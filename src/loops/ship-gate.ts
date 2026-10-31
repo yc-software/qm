@@ -1,4 +1,5 @@
-import type { ApprovalGrantModes, Loop, LoopOutput, ShipGate, ShipGrant } from "../types.ts";
+import type { ApprovalGrantModes } from "../types.ts";
+import type { Loop, LoopOutput, ShipGate, ShipGrant } from "./types.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 

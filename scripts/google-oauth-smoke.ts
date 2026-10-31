@@ -182,15 +182,15 @@ if (expectedRedirect && expectedRedirect !== redirectUri) {
 
 const built = buildApp({
   ...loadConfig({}),
+  databaseUrl: process.env.DATABASE_URL,
   port: corePort,
   dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
-  sessionStore: "memory",
-  runStore: "memory",
 });
 const core = createServer(built.app, {
   signingSecret: secret,
   connectorTokens: built.connectorTokens,
   auditLog: built.auditLog,
+  replayDedupe: built.replayDedupe,
   oauthEnv: process.env,
 });
 

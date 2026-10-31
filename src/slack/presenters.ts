@@ -57,12 +57,6 @@ export const CURATED_ACK_EMOJI = [
   "coffee",
 ] as const;
 
-export function stripAckPrefix(text: string, ack: string | undefined): string {
-  if (!ack) return text;
-  const lead = text.trimStart();
-  return lead.startsWith(ack) ? lead.slice(ack.length).trimStart() : text;
-}
-
 export interface AckPresenter {
   onFirstBlock(text: string): void;
   onSurfacePosted(): void;

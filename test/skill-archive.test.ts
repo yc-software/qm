@@ -1,15 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { scopeId } from "../src/types.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 async function published() {
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "pack:src1" });
   await skills.review(s.id, "system:pack-reviewer", []);
   await skills.publish(s.id);
@@ -43,7 +43,7 @@ test("an archived skill can be re-published (resurrection on re-import)", async 
 });
 
 test("create carries pack provenance, kept out of the signature", async () => {
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const s = await skills.create({
     scopeId: org,
     manifest,

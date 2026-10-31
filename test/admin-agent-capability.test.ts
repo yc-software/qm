@@ -1,7 +1,7 @@
 import { createAdminCall } from "../src/tools/admin.ts";
 import { adminRoutes } from "../src/api/routes/admin.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -16,7 +16,6 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import {
   mintCapabilityToken,
@@ -26,15 +25,14 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = TEST_ROOT_SCOPE;
 
-function start(withConfig = true) {
+async function start(withConfig = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
@@ -43,7 +41,7 @@ function start(withConfig = true) {
       apiBaseUrl: "http://core.example.test",
     }),
   );
-  void built.directory.replaceChannels(
+  await built.directory.replaceChannels(
     [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
     [
       { channelId: "C1", principalId: "admin-alice" },
@@ -51,13 +49,14 @@ function start(withConfig = true) {
     ],
   );
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     memory: built.memory,
     ...(withConfig ? { config: built.config } : {}),
@@ -94,7 +93,7 @@ const capFor = async (
 };
 
 test("an org admin's capability token can read and rewrite a scope's notebook via the admin API", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("admin-alice");
     await s.built.memory.capture(ORG, ["seed"], 0);
@@ -120,7 +119,7 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
 });
 
 test("a large channel's capability passes HTTP parsing and retains admin authorization", async () => {
-  const s = start();
+  const s = await start();
   try {
     const members = Array.from({ length: 120 }, (_, i) => ({
       id: `channel-member-${i}@example.test`,
@@ -171,7 +170,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
 });
 
 test("whoami answers an agent capability token for admins and non-admins alike", async () => {
-  const s = start();
+  const s = await start();
   try {
     const admin = await fetch(`${s.base}/v1/admin/whoami`, {
       headers: { "x-agent-capability": await capFor("admin-alice") },
@@ -192,7 +191,7 @@ test("whoami answers an agent capability token for admins and non-admins alike",
 });
 
 test("a non-admin's capability token gets 403 from admin routes (gate routes, the grant store decides)", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("U1");
     await s.built.memory.capture(ORG, ["seed"], 0);
@@ -210,7 +209,7 @@ test("a non-admin's capability token gets 403 from admin routes (gate routes, th
 });
 
 test("x-admin-actor cannot escalate a capability token — the header is the portal's source-authed door", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("U1");
     const spoof = { "x-agent-capability": cap, "x-admin-actor": "admin-alice" };
@@ -236,7 +235,7 @@ test("x-admin-actor cannot escalate a capability token — the header is the por
 });
 
 test("a wrong-audience token never reaches the admin plane", async () => {
-  const s = start();
+  const s = await start();
   try {
     const res = await fetch(`${s.base}/v1/admin/whoami`, {
       headers: { "x-agent-capability": await capFor("admin-alice", { aud: EGRESS_PROXY_AUD }) },
@@ -248,7 +247,7 @@ test("a wrong-audience token never reaches the admin plane", async () => {
 });
 
 test("an autonomous turn's token cannot act as an admin, even when its actor holds the grant", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("admin-alice", { live: false });
 
@@ -270,7 +269,7 @@ test("an autonomous turn's token cannot act as an admin, even when its actor hol
 });
 
 test("an unattended admin-read grant opens only the five read-only routes and keeps the DM gate", async () => {
-  const s = start();
+  const s = await start();
   try {
     const granted = await capFor("admin-alice", { live: false, grants: ["admin.sessions.read"] });
     const scopeQ = `scope=${encodeURIComponent(ORG)}`;
@@ -331,7 +330,7 @@ test("an unattended admin-read grant opens only the five read-only routes and ke
 });
 
 test("each new unattended read grant opens exactly its own routes", async () => {
-  const s = start();
+  const s = await start();
   try {
     const scopeQ = `scope=${encodeURIComponent(ORG)}`;
     const cases: Array<[string, string[]]> = [
@@ -383,7 +382,7 @@ test("each new unattended read grant opens exactly its own routes", async () => 
 });
 
 test("the unattended-grant listing mirrors the route annotations and only answers a live org admin", async () => {
-  const s = start();
+  const s = await start();
   try {
     const expected = adminRoutes.flatMap((route) =>
       "path" in route && route.admin?.unattended
@@ -422,7 +421,7 @@ test("the unattended-grant listing mirrors the route annotations and only answer
 });
 
 test("an aud-less token never opens the admin door", async () => {
-  const s = start();
+  const s = await start();
   try {
     const res = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       headers: { "x-agent-capability": await capFor("admin-alice", { aud: null }) },
@@ -435,7 +434,7 @@ test("an aud-less token never opens the admin door", async () => {
 });
 
 test("grant management refuses agent tokens outright — promote/revoke stays in the portal", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("admin-alice");
     const promote = await fetch(`${s.base}/v1/admin/grants`, {
@@ -460,7 +459,7 @@ test("grant management refuses agent tokens outright — promote/revoke stays in
 });
 
 test("admin walls hold for every spelling of a path, and encoded params still route", async () => {
-  const s = start();
+  const s = await start();
   try {
     const live = await capFor("admin-alice");
     const unattended = await capFor("admin-alice", { live: false });
@@ -505,7 +504,7 @@ test("admin walls hold for every spelling of a path, and encoded params still ro
 });
 
 test("MCP server registration refuses agent tokens — the agent cannot change which calls need approval", async () => {
-  const s = start();
+  const s = await start();
   try {
     const res = await fetch(`${s.base}/v1/admin/mcp-servers/crm`, {
       method: "PUT",
@@ -520,7 +519,7 @@ test("MCP server registration refuses agent tokens — the agent cannot change w
 });
 
 test("impersonation refuses agent tokens outright — acting as another user stays in the portal", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("admin-alice");
     const start1 = await fetch(`${s.base}/v1/admin/impersonate`, {
@@ -543,7 +542,7 @@ test("impersonation refuses agent tokens outright — acting as another user sta
 });
 
 test("content reads need a DM-scoped token", async () => {
-  const s = start();
+  const s = await start();
   try {
     const fromChannel = await capFor("admin-alice", { scope: scopeId("channel", "C1") });
 
@@ -626,7 +625,7 @@ test("content reads need a DM-scoped token", async () => {
 });
 
 test("revoking the admin grant cuts off an already-minted token immediately", async () => {
-  const s = start();
+  const s = await start();
   try {
     const cap = await capFor("admin-alice");
     const before = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": cap } });
@@ -649,7 +648,7 @@ test("revoking the admin grant cuts off an already-minted token immediately", as
 
 for (const liveAuthor of [false, true]) {
   test(`thread author admin access (${liveAuthor}) preserves all other authorization gates`, async () => {
-    const s = start();
+    const s = await start();
     try {
       const cap = await capFor("admin-alice", { live: false, liveAuthor, scope: "channel:C1" });
       const headers = { "x-agent-capability": cap, "content-type": "application/json" };
@@ -713,7 +712,7 @@ for (const [name, input, expected] of [
   ["webhook", { triggered: true, surface: "webhook", liveActor: true }, 403],
 ] satisfies Array<[string, Partial<TurnRequest>, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
-    const s = start();
+    const s = await start();
     try {
       await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
       let cap: string | undefined;
@@ -752,7 +751,7 @@ for (const [name, input, expected] of [
 
 for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`Open admin reads and writes from ${room} preserve live authorization and posture vetoes`, async () => {
-    const s = start();
+    const s = await start();
     try {
       await s.built.directory.replaceGroups([
         { groupId: "G1", principalId: "admin-alice" },
@@ -855,7 +854,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
 }
 
 test("shared admin reads fail closed without a sharing config resolver", async () => {
-  const s = start(false);
+  const s = await start(false);
   try {
     await s.built.config.setSharingPosture(ORG, "open");
     const cap = await capFor("admin-alice", { scope: scopeId("channel", "C1") });
@@ -868,7 +867,7 @@ test("shared admin reads fail closed without a sharing config resolver", async (
 
 for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`retired bulk import is equally unsupported from ${room}`, async () => {
-    const s = start();
+    const s = await start();
     try {
       await s.built.directory.replaceGroups([
         { groupId: "G1", principalId: "admin-alice" },
@@ -893,7 +892,7 @@ for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1")
 }
 
 test("shared-channel admin runtime mutations do not return a private cron prompt", async () => {
-  const s = start();
+  const s = await start();
   try {
     await s.built.config.setSharingPosture("channel:C1", "isolated");
     const cron = await s.built.app.createCron({
@@ -934,7 +933,7 @@ test("shared-channel admin runtime mutations do not return a private cron prompt
 });
 
 test("native admin tools use the authenticated handler, including its live authority, audience and audit checks", async () => {
-  const s = start();
+  const s = await start();
   const target = scopeId("personal", "U1");
   try {
     const call = createAdminCall(s.base, await capFor("admin-alice"));

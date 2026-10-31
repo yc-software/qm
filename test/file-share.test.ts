@@ -7,16 +7,17 @@ import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
+import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/blob-transfer.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
@@ -28,16 +29,16 @@ const owner = scopeId("personal", "U1");
 const grantee = scopeId("personal", "U2");
 
 function fixture() {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  return { files, acl: createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }) };
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  return {
+    files,
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+      resolveFiles: (refs) => files.resolveByIds(refs),
+    }),
+  };
 }
 
-async function put(
-  files: ReturnType<typeof createMemoryFileArtifactStore>,
-  ownerScopeId: string,
-  name: string,
-  data: Uint8Array,
-) {
+async function put(files: FileArtifactStore, ownerScopeId: string, name: string, data: Uint8Array) {
   const id = fileArtifactId(`${ownerScopeId}:${name}`, "in", 0);
   return (
     await files.put({

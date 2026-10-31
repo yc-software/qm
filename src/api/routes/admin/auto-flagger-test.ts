@@ -3,7 +3,6 @@ import { audit, authorizeAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-posture.ts";
 import { defaultAutoFlaggerConfig, parseAutoFlaggerDraft, type AutoFlaggerDraft } from "../admin-resources.ts";
-import { isHarnessId } from "../../../model/pi-models.ts";
 import type { ScreenSample } from "../../../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../../../security/security-screener.ts";
 import { tenantRootScope } from "../../../tenants/context.ts";
@@ -54,7 +53,6 @@ async function replay(
       try {
         verdict = await probe({
           payload: sample.payload,
-          harnessId: config.harnessId,
           modelId: config.modelId,
           systemPrompt,
           actorId,
@@ -95,7 +93,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const body = (ctx.body ?? {}) as {
     window?: unknown;
-    harnessId?: unknown;
     modelId?: unknown;
     rubric?: unknown;
     compare?: unknown;
@@ -118,11 +115,8 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   }
   const saved = configStore.getAutoFlaggerConfig();
   const fallback = defaultAutoFlaggerConfig(ctx.deps);
-  const effective: AutoFlaggerDraft =
-    saved && isHarnessId(saved.harnessId)
-      ? { harnessId: saved.harnessId, modelId: saved.modelId, rubric: saved.rubric }
-      : fallback;
-  const draftGiven = body.harnessId !== undefined || body.modelId !== undefined || body.rubric !== undefined;
+  const effective: AutoFlaggerDraft = saved ? { modelId: saved.modelId, rubric: saved.rubric } : fallback;
+  const draftGiven = body.modelId !== undefined || body.rubric !== undefined;
   const parsed = draftGiven
     ? await parseAutoFlaggerDraft(ctx.deps, body)
     : ({ value: effective } as { value: AutoFlaggerDraft });
@@ -147,7 +141,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       scopeId: scope,
       window: requestedWindow,
       sampled: 0,
-      harnessId: candidate.harnessId,
       modelId: candidate.modelId,
       message: "no past screenings are recorded yet, so there is nothing to replay",
     });
@@ -156,10 +149,7 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
   const run = await replay(screenSecurity, candidate, samples, actor.id, deadline);
   const scored = run.totals.flagged + run.totals.allowed;
   const wantCompare =
-    body.compare === true &&
-    (candidate.harnessId !== effective.harnessId ||
-      candidate.modelId !== effective.modelId ||
-      candidate.rubric !== effective.rubric);
+    body.compare === true && (candidate.modelId !== effective.modelId || candidate.rubric !== effective.rubric);
   const baseline = wantCompare ? await replay(screenSecurity, effective, samples, actor.id, deadline) : null;
   let changed: number | null = null;
   if (baseline) {
@@ -181,7 +171,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
     flagRate: rate(run.totals.flagged, scored),
     oldestAt: samples[samples.length - 1]?.createdAt ?? null,
     newestAt: samples[0]?.createdAt ?? null,
-    harnessId: candidate.harnessId,
     modelId: candidate.modelId,
     saved: !!saved,
     partial: !run.complete || !(baseline?.complete ?? true),
@@ -189,7 +178,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
     ...(baseline
       ? {
           baseline: {
-            harnessId: effective.harnessId,
             modelId: effective.modelId,
             flagged: baseline.totals.flagged,
             flagRate: rate(baseline.totals.flagged, baseline.totals.flagged + baseline.totals.allowed),
@@ -209,7 +197,6 @@ export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
       sampled: result.sampled,
       flagged: result.flagged,
       errors: result.errors,
-      harnessId: candidate.harnessId,
       modelId: candidate.modelId,
       compared: !!baseline,
     }),

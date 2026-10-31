@@ -7,7 +7,6 @@ const fieldNames: Record<string, Record<string, string>> = {
   "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
   "auto-flagger": {
-    "auto-flagger-harness": "harnessId",
     "auto-flagger-model": "modelId",
     "auto-flagger-rubric": "rubric",
   },
@@ -38,20 +37,12 @@ export class GovernanceState extends SettingState {
   }
   change(id: string, value: unknown) {
     this.draft[fieldNames[this.key][id]] = value;
-    if (id === "auto-flagger-harness") {
-      const options = this.models;
-      if (!options.some((entry: any) => entry.id === this.draft.modelId)) this.draft.modelId = options[0]?.id || "";
-    }
     this.changed();
   }
   get models(): Array<{ id: string; name: string }> {
-    const options = [...(this.context.modelsByHarness?.[this.draft.harnessId] || [])];
+    const options = [...(this.context.baseModelOptions || [])];
     const configured = this.context.autoFlagger || this.context.autoFlaggerDefault;
-    if (
-      configured &&
-      configured.harnessId === this.draft.harnessId &&
-      !options.some((entry) => entry.id === configured.modelId)
-    ) {
+    if (configured && !options.some((entry) => entry.id === configured.modelId)) {
       options.push({ id: configured.modelId, name: configured.modelId + " (configured; unavailable)" });
     }
     return options;
@@ -228,8 +219,7 @@ export function updateCatalog(data: Record<string, any>) {
   const state = states.get("auto-flagger")!;
   state.context = {
     ...state.context,
-    modelsByHarness: data.modelsByHarness || state.context.modelsByHarness,
-    harnessOptions: data.harnessOptions || state.context.harnessOptions,
+    baseModelOptions: data.baseModelOptions || state.context.baseModelOptions,
   };
   state.render();
 }

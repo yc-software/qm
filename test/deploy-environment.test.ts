@@ -10,10 +10,12 @@ import { scopeId } from "../src/types.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 const tmp = () => mkdtempSync(join(tmpdir(), "deployment-env-"));
 
 function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>) {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   let applied: DeploymentVersion | undefined;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
@@ -28,7 +30,7 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: tmp(),
     ...(deploymentEnv ? { deploymentEnv } : {}),
   });

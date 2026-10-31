@@ -1,4 +1,4 @@
-import type { Webhook } from "../../types.ts";
+import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";

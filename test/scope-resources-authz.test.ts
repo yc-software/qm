@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
@@ -9,9 +8,11 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const U1 = "U1";
 const C1 = "C1";
@@ -19,10 +20,12 @@ const channelScope = scopeId("channel", C1);
 const orgScope = TEST_ROOT_SCOPE;
 
 function makeDeps() {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const crons = createCronStore();
-  const webhooks = createWebhookStore();
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const webhooks = createWebhookStore(testMap(), testMap());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
     isInternal: (p: { type: string }) => p.type === "internal",
@@ -40,7 +43,7 @@ function makeDeps() {
     listByParticipant: async (_p: string) => [],
     participantScopes: async (_p: string) => [],
   };
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };

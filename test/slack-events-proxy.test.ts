@@ -9,9 +9,8 @@ import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SOURCE_SECRET = "source-auth-secret-for-slack-proxy-tests-0001";
 const SLACK_SECRET = "slack-signing-secret-for-proxy-tests-0001";
@@ -39,6 +38,7 @@ before(async () => {
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-events-proxy-")) }));
   core = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SOURCE_SECRET,
     slackEventsPort: (receiver.address() as AddressInfo).port,
   });

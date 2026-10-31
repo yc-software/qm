@@ -8,7 +8,7 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -18,6 +18,7 @@ const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
 isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
 const databaseUrl = isolatedUrl?.toString();
 before(async () => {
+  await testTenantsSeeded();
   if (!baseUrl) return;
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: baseUrl });
@@ -26,6 +27,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
+  await seedTenant(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;
@@ -303,7 +305,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       requestId: "unicode",
       audience: [],
       text: "body\u0000\ud800",
-      notify: false,
+      wake: false,
     });
     assert.equal(
       (await fixture.service.read(fixture.caller, { after: binaryText.seq - 1 }))[0]!.text,

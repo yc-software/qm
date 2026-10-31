@@ -116,7 +116,6 @@ export function createSlackInstallationStore(
       return publicStatus(await map.get(currentTenant()));
     },
     async set(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       const updatedAt = Date.now();
       const record: StoredSlackInstallation = {
         disabled: false,
@@ -140,7 +139,6 @@ export function createSlackInstallationStore(
       return publicStatus(stored);
     },
     async setManaged(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       await map.putIfAbsent(currentTenant(), {
         disabled: true,
         updatedAt: 0,
@@ -174,7 +172,6 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async enableManaged() {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let accepted = true;
       await map.update(currentTenant(), (record) => {
         if (!record.disabled && !record.installId) {
@@ -186,7 +183,6 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async disableManaged(installId) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let disabled = false;
       await map.update(currentTenant(), (record) => {
         if (record.disabled || record.installId !== installId) return record;
@@ -202,17 +198,15 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
-      if (map.update) {
-        const record = await map.update(currentTenant(), (current) => ({
-          disabled: true,
-          serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-          ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-          updatedAt: Date.now(),
-          updatedBy,
-          version: crypto.randomUUID(),
-        }));
-        if (record) return;
-      }
+      const record = await map.update(currentTenant(), (current) => ({
+        disabled: true,
+        serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
+        ...(current.installedAt ? { installedAt: current.installedAt } : {}),
+        updatedAt: Date.now(),
+        updatedBy,
+        version: crypto.randomUUID(),
+      }));
+      if (record) return;
       const updatedAt = Date.now();
       await map.put(currentTenant(), {
         disabled: true,

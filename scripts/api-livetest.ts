@@ -17,9 +17,6 @@ const built = buildApp({
   ...loadConfig(),
   port: 0,
   dataDir: DATA,
-  sessionStore: "memory",
-  runStore: "memory",
-  harness: "pi",
 });
 await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");
 mkdirSync(join(DATA, "workspaces", "org__acme"), { recursive: true });

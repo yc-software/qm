@@ -1,21 +1,24 @@
 import { test } from "node:test";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
+import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import { createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
+import { createPostgresToolOutputStore, DEFAULT_INLINE_TOKENS, parkedOutputKey } from "../src/sessions/tool-output.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
-import { connectorToolsNote, deferredMcpTools } from "../src/harness/deferred-tools.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -348,13 +351,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async readMembers() {
       return { ok: true, members: [{ displayName: "Ada" }, { displayName: "Bob" }] };
     },
-    async readFile(ref) {
-      if (ref === "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        return { ok: true, content: "hello from the file", sizeBytes: 19 };
-      if (ref === "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-        return { ok: true, sizeBytes: 1024, contentType: "application/octet-stream" };
-      return { ok: false, message: "I can't find that file — it may have expired." };
-    },
     async getStandingOrder() {
       return { ok: true, orders: "" };
     },
@@ -495,6 +491,10 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "restart",
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
+  assert.match(
+    textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),
+    /invalid sandbox arguments/,
+  );
   assert.match(textOut(await call(execute, { command: "", computer: "migrate" })), /invalid execute arguments/);
 });
 
@@ -719,21 +719,34 @@ test("a giant tool result is capped for the model, keeping the tail and matching
 
 test("a result over the inline cap keeps its head and tail and parks the full text where its marker points", async () => {
   const emitted: Emitted[] = [];
-  const outputs = createMemoryToolOutputStore({
-    inlineTokens: 100,
-    sessions: { getEntries: async () => emitted as unknown as SessionEntry[] },
-  });
-  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const url = testDatabaseUrl();
+  const store = createPostgresSessionStore(url);
+  const pool = createPgPool(url);
+  const session = await store.getOrCreateByThread("web:park", "dm", "personal:U1" as SessionEntry["scopeLabel"]);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const appends: Promise<unknown>[] = [];
+  const full = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {
     ...fakeToolContext(),
     toolOutput: outputs,
     execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
   };
-  const ref: ToolContextRef = { current: tc, emit: (e) => void emitted.push(e as Emitted), scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+      appends.push(store.append({ ...lease, turnId: "run-park" }, e as Parameters<typeof store.append>[1]));
+    },
+    scopeLabel: "personal:U1",
+  };
   const [execute] = createAgentTools(ref);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
   };
+  await Promise.all(appends);
   const seen = ret.content.map((c) => c.text).join("\n");
   const payload = emitted.find((e) => e.type === "tool_result")!.payload as {
     callId: string;
@@ -744,21 +757,16 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
   const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
-  assert.deepEqual(
-    await outputs.read("s1", marker),
-    { text: outputs.parked.get(payload.output.blob) },
-    "the marker names the parked file",
+  const parked = await outputs.read(session.id, marker);
+  assert.ok(parked && "text" in parked, "the marker names the parked file");
+  assert.ok(
+    payload.output.shownChars <= DEFAULT_INLINE_TOKENS * 4 && seen.length < full.length / 2,
+    `cut to the default budget (${seen.length})`,
   );
-  assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
-  assert.equal(outputs.parked.get(payload.output.blob)!.length, payload.output.chars);
-  assert.ok(outputs.parked.get(payload.output.blob)!.includes("line 1999"));
-
-  outputs.setInlineTokens(0);
-  emitted.length = 0;
-  await call(execute, { command: "seq", purpose: "Run test command" });
-  const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
-  assert.equal(uncapped.output, undefined, "0 turns the cap off");
-  assert.ok(uncapped.result.includes("line 1000"));
+  assert.equal(parked.text.length, payload.output.chars);
+  assert.ok(parked.text.includes("line 19999"));
+  await store.releaseLease(lease);
+  await pool.close();
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
@@ -1087,17 +1095,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const refOff: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   const off = createAgentTools(refOff).map((t) => t.name);
   assert.ok(!off.includes("slack"), "off by default (overheard path unchanged)");
-  for (const n of [
-    "post",
-    "react",
-    "edit",
-    "delete",
-    "read_thread",
-    "whats_new",
-    "search",
-    "read_members",
-    "read_file",
-  ]) {
+  for (const n of ["post", "react", "edit", "delete", "read_thread", "whats_new", "search", "read_members"]) {
     assert.ok(!off.includes(n), `${n} is not a standalone tool`);
   }
 
@@ -1400,15 +1398,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   assert.match(members, /Ada/);
   assert.match(members, /Bob/);
 
-  const txt = textOf(await call(slack, { action: "read_file", ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }));
-  assert.match(txt, /hello from the file/);
-  const bin = textOf(await call(slack, { action: "read_file", ref: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
-  assert.match(bin, /not text/);
-  assert.doesNotMatch(bin, /hello from the file/);
-  const gone = textOf(await call(slack, { action: "read_file", ref: "cccccccccccccccccccccccccccccccc" }));
-  assert.match(gone, /couldn't read that file/);
-
-  for (const n of ["whats_new", "search", "read_members", "read_file"]) {
+  for (const n of ["whats_new", "search", "read_members"]) {
     const pair = emitted.filter((e) => e.payload.action === n).map((e) => e.type);
     assert.ok(pair.includes("tool_call") && pair.includes("tool_result"), `${n} emits call + result`);
   }
@@ -1420,6 +1410,10 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
   assert.match(out.content[0]!.text, /post, react, edit, delete/);
+  const removed = (await call(slack, { action: "read_file", ref: "a".repeat(32) })) as {
+    content: Array<{ text: string }>;
+  };
+  assert.match(removed.content[0]!.text, /unknown action "read_file"/);
 });
 
 test("the post delivery ack is never screened — a classifier false positive cannot quarantine a sent reply", async () => {
@@ -1476,7 +1470,6 @@ test("each action dispatches to exactly its matching tool-context method", async
     whatsNew: spy("whatsNew", { ok: true, hereNew: 0, activeSubConversations: 0 }),
     search: spy("search", { ok: true, hits: [], source: "live" }),
     readMembers: spy("readMembers", { ok: true, members: [] }),
-    readFile: spy("readFile", { ok: true, content: "x" }),
   } as unknown as ToolContext;
   const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1" });
 
@@ -1488,15 +1481,14 @@ test("each action dispatches to exactly its matching tool-context method", async
   await call(slack, { action: "whats_new", since: "1.0" });
   await call(slack, { action: "search", query: "q", source: "slack" });
   await call(slack, { action: "read_members" });
-  await call(slack, { action: "read_file", ref: "aaaa" });
   await call(slack, { action: "reach", text: "hi", channel: "eng", files: ["report.md"], sandbox_id: "box" });
 
   assert.deepEqual(
     calls.map((c) => c[0]),
-    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "readFile", "reach"],
+    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "reach"],
   );
   assert.deepEqual(calls[0]![1], ["hi", {}, [{ file_id: "saved" }], "box"]);
-  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
+  assert.deepEqual(calls[8]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
   assert.deepEqual(calls[1]![1], [{ ts: "1.1", emoji: "eyes" }]);
   assert.deepEqual(calls[2]![1], [{ ref: "1.1", text: "y" }]);
   assert.deepEqual(calls[3]![1], [{ ref: "1.1" }]);
@@ -1504,7 +1496,6 @@ test("each action dispatches to exactly its matching tool-context method", async
   assert.deepEqual(calls[5]![1], [{ since: "1.0" }]);
   assert.deepEqual(calls[6]![1], ["q", { source: "slack" }]);
   assert.deepEqual(calls[7]![1], []);
-  assert.deepEqual(calls[8]![1], ["aaaa"]);
 });
 
 test("the surface tool is NAMED after its surface — a telegram surface produces a `telegram` tool", async () => {
@@ -2478,12 +2469,12 @@ test("a blocking command approval terminates the agent loop and flags pausedOnAp
   };
   assert.equal(r.terminate, true, "the tool result must stop the loop — a paused turn, not a narrated block");
   assert.match(r.content[0]!.text ?? "", /needs human approval/);
-  assert.equal(ref.pausedOnApproval, true, "the harness flag rides to the orchestrator's blocksInput");
+  assert.equal(ref.pausedOnApproval, true, "the agent flag rides to the orchestrator's blocksInput");
   assert.equal(ref.pendingApprovals!.length, 1);
 });
 
 test("pauseStampAfterToolCall stamps terminate on sibling results once the turn paused (batch-wide stop)", async () => {
-  const { pauseStampAfterToolCall } = await import("../src/harness/agent-tools.ts");
+  const { pauseStampAfterToolCall } = await import("../src/agent/agent-tools.ts");
   const ref: { pausedOnApproval?: boolean } = {};
   const hook = pauseStampAfterToolCall(ref);
 
@@ -2761,7 +2752,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
         );
       }
     }
-    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { durable: false }, { sandbox_id: null }])
+    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { sandbox_id: null }])
       assert.match(
         textOut(
           await call(execute, { command: "forbidden", purpose: "Test invalid routing", background: true, ...input }),
@@ -2788,7 +2779,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     {
       sandboxResources: true,
       reachExec: true,
-      commandCredentialHandles: ["git"],
     },
   ).find((t) => t.name === "execute")!;
   for (const [scope, route] of [
@@ -3021,7 +3011,7 @@ test("runtime persists its decision before terminating and blocks later effects"
   const persisted = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
+  const choice = { modelId: "gpt-6-astra" };
   const ref: ToolContextRef = {
     current: { ...fakeToolContext(), runtime: async () => ({ ok: true, handoff: { choice, lifetime: "task" } }) },
     scopeLabel: "personal:U1",
@@ -3054,7 +3044,7 @@ test("runtime persists its decision before terminating and blocks later effects"
 
 test("runtime get persists the active runtime beside a result too long to show in full", async () => {
   const events: Emitted[] = [];
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
+  const active = { modelId: "claude-sonnet-5" };
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
@@ -3080,7 +3070,7 @@ test("runtime persistence failure does not latch a handoff", async () => {
       ...fakeToolContext(),
       runtime: async () => ({
         ok: true,
-        handoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
+        handoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
       }),
     },
     scopeLabel: "personal:U1",
@@ -3423,44 +3413,52 @@ test("subagents open schema and dispatch preserve an explicit false fast mode", 
   assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
 });
 
-test("subagents followup_task takes its instruction in task, like open", async () => {
-  const writes: Array<{ followup?: boolean; text?: string; interrupt?: boolean }> = [];
+test("subagents send_message wakes by default and says what happened", async () => {
+  const writes: Array<{ wake?: boolean; text?: string; interrupt?: boolean }> = [];
   const tc = fakeToolContext();
+  const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
+    {
+      ok: true,
+      sessionId: "root",
+      title: "root",
+      delivered: "queued_message",
+      busy: false,
+      notWoken: "a message cannot start a turn in a top-level conversation",
+    },
+  ];
   tc.sessionSyscalls = {
     open: async () => ({ ok: false, message: "unused" }),
     write: async (input) => {
       writes.push(input);
-      return input.text || input.interrupt
-        ? { ok: true, sessionId: "child", title: "child", delivered: input.followup ? "queued_turn" : "queued_message" }
-        : {
-            ok: false,
-            message: input.followup ? "followup_task requires `task`." : "send_message requires `text`.",
-          };
+      return replies.shift()!;
     },
     read: async () => ({ ok: false, message: "unused" }),
   };
   const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
-  assert.ok(!Check(session.parameters, { action: "write", target: "child", text: "hi" }));
+  assert.ok(!Check(session.parameters, { action: "followup_task", target: "child", task: "next" }));
+  const send = async (extra: object) =>
+    textOut(await call(session, { action: "send_message", target: "child", text: "hi", ...extra }));
+  assert.equal(await send({}), 'Woke "child"; it is working on this now.');
   assert.match(
-    textOut(await call(session, { action: "followup_task", target: "child", task: "next task" })),
-    /queued as a new turn/,
+    await send({ wake: true }),
+    /^Queued for "child": it is busy and starts on this when its current turn ends/,
   );
-  assert.match(
-    textOut(await call(session, { action: "send_message", target: "child", text: "fyi" })),
-    /queued internally/,
+  assert.equal(
+    await send({ wake: false }),
+    `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
-  assert.match(
-    textOut(await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true })),
-    /interrupt applies to send_message/,
+  assert.equal(
+    await send({ wake: false }),
+    `Left in "child"'s mailbox. It has work running or queued and sees this at its next step.`,
   );
-  await call(session, { action: "followup_task", target: "child", text: "misplaced" });
+  assert.match(await send({}), /^Left in "root"'s mailbox without waking it: a message cannot start a turn/);
   assert.deepEqual(
-    writes.map(({ followup, text, interrupt }) => ({ followup, text, interrupt })),
-    [
-      { followup: true, text: "next task", interrupt: undefined },
-      { followup: false, text: "fyi", interrupt: undefined },
-      { followup: true, text: undefined, interrupt: undefined },
-    ],
+    writes.map(({ wake }) => wake),
+    [true, true, false, false, true],
   );
 });
 
@@ -3680,15 +3678,6 @@ test("files share preserves artifact IDs, recipient resolution and authorization
   assert.equal(requests.length, 1);
 });
 
-test("the retired credential tool is absent and execute accepts credential handles", () => {
-  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
-  assert.equal(
-    tools.some((tool) => tool.name === "credential_exec"),
-    false,
-  );
-  assert.ok(tools.some((tool) => tool.name === "execute"));
-});
-
 test("command and management call traces preserve purpose", async () => {
   const calls: Record<string, unknown>[] = [];
   const ref: ToolContextRef = {
@@ -3731,7 +3720,7 @@ test("declared client tools follow qm's own tools, in name order whatever the de
   assert.deepEqual(reversed, forward, "the tools array is stable from one turn to the next");
 });
 
-function clientToolRef(store = createMemoryRunSignalStore()) {
+function clientToolRef(store = createPostgresRunSignalStore(testDatabaseUrl())) {
   const emitted: Emitted[] = [];
   const cancel = new AbortController();
   const ref: ToolContextRef = {
@@ -3973,7 +3962,7 @@ test("thrown execution errors leave pending child messages for the next delivere
 });
 
 test("subagents and sessions are separate tools with one noun each", async () => {
-  const writes: Array<{ followup?: boolean; target: string; text?: string }> = [];
+  const writes: Array<{ wake?: boolean; target: string; text?: string }> = [];
   const starts: Array<{ fork: boolean; text?: string; title?: string }> = [];
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
@@ -3995,7 +3984,7 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   const tools = createAgentTools({ current: tc }, { surfaceName: "web" });
   const subagents = tools.find((tool) => tool.name === "subagents")!;
   const sessions = tools.find((tool) => tool.name === "sessions")!;
-  for (const action of ["open", "followup_task", "wait"])
+  for (const action of ["open", "wait"])
     assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);
   for (const action of ["list", "new", "fork"])
     assert.ok(!Check(subagents.parameters, { action }), `subagents has no ${action}`);
@@ -4006,8 +3995,8 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
-    writes.map(({ followup, target, text }) => ({ followup, target, text })),
-    [{ followup: undefined, target: "peer", text: "fyi" }],
+    writes.map(({ wake, target, text }) => ({ wake, target, text })),
+    [{ wake: undefined, target: "peer", text: "fyi" }],
   );
 });
 

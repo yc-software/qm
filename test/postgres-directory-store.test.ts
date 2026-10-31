@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -9,6 +9,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
@@ -79,7 +80,7 @@ test("pg directory: exact channel-id resolution has a matching expression index"
   const raw = new pg.Pool({ connectionString: URL });
   try {
     const result = await raw.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'directory_channels_lower_cid'");
-    assert.match(result.rows[0]?.indexdef ?? "", /\(org_id, lower\(channel_id\)\)/);
+    assert.match(result.rows[0]?.indexdef ?? "", /\(tenant_id, lower\(channel_id\)\)/);
   } finally {
     await raw.end();
   }
@@ -163,12 +164,12 @@ test("pg directory: replace is a full per-org swap and skips an unchanged roster
   assert.equal((await store.list()).length, 2);
 
   const direct = (await freshPg(URL!)).query;
-  const t0 = await direct("SELECT updated_at FROM directory_sync WHERE org_id = $1", [TEST_TENANT]);
+  const t0 = await direct("SELECT updated_at FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
   await store.replace([
     { principalId: "U-b", displayName: "Bob", type: "internal" },
     { principalId: "U-a", displayName: "Alice", type: "internal" },
   ]);
-  const t1 = await direct("SELECT updated_at FROM directory_sync WHERE org_id = $1", [TEST_TENANT]);
+  const t1 = await direct("SELECT updated_at FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
   assert.equal(t0.rows[0]?.updated_at, t1.rows[0]?.updated_at, "unchanged roster must not rewrite directory_sync");
   assert.equal((await store.list()).length, 2);
 
@@ -220,8 +221,6 @@ test(
 
 test("pg directory: private nonmembership is definitive only after a membership-bearing push", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
-  const direct = (await freshPg(URL!)).query;
-  await direct("UPDATE directory_sync SET channel_members_synced = FALSE", []);
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }]);
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), undefined);
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }], []);
@@ -263,7 +262,7 @@ test(
     assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
 
     const direct = (await freshPg(URL!)).query;
-    const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", [TEST_TENANT]);
+    const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
     await store.replaceGroups([
       { groupId: "G-2", principalId: "U-carol" },
       { groupId: "G-2", principalId: "U-alice" },
@@ -271,7 +270,7 @@ test(
       { groupId: "G-1", principalId: "U-alice" },
       { groupId: "G-1", principalId: "U-carol" },
     ]);
-    const t1 = await direct("SELECT groups_hash FROM directory_sync WHERE org_id = $1", [TEST_TENANT]);
+    const t1 = await direct("SELECT groups_hash FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
     assert.equal(t0.rows[0]?.groups_hash, t1.rows[0]?.groups_hash, "identical set must not rewrite the hash");
     assert.equal(await store.groupMember("G-1", "U-sam"), true);
 

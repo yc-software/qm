@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createDirectFileUploads, multipartChecksum, FILE_UPLOAD_PART_SIZE } from "../src/files/direct-file-upload.ts";
 import { FileUploadError, type FileUpload, type FileUploadStore } from "../src/files/file-upload-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {
@@ -45,7 +46,7 @@ function fixture() {
       );
     },
   };
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const calls: Array<{ name: string; input: Record<string, any> }> = [];
   let head: Record<string, unknown> | undefined;
   let parts: Array<Record<string, unknown>> = [];

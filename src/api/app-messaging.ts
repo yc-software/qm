@@ -1,10 +1,10 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
-import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachEnqueue,
@@ -17,11 +17,11 @@ import {
 import { isVisible } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
-import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
+import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
@@ -47,7 +47,7 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
+    canSee: (c: Pick<Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
       allowed(c.ownerScopeId) &&
       (viewersOwn(c.owner) ||
         scopeNames.has(c.ownerScopeId) ||
@@ -97,6 +97,7 @@ export function createMessagingMethods(
   | "pendingContextRequests"
   | "fulfillContextRequest"
   | "ackDelivery"
+  | "failDelivery"
   | "ackDeliveryByKey"
   | "setRunDeliveryState"
   | "upsertDirectory"
@@ -122,7 +123,7 @@ export function createMessagingMethods(
 > {
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
-  const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
+  const contextRequests = deps.contextRequests;
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
@@ -415,6 +416,9 @@ export function createMessagingMethods(
     },
     async ackDelivery(id, slackApiMs) {
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    },
+    failDelivery(id, reason) {
+      return deps.deliveries.fail(id, reason, Date.now());
     },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());

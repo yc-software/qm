@@ -44,7 +44,7 @@ test(
       const migrations = registeredPgMigrations(url);
       await applyPgMigrations(
         raw,
-        migrations.filter((migration) => migration.id < "sessions/store/0050"),
+        migrations.filter((migration) => migration.id < "sessions/store/0051"),
       );
       for (const table of KV_TABLES) await raw.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await raw.query(`CREATE TABLE org_rows(org_id TEXT NOT NULL, scope_label TEXT, scopes TEXT[], note TEXT)`);
@@ -147,7 +147,7 @@ test("pg upgrade with no tenant drops the deployment identity and moves nothing"
     const migrations = registeredPgMigrations(schemaUrl.toString());
     await applyPgMigrations(
       raw,
-      migrations.filter((migration) => migration.id < "sessions/store/0050"),
+      migrations.filter((migration) => migration.id < "sessions/store/0051"),
     );
     await raw.query("DELETE FROM tenants");
     await raw.query(`CREATE TABLE deployment_identity(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);

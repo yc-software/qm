@@ -1,6 +1,4 @@
 import type { ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 export type AdminRole = "org_admin";
@@ -24,28 +22,6 @@ export interface AdminGrantPersistence {
   remove(principalId: string, scopeId: ScopeId, role: AdminRole): Promise<void>;
 }
 
-export function createMapAdminGrantPersistence(
-  map: DurableMap<AdminGrant> = createMemoryMap<AdminGrant>(),
-): AdminGrantPersistence {
-  return {
-    async all() {
-      return map.all();
-    },
-    async put(g) {
-      await map.put(grantKey(g.principalId, g.scopeId, g.role), g);
-    },
-    async insertIfAbsent(g) {
-      if (!map.insertIfAbsent) throw new Error("admin grant storage requires atomic insertion");
-      return map.insertIfAbsent(grantKey(g.principalId, g.scopeId, g.role), g);
-    },
-    async remove(principalId, scopeId, role) {
-      await map.delete(grantKey(principalId, scopeId, role));
-    },
-  };
-}
-
-export const createMemoryAdminGrantPersistence = (): AdminGrantPersistence => createMapAdminGrantPersistence();
-
 export interface AdminGrantStore {
   list(): Promise<AdminGrant[]>;
   add(g: AdminGrant): Promise<void>;
@@ -58,7 +34,7 @@ export interface AdminGrantStoreOptions {
 }
 
 export function createAdminGrantStore(
-  persist: AdminGrantPersistence = createMemoryAdminGrantPersistence(),
+  persist: AdminGrantPersistence,
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
   const seeded = new Map<string, Promise<void>>();

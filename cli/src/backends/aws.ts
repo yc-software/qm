@@ -404,8 +404,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     const stores = {
       DEPLOY_PROVIDER: config.env.core?.DEPLOY_PROVIDER?.trim() || "aws",
       AWS_DEPLOY_REGION: aws.region,
-      SESSION_STORE: "postgres",
-      RUN_STORE: "postgres",
       SNAPSHOT_STORE: "s3",
       TRANSFER_STORE: "s3",
       S3_BUCKET: config.env.core?.S3_BUCKET?.trim() || awsObjectStoreBucket(config),

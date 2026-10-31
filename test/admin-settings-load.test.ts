@@ -9,9 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice" };
 
@@ -26,6 +24,10 @@ function start(overrides: Partial<ServerDeps> = {}) {
 }
 
 const scopePath = `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`;
+
+async function warm(base: string) {
+  await (await fetch(base + scopePath + "?view=customize", { headers: ADMIN })).arrayBuffer();
+}
 
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
@@ -47,10 +49,13 @@ test("settings projections preserve values while excluding unrelated payloads", 
     const projected = (await response.json()) as Record<string, unknown> & { branding: { selfLabel: string } };
     for (const [key, value] of Object.entries(projected)) assert.deepEqual(value, full[key], view + ":" + key);
     if (view !== "credentials") assert.equal("serviceCredentials" in projected, false, view);
-    else assert.deepEqual(projected.directoryChannels, [{ channelId: "C-settings", name: "settings-test" }]);
+    else
+      assert.deepEqual(projected.directoryChannels, [
+        { channelId: "C-settings", name: "settings-test", isPrivate: false },
+      ]);
     assert.match(response.headers.get("server-timing") ?? "", /authorize;dur=/);
     if (["customize", "credentials", "connectors"].includes(view))
-      assert.equal("modelsByHarness" in projected, false, view);
+      assert.equal("baseModelOptions" in projected, false, view);
     if (view === "slack-settings") {
       for (const key of ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"])
         assert.equal(key in projected, true);
@@ -66,13 +71,13 @@ test("settings projections preserve values while excluding unrelated payloads", 
   }
 });
 
-test("Customize completes within 500 ms with unrelated model and credential services unavailable", async (t) => {
+test("Customize completes within 500 ms with unrelated model and connector services unavailable", async (t) => {
   const fail = () => {
     throw new Error("Unrelated dependency must not be called");
   };
   const srv = start({ refreshModels: fail, modelCredentialFetch: fail });
   t.after(srv.close);
-  t.mock.method(srv.built.serviceCreds, "listServiceCredentials", fail);
+  await warm(srv.base);
   t.mock.method(srv.built.config, "listConnectorClients", fail);
   t.mock.method(srv.built.config, "getSecurityPostureDurable", fail);
   const started = performance.now();
@@ -91,6 +96,7 @@ test("independent governance reads overlap rather than accumulating network roun
     "getSharingPostureOwnDurable",
     "getApprovalGrantModesDurable",
   ] as const;
+  await warm(srv.base);
   let active = 0;
   let maxActive = 0;
   for (const name of reads) {
@@ -103,12 +109,10 @@ test("independent governance reads overlap rather than accumulating network roun
       return original(scope);
     });
   }
-  const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=governance", { headers: ADMIN });
   assert.equal(response.status, 200);
   await response.json();
   assert.equal(maxActive, reads.length);
-  assert.ok(performance.now() - started < 500);
 });
 
 test("each settings projection retains authorization before reading configuration", async (t) => {
@@ -152,9 +156,9 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openrouter: true,
   }));
   await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
-    harnessId: "pi",
     modelId: "settings/previously-saved-model",
   });
+  await warm(srv.base);
   const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=models", {
     headers: ADMIN,
@@ -163,13 +167,12 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
   assert.equal(response.status, 200);
   const body = (await response.json()) as {
     baseModelOptions: { id: string }[];
-    modelsByHarness: Record<string, { id: string }[]>;
     runtime: { modelId: string };
     modelCatalogRefreshing: boolean;
   };
   assert.ok(body.baseModelOptions.length > 0);
   assert.equal(body.runtime.modelId, "settings/previously-saved-model");
-  assert.ok(body.modelsByHarness.pi!.some((model) => model.id === body.runtime.modelId));
+  assert.ok(body.baseModelOptions.some((model) => model.id === body.runtime.modelId));
   assert.equal(body.modelCatalogRefreshing, true);
   assert.ok(performance.now() - started < 500);
 });

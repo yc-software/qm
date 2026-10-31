@@ -13,17 +13,13 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
 }
 
-export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntry[] {
-  const received = new Set(
-    entries.flatMap((entry) => {
-      const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
-      return entry.type === "user" && payload?.ts && !payload.slackReplyReceipt ? [payload.ts] : [];
-    }),
-  );
-  return entries.filter((entry) => {
-    const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
-    return !(payload?.slackReplyReceipt && payload.ts && received.has(payload.ts));
-  });
+export function commonEntrySeqs(views: readonly (readonly SessionEntry[])[]): Set<number> {
+  const common = new Set((views[0] ?? []).map((entry) => entry.seq));
+  for (const view of views.slice(1)) {
+    const visible = new Set(view.map((entry) => entry.seq));
+    for (const seq of common) if (!visible.has(seq)) common.delete(seq);
+  }
+  return common;
 }
 
 const emptyWindowStart = (opts?: GetEntriesOptions): number =>

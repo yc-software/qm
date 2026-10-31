@@ -3,16 +3,18 @@ import { test } from "node:test";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { planTriage, removeFromGroup, settleGroup, triageWork, workOrder } from "../src/loops/triage.ts";
-import { scopeId, type Loop, type LoopItem } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop, LoopItem } from "../src/loops/types.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { sleep } from "../src/util/async.ts";
+import { testMap } from "./support/test-database.ts";
 
 const LOOP = "loop-1";
 
 async function flood() {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testMap());
   const loop = (
-    await createLoopStore().create({
+    await createLoopStore(testMap()).create({
       owner: "U1",
       createdBy: "U1",
       ownerScopeId: scopeId("personal", "U1"),

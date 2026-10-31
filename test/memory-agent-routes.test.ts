@@ -11,9 +11,9 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -40,7 +40,11 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -378,7 +382,11 @@ describe("agent memory: cross-conversation writes are refused", () => {
       { groupId: GROUP, principalId: "U-carol" },
       { groupId: GROUP, principalId: "U-sam" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createAclStore, type ScopeManagement } from "../src/acl/acl-store.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import { scopeId, type Grant } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const CHAN = scopeId("channel", "C1");
 const GROUP = scopeId("group", "G1");
@@ -30,7 +30,7 @@ const grant = (over: Partial<Grant>): Grant => ({
 });
 
 test("a channel member may grant and revoke its artifacts (members manage)", async () => {
-  const acl = createAclStore(undefined, { manages });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
   await acl.grant(grant({ grantedBy: "alice" }));
   assert.equal((await acl.grantsFor(CHAN, ref)).length, 1);
   await acl.revoke(CHAN, ref, carol, "alice");
@@ -38,7 +38,7 @@ test("a channel member may grant and revoke its artifacts (members manage)", asy
 });
 
 test("a non-member cannot grant or revoke a channel artifact", async () => {
-  const acl = createAclStore(undefined, { manages });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
   await assert.rejects(acl.grant(grant({ grantedBy: "mallory" })), /only a manager/);
   await acl.grant(grant({ grantedBy: "alice" }));
   await assert.rejects(acl.revoke(CHAN, ref, carol, "mallory"), /only a manager/);
@@ -46,14 +46,14 @@ test("a non-member cannot grant or revoke a channel artifact", async () => {
 });
 
 test("a group-DM member may manage its artifacts; a non-member may not", async () => {
-  const acl = createAclStore(undefined, { manages });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
   await acl.grant(grant({ ownerScopeId: GROUP, grantedBy: "bob" }));
   assert.equal((await acl.grantsFor(GROUP, ref)).length, 1);
   await assert.rejects(acl.grant(grant({ ownerScopeId: GROUP, grantedBy: "alice" })), /only a manager/);
 });
 
 test("personal-scope owner authz is unchanged: only the owner manages", async () => {
-  const acl = createAclStore(undefined, { manages });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
   const owner = scopeId("personal", "U1");
   await assert.rejects(acl.grant(grant({ ownerScopeId: owner, grantedBy: "U2" })), /only a manager/);
   await acl.grant(grant({ ownerScopeId: owner, grantedBy: "U1" }));
@@ -61,13 +61,13 @@ test("personal-scope owner authz is unchanged: only the owner manages", async ()
 });
 
 test("without a membership predicate, channel/group grants pass unguarded (narrow unit slices)", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant(grant({ grantedBy: "anyone" }));
   assert.equal((await acl.grantsFor(CHAN, ref)).length, 1);
 });
 
 test("org/team home scopes are not membership-managed: grants pass unguarded as before", async () => {
-  const acl = createAclStore(undefined, { manages });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
   const org = TEST_ROOT_SCOPE;
   const team = scopeId("team", "eng");
   await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
@@ -84,20 +84,20 @@ const managesWithAuthorDoor: ScopeManagement = async (principalId, scope, author
 };
 
 test("a PUBLIC-channel artifact's author may grant when the guard is told the author (authoredBy)", async () => {
-  const acl = createAclStore(undefined, { manages: managesWithAuthorDoor });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages: managesWithAuthorDoor });
   await acl.grant(grant({ ownerScopeId: PUBCHAN, grantedBy: "U1" }), "U1");
   assert.equal((await acl.grantsFor(PUBCHAN, ref)).length, 1);
 });
 
 test("a non-author on a PUBLIC channel is still denied — the author door does not open for members", async () => {
-  const acl = createAclStore(undefined, { manages: managesWithAuthorDoor });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages: managesWithAuthorDoor });
   await assert.rejects(acl.grant(grant({ ownerScopeId: PUBCHAN, grantedBy: "U2" }), "U1"), /only a manager/);
   await assert.rejects(acl.grant(grant({ ownerScopeId: PUBCHAN, grantedBy: "U1" })), /only a manager/);
   assert.equal((await acl.grantsFor(PUBCHAN, ref)).length, 0);
 });
 
 test("the author door does NOT weaken a PRIVATE channel — authoredBy can't let a non-member author in", async () => {
-  const acl = createAclStore(undefined, { manages: managesWithAuthorDoor });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages: managesWithAuthorDoor });
   await assert.rejects(acl.grant(grant({ ownerScopeId: CHAN, grantedBy: "U1" }), "U1"), /only a manager/);
   assert.equal((await acl.grantsFor(CHAN, ref)).length, 0);
   await acl.grant(grant({ ownerScopeId: CHAN, grantedBy: "alice" }), "U1");
@@ -105,7 +105,7 @@ test("the author door does NOT weaken a PRIVATE channel — authoredBy can't let
 });
 
 test("revoke honors the author door too: a PUBLIC-channel author may revoke, a non-author may not", async () => {
-  const acl = createAclStore(undefined, { manages: managesWithAuthorDoor });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages: managesWithAuthorDoor });
   await acl.grant(grant({ ownerScopeId: PUBCHAN, grantedBy: "U1" }), "U1");
   assert.equal((await acl.grantsFor(PUBCHAN, ref)).length, 1);
   await assert.rejects(acl.revoke(PUBCHAN, ref, carol, "U2", "U1"), /only a manager/);

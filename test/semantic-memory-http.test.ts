@@ -14,7 +14,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -48,6 +48,7 @@ async function isolatedDatabase(t: TestContext) {
   const url = new URL(database!);
   url.pathname = `/${name}`;
   fixture.url = url.toString();
+  await seedTenant(fixture.url);
   return fixture;
 }
 

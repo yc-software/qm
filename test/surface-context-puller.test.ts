@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSurfaceContextPuller } from "../src/api/surface-context-puller.ts";
-import type { SurfaceContextQuery, SurfaceContextResult } from "../src/types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 
 function fakeApp(behavior: (id: string) => { status: string; result?: SurfaceContextResult }) {
   let lastId = 0;

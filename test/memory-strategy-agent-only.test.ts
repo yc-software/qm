@@ -3,12 +3,10 @@ import assert from "node:assert/strict";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { AGENT_ONLY_PROMPT_LINES, createAgentOnlyStrategy } from "../src/memory/strategies/agent-only.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "u1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "t1", audience: [actor] };
@@ -27,15 +25,18 @@ test("agent-only strategy: no automatic extraction, curation guidance in promptL
 });
 
 test("createMemoryStrategy('agent-only') returns the agent-only strategy", () => {
-  const harness = {} as never;
+  const agent = {} as never;
   const memory = {} as never;
-  const { strategy } = createMemoryStrategy("agent-only", { harness, memory });
+  const { strategy } = createMemoryStrategy("agent-only", { agent, memory });
   assert.equal(strategy.onTurnEnd, undefined);
   assert.deepEqual(strategy.promptLines?.(), AGENT_ONLY_PROMPT_LINES);
 });
 
 test("resolution systemPrompt no longer embeds the memory section — it moved to shared-core + the orchestrator strategy block", async () => {
-  const resolution = createResolutionService(createMemoryConfigStore(), createAclStore());
+  const resolution = createResolutionService(
+    testConfigStore(),
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const res = await resolution.resolve(conversation, actor);
   assert.ok(!res.systemPrompt.includes(AGENT_ONLY_PROMPT_LINES[0] as string));
 });

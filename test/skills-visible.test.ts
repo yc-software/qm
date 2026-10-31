@@ -9,11 +9,9 @@ import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function freshApp() {
   const config: Config = testConfig({
@@ -84,7 +82,7 @@ test("an unpublished (draft/reviewed) skill is not visible", async () => {
 });
 
 test("visibleFor reads the requested scopes once, not once per skill name", async () => {
-  const backing = createMemoryMap<Skill>();
+  const backing = testMap<Skill>();
   let allReads = 0;
   let selectReads = 0;
   const originalAll = backing.all.bind(backing);
@@ -97,7 +95,7 @@ test("visibleFor reads the requested scopes once, not once per skill name", asyn
     selectReads += 1;
     return originalSelect(query);
   };
-  const skills = createSkillStore({ backing });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing });
 
   const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");

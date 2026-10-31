@@ -11,7 +11,7 @@ import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
-import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
+import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
@@ -77,7 +77,7 @@ import type {
   ControlErr,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
-import type { Cron, Webhook } from "../types.ts";
+import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
@@ -197,10 +197,8 @@ export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
-  /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
-  commandCredentialHandles?: readonly string[];
   execute(
     command: string,
     opts?: {
@@ -418,15 +416,6 @@ interface SurfaceMembersResult {
   message?: string;
 }
 
-interface SurfaceFileResult {
-  ok: boolean;
-  content?: string;
-  name?: string;
-  sizeBytes?: number;
-  contentType?: string;
-  message?: string;
-}
-
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -451,7 +440,6 @@ export interface SurfaceToolDeps {
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
-  readFile(ref: string): Promise<SurfaceFileResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -734,9 +722,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
-    ...(deps.commandCredentials?.length
-      ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
-      : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
           async sandboxResources(
@@ -1325,7 +1310,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
-    readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

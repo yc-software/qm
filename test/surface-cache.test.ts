@@ -1,16 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySurfaceCache, type LiveFallback } from "../src/surface-cache/surface-cache.ts";
-import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { type LiveFallback, createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import {
   judgeAmbientBatch,
   parseAmbientDecision,
   type AmbientBatch,
   type AmbientDecision,
 } from "../src/surface-cache/ambient-judge.ts";
+import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
   await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
   const msgs = await cache.readMessages("C1");
@@ -19,7 +20,7 @@ test("ingest is idempotent per (container, ts) — a re-delivery upserts, never 
 });
 
 test("ingest is last-writer-wins on change-time — an edit overwrites, a stale re-send of the original does not", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "100.1", text: "original", createdAt: 1 }]);
   await cache.ingest([{ container: "C1", ts: "100.1", text: "edited", editedAt: 5, createdAt: 1 }]);
   let msgs = await cache.readMessages("C1");
@@ -30,7 +31,7 @@ test("ingest is last-writer-wins on change-time — an edit overwrites, a stale 
 });
 
 test("a delete always wins (even after an edit) and is monotonic — a re-delivered original can't un-delete", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "1.0", text: "original", createdAt: 1 }]);
   await cache.ingest([{ container: "C1", ts: "1.0", text: "edited", editedAt: 9, createdAt: 1 }]);
   await cache.ingest([{ container: "C1", ts: "1.0", deleted: true, createdAt: 1 }]);
@@ -52,7 +53,7 @@ test("readMessages heals from the live fallback on a mirror miss", async () => {
     called++;
     return [{ container, ts: "9.9", authorId: "U2", text: "from the live surface", createdAt: 1 }];
   };
-  const cache = createMemorySurfaceCache({ liveFallback });
+  const cache = createPostgresSurfaceCache(testDatabaseUrl(), { liveFallback });
   const missed = await cache.readMessages("C-empty");
   assert.equal(called, 1, "the live fallback was consulted on the miss");
   assert.equal(missed.length, 1);
@@ -64,7 +65,7 @@ test("readMessages heals from the live fallback on a mirror miss", async () => {
 });
 
 test("search finds mirrored bodies and excludes deleted rows", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.0", text: "the Q3 launch is next week", createdAt: 1 },
     { container: "C1", ts: "2.0", text: "unrelated banter", createdAt: 2 },
@@ -76,7 +77,7 @@ test("search finds mirrored bodies and excludes deleted rows", async () => {
 });
 
 test("activeThreads projects sub-conversations with recent activity, newest first", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 1 },
     { container: "C1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 2 },
@@ -95,7 +96,7 @@ test("activeThreads projects sub-conversations with recent activity, newest firs
 });
 
 test("eager membership maintenance: ingest keeps a container's members fresh, ungated by bodies", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     {
       container: "C1",
@@ -120,7 +121,7 @@ test("eager membership maintenance: ingest keeps a container's members fresh, un
 });
 
 test("oldest_ts is the numeric floor of ingested ts — compared numerically, not lexically", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "1000.1", text: "newest", createdAt: 3 }]);
   await cache.ingest([{ container: "C1", ts: "999.1", text: "older", createdAt: 2 }]);
   await cache.ingest([{ container: "C1", ts: "1500.1", text: "even newer", createdAt: 4 }]);
@@ -129,7 +130,7 @@ test("oldest_ts is the numeric floor of ingested ts — compared numerically, no
 });
 
 test("channel policy store: set + get + list standing orders", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   assert.equal(await store.get("C1"), null);
   await store.set("C1", "flag anything about the Q3 launch", { setBy: "U-admin" });
   const p = await store.get("C1");
@@ -139,7 +140,7 @@ test("channel policy store: set + get + list standing orders", async () => {
 });
 
 test("channel policy store: every set appends a provenance revision to history", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   await store.set("C1", "flag the launch", { setBy: "U-alice", sessionId: "sess-1" });
   await store.set("C1", "flag the launch and incidents", { setBy: "U-bob", sessionId: "sess-2" });
   await store.set("C-other", "unrelated", { setBy: "U-carol" });
@@ -153,7 +154,7 @@ test("channel policy store: every set appends a provenance revision to history",
 });
 
 test("channel policy store: bot ledger round-trips and an omitted `bots` leaves it unchanged", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   const ledger = { newsbot: { mode: "rollup" as const, rollupHours: 6 }, deploybot: { mode: "action" as const } };
   await store.set("C1", "watch the launch", { setBy: "U-admin", bots: ledger });
   const p = await store.get("C1");
@@ -167,7 +168,7 @@ test("channel policy store: bot ledger round-trips and an omitted `bots` leaves 
 });
 
 test("channel policy store: ambientEnabled is tri-state — unset by default, round-trips, omitted leaves it, null clears it", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   await store.set("C1", "watch the launch", { setBy: "U-admin" });
   assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "unset by default — the size rule decides");
   await store.set("C1", "watch the launch", { setBy: "U-admin", ambientEnabled: false });
@@ -283,7 +284,7 @@ test("ambient judge: the agent's own posts are never shown to the judge as new m
 });
 
 test("mentions round-trip through ingest → readMessages (memory)", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", mentions: { U1: "jordan" }, createdAt: 1 }]);
   const msgs = await cache.readMessages("C1");
   assert.deepEqual(msgs[0]!.mentions, { U1: "jordan" }, "the mentions map survives the round-trip");
@@ -293,7 +294,7 @@ test("mentions round-trip through ingest → readMessages (memory)", async () =>
 });
 
 test("mentionsSelf round-trips through ingest → readMessages (memory)", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.0", text: "@bot help", mentionsSelf: true, createdAt: 1 },
     { container: "C1", ts: "2.0", text: "just chatting", createdAt: 2 },
@@ -307,14 +308,14 @@ test("mentionsSelf round-trips through ingest → readMessages (memory)", async 
 });
 
 test("revisedSince returns messages edited or deleted after the watermark, stamping deletions once", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "Cr", ts: "1.0", text: "a", createdAt: 1 },
     { container: "Cr", ts: "2.0", text: "b", createdAt: 2 },
     { container: "Cr", ts: "3.0", text: "c", createdAt: 3 },
   ]);
   const before = Date.now();
-  await cache.ingest([{ container: "Cr", ts: "1.0", text: "a2", editedAt: before + 10 }]);
+  await cache.ingest([{ container: "Cr", ts: "1.0", text: "a2", editedAt: before + 60_000 }]);
   await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
   const revised = (await cache.revisedSince("Cr", before - 1)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
   assert.deepEqual(
@@ -328,22 +329,23 @@ test("revisedSince returns messages edited or deleted after the watermark, stamp
   assert.ok(firstDeletedAt && firstDeletedAt >= before);
   await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
   assert.equal(
-    (await cache.revisedSince("Cr", 0))[1]!.deletedAt,
+    (await cache.revisedSince("Cr", 0)).find((m) => m.ts === "2.0")!.deletedAt,
     firstDeletedAt,
     "a repeat delete keeps the first stamp",
   );
-  assert.equal((await cache.revisedSince("Cr", before + 10)).length, 1, "the watermark itself is included");
-  assert.deepEqual(await cache.revisedSince("Cr", before + 11), []);
+  assert.equal((await cache.revisedSince("Cr", before + 60_000)).length, 1, "the watermark itself is included");
+  assert.deepEqual(await cache.revisedSince("Cr", before + 60_001), []);
   assert.deepEqual(await cache.revisedSince("Cother", 0), []);
+  const byTs = (rows: { ts: string }[]) => rows.map((m) => m.ts).sort();
   assert.deepEqual(
-    await cache.revisedSince("Cr", 0),
-    await cache.revisedSince("Cr", 1),
+    byTs(await cache.revisedSince("Cr", 0)),
+    byTs(await cache.revisedSince("Cr", 1)),
     "never-revised rows never match",
   );
 });
 
 test("revisedSince includes the bot's own edits and can be scoped to one thread", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "Ct", ts: "1.0", text: "root", createdAt: 1 },
     { container: "Ct", ts: "1.5", sub: "1.0", text: "reply", createdAt: 2 },
@@ -371,7 +373,7 @@ test("revisedSince includes the bot's own edits and can be scoped to one thread"
 });
 
 test("cache revisions preserve attachments and parent against stale handled events", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   try {
     const base = { container: "CSNAPSHOT", ts: "2.0" };
     await cache.ingest([{ ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] }]);
@@ -418,7 +420,7 @@ test("cache revisions preserve attachments and parent against stale handled even
 });
 
 test("cache selects exact timestamps and oldest pages with live reply counts", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   try {
     const container = "CSELECT";
     await cache.ingest([
@@ -453,7 +455,7 @@ test("cache selects exact timestamps and oldest pages with live reply counts", a
 });
 
 test("channel history includes broadcasts while exact roots exclude them", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   try {
     const container = "CBROADCAST";
     await cache.ingest([

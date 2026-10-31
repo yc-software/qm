@@ -6,16 +6,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
@@ -43,9 +44,11 @@ async function putFile(files: FileArtifactStore, ownerScopeId: string) {
 }
 
 async function fileAcl(ownerScopeId: string) {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   await putFile(files, ownerScopeId);
-  return createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  return createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
 }
 
 test("revoke has the same owner check as grant: a non-owner cannot revoke a personal-scope grant", async () => {

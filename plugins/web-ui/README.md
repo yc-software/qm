@@ -46,7 +46,7 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
 ## Suggested activities
 
-Suggested activity generation is **on by default** when the configured harness supports
+Suggested activity generation is **on by default** when the configured model supports
 it. Set `SUGGESTED_ACTIVITIES_ENABLED=false` on core to disable generation. Optionally
 set `WEB_UI_SUGGESTED_ACTIVITIES` on web to a JSON array for fixed fallback starters;
 unset it as well to hide suggestions entirely. No deployment-specific activity content
@@ -142,7 +142,7 @@ Below 860px the same build behaves like an app rather than a shrunken desktop:
   button's column so nothing renders under it.
 - **Bottom sheets.** Popover menus — composer settings, a session's ⋯, the user menu, the
   per-session tools — render as sheets with a backdrop; tap outside or swipe down to dismiss.
-- **Compact composer.** Attach · input · settings · send on one row; model, harness, effort, and
+- **Compact composer.** Attach · input · settings · send on one row; model, effort, and
   Fast live in the settings sheet. Inputs are 16px so iOS never zooms on focus, and the layout
   tracks the visual viewport so the composer stays above the on-screen keyboard.
 - **Touch targets.** Message actions, file chips, selects, drawer rows, approvals, and back
@@ -159,7 +159,7 @@ the CSS media queries, the composer, and the split canvas.
 
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
-  serviceable for the approved harnesses),
+  serviceable),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
   toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
   light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or
@@ -177,8 +177,8 @@ the CSS media queries, the composer, and the split canvas.
   (→ core `GET /v1/skills?principalId=`, resolved by `app.listVisibleSkills`). The skill _body_
   never reaches the browser; only name/description/scope do.
 - **Functional selectors** — the chosen model + effort + Fast mode ride along on each turn
-  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the Pi harness applies them
-  server-side, bypassing Pi's stale thinking-level clamp for newer effort values and falling
+  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the agent applies them
+  server-side, bypassing pi-ai's stale thinking-level clamp for newer effort values and falling
   back to its default on any unknown value. Attachments are forwarded as `IncomingAttachment`s
   and materialized into the agent's sandbox inbox (same path as Slack file shares).
 - **Unified history** — every session you participated in (DMs, channels, web), via

@@ -7,13 +7,11 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { type TurnRequest } from "../src/types.ts";
+import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const internalActor = { externalId: "U1" };
@@ -33,7 +31,7 @@ function freshApp() {
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {
-  const c = createMemoryConfigStore();
+  const c = testConfigStore();
   assert.equal(c.getExternalSlackParticipants(org), false);
   await c.setExternalSlackParticipants(org, true);
   assert.equal(c.getExternalSlackParticipants(org), true);
@@ -42,9 +40,9 @@ test("external-slack-participants: default off; the org flip is what turns it on
 });
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
-  const store = createMemoryMap<PersistedScopedFlag>();
-  const a = createMemoryConfigStore({ externalSlackParticipants: store });
-  const b = createMemoryConfigStore({ externalSlackParticipants: store });
+  const store = testMap<PersistedScopedFlag>();
+  const a = testConfigStore({ externalSlackParticipants: store });
+  const b = testConfigStore({ externalSlackParticipants: store });
 
   await a.setExternalSlackParticipants(org, true);
   await Promise.resolve();

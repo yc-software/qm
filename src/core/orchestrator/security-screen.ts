@@ -8,7 +8,7 @@ import {
   type SecurityScreenVerdict,
 } from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
+import type { TurnLlmRequestRecord } from "../../agent/agent.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
@@ -18,7 +18,7 @@ const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
 
-const unscreenedVerdict = (): SecurityScreenVerdict => ({
+export const unscreenedVerdict = (): SecurityScreenVerdict => ({
   decision: "auto",
   unscreened: true,
   reason: UNSCREENED_REASON,
@@ -27,7 +27,7 @@ const unscreenedVerdict = (): SecurityScreenVerdict => ({
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
 
-interface SecurityScreenContext {
+export interface SecurityScreenContext {
   mode: "observe" | "enforce";
   hook?: SecurityScreenHook;
   surface?: string;
@@ -43,7 +43,7 @@ export type SecurityClassifier = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest: ((rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
+  recordLlmRequest: ((rec: TurnLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
   context: SecurityScreenContext,
 ) => Promise<SecurityScreenVerdict | undefined>;
 
@@ -64,7 +64,7 @@ function screenSources(payload: string): string[] {
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
-    const model = deps.harness.models.screenSecurity;
+    const model = deps.agent.screenSecurity;
     const observe = context.mode === "observe";
     if (!screener && !model) return observe ? { decision: "auto" } : undefined;
     const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;
@@ -122,14 +122,12 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
         payload: request ? JSON.stringify({ request, payload }) : payload,
         ...(flagger
           ? {
-              harnessId: flagger.harnessId,
               modelId: flagger.modelId,
               systemPrompt: securityScreenSystemPrompt(flagger.rubric),
             }
           : {}),
         signal,
         recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
           if (!observe) void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));
         },
         ...(recordLlmRequest && !observe ? { recordLlmRequest } : {}),
@@ -178,4 +176,25 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     await sleep(250);
     return settle(await attempt(), 2) ?? unscreenedVerdict();
   };
+}
+
+export const cleanVerdict = (verdict: SecurityScreenVerdict | undefined): boolean =>
+  verdict?.decision === "auto" && !verdict.unscreened;
+
+export async function screenChunks(
+  chunks: readonly string[],
+  classify: (chunk: string) => Promise<SecurityScreenVerdict | undefined>,
+  { batch = 1, stopUnclean = false, signal }: { batch?: number; stopUnclean?: boolean; signal?: AbortSignal } = {},
+): Promise<SecurityScreenVerdict> {
+  const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+  for (let i = 0; i < chunks.length; i += batch) {
+    signal?.throwIfAborted();
+    const settled = await Promise.all(chunks.slice(i, i + batch).map(classify));
+    verdicts.push(...settled);
+    if (settled.some((verdict) => verdict?.decision === "strict" || (stopUnclean && !cleanVerdict(verdict)))) break;
+  }
+  const strict = verdicts.find((verdict) => verdict?.decision === "strict");
+  if (strict) return strict;
+  if (verdicts.length < chunks.length || !verdicts.every(cleanVerdict)) return unscreenedVerdict();
+  return verdicts[0] ?? { decision: "auto" };
 }

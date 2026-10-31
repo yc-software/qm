@@ -4,9 +4,10 @@ import { deploymentCredentialSlugs } from "../src/deploy/deployment-credentials.
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { scopeId } from "../src/types.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({
@@ -22,7 +23,7 @@ const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): Public
 });
 
 test("a published app gets only enabled broker credentials that are switched on for apps AND granted org-wide", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const grant = (slug: string, grantee: string) =>
     acl.grant({
       ownerScopeId: ORG,

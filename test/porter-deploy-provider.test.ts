@@ -6,13 +6,14 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testMap } from "./support/test-database.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -80,7 +81,7 @@ function make(
 ): void {
   fake?.cleanup();
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
-  store = createMemoryMap<StoredPorterDeployBody>();
+  store = testMap<StoredPorterDeployBody>();
   provider = createPorterDeployProvider({
     ...singleProcessDeps(),
     appsDomain: "apps.test",

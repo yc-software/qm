@@ -1,15 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { scopeId } from "../src/types.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 test("recordUse sets lastUsedAt without touching version/updatedAt or the signature", async () => {
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const s = await skills.create({ scopeId: org, manifest, createdBy: "alice" });
   assert.equal(s.lastUsedAt, undefined);
   await skills.recordUse(s.id, 12345);
@@ -21,7 +21,7 @@ test("recordUse sets lastUsedAt without touching version/updatedAt or the signat
 });
 
 test("recordUse on an unknown id is a no-op", async () => {
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   await skills.recordUse("nope");
   assert.equal(await skills.get("nope"), null);
 });

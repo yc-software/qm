@@ -5,29 +5,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> => ({
@@ -104,17 +101,17 @@ function gatedSandbox() {
 function buildOrchestrator(
   sandbox: Sandbox,
   errors?: ErrorLog,
-  harness = createMockHarness(),
+  agent = createMockAgent(),
   surfaceCache?: SurfaceCache,
 ) {
-  const config = createMemoryConfigStore();
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const config = testConfigStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "frr-deploy"),
     auditLog,
@@ -122,17 +119,16 @@ function buildOrchestrator(
   });
   const orch = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(config, acl),
     sessions,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
     ...(errors ? { errors } : {}),
@@ -155,19 +151,19 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
   assert.ok(lease2, "the session lease is free right after the reply (fast follow-up not blocked)");
   await sessions.releaseLease(lease2!);
 
-  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   assert.equal(g.teardownStarted, 1, "the detached tail reached teardown");
   assert.equal(g.teardownFinished, 0, "...and it ran AFTER the reply returned (still gated here)");
   g.release();
-  for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownFinished === 0; i++) await tick();
   assert.equal(g.teardownFinished, 1, "the detached tail completed once unblocked");
 });
 
 test("background: title persistence finishes before the run while teardown stays detached", async () => {
   const g = gatedSandbox();
-  const base = createMockHarness();
-  const harness = { ...base, models: { ...base.models, generateTitle: () => new Promise<string>(() => {}) } };
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, harness);
+  const base = createMockAgent();
+  const agent = { ...base, generateTitle: () => new Promise<string>(() => {}) };
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, agent);
   const result = await orch.handleTurn({
     ...dm("dm:U1:title-background", "!run echo hi"),
     displayText: "Simulate four-way title outage from the visible message",
@@ -181,7 +177,7 @@ test("background: title persistence finishes before the run while teardown stays
     "Simulate four-way title outage from the visible message",
   );
   assert.equal(g.teardownFinished, 0);
-  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   g.release();
 });
 
@@ -209,13 +205,13 @@ test("spine-routed titles use visible text instead of the internal wake envelope
 
 test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
   assert.equal(first.status, "ok");
-  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   g.release();
-  for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownFinished === 0; i++) await tick();
   assert.equal(g.provisioned, 1);
 
   const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: "r5", background: true });
@@ -223,18 +219,18 @@ test("background: a turn that never used its eagerly provisioned box returns bef
   assert.equal(g.provisioned, 2, "the session had used tools before, so the box was provisioned eagerly");
   assert.equal(g.teardownFinished, 1, "the reply returned without waiting for the unused box's teardown");
 
-  for (let i = 0; i < 200 && g.teardownStarted < 2; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownStarted < 2; i++) await tick();
   assert.equal(g.teardownStarted, 2, "the detached tail reached teardown");
   assert.equal(g.teardownOpts[1]?.homeUnchanged, true, "an unused box tells the backend there is nothing to snapshot");
   assert.equal(g.teardownOpts[0]?.homeUnchanged, undefined, "a used box does not");
   g.release();
-  for (let i = 0; i < 200 && g.teardownFinished < 2; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownFinished < 2; i++) await tick();
   assert.equal(g.teardownFinished, 2);
 });
 
 test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
   assert.equal(first.status, "ok");
@@ -273,7 +269,7 @@ test("background: the message edit catch-up still runs before the lease is relea
           }
         : async () => [],
   }) as unknown as SurfaceCache;
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), surfaceCache);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent(), surfaceCache);
   const result = await orch.handleTurn({
     ...dm("ch:C1:t1", "!run echo hi"),
     surface: "slack",
@@ -332,16 +328,16 @@ test("background: an error in the detached tail still reclaims the box (no machi
     list: () => Promise.resolve([]),
     count: () => Promise.resolve(0),
   };
-  const harness = createMockHarness();
-  harness.models.generateTitle = async () => {
+  const agent = createMockAgent();
+  agent.generateTitle = async () => {
     throw new Error("title gen blew up");
   };
-  const { orch } = buildOrchestrator(sandbox, throwingErrors, harness);
+  const { orch } = buildOrchestrator(sandbox, throwingErrors, agent);
 
   const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: "r3", background: true });
   assert.equal(result.status, "ok");
 
-  for (let i = 0; i < 200 && teardowns === 0; i++) await tick();
+  for (let i = 0; i < 2000 && teardowns === 0; i++) await tick();
   assert.equal(teardowns, 1, "the box is reclaimed even though the tail failed");
 });
 
@@ -355,7 +351,7 @@ test("blocking path: the turn does NOT return until the tail (teardown) complete
     done = true;
   });
 
-  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   assert.equal(g.teardownStarted, 1, "the blocking path runs the tail (reaches teardown)");
   assert.equal(done, false, "handleTurn has NOT returned — it awaits the tail");
 

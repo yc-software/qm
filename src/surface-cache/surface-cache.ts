@@ -1,15 +1,7 @@
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import type {
-  ActiveThread,
-  CachedFile,
-  CachedMessage,
-  ContainerState,
-  ContainerSummary,
-  LiveFallback,
-  IngestEvent,
-  SurfaceCache,
-} from "./types.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { currentTenant } from "../tenants/context.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
 
 export type {
   ActiveThread,
@@ -39,21 +31,12 @@ function clampLimit(limit: number | undefined, fallback: number): number {
 
 const REVISION_SCAN_LIMIT = 500;
 
-function revisedAt(m: { editedAt?: number; deletedAt?: number }): number {
-  return Math.max(m.editedAt ?? 0, m.deletedAt ?? 0);
-}
-
-function compareTs(a: { ts: string }, b: { ts: string }): number {
-  if (a.ts < b.ts) return -1;
-  if (a.ts > b.ts) return 1;
-  return 0;
-}
-
 export function createPostgresSurfaceCache(
   connectionString: string,
   opts: { liveFallback?: LiveFallback } = {},
 ): SurfaceCache {
   const { q, pool, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "surface-cache/store/0001",
       statements: [
@@ -130,6 +113,21 @@ export function createPostgresSurfaceCache(
         `ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS size BIGINT`,
       ],
     },
+    tenantTables("surface-cache/store/0007-tenants", [
+      {
+        table: "channel_messages",
+        primaryKey: "container, ts",
+        replacesOrgId: [
+          { name: "channel_messages_by_container", columns: "container, ts" },
+          { name: "channel_messages_live_by_container", columns: "container", where: "deleted = FALSE" },
+          { name: "channel_messages_by_sub", columns: "container, sub, ts" },
+          { name: "channel_messages_edited_by_container", columns: "container, edited_at", where: "edited_at > 0" },
+          { name: "channel_messages_deleted_by_container", columns: "container, deleted_at", where: "deleted_at > 0" },
+        ],
+      },
+      { table: "channel_state", primaryKey: "container", replacesOrgId: [] },
+      { table: "channel_files", primaryKey: "container, ts, file_id", replacesOrgId: [] },
+    ]),
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -169,9 +167,9 @@ export function createPostgresSurfaceCache(
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id)
+            `INSERT INTO channel_messages(tenant_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20)
-             ON CONFLICT (org_id, container, ts) DO UPDATE SET
+             ON CONFLICT (tenant_id, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
                subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
                broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
@@ -216,7 +214,7 @@ export function createPostgresSurfaceCache(
           );
           upserted += res.rowCount ?? 0;
           if (res.rows[0]?.content_accepted && e.files !== undefined) {
-            await client.query("DELETE FROM channel_files WHERE org_id = $1 AND container = $2 AND ts = $3", [
+            await client.query("DELETE FROM channel_files WHERE tenant_id = $1 AND container = $2 AND ts = $3", [
               currentTenant(),
               e.container,
               e.ts,
@@ -224,9 +222,9 @@ export function createPostgresSurfaceCache(
             for (const f of e.files) {
               if (!f.fileId) continue;
               await client.query(
-                `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
+                `INSERT INTO channel_files(tenant_id, container, ts, file_id, name, mimetype, created_at, title, size)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT (org_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
+               ON CONFLICT (tenant_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
                 [
                   currentTenant(),
                   e.container,
@@ -242,9 +240,9 @@ export function createPostgresSurfaceCache(
             }
           }
           await client.query(
-            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at)
+            `INSERT INTO channel_state(tenant_id, container, last_ts, oldest_ts, name, kind, members, updated_at)
              VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7)
-             ON CONFLICT (org_id, container) DO UPDATE SET
+             ON CONFLICT (tenant_id, container) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
                  WHEN channel_state.oldest_ts IS NULL OR EXCLUDED.oldest_ts::numeric < channel_state.oldest_ts::numeric
@@ -270,16 +268,16 @@ export function createPostgresSurfaceCache(
 
     async markHandled(container, ts) {
       await q(
-        `INSERT INTO channel_messages(org_id, container, ts, created_at, handled)
+        `INSERT INTO channel_messages(tenant_id, container, ts, created_at, handled)
          VALUES ($1,$2,$3,$4,TRUE)
-         ON CONFLICT (org_id, container, ts) DO UPDATE SET handled = TRUE`,
+         ON CONFLICT (tenant_id, container, ts) DO UPDATE SET handled = TRUE`,
         [currentTenant(), container, ts, Date.now()],
       );
     },
 
     async readMessages(container, opts = {}) {
       const limit = clampLimit(opts.limit, DEFAULT_READ_LIMIT);
-      const conds = ["org_id = $1", "container = $2"];
+      const conds = ["tenant_id = $1", "container = $2"];
       const args: unknown[] = [currentTenant(), container];
       if (opts.at) {
         args.push(opts.at);
@@ -308,7 +306,7 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
+        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.tenant_id = channel_messages.tenant_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.tenant_id = channel_messages.tenant_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
         args,
       );
       const hit = rows.map(rowToMessage);
@@ -322,7 +320,7 @@ export function createPostgresSurfaceCache(
 
     async revisedSince(container, since, opts = {}) {
       const conds = [
-        "org_id = $1",
+        "tenant_id = $1",
         "container = $2",
         "((edited_at > 0 AND edited_at >= $3) OR (deleted_at > 0 AND deleted_at >= $3))",
       ];
@@ -344,7 +342,7 @@ export function createPostgresSurfaceCache(
       const term = queryText.trim();
       if (!term) return [];
       const limit = clampLimit(opts.limit, DEFAULT_SEARCH_LIMIT);
-      const conds = ["org_id = $1", "deleted = FALSE", "tsv @@ plainto_tsquery('english', $2)"];
+      const conds = ["tenant_id = $1", "deleted = FALSE", "tsv @@ plainto_tsquery('english', $2)"];
       const args: unknown[] = [currentTenant(), term];
       if (opts.container) {
         args.push(opts.container);
@@ -361,7 +359,7 @@ export function createPostgresSurfaceCache(
 
     async activeThreads(o = {}) {
       const limit = clampLimit(o.limit, DEFAULT_THREADS_LIMIT);
-      const conds = ["org_id = $1", "sub IS NOT NULL", "deleted = FALSE"];
+      const conds = ["tenant_id = $1", "sub IS NOT NULL", "deleted = FALSE"];
       const args: unknown[] = [currentTenant()];
       if (o.container) {
         args.push(o.container);
@@ -385,7 +383,7 @@ export function createPostgresSurfaceCache(
     },
 
     async members(container) {
-      const rows = await q("SELECT members FROM channel_state WHERE org_id = $1 AND container = $2", [
+      const rows = await q("SELECT members FROM channel_state WHERE tenant_id = $1 AND container = $2", [
         currentTenant(),
         container,
       ]);
@@ -396,7 +394,7 @@ export function createPostgresSurfaceCache(
     },
 
     async isMember(container, principalId) {
-      const rows = await q("SELECT 1 FROM channel_state WHERE org_id = $1 AND container = $2 AND members ? $3", [
+      const rows = await q("SELECT 1 FROM channel_state WHERE tenant_id = $1 AND container = $2 AND members ? $3", [
         currentTenant(),
         container,
         principalId,
@@ -405,7 +403,7 @@ export function createPostgresSurfaceCache(
     },
 
     async containerState(container) {
-      const rows = await q("SELECT * FROM channel_state WHERE org_id = $1 AND container = $2", [
+      const rows = await q("SELECT * FROM channel_state WHERE tenant_id = $1 AND container = $2", [
         currentTenant(),
         container,
       ]);
@@ -426,9 +424,9 @@ export function createPostgresSurfaceCache(
       const rows = await q(
         `SELECT s.*, COALESCE(m.n, 0) AS message_count
            FROM channel_state s
-           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE org_id = $1 AND deleted = FALSE GROUP BY container) m
+           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE tenant_id = $1 AND deleted = FALSE GROUP BY container) m
              ON m.container = s.container
-          WHERE s.org_id = $1
+          WHERE s.tenant_id = $1
           ORDER BY s.updated_at DESC
           LIMIT $2`,
         [currentTenant(), limit],
@@ -451,243 +449,5 @@ export function createPostgresSurfaceCache(
     },
 
     close,
-  };
-}
-
-export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } = {}): SurfaceCache {
-  const key = (container: string): string => container;
-  const messages = new Map<string, Map<string, CachedMessage>>();
-  const files = new Map<string, CachedFile[]>();
-  const state = new Map<string, ContainerState & { members: string[] }>();
-  const liveFallback = opts.liveFallback;
-
-  const containerMsgs = (container: string): Map<string, CachedMessage> => {
-    const k = key(container);
-    let m = messages.get(k);
-    if (!m) messages.set(k, (m = new Map()));
-    return m;
-  };
-
-  return {
-    async ingest(events) {
-      const now = Date.now();
-      let upserted = 0;
-      for (const event of events) {
-        const e = normalizeEvent(event);
-        if (!e.container || !e.ts) continue;
-        const m = containerMsgs(e.container);
-        const existing = m.get(e.ts);
-        const deleted = (existing?.deleted ?? false) || (e.deleted ?? false);
-        const accepted = !existing?.deleted && !e.deleted && (e.editedAt ?? 0) >= (existing?.editedAt ?? 0);
-        if (accepted || !existing) {
-          m.set(e.ts, {
-            container: e.container,
-            ts: e.ts,
-            ...((e.sub === undefined ? existing?.sub : e.sub)
-              ? { sub: (e.sub === undefined ? existing?.sub : e.sub) as string }
-              : {}),
-            ...((e.subtype ?? existing?.subtype) !== undefined ? { subtype: e.subtype ?? existing?.subtype } : {}),
-            ...((e.broadcast ?? existing?.broadcast) ? { broadcast: true } : {}),
-            ...((e.botId ?? existing?.botId) ? { botId: e.botId ?? existing?.botId } : {}),
-            ...((e.authorId ?? existing?.authorId) ? { authorId: (e.authorId ?? existing?.authorId) as string } : {}),
-            ...((e.authorName ?? existing?.authorName)
-              ? { authorName: (e.authorName ?? existing?.authorName) as string }
-              : {}),
-            text: e.deleted ? (existing?.text ?? "") : (e.text ?? ""),
-            ...(() => {
-              const mentions = e.deleted ? existing?.mentions : (e.mentions ?? existing?.mentions);
-              return mentions ? { mentions } : {};
-            })(),
-            ...((e.self ?? false) || existing?.self ? { self: true } : {}),
-            ...((e.bot ?? false) || existing?.bot ? { bot: true } : {}),
-            ...((e.mentionsSelf ?? false) || existing?.mentionsSelf ? { mentionsSelf: true } : {}),
-            ...(Math.max(e.editedAt ?? 0, existing?.editedAt ?? 0) > 0
-              ? { editedAt: Math.max(e.editedAt ?? 0, existing?.editedAt ?? 0) }
-              : {}),
-            ...(deleted ? { deleted: true, deletedAt: existing?.deletedAt ?? now } : {}),
-            ...((e.handled ?? false) || existing?.handled ? { handled: true } : {}),
-            createdAt: existing?.createdAt ?? e.createdAt ?? now,
-          });
-          upserted++;
-        }
-        if (existing && e.deleted)
-          m.set(e.ts, { ...m.get(e.ts)!, deleted: true, deletedAt: existing.deletedAt ?? now });
-        if (existing && e.handled && !existing.handled) m.set(e.ts, { ...m.get(e.ts)!, handled: true });
-        if (accepted && e.files !== undefined) {
-          const k = key(e.container);
-          const attached = new Map(
-            e.files
-              .filter((f) => f.fileId)
-              .map((f) => [
-                f.fileId,
-                {
-                  container: e.container,
-                  ts: e.ts,
-                  ...f,
-                  createdAt: e.createdAt ?? now,
-                },
-              ]),
-          );
-          files.set(k, [...(files.get(k) ?? []).filter((f) => f.ts !== e.ts), ...attached.values()]);
-        }
-        const k = key(e.container);
-        const st = state.get(k) ?? { container: e.container, members: [], updatedAt: now };
-        if (!st.lastTs || e.ts > st.lastTs) st.lastTs = e.ts;
-        if (!st.oldestTs || Number(e.ts) < Number(st.oldestTs)) st.oldestTs = e.ts;
-        if (e.containerName) st.name = e.containerName;
-        if (e.kind) st.kind = e.kind;
-        if (e.members && e.members.length) st.members = [...new Set(e.members)];
-        st.updatedAt = now;
-        state.set(k, st);
-      }
-      return { upserted };
-    },
-
-    async markHandled(container, ts) {
-      const m = containerMsgs(container);
-      const existing = m.get(ts);
-      if (existing) m.set(ts, { ...existing, handled: true });
-      else m.set(ts, { container, ts, text: "", handled: true, createdAt: Date.now() });
-    },
-
-    async readMessages(container, o = {}) {
-      const limit = clampLimit(o.limit, DEFAULT_READ_LIMIT);
-      let all = [...containerMsgs(container).values()];
-      if (o.at) all = all.filter((x) => x.ts === o.at);
-      if (o.timestamps !== undefined) {
-        if (o.timestamps.length > MAX_READ_LIMIT) throw new RangeError("At most 500 message timestamps are allowed");
-        if (!o.timestamps.length) return [];
-        const selected = new Set(o.timestamps);
-        all = all.filter((x) => selected.has(x.ts));
-      }
-      if (o.channelHistory) all = all.filter((x) => x.sub === undefined || x.broadcast);
-      if (o.sub === null) all = all.filter((x) => x.sub === undefined);
-      else if (o.sub !== undefined) all = all.filter((x) => x.sub === o.sub);
-      if (o.after) all = all.filter((x) => x.ts > o.after!);
-      if (o.before) all = all.filter((x) => x.ts < o.before!);
-      if (!o.includeDeleted) all = all.filter((x) => !x.deleted);
-      all.sort(compareTs);
-      const hit = (o.oldestFirst ? all.slice(0, limit) : all.slice(-limit)).map((m) => {
-        const attached = (files.get(key(container)) ?? []).filter((f) => f.ts === m.ts);
-        return {
-          ...m,
-          replyCount: [...containerMsgs(container).values()].filter(
-            (reply) => reply.sub === m.ts && reply.ts !== m.ts && !reply.deleted,
-          ).length,
-          ...(attached.length
-            ? {
-                files: attached.map(({ fileId, name, title, size, mimetype }) => ({
-                  fileId,
-                  name,
-                  ...(title !== undefined ? { title } : {}),
-                  ...(size !== undefined ? { size } : {}),
-                  mimetype,
-                })),
-              }
-            : {}),
-        };
-      });
-      if (hit.length === 0 && liveFallback && !o.noFallback && !o.before) {
-        const live = await liveFallback(container, o);
-        if (live) return live;
-      }
-      return hit;
-    },
-
-    async revisedSince(container, since, o = {}) {
-      return [...containerMsgs(container).values()]
-        .filter((m) => revisedAt(m) > 0 && revisedAt(m) >= since)
-        .filter((m) => !o.thread || m.sub === o.thread || m.ts === o.thread)
-        .sort((a, b) => revisedAt(b) - revisedAt(a) || compareTs(b, a))
-        .slice(0, REVISION_SCAN_LIMIT);
-    },
-
-    async search(queryText, o = {}) {
-      const term = queryText.trim().toLowerCase();
-      if (!term) return [];
-      const limit = clampLimit(o.limit, DEFAULT_SEARCH_LIMIT);
-      const out: CachedMessage[] = [];
-      for (const m of messages.values()) {
-        for (const msg of m.values()) {
-          if (msg.deleted) continue;
-          if (o.container && msg.container !== o.container) continue;
-          if ((msg.text ?? "").toLowerCase().includes(term)) out.push(msg);
-        }
-      }
-      out.sort((a, b) => {
-        if (a.ts < b.ts) return 1;
-        if (a.ts > b.ts) return -1;
-        return 0;
-      });
-      return out.slice(0, limit);
-    },
-
-    async activeThreads(o = {}) {
-      const limit = clampLimit(o.limit, DEFAULT_THREADS_LIMIT);
-      const byThread = new Map<string, ActiveThread>();
-      for (const m of messages.values()) {
-        for (const msg of m.values()) {
-          if (!msg.sub || msg.deleted) continue;
-          if (o.container && msg.container !== o.container) continue;
-          const tk = `${msg.container}\0${msg.sub}`;
-          const cur = byThread.get(tk);
-          if (!cur) {
-            byThread.set(tk, {
-              container: msg.container,
-              sub: msg.sub,
-              lastTs: msg.ts,
-              messageCount: 1,
-              lastActivityAt: msg.createdAt,
-            });
-          } else {
-            cur.messageCount++;
-            if (msg.ts > cur.lastTs) cur.lastTs = msg.ts;
-            if (msg.createdAt > cur.lastActivityAt) cur.lastActivityAt = msg.createdAt;
-          }
-        }
-      }
-      return [...byThread.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt).slice(0, limit);
-    },
-
-    async members(container) {
-      return state.get(key(container))?.members ?? [];
-    },
-
-    async isMember(container, principalId) {
-      return (state.get(key(container))?.members ?? []).includes(principalId);
-    },
-
-    async containerState(container) {
-      const st = state.get(key(container));
-      if (!st) return null;
-      return {
-        container: st.container,
-        ...(st.lastTs ? { lastTs: st.lastTs } : {}),
-        ...(st.oldestTs ? { oldestTs: st.oldestTs } : {}),
-        ...(st.name ? { name: st.name } : {}),
-        ...(st.kind ? { kind: st.kind } : {}),
-        updatedAt: st.updatedAt,
-      };
-    },
-
-    async listContainers(o = {}) {
-      const limit = clampLimit(o.limit, MAX_READ_LIMIT);
-      const out: ContainerSummary[] = [];
-      for (const [k, st] of state) {
-        out.push({
-          container: st.container,
-          ...(st.lastTs ? { lastTs: st.lastTs } : {}),
-          ...(st.oldestTs ? { oldestTs: st.oldestTs } : {}),
-          ...(st.name ? { name: st.name } : {}),
-          ...(st.kind ? { kind: st.kind } : {}),
-          members: st.members,
-          messageCount: [...(messages.get(k)?.values() ?? [])].filter((m) => !m.deleted).length,
-          updatedAt: st.updatedAt,
-        });
-      }
-      return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
-    },
-
-    async close() {},
   };
 }

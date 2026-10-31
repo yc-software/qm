@@ -12,7 +12,7 @@ import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { createMemoryReplayDedupe, type ReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
@@ -21,10 +21,9 @@ bindTestTenant();
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
 
-function durableStub(): ReplayDedupe {
+function stubDedupe(): ReplayDedupe {
   const held = new Map<string, number>();
   return {
-    durable: true,
     async claim(eventId, expiresAtMs) {
       if ((held.get(eventId) ?? 0) > Date.now()) return false;
       held.set(eventId, expiresAtMs);
@@ -34,7 +33,7 @@ function durableStub(): ReplayDedupe {
 }
 
 function start(
-  replayDedupe: ReplayDedupe = durableStub(),
+  replayDedupe: ReplayDedupe = stubDedupe(),
   brokerSessions?: BrokerSessionStore,
 ): {
   base: string;
@@ -110,14 +109,6 @@ test("broker ids live in their own namespace and cannot poison another subsystem
   );
 });
 
-test("the claim route refuses to answer from a per-process replay store", async (t) => {
-  const srv = start(createMemoryReplayDedupe());
-  t.after(() => srv.close());
-  const response = await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() });
-  assert.equal(response.status, 503, "a RAM-only dedupe cannot make a sign-in link single-use across instances");
-  assert.equal(response.json.error, "not_configured");
-});
-
 test("the claim route refuses unsigned callers", async (t) => {
   const srv = start();
   t.after(() => srv.close());
@@ -161,7 +152,7 @@ test("broker sessions cross the production identity gate, but revocation require
       revoked.push(email);
     },
   };
-  const srv = start(durableStub(), sessions);
+  const srv = start(stubDedupe(), sessions);
   t.after(() => srv.close());
   const post = async (suffix: string, data: unknown, actor?: string, signed = true): Promise<Response> => {
     const path = `/v1/auth/broker/sessions${suffix}?nonce=${crypto.randomUUID()}`;

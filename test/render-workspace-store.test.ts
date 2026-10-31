@@ -10,6 +10,9 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { materializeRoLayers } from "../src/sandbox/ro-layers.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL to test Render workspace storage";
