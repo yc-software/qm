@@ -183,6 +183,27 @@ test("Render base reports a failed import, retries it, and clears the error once
   assert.ok(record.readyAtMs);
 });
 
+test("Render base keeps retrying after its lease or store fails", async (t) => {
+  const { fake, store, errors } = setup(t);
+  let failures = 1;
+  const base = createRenderBase({
+    client: fake.client,
+    store,
+    image: REF_A,
+    hold: async (work) => {
+      if (failures-- > 0) throw new Error("lock connection lost");
+      return work();
+    },
+    pollMs: 5,
+    prepareMs: 5,
+    retryMs: 5,
+    onError: (error) => errors.push(error.message),
+  });
+  await prepare(base);
+  assert.deepEqual(errors, ["lock connection lost"]);
+  assert.ok((await store.get(DIGEST_A))!.readyAtMs);
+});
+
 test("Render base polls an import that is still running and stops when the core stops", async (t) => {
   const { fake, store, make, prepareUntil } = setup(t);
   fake.slowImports();

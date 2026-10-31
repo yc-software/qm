@@ -126,6 +126,10 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     const scope = scopeFor(name);
     const stored = await store.get(scope);
     if (!stored) throw new Error(`Render sandbox is not provisioned: ${name}`);
+    if (stored.stopped)
+      throw new Error(
+        "This Render computer was saved and stopped after sitting idle; it is restored at the start of the next turn",
+      );
     if ((homeDirty && stored.homeDirty !== true) || Date.now() - stored.lastActivityMs >= 60_000)
       await store.merge(scope, { lastActivityMs: Date.now(), ...(homeDirty ? { homeDirty: true } : {}) });
     return stored.sandboxId;
@@ -228,6 +232,11 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     return cleanupRetired(scope, saved);
   }
 
+  async function clearCredentials(sandboxId: string): Promise<void> {
+    const scrub = await client.runScript(sandboxId, `rm -rf /tmp/agent-creds ${shq(homeDir)}/.cred-state*`, 30);
+    if (scrub.exitCode !== 0) throw new Error(`Render sandbox could not clear expired credentials: ${scrub.stderr}`);
+  }
+
   async function hasLiveProcesses(sandboxId: string): Promise<boolean> {
     const sessions = await createExecProcessSessions({
       async run(_handle, command, options) {
@@ -302,9 +311,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     });
     try {
       if (stored) {
-        const scrub = await client.runScript(created.id, `rm -rf /tmp/agent-creds ${shq(homeDir)}/.cred-state*`, 30);
-        if (scrub.exitCode !== 0)
-          throw new Error(`Render sandbox could not clear expired credentials: ${scrub.stderr}`);
+        await clearCredentials(created.id);
       }
       await releaseFromCleanup(scope, created.id);
       await store.put(scope, {
@@ -607,6 +614,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
             stored.lastActivityMs <= cutoff &&
             (await tryUse(name, async () => {
               if (await hasLiveProcesses(info.id)) return false;
+              await clearCredentials(info.id);
               await checkpoint(scope, current, false);
               await client.terminate(info.id);
               await store.merge(scope, { stopped: true });

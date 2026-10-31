@@ -772,6 +772,35 @@ test("Render saves a home in use without stopping its sandbox and stops it once 
   assert.equal(await next.readFile(restored, "latest"), "retained before stopping");
 });
 
+test("Render clears temporary credentials before the checkpoint of an idle stop", async (t) => {
+  const { make, fake, layers, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(layers);
+  const running = (await store.get(scope))!.sandboxId;
+  await fake.client.writeFileBytes(running, "/root/.cred-state-secret", Buffer.from("token"));
+  await fake.client.writeFileBytes(running, "/tmp/agent-creds/gh", Buffer.from("token"));
+  await sandbox.writeFile(handle, "kept", "work");
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
+  const stopped = (await store.get(scope))!;
+  assert.equal(stopped.stopped, true);
+  const copy = await fake.client.create({ snapshotId: stopped.checkpoint!.id, lifetimeSec: 60 });
+  assert.equal(await fake.client.readFileBytes(copy.id, "/root/.cred-state-secret"), null);
+  assert.equal(await fake.client.readFileBytes(copy.id, "/tmp/agent-creds/gh"), null);
+  assert.equal(String(await fake.client.readFileBytes(copy.id, "/root/workspace/kept")), "work");
+});
+
+test("Render tells a turn that its computer was stopped instead of running on a dead sandbox", async (t) => {
+  const { make, layers, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(layers);
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
+  assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
+  await assert.rejects(sandbox.run(handle, "true"), /stopped after sitting idle/);
+  const restored = await sandbox.provision(layers);
+  assert.equal((await sandbox.run(restored, "echo ok")).stdout, "ok\n");
+});
+
 test("Render stops an idle computer at its idle limit even when deep idle allows longer", async (t) => {
   const { make, fake, layers, store, scope } = setup(t);
   await make().provision(layers);
