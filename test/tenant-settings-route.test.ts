@@ -5,7 +5,7 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
@@ -23,6 +23,7 @@ async function fixture(secret: string | undefined = controlSecret) {
     tenantSettings: built.tenantSettings,
     modelCredentials: built.modelCredentials,
     config: built.config,
+    replayDedupe: built.replayDedupe,
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
@@ -54,11 +55,13 @@ test("tenant settings are written only with both the source signature and the op
     assert.equal((await srv.put({ env: { PI_MODEL: "x" } }, { "x-signature": "invalid" })).status, 401);
     const response = await srv.put({ env: { PI_MODEL: "claude-opus-5-5", ANTHROPIC_API_KEY: "key-a" } });
     assert.equal(response.status, 200);
+    const installTenant = await srv.built.tenantSettings.onlyTenant();
+    assert.ok(installTenant);
     assert.deepEqual(await response.json(), {
-      tenant: TEST_TENANT,
+      tenant: installTenant,
       updated: ["PI_MODEL", "ANTHROPIC_API_KEY"],
     });
-    await withTenant(TEST_TENANT, async () => {
+    await withTenant(installTenant, async () => {
       assert.equal((await srv.built.tenantSettings.get()).piModel, "claude-opus-5-5");
       assert.equal(await srv.built.modelCredentials.resolve("anthropic"), "key-a");
     });

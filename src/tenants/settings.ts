@@ -239,9 +239,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
   function load(tenant: string, fresh = false): Promise<TenantSettings> {
     const hit = loading.get(tenant);
     if (hit && now() - hit.at < cacheMs) return hit.settings;
-    const settings = withTenant(tenant, () =>
-      backing.read(tenant).then((values) => parseTenantSettings(values)),
-    );
+    const settings = withTenant(tenant, () => backing.read(tenant).then((values) => parseTenantSettings(values)));
     const entry = { at: now(), settings };
     loading.set(tenant, entry);
     const stale = fresh ? undefined : loaded.get(tenant);

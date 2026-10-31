@@ -2,28 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { createTenantSettingsStore } from "../src/tenants/settings.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
 import { scopeId } from "../src/types.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testSettingsStore } from "./support/tenant-settings.ts";
 
 const KEY = "import-test-connector-key-0123456789";
 const root = scopeId("org", "acme");
 
-function deps() {
+async function deps() {
   return {
-    settings: createTenantSettingsStore({ harness: "pi" }),
-    modelCredentials: createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: KEY }),
-    config: createMemoryConfigStore("acme", { connectorSecretKey: KEY }),
+    settings: await testSettingsStore(),
+    modelCredentials: createModelCredentialStore({ backing: testMap(), keyMaterial: KEY }),
+    config: testConfigStore("acme", { connectorSecretKey: KEY }),
     rootScope: root,
     actor: "import-test",
   };
 }
 
 test("the import copies env values into the tenant's settings and the stores that already own them", async () => {
-  const d = deps();
+  const d = await deps();
   await withTenant(randomUUID(), async () => {
     const updated = await importTenantSettings(
       {
@@ -57,7 +56,7 @@ test("the import copies env values into the tenant's settings and the stores tha
 });
 
 test("the import rejects keys that are not tenant settings and leaves nothing half-written", async () => {
-  const d = deps();
+  const d = await deps();
   await withTenant(randomUUID(), async () => {
     await assert.rejects(
       importTenantSettings({ SPRITES_TOKEN: "t", DATABASE_URL: "postgres://x", CORE_SIGNING_SECRET: "s" }, d),
@@ -69,7 +68,8 @@ test("the import rejects keys that are not tenant settings and leaves nothing ha
 });
 
 test("the import needs a bound tenant", async () => {
-  await assert.rejects(importTenantSettings({ PI_MODEL: "x" }, deps()), /No tenant is bound/);
+  const d = await deps();
+  await withoutTenant(() => assert.rejects(importTenantSettings({ PI_MODEL: "x" }, d), /No tenant is bound/));
 });
 
 test("boot names the tenant settings still present in the environment", () => {
@@ -80,7 +80,7 @@ test("boot names the tenant settings still present in the environment", () => {
 });
 
 test("the import never replaces values an admin already stored", async () => {
-  const d = deps();
+  const d = await deps();
   await withTenant(randomUUID(), async () => {
     await d.modelCredentials.set("anthropic", "admin-key", "admin");
     await d.config.setSecurityPosture(root, "strict");

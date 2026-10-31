@@ -1,14 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
-import { configuredModelFor, defaultModelFor, harnessCarriedModelAuthFor } from "../src/model/tenant-models.ts";
-import { DEFAULT_CODEX_MODEL_ID, defaultModelForHarness, defaultModelForProvider } from "../src/model/pi-models.ts";
+import { companySubscriptionAuthFor, configuredModelFor, defaultModelFor } from "../src/model/tenant-models.ts";
+import { DEFAULT_CODEX_MODEL_ID, defaultModel, defaultModelForProvider } from "../src/model/pi-models.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-const parse = (values: Parameters<typeof parseTenantSettings>[0], harness = "pi") =>
-  parseTenantSettings(values, harness);
+const parse = (values: Parameters<typeof parseTenantSettings>[0]) => parseTenantSettings(values);
 
 test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
   assert.deepEqual(parse({}).emailAuthPrincipals, []);
@@ -69,59 +68,42 @@ test("the security screen proxy needs all three settings and a safe provider and
   }
 });
 
-test("CLAUDE_MODEL is the configured model on the claude harness", () => {
-  const settings = parse({ CLAUDE_MODEL: "claude-opus-4-8" }, "claude");
-  assert.equal(settings.claudeModel, "claude-opus-4-8");
-  assert.equal(configuredModelFor(settings, "claude"), "claude-opus-4-8");
-});
-
 test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(parse({}).modelProvider, undefined);
   assert.equal(parse({ MODEL_PROVIDER: " openrouter " }).modelProvider, "openrouter");
   assert.throws(() => parse({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
 });
 
-test("MODEL_PROVIDER is refused when the harness can never run that vendor's models", () => {
-  assert.throws(() => parse({ MODEL_PROVIDER: "openrouter" }, "claude"), /cannot serve a base model on HARNESS=claude/);
-  assert.throws(() => parse({ MODEL_PROVIDER: "openai" }, "claude"), /cannot serve a base model on HARNESS=claude/);
-  assert.equal(parse({ MODEL_PROVIDER: "openai" }, "pi").modelProvider, "openai");
-});
-
 test("a declared MODEL_PROVIDER constrains the base model only when it is declared", () => {
   assert.equal(
-    defaultModelFor(parse({ MODEL_PROVIDER: "openrouter" }), "pi"),
-    defaultModelForProvider("pi", "openrouter"),
+    defaultModelFor(parse({ MODEL_PROVIDER: "openrouter" })),
+    defaultModelForProvider("openrouter"),
     "the declaration picks that vendor's base model",
   );
   assert.equal(
-    defaultModelFor(parse({}), "pi"),
-    defaultModelForHarness("pi", undefined, undefined),
+    defaultModelFor(parse({})),
+    defaultModel(),
     "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
   );
 });
 
-test("company ChatGPT auth satisfies model onboarding on any harness without an API key", () => {
+test("company subscriptions satisfy model onboarding without an API key", () => {
   const codex = parse({ CODEX_AUTH_CREDENTIAL: " cred-1 " });
   assert.equal(codex.codexAuthCredential, "cred-1");
-  assert.equal(harnessCarriedModelAuthFor(codex, "pi"), "openai");
-  assert.equal(harnessCarriedModelAuthFor(codex, "claude"), "openai");
-  assert.equal(harnessCarriedModelAuthFor(parse({}), "pi"), undefined);
-  assert.equal(
-    harnessCarriedModelAuthFor(parse({ CLAUDE_AUTH_CREDENTIAL: "cred-2" }, "claude"), "claude"),
-    "anthropic",
-  );
+  assert.equal(companySubscriptionAuthFor(codex), "openai");
+  assert.equal(companySubscriptionAuthFor(parse({})), undefined);
+  assert.equal(companySubscriptionAuthFor(parse({ CLAUDE_AUTH_CREDENTIAL: "cred-2" })), "anthropic");
+  assert.equal(companySubscriptionAuthFor(parse({}), "sk-ant-oat01-company"), "anthropic");
+  assert.equal(companySubscriptionAuthFor(parse({ CLAUDE_AUTH_CREDENTIAL: "cred-2" }), "sk-ant-api"), undefined);
   assert.equal(parse({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential, "cred-1");
 });
 
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
-  assert.equal(configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1" }), "pi"), DEFAULT_CODEX_MODEL_ID);
+  assert.equal(configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1" })), DEFAULT_CODEX_MODEL_ID);
+  assert.equal(configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1", MODEL_PROVIDER: "anthropic" })), undefined);
   assert.equal(
-    configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1", MODEL_PROVIDER: "anthropic" }), "pi"),
-    undefined,
-  );
-  assert.equal(
-    configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1", PI_MODEL: "claude-opus-5" }), "pi"),
+    configuredModelFor(parse({ CODEX_AUTH_CREDENTIAL: "cred-1", PI_MODEL: "claude-opus-5" })),
     "claude-opus-5",
   );
-  assert.equal(configuredModelFor(parse({}), "pi"), undefined);
+  assert.equal(configuredModelFor(parse({})), undefined);
 });

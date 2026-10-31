@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { buildModelRuntime } from "../src/model/model-runtime.ts";
 import { DEFAULT_AGENT_MODEL_ID, getRequiredModel } from "../src/model/pi-models.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 
-test("the pi model runtime never authenticates with provider keys from the process environment", async () => {
+test("the model runtime never authenticates with provider keys from the process environment", async () => {
   const saved = { anthropic: process.env.ANTHROPIC_API_KEY, openai: process.env.OPENAI_API_KEY };
   process.env.ANTHROPIC_API_KEY = "env-anthropic-key";
   process.env.OPENAI_API_KEY = "env-openai-key";

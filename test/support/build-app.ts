@@ -76,14 +76,11 @@ export function buildApp(
 ): BuiltApp & { modelCalls: ModelCall[] } {
   const modelCalls: ModelCall[] = [];
   const app = stopAtEnd(
-    buildProductionApp(
-      config,
-      {
-        tenantSettings: testTenantSettings({}, config.databaseUrl),
-        agent: recordingModelCalls(createMockAgent(), modelCalls),
-        ...overrides,
-      },
-    ),
+    buildProductionApp(config, {
+      tenantSettings: testTenantSettings({}, config.databaseUrl),
+      agent: recordingModelCalls(createMockAgent(), modelCalls),
+      ...overrides,
+    }),
   );
   return Object.assign(app, { modelCalls });
 }

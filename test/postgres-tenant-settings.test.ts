@@ -3,8 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -15,22 +14,26 @@ async function withSettingsDb(
   fn: (ctx: { app: ReturnType<typeof createPgPool>; admin: pg.Pool; a: string; b: string }) => Promise<void>,
 ): Promise<void> {
   const schema = `tenant_settings_${randomUUID().replaceAll("-", "")}`;
+  const role = `app_${randomUUID().replaceAll("-", "")}`;
   const schemaUrl = new globalThis.URL(URL!);
   schemaUrl.searchParams.set("options", `-c search_path=${schema}`);
   const admin = new pg.Pool({ connectionString: schemaUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const owner = createPgPool(schemaUrl.toString(), [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
+  await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS`);
+  const owner = createPgPool(schemaUrl.toString());
+  createTenantSettingsStore({ db: owner, keyMaterial: KEY });
   try {
     await migrateRegisteredPgSchemas(schemaUrl.toString());
-    await admin.query(`ALTER ROLE qm_app PASSWORD 'app'`);
     const a = randomUUID();
     const b = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'first', 'First'), ($2, 'second', 'Second')`, [
       a,
       b,
     ]);
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
+    await admin.query(`GRANT ALL ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
     const appUrl = new globalThis.URL(schemaUrl);
-    appUrl.username = "qm_app";
+    appUrl.username = role;
     appUrl.password = "app";
     const app = createPgPool(appUrl.toString());
     try {
@@ -41,13 +44,15 @@ async function withSettingsDb(
   } finally {
     await owner.close();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    await admin.query(`DROP OWNED BY ${role}`).catch(() => undefined);
+    await admin.query(`DROP ROLE ${role}`);
     await admin.end();
   }
 }
 
 test("tenant settings are stored per tenant, sealed at rest, and never read across tenants", { skip }, async () => {
   await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi", cacheMs: 0 });
+    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
     await withTenant(a, () =>
       store.update({ SPRITES_TOKEN: "sprites-a", SANDBOX_BACKEND: "sprites", PI_MODEL: "m-a" }),
     );
@@ -67,7 +72,9 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
     assert.ok(Buffer.isBuffer(sealed));
     assert.equal(sealed.includes(Buffer.from("sprites-a")), false);
     assert.equal((await withTenant(b, () => app.q(`SELECT tenant_id FROM tenant_settings`))).length, 1);
-    await assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/);
+    await withoutTenant(() =>
+      assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/),
+    );
     const stolen = await withTenant(b, () =>
       app.q(`UPDATE tenant_settings SET pi_model = 'stolen' WHERE tenant_id = $1 RETURNING 1`, [a]),
     );
@@ -78,7 +85,7 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
 
 test("a sealed secret copied into another tenant's row does not open there", { skip }, async () => {
   await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi", cacheMs: 0 });
+    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
     await withTenant(a, () => store.update({ SPRITES_TOKEN: "sprites-a" }));
     await withTenant(b, () => store.update({ PI_MODEL: "m-b" }));
     await admin.query(
@@ -86,7 +93,7 @@ test("a sealed secret copied into another tenant's row does not open there", { s
         WHERE tenant_id = $2`,
       [a, b],
     );
-    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi" });
+    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY });
     await assert.rejects(
       withTenant(b, () => reader.get()),
       /Unsupported state or unable to authenticate data/,
