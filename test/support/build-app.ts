@@ -13,7 +13,7 @@ import {
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 import { TEST_TENANT } from "./tenant.ts";
-import { seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
+import { migrateSettings, seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
 import { TEST_ADMIN_GRANTS } from "./test-database.ts";
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
@@ -24,7 +24,9 @@ export const TEST_TENANT_SETTINGS: TenantSettingValues = {
 };
 
 export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl?: string): TenantSettingsStore {
-  const target = databaseUrl ? { url: databaseUrl, ready: seedSettingsTenants(databaseUrl) } : settingsDatabase();
+  const target = databaseUrl
+    ? { url: databaseUrl, ready: migrateSettings(databaseUrl).then(() => seedSettingsTenants(databaseUrl)) }
+    : settingsDatabase();
   const store = createTenantSettingsStore({
     db: createPgPool(target.url),
     keyMaterial: "test-connector-key-distinct-from-ingress-auth",
