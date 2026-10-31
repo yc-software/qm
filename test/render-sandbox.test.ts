@@ -887,6 +887,25 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
   assert.ok((await store.get(scope))!.savedAtMs! > stale);
 });
 
+test("Render does not report a computer that QM itself restarted as ended", async (t) => {
+  const { make, fake, layers, store, scope, errors } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(layers);
+  await sandbox.writeFile(handle, "kept", "work");
+  const first = (await store.get(scope))!.sandboxId;
+  await sandbox.restartComputer!(scope);
+  assert.equal(fake.sandboxes.get(first)?.status, "terminated");
+  await store.merge(scope, { lastActivityMs: Date.now() - 7200_000, homeDirty: true, savedAtMs: 0 });
+  await sandbox.reapDeepIdle!(3600_000);
+  assert.deepEqual(
+    errors.filter((error) => error.code === "computer_ended"),
+    [],
+  );
+  const restored = await sandbox.provision(layers);
+  assert.equal(await sandbox.readFile(restored, "kept"), "work");
+  assert.equal((await store.get(scope))!.stopped, undefined);
+});
+
 test("Render reports a computer that ended outside QM, probes it once, and leaves it alone until it is provisioned again", async (t) => {
   const { make, fake, layers, store, scope, errors } = setup(t);
   const sandbox = make();

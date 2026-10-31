@@ -273,8 +273,10 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
       if (info?.status === "running") {
         stored = await checkpoint(scope, stored, false);
         await client.terminate(info.id);
+        await store.merge(scope, { stopped: true });
       } else if (info?.status === "suspended") {
         await client.terminate(info.id);
+        await store.merge(scope, { stopped: true });
       } else if (info && info.status !== "terminated" && info.status !== "errored") {
         throw new Error(`Render sandbox ${info.id} is ${info.status}; retry after its transition ends`);
       }
@@ -569,6 +571,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         await withUse(name, async () => {
           await checkpoint(scope, stored, await hasLiveProcesses(info.id));
           await client.terminate(info.id);
+          await store.merge(scope, { stopped: true });
         });
       });
     },
