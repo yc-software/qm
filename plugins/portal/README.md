@@ -6,10 +6,10 @@ fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspac
 is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
 surfaces, which all stay **private** (no public `[http_service]` of their own):
 
-| Path        | → upstream        | Notes                                                                                     |
-| ----------- | ----------------- | ----------------------------------------------------------------------------------------- |
-| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links)             |
-| `/settings` | `<prefix>-web-ui` | Administrator settings; web-ui redirects old `/admin/*` links here, and core checks admin |
+| Path        | → upstream        | Notes                                                                         |
+| ----------- | ----------------- | ----------------------------------------------------------------------------- |
+| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
+| `/settings` | `<prefix>-web-ui` | Administrator settings; core checks admin                                     |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 

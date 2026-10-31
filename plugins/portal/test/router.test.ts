@@ -237,9 +237,9 @@ test("a surface that declares frame-ancestors keeps it; the blanket DENY stays o
   assert.equal(normal.headers.get("x-frame-options"), "DENY");
 });
 
-test("/admin and /settings reach the web UI as the signed-in user without an admin probe", async () => {
+test("/settings reaches the web UI as the signed-in user without an admin probe", async () => {
   const before = whoamiProbes;
-  for (const path of ["/admin/api/me", "/settings/users"]) {
+  for (const path of ["/settings/users"]) {
     const r = await fetch(`${base}${path}`, { headers: { cookie: `${sessionCookie("U1")}; admin=EVIL` } });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { url: string; cookie: string };

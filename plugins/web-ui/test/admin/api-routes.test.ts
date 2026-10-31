@@ -345,19 +345,6 @@ test("an upload stages the bytes as a blob, then registers the file as the admin
   assert.equal((await missing.json()).message, "scope required");
 });
 
-test("old /admin pages redirect into Settings", async () => {
-  for (const [from, to] of [
-    ["/admin", "/settings/history"],
-    ["/admin/", "/settings/history"],
-    ["/admin/files?scope=org%3Aacme", "/settings/files?scope=org%3Aacme"],
-    ["/admin/history/s/sess-1", "/settings/history/s/sess-1"],
-  ]) {
-    const response = await fetch(`${base}${from}`, { redirect: "manual" });
-    assert.equal(response.status, 302, from);
-    assert.equal(response.headers.get("location"), to, from);
-  }
-});
-
 test("a core reset mid-download fails that download without taking the server down", async () => {
   await assert.rejects(async () => {
     const response = await fetch(`${base}/api/admin/files/download?id=reset-mid-stream`, { headers: identity() });

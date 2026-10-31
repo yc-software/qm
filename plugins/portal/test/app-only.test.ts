@@ -144,7 +144,6 @@ test("OIDC callback seals core app-only authority; ordinary admission stays ordi
 test("app-only sessions cannot reach or renew on any ordinary portal surface", async () => {
   const paths = [
     "/",
-    "/admin/",
     "/settings/",
     "/settings/users",
     "/api/whoami",

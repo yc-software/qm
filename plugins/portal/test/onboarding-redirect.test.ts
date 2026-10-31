@@ -68,8 +68,8 @@ test("unconfigured deployment: web-ui JSON requests still proxy through untouche
   assert.equal(((await r.json()) as { url: string }).url, "/api/sessions");
 });
 
-test("unconfigured deployment: settings and legacy admin pages reach web-ui, so onboarding never loops", async () => {
-  for (const path of ["/settings/onboarding", "/settings", "/admin/onboarding"]) {
+test("unconfigured deployment: settings pages reach web-ui, so onboarding never loops", async () => {
+  for (const path of ["/settings/onboarding", "/settings"]) {
     const r = await fetch(`${base}${path}`, {
       headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
       redirect: "manual",

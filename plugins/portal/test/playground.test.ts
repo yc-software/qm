@@ -86,7 +86,7 @@ test("anonymous sessions reach settings paths only as their own playground princ
   const cookie = sessionCookieOf(visit);
   const principal = /webuiuser=(playground-[0-9a-f]+)/.exec(((await visit.json()) as { cookie: string }).cookie)?.[1];
   assert.ok(principal);
-  for (const path of ["/settings/users", "/admin/api/me"]) {
+  for (const path of ["/settings/users"]) {
     const r = await fetch(`${base}${path}`, { headers: { accept: "application/json", cookie } });
     assert.equal(r.status, 200);
     assert.equal(((await r.json()) as { cookie: string }).cookie, `webuiuser=${principal}; webuiuser_name=Guest`);

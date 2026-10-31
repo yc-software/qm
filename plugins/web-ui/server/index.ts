@@ -3390,11 +3390,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     );
   }
   if (method === "GET" && path === "/manifest.webmanifest") return serveWebManifest(res);
-  if (method === "GET" && (path === "/admin" || path.startsWith("/admin/")) && !path.startsWith("/admin/api/")) {
-    const rest = path.slice("/admin".length).replace(/^\/+/, "");
-    res.writeHead(302, { location: `/settings/${rest || "history"}${url.search}`, "cache-control": "no-store" });
-    return res.end();
-  }
 
   if (method === "POST" && path === "/signin") {
     if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });

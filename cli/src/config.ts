@@ -605,8 +605,6 @@ function validate(raw: unknown, path: string): QmConfig {
     }
   }
 
-  rejectRetiredAdminService(o, path);
-
   const target = o["target"];
   if (!isTarget(target)) throw new CliError(`${path}: "target" must be ${hostingProviderChoices()}`);
 
@@ -1698,21 +1696,6 @@ function validateStringMap(raw: unknown, path: string, field: string): Record<st
     out[k] = v;
   }
   return out;
-}
-
-function rejectRetiredAdminService(o: Record<string, unknown>, path: string): void {
-  const hasAdmin = (v: unknown): boolean => isPlainObject(v) && Object.hasOwn(v, "admin");
-  const aws = o["aws"];
-  const found = [
-    ...(Array.isArray(o["services"]) && o["services"].includes("admin") ? ['"admin" from services'] : []),
-    ...["env", "secretEnv", "imageOverrides"].filter((field) => hasAdmin(o[field])).map((field) => `${field}.admin`),
-    ...(isPlainObject(aws) && hasAdmin(aws["services"]) ? ["aws.services.admin"] : []),
-  ];
-  if (found.length) {
-    throw new CliError(
-      `${path}: the admin service no longer exists; admin settings are part of web-ui at /settings. Remove ${found.join(", ")}`,
-    );
-  }
 }
 
 function validateServiceMap<T>(

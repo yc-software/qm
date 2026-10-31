@@ -197,29 +197,6 @@ test("listen ports are managed consistently across deployment targets", () => {
   });
 });
 
-test("a config that still names the retired admin service is rejected with the fix", () => {
-  const retired = [
-    [{ services: ["core", "web-ui", "admin", "portal"] }, '"admin" from services'],
-    [{ env: { admin: { ADMIN_BASE_PATH: "/admin" } } }, "env.admin"],
-    [{ secretEnv: { admin: { INBOX_USERS: "INBOX_USERS" } } }, "secretEnv.admin"],
-    [{ imageOverrides: { admin: "registry.example/admin:1" } }, "imageOverrides.admin"],
-    [
-      { aws: { services: { admin: { ecrRepository: "admin", ecsService: "admin", cpu: 512, memory: 1024 } } } },
-      "aws.services.admin",
-    ],
-  ] as const;
-  for (const [overrides, entry] of retired) {
-    withConfig(overrides, ({ path }) => {
-      assert.throws(
-        () => loadConfigAt(path),
-        (error: Error) =>
-          error.message.includes("admin settings are part of web-ui at /settings") &&
-          error.message.includes(`Remove ${entry}`),
-      );
-    });
-  }
-});
-
 test("model, skills, and the fly keys parse onto the config", () => {
   withConfig({ model: "claude-opus-4-8", skills: ["./skills/support"] }, ({ path }) => {
     const { config } = loadConfigAt(path);

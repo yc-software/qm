@@ -1296,7 +1296,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/") || seg === "admin";
+  const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
     if (modelProviderConfigured === false) {

@@ -1,6 +1,6 @@
 # Combined web and sign-in services
 
-QM deploys three application workloads: core, web-ui, and portal. The web-ui workload serves the chat interface and the administrator settings under `/settings`; old `/admin` links redirect there. Portal remains the public entry point and hosts the built-in auth broker when enabled. Slack remains in core.
+QM deploys three application workloads: core, web-ui, and portal. The web-ui workload serves the chat interface and the administrator settings under `/settings`. Portal remains the public entry point and hosts the built-in auth broker when enabled. Slack remains in core.
 
 The deployment's `services` list still declares capabilities. Administrator settings are part of web-ui and need no entry; a configuration that still names `admin` in `services`, `env`, `secretEnv`, `imageOverrides`, or `aws.services` is rejected until that entry is removed. Keep `auth` to enable email sign-in. Its configuration remains under `env.auth` and the corresponding secret mappings. The CLI combines it into portal, rejects conflicting environment values, and preserves secret aliases. Omitting auth retains external OIDC sign-in. Logs and selective deployments for auth resolve to portal; the components cannot be released independently within a combined workload.
 
