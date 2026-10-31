@@ -350,7 +350,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             const alive =
               run.status === "running" &&
               run.leaseToken !== null &&
-              (await deps.runs.leaseHeld(run, run.leaseToken).catch(() => false));
+              (await deps.runs
+                .leaseHeld(run, run.leaseToken)
+                .catch(swallowAs("slack-core-client: claim liveness check", false)));
             if (mark !== lastMark || alive) {
               lastMark = mark;
               lastProgressAt = Date.now();
