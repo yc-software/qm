@@ -4221,7 +4221,7 @@ test("denying a quarantine release upholds the block", async () => {
 });
 
 test("a turn carries its surface name to the agent, DM or not", async () => {
-  const built = freshApp();
+  const built = await keyedApp();
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "web" }))).reply, "surface:web");
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "slack" }))).reply, "surface:slack");
 });
