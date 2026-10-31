@@ -12,7 +12,7 @@ import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { StagedEnvelopeRows } from "./envelope-staging.ts";
 import type { SlackSessionStatusRows, SlackSessionStatusState } from "./session-status.ts";
 import type { TaskAckRows, TaskAckState } from "./task-ack.ts";
-import type { SlackAccountLink, SlackAccountRows } from "../api/routes/composio.ts";
+import type { SlackAccountRows } from "../api/routes/composio.ts";
 
 const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
