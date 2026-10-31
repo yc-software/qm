@@ -33,11 +33,10 @@ import {
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
-import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
-import { resolverFor } from "./connectors.ts";
+import { PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -779,16 +778,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(typeof b.enabled === "boolean" ? { enabled: b.enabled } : {}),
         updatedBy: actor.id,
       });
-      try {
-        const client = await resolverFor(deps)(provider, {});
-        authorizeUrl(provider, {
-          redirectUri: client.redirectAllowlist?.[0] ?? "https://example.invalid/cb",
-          state: "dry-run",
-          client,
-        });
-      } catch (e) {
-        return { error: errMessage(e), code: "connector_invalid" };
-      }
       return { ok: true };
     },
   },

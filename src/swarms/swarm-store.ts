@@ -113,7 +113,6 @@ export function createSwarmStore(
   backing: DurableMap<SwarmStorage>,
   authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
-  if (!backing.update) throw new Error("swarm storage requires atomic updates");
   async function fencedWrite(
     id: string,
     mutate: (value: SwarmStorage | null) => SwarmStorage,
@@ -157,7 +156,7 @@ export function createSwarmStore(
       throw new Error("capability session mismatch");
     const run = await authority.runs.get(fence.runId);
     assertSwarmRun(fence, run);
-    const updated = await backing.update!(id, (current) => {
+    const updated = await backing.update(id, (current) => {
       assertSwarmRun(fence, run);
       return mutate(current);
     });
@@ -191,7 +190,7 @@ export function createSwarmStore(
           );
         return encode(next);
       };
-      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update!(id, apply);
+      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update(id, apply);
       if (!updated) throw new Error("swarm not found");
       return decode(updated);
     },

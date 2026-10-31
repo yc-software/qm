@@ -1,11 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
 import { loadConfig } from "../src/config.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";
 import {
   DEFAULT_STRATEGY_FLOORS,
@@ -44,6 +42,9 @@ const conversations = readdirSync(fixtureDir)
   .sort()
   .map((f) => parseBenchConversation(JSON.parse(readFileSync(join(fixtureDir, f), "utf8")), f));
 
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+
 const agent = createAgent({ ...agentConfigOptions(loadConfig()), tempDirPrefix: "membench" });
 if (!agent.oneShot) {
   console.error("agent has no oneShot — cannot judge");
@@ -54,10 +55,9 @@ const oneShot = agent.oneShot.bind(agent);
 const results: BenchResult[] = [];
 for (const kind of kinds) {
   for (const conversation of conversations) {
-    const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), `membench-${kind}-`)));
-    const memory = createMemoryService(workspace);
+    const memory = createPostgresMemoryService(databaseUrl);
     const { strategy } = createMemoryStrategy(kind, { agent, memory });
-    const scopeId = "user:bench";
+    const scopeId = `user:bench-${kind}-${conversation.id}-${Date.now()}`;
     if (!strategy.onTurnEnd) {
       console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
     }

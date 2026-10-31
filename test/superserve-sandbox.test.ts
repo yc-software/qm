@@ -13,14 +13,14 @@ import {
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions, computerVerdict } from "../src/sandbox/sandbox.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { scopeId } from "../src/types.ts";
 import { shq } from "../src/util/shell.ts";
 import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-superserve.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;
@@ -37,7 +37,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSuperserveSandbox(newWorkspace(), {
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
@@ -170,7 +170,7 @@ test("a paused sandbox under a different egress policy is destroyed and replaced
 });
 
 test("a paused sandbox that predates egress stamping keeps its disk when the policy still matches", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "resident.txt", "months of work\n");
@@ -212,7 +212,7 @@ test("network reconciliation reads the actual policy independently of metadata",
 });
 
 test("a paused sandbox keeps its disk when its policy can be updated without resuming", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   fake.acceptNetworkUpdateWhilePaused();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
@@ -256,7 +256,7 @@ test("an unapplied policy update prevents resuming the sandbox under the old pol
 });
 
 test("a cached sandbox whose network drifted is reconciled before the next command", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store, egressDeny: ["0.0.0.0/0"], egressAllow: ["api.example.com"] });
   const h = await sandbox.provision(layers);
   const id = fake.current(scopeName())!.id;
@@ -318,7 +318,7 @@ test("an active sandbox gets a changed egress policy applied before its first co
 });
 
 test("computerStatus observing a deleted sandbox clears cached state so the next provision replaces it", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   await sandbox.provision(layers);
   fake.expire(scopeName());
@@ -390,7 +390,7 @@ test("concurrent cores serialize read-only layer preparation", async () => {
   const shared = scopeId("org", "shared");
   await workspace.write(shared, "policy.txt", "current");
   const layered = [...layers, { scopeId: shared, mountPath: "global", mode: "ro" as const }];
-  const advisoryLock = createMemoryAdvisoryLock();
+  const advisoryLock = testAdvisoryLock();
   let writes = 0;
   let overlappingWrites = false;
   const wrap = (session: Awaited<ReturnType<typeof fake.client.create>>) => ({
@@ -412,8 +412,8 @@ test("concurrent cores serialize read-only layer preparation", async () => {
     create: async (...args: Parameters<typeof fake.client.create>) => wrap(await fake.client.create(...args)),
     connect: async (...args: Parameters<typeof fake.client.connect>) => wrap(await fake.client.connect(...args)),
   };
-  const first = createSuperserveSandbox(workspace, { store: createMemoryMap(), client, advisoryLock, configEpoch: 1 });
-  const second = createSuperserveSandbox(workspace, { store: createMemoryMap(), client, advisoryLock, configEpoch: 1 });
+  const first = createSuperserveSandbox(workspace, { store: testMap(), client, advisoryLock, configEpoch: 1 });
+  const second = createSuperserveSandbox(workspace, { store: testMap(), client, advisoryLock, configEpoch: 1 });
   const results = await Promise.allSettled([first.provision(layered), second.provision(layered)]);
   assert.equal(overlappingWrites, false, "each core owns the shared archive until extraction finishes");
   assert.deepEqual(
@@ -429,15 +429,15 @@ test("an older core leaves newer read-only layers intact", async () => {
   await olderWorkspace.write(shared, "policy.txt", "old");
   await newerWorkspace.write(shared, "policy.txt", "new");
   const layered = [...layers, { scopeId: shared, mountPath: "global", mode: "ro" as const }];
-  const advisoryLock = createMemoryAdvisoryLock();
+  const advisoryLock = testAdvisoryLock();
   const older = createSuperserveSandbox(olderWorkspace, {
-    store: createMemoryMap(),
+    store: testMap(),
     client: fake.client,
     advisoryLock,
     configEpoch: 1,
   });
   const newer = createSuperserveSandbox(newerWorkspace, {
-    store: createMemoryMap(),
+    store: testMap(),
     client: fake.client,
     advisoryLock,
     configEpoch: 2,
@@ -601,7 +601,7 @@ test("a newer core stamps its epoch even when only lifecycle settings changed", 
 });
 
 test("the config epoch is claimed once per deployment generation, so a restarted core cannot outrank a newer one", async () => {
-  const epochs: DurableMap<StoredConfigEpoch> = createMemoryMap();
+  const epochs: DurableMap<StoredConfigEpoch> = testMap();
   const claimed = await createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock)();
   assert.equal(claimed, 1);
   assert.equal(
@@ -641,7 +641,7 @@ test("the config epoch is claimed once per deployment generation, so a restarted
 });
 
 test("a command that finds its sandbox gone leaves a replacement provisioned meanwhile in place", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -665,7 +665,7 @@ test("a command that finds its sandbox gone leaves a replacement provisioned mea
 });
 
 test("a handle never runs against a replacement another turn is still provisioning", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const held = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -687,7 +687,7 @@ test("a handle never runs against a replacement another turn is still provisioni
 });
 
 test("a sandbox that disappears while checking ownership fails provisioning instead of returning a handle to it", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store, layerToolFiles: () => [] });
   const first = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -711,7 +711,7 @@ test("a sandbox that disappears while checking ownership fails provisioning inst
 });
 
 test("a gone sandbox never forgets a replacement another instance already recorded", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   const oldId = fake.current(scopeName())!.id;
@@ -775,7 +775,7 @@ test("a fresh core with an empty store rediscovers the sandbox by scope metadata
 });
 
 test("a durable store lets a restarted core reconnect without listing", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const first = await sandbox.provision(layers);
   await sandbox.teardown(first);
@@ -791,7 +791,7 @@ test("a durable store lets a restarted core reconnect without listing", async ()
 });
 
 test("a sandbox that disappeared is replaced on the next provision", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
@@ -804,7 +804,7 @@ test("a sandbox that disappeared is replaced on the next provision", async () =>
 });
 
 test("a sandbox lost mid-session fails the command and is replaced by the next provision", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   fake.expire(scopeName());
@@ -821,7 +821,7 @@ test("a sandbox lost mid-session fails the command and is replaced by the next p
 });
 
 test("destroyScope surfaces a failed listing instead of forgetting the scope", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   await sandbox.provision(layers);
   fake.failNextList(new Error("superserve unavailable"));
@@ -833,7 +833,7 @@ test("destroyScope surfaces a failed listing instead of forgetting the scope", a
 });
 
 test("destroy teardown and destroyScope kill the sandbox and forget the scope", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h, { destroy: true });
@@ -855,7 +855,7 @@ test("destroyScope also removes sandboxes only findable by metadata", async () =
 });
 
 test("computerStatus reports paused, running, and gone", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store });
   assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "down");
 
@@ -879,7 +879,7 @@ test("computerStatus reports paused, running, and gone", async () => {
 });
 
 test("computerStatus reports the sandbox it actually probed after a replacement", async () => {
-  const store: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const store: DurableMap<StoredSuperserveSandbox> = testMap();
   sandbox = make({ store, template: "qm-agent-1.0.0" });
   await sandbox.provision(layers);
   const firstId = fake.current(scopeName())!.id;
@@ -976,7 +976,7 @@ test("no access token or key ever appears in exec scripts", async () => {
 });
 
 test("a sandbox is not cached when its durable record cannot be written", async () => {
-  const inner: DurableMap<StoredSuperserveSandbox> = createMemoryMap();
+  const inner: DurableMap<StoredSuperserveSandbox> = testMap();
   let failPuts = 1;
   const store: DurableMap<StoredSuperserveSandbox> = {
     ...inner,

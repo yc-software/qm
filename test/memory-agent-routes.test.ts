@@ -15,6 +15,8 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -41,7 +43,11 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
         signingSecret: SECRET,
       }),
     );
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -379,7 +385,11 @@ describe("agent memory: cross-conversation writes are refused", () => {
       { groupId: GROUP, principalId: "U-carol" },
       { groupId: GROUP, principalId: "U-sam" },
     ]);
-    server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory: built.memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
@@ -521,7 +531,11 @@ describe("agent memory routes report provider failures as problem+json", () => {
         { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
       ],
     });
-    const server = createServer(built.app, { signingSecret: SECRET, memory });
+    const server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      memory,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     after(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const url = `http://localhost:${(server.address() as AddressInfo).port}`;

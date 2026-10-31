@@ -17,9 +17,9 @@ import { oneShot } from "../src/agent/agent-run.ts";
 import { resolveModel, modelSupported, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { testMap } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -353,7 +353,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
   // In production the backing map is the Postgres artifact store (same as
   // model credentials); a restart is a new store instance over the same
   // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
-  const backing = createMemoryMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
+  const backing = testMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
   const secret = "restart-secret-restart-secret-restart-secret";
   const first = createCustomProviderStore({ backing, keyMaterial: secret });
   await first.upsert(
@@ -379,7 +379,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
 });
 
 test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
-  const backing = createMemoryMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
+  const backing = testMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
   const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
   await writer.upsert(
     {

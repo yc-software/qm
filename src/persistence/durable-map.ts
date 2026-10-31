@@ -19,136 +19,13 @@ export interface DurableMap<T> {
   get(id: string): Promise<T | null>;
   put(id: string, value: T): Promise<void>;
   putIfAbsent(id: string, value: T): Promise<T>;
-  insertIfAbsent?(id: string, value: T): Promise<boolean>;
+  insertIfAbsent(id: string, value: T): Promise<boolean>;
   merge(id: string, patch: Partial<T>): Promise<T | null>;
-  update?(id: string, fn: (value: T) => T): Promise<T | null>;
+  update(id: string, fn: (value: T) => T): Promise<T | null>;
   mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
-  deleteIf?(id: string, predicate: (value: T) => boolean): Promise<boolean>;
+  deleteIf(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
-}
-
-function fieldText(value: unknown): string | null {
-  if (value == null) return null;
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function isAscii(text: string): boolean {
-  for (const ch of text) if (ch.codePointAt(0)! > 0x7f) return false;
-  return true;
-}
-
-export function selectEntries<T, K extends Extract<keyof T, string>>(
-  entries: ReadonlyArray<readonly [string, T]>,
-  query: DurableMapSelect<T, K>,
-): Array<[string, Omit<T, K>]> {
-  const folded = query.where ? new Set(query.where.anyOfFold.map((v) => v.toLowerCase())) : null;
-  const out: Array<[string, Omit<T, K>]> = [];
-  for (const [id, value] of entries) {
-    if (query.limit !== undefined && out.length >= query.limit) break;
-    if (query.afterId !== undefined && id <= query.afterId) continue;
-    if (folded && query.where) {
-      const text = fieldText((value as Record<string, unknown>)[query.where.field]);
-      if (text === null || !(folded.has(text.toLowerCase()) || !isAscii(text))) continue;
-    }
-    const projected = structuredClone(value) as Record<string, unknown>;
-    for (const [field, keys] of Object.entries(query.pickNested ?? {}) as Array<[string, readonly string[]]>) {
-      const nested = projected[field];
-      if (nested && typeof nested === "object" && !Array.isArray(nested))
-        projected[field] = Object.fromEntries(Object.entries(nested).filter(([key]) => keys.includes(key)));
-    }
-    for (const key of query.omit ?? []) delete projected[key];
-    out.push([id, projected as Omit<T, K>]);
-  }
-  return out;
-}
-
-function applyPatch<T>(value: T, patch: Partial<T>): T {
-  const next = { ...value } as Record<string, unknown>;
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) delete next[k];
-    else next[k] = v;
-  }
-  return next as T;
-}
-
-export function createMemoryMap<T>(): DurableMap<T> {
-  const m = new Map<string, T>();
-  const sortedEntries = () =>
-    [...m.entries()].sort(([a], [b]) => {
-      if (a < b) return -1;
-      if (a > b) return 1;
-      return 0;
-    });
-  return {
-    async all() {
-      return sortedEntries().map(([, v]) => v);
-    },
-    async entries() {
-      return sortedEntries();
-    },
-    async select(query) {
-      return selectEntries(sortedEntries(), query).map(([, value]) => value);
-    },
-    async selectEntries(query) {
-      return selectEntries(sortedEntries(), query);
-    },
-    async get(id) {
-      return m.get(id) ?? null;
-    },
-    async put(id, value) {
-      m.set(id, value);
-    },
-    async putIfAbsent(id, value) {
-      const existing = m.get(id);
-      if (existing !== undefined) return existing;
-      m.set(id, value);
-      return value;
-    },
-    async insertIfAbsent(id, value) {
-      if (m.has(id)) return false;
-      m.set(id, value);
-      return true;
-    },
-    async merge(id, patch) {
-      const v = m.get(id);
-      if (v == null) return null;
-      const merged = applyPatch(v, patch);
-      m.set(id, merged);
-      return merged;
-    },
-    async update(id, fn) {
-      const v = m.get(id);
-      if (v == null) return null;
-      const next = fn(v);
-      m.set(id, next);
-      return next;
-    },
-    async mutateMany(updates) {
-      const pending = new Map<string, T>();
-      const results = updates.map(({ id, apply }) => {
-        const next = apply(structuredClone(pending.get(id) ?? m.get(id) ?? null));
-        pending.set(id, next);
-        return next;
-      });
-      for (const [id, value] of pending) m.set(id, value);
-      return results;
-    },
-    async deleteIf(id, predicate) {
-      const value = m.get(id);
-      if (value === undefined || !predicate(value)) return false;
-      m.delete(id);
-      return true;
-    },
-    async delete(id) {
-      m.delete(id);
-    },
-    async take(id) {
-      const v = m.get(id) ?? null;
-      m.delete(id);
-      return v;
-    },
-  };
 }
 
 const VERSIONS_TABLE = "durable_map_versions";

@@ -8,7 +8,7 @@ import type {
   LoopTriageConfig,
   ShipActionPolicy,
 } from "./types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -138,8 +138,7 @@ function mergeTriage(current: LoopTriageConfig | undefined, patch: LoopTriageCon
   return next;
 }
 
-export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop>()): LoopStore {
-  if (!backing.update) throw new Error("loops need atomic durable updates");
+export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   const atomicUpdate = backing.update.bind(backing);
   const merge = (id: string, fields: Partial<Loop>) => atomicUpdate(id, (loop) => ({ ...loop, ...fields }));
 
@@ -186,12 +185,8 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...(input.governor ? { governor: input.governor } : {}),
         ...(input.cronId ? { cronId: input.cronId } : {}),
       };
-      if (backing.insertIfAbsent) {
-        const created = await backing.insertIfAbsent(contentId, candidate);
-        return { loop: created ? candidate : ((await backing.get(contentId)) ?? candidate), created };
-      }
-      const loop = await backing.putIfAbsent(contentId, candidate);
-      return { loop, created: loop.createdAt === candidate.createdAt };
+      const created = await backing.insertIfAbsent(contentId, candidate);
+      return { loop: created ? candidate : ((await backing.get(contentId)) ?? candidate), created };
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),

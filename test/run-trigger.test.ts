@@ -4,9 +4,9 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../src/core/failure-copy.ts";
+import { testMap } from "./support/test-database.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -32,8 +32,8 @@ function directory(member: boolean) {
 function deps(run: (req: TurnRequest) => Promise<TurnResult>, dir?: ReturnType<typeof directory>): TriggerDeps {
   return {
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(createMemoryMap()),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
     ...(dir ? { directory: dir } : {}),
   };

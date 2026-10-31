@@ -79,7 +79,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.ok(skillSecret, "init generates a strong skill signing key");
     assert.notEqual(coreSecret, skillSecret, "generated keys are independent");
     assert.equal(statSync(join(dir, ".env")).mode & 0o777, 0o600, ".env is owner-readable only");
-    for (const stale of ["HARNESS=", "ORG_ID=", "PORT=", "SESSION_STORE"]) {
+    for (const stale of ["HARNESS=", "ORG_ID=", "PORT="]) {
       assert.ok(!env.includes(stale), `.env.example should not offer ${stale} as a value to fill in`);
     }
 

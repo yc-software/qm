@@ -453,6 +453,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   if (!parsed.success)
     return sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error.issues[0]?.message });
   const options = parsed.data;
+  if (ctx.capability && options.attachments?.length) return sendJson(ctx.res, 403, { error: "forbidden" });
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message && !options.attachments?.length)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });

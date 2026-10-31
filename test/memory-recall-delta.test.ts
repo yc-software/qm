@@ -4,11 +4,9 @@ import assert from "node:assert/strict";
 import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
 import { renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, type MemoryProviderOutcome, type MemoryService } from "../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
@@ -101,9 +99,7 @@ test("recall checkpoint metadata never leaks into attachment-only compaction inp
 });
 
 test("id-less provider lines inject only new lines over 20 turns, and timeouts or denials never claim removal", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "recall-delta-provider-")));
-  const notebook = createMemoryService(workspace);
-  await workspace.ensureScope(alice);
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
   await notebook.capture(alice, ["NOTEBOOK_FACT prefers terse replies"], Date.parse("2026-10-01T12:00:00Z"));
   const line = (i: number) => `provider line ${i}: ${"detail ".repeat(6).trim()}`;
   let window = 0;

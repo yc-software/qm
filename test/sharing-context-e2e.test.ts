@@ -714,6 +714,7 @@ test("shared conversations run named credentials on the turn's scratch computer 
     "True True",
   );
   assert.ok(provisions.slice(before).every((key) => !key.startsWith("turn:")));
+  await b.environments.create({ id: "personal:U1", ownerActorId: "U1" });
   await b.environments.attach("channel:C1", "personal:U1", "U1");
   const attached = provisions.length;
   assert.equal(

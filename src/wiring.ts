@@ -34,7 +34,6 @@ import {
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
-import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
@@ -99,7 +98,7 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -108,17 +107,13 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
-import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
-import {
-  createMemoryAdvisoryLock,
-  createPostgresAdvisoryLock,
-  type AdvisoryLock,
-} from "./persistence/advisory-lock.ts";
+import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
+import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
   PendingApprovalRecord,
@@ -131,43 +126,35 @@ import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
-import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
+import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
+import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { createBudgetTracker, estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
+import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
-import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
+import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
-import {
-  createMemoryLedgerEventBus,
-  createPostgresLedgerEventBus,
-  type LedgerEventBus,
-} from "./loops/ledger-events.ts";
+import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
 import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
 import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
-import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
+import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
-import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
+import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
-import {
-  createMemoryEnvironmentStore,
-  createPostgresEnvironmentStore,
-  type EnvironmentStore,
-} from "./environments/environment-store.ts";
+import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
@@ -201,7 +188,7 @@ import {
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
-import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
+import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
@@ -216,7 +203,7 @@ import {
   createS3DurableByteStore,
   type DurableByteStore,
 } from "./files/durable-byte-store.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
+import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
@@ -291,9 +278,9 @@ import {
   type BrowserSessionStore,
   type StoredBrowserSession,
 } from "./connectors/browser-session-store.ts";
-import { createCredentialUsageSink, type CredentialUsageSink } from "./admin/credential-usage-sink.ts";
+import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
-import { createEgressAuditSink, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
+import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
 import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
@@ -307,9 +294,8 @@ import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
-import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
+import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
@@ -328,9 +314,8 @@ import {
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
-import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
+import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
 import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
@@ -342,11 +327,7 @@ import {
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
-import {
-  createMemoryProcessRegistry,
-  createPostgresProcessRegistry,
-  type ProcessRegistry,
-} from "./processes/process-registry.ts";
+import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -355,9 +336,9 @@ import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
 import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
-import { createMemorySessionStateBus, type SessionStateBus } from "./runs/session-state-bus.ts";
+import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
-import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-activity-store.ts";
+import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
@@ -367,26 +348,13 @@ import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-cl
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
+import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
+import { createPostgresChannelPolicyStore, type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
 import {
-  createMemorySurfaceCache,
-  createPostgresSurfaceCache,
-  type SurfaceCache,
-} from "./surface-cache/surface-cache.ts";
-import {
-  createMemoryChannelPolicyStore,
-  createPostgresChannelPolicyStore,
-  type ChannelPolicyStore,
-} from "./surface-cache/channel-policy-store.ts";
-import {
-  createMemoryAmbientJudgmentStore,
   createPostgresAmbientJudgmentStore,
   type AmbientJudgmentStore,
 } from "./surface-cache/ambient-judgment-store.ts";
-import {
-  createMemoryAckEmojiPickStore,
-  createPostgresAckEmojiPickStore,
-  type AckEmojiPickStore,
-} from "./surface-cache/ack-emoji-pick-store.ts";
+import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   auxiliaryModelFor,
   CODEX_SUBSCRIPTION_PROVIDER,
@@ -398,12 +366,12 @@ import {
   resolveModel,
   modelSupported,
 } from "./model/pi-models.ts";
-import { createAdminService, bootAdminGrantSeed, type AdminService } from "./admin/admin-service.ts";
-import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
+import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
-import { withErrorReporting, createErrorLog, type ErrorLog } from "./admin/error-log.ts";
-import { createMemoryReplayDedupe, createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
+import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
+import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
   emptyDeploymentLayer,
   loadDeploymentLayer,
@@ -514,7 +482,7 @@ export interface BuiltApp {
   loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
-  budget: BudgetTracker;
+  budget: BudgetTracker | undefined;
   errors: ErrorLog;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
@@ -540,7 +508,7 @@ export interface BuiltApp {
   featureFlags: FeatureFlagStore;
   teams?: TeamStore;
   decisions?: DecisionStore;
-  replayDedupe?: ReplayDedupe;
+  replayDedupe: ReplayDedupe;
   brokerSessions?: BrokerSessionStore;
   directory: DirectoryStore;
   projects: ProjectStore;
@@ -581,11 +549,11 @@ export function buildApp(
   let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
-  if (config.databaseUrl && !config.connectorSecretKey) {
-    throw new Error("CONNECTOR_SECRET_KEY is required with durable storage");
-  }
+  const databaseUrl = config.databaseUrl;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
+  if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
-    ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
+    databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
@@ -611,14 +579,14 @@ export function buildApp(
     canUseSandboxScope?: CanManageScope;
     managesArtifactHome?: ManagesArtifactHome;
   } = {};
-  const acl = createAclStore(config.databaseUrl ? createPostgresGrantStore(config.databaseUrl) : undefined, {
+  const acl = createAclStore(createPostgresGrantStore(databaseUrl), {
     manages: (principalId, scopeId, authoredBy) =>
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
-  const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
+  const pgArtifactMap = createPostgresMapFactory(databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
+    pgArtifactMap.map<T>(table, indexedFields);
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
@@ -651,9 +619,7 @@ export function buildApp(
       };
     },
   };
-  const advisoryLock: AdvisoryLock = pgArtifactMap
-    ? createPostgresAdvisoryLock(pgArtifactMap.pool)
-    : createMemoryAdvisoryLock();
+  const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
@@ -662,10 +628,8 @@ export function buildApp(
     principalLinks,
   });
   void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
-  const leaderLease: LeaderLease = pgArtifactMap
-    ? createPostgresLeaderLease(pgArtifactMap.pool)
-    : createNoopLeaderLease();
-  const configStore = createMemoryConfigStore(config.orgId, {
+  const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
+  const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
@@ -680,10 +644,8 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = config.databaseUrl
-    ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
-    : undefined;
-  const decisions = config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined;
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
@@ -695,14 +657,13 @@ export function buildApp(
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
-  const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
+  const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
     scopeId: orgScope,
-    durable: pgArtifactMap !== null,
     advisoryLock,
     auditPersisted: (record) =>
       auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
@@ -754,18 +715,16 @@ export function buildApp(
     );
   }
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = config.databaseUrl
-    ? createPostgresRateLimiter(config.databaseUrl, rateLimitOpts)
-    : createRateLimiter(rateLimitOpts);
+  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
     windowMs: config.budgetWindowMs,
   };
   const budget =
-    config.databaseUrl && (config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined)
-      ? createPostgresBudgetTracker(config.databaseUrl, budgetOpts)
-      : createBudgetTracker(budgetOpts);
+    config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
+      ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
+      : undefined;
   const resolution = createResolutionService(
     config.orgId,
     configStore,
@@ -773,15 +732,11 @@ export function buildApp(
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
   );
 
-  const requireDbUrl = (kind: string): string => {
-    if (!config.databaseUrl) throw new Error(`${kind}=postgres requires DATABASE_URL`);
-    return config.databaseUrl;
-  };
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
   const workspace =
     config.workspaceStore === "postgres"
-      ? createRenderWorkspaceStore(config.dataDir, requireDbUrl("WORKSPACE_STORE"))
+      ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
       : createLocalWorkspaceStore(config.dataDir);
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
@@ -801,26 +756,22 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
-  const files: FileArtifactStore = config.databaseUrl
-    ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
-    : createMemoryFileArtifactStore(fileBytes);
+  const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
   const fileUploads =
-    config.databaseUrl && config.snapshotStore === "s3" && config.s3Bucket
+    config.snapshotStore === "s3" && config.s3Bucket
       ? createDirectFileUploads({
           ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
           bucket: config.s3Bucket,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-          store: createPostgresFileUploadStore(config.databaseUrl),
+          store: createPostgresFileUploadStore(databaseUrl),
           files,
         })
       : undefined;
-  const notebookMemory: MemoryService = config.databaseUrl
-    ? createPostgresMemoryService(config.databaseUrl)
-    : createMemoryService(workspace);
+  const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
     notebook: notebookMemory,
-    databaseUrl: config.databaseUrl,
+    databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
     leaderLease,
@@ -839,7 +790,7 @@ export function buildApp(
     (scope) => memoryTidy.ensure(scope),
   );
   const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
-  const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
+  const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
     error?: unknown,
@@ -1254,7 +1205,7 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial ?? randomBytes(32), "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
     statements: [
       "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
@@ -1335,31 +1286,21 @@ export function buildApp(
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
 
-  const sessions: SessionStore =
-    config.sessionStore === "postgres"
-      ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"))
-      : createMemorySessionStore();
+  const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
-  const toolOutput =
-    config.sessionStore === "postgres" && pgArtifactMap
-      ? createPostgresToolOutputStore({
-          pool: pgArtifactMap.pool,
-          bytesFor: (prefix) =>
-            config.snapshotStore === "s3" && config.s3Bucket
-              ? createS3DurableByteStore({
-                  ...s3Override,
-                  bucket: config.s3Bucket,
-                  ...(config.s3Region ? { region: config.s3Region } : {}),
-                  prefix: `${config.s3Prefix ?? ""}${prefix}`,
-                })
-              : createLocalDurableByteStore(join(config.dataDir, prefix)),
-        })
-      : createMemoryToolOutputStore({ sessions });
-  const runStoreKind = config.runStore;
-  const runSignals: RunSignalStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunSignalStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunSignalStore();
+  const toolOutput = createPostgresToolOutputStore({
+    pool: pgArtifactMap.pool,
+    bytesFor: (prefix) =>
+      config.snapshotStore === "s3" && config.s3Bucket
+        ? createS3DurableByteStore({
+            ...s3Override,
+            bucket: config.s3Bucket,
+            ...(config.s3Region ? { region: config.s3Region } : {}),
+            prefix: `${config.s3Prefix ?? ""}${prefix}`,
+          })
+        : createLocalDurableByteStore(join(config.dataDir, prefix)),
+  });
+  const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock("model-registry", async () => {
       await refreshModels();
@@ -1559,10 +1500,7 @@ export function buildApp(
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
-  const runStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
-      : createMemoryRunStore({ maxClaims: config.maxClaims });
+  const runStore = createPostgresRunStore(databaseUrl, { maxClaims: config.maxClaims });
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
     if (!sessionIds.length) return new Set();
     const wanted = new Set(sessionIds);
@@ -1622,15 +1560,14 @@ export function buildApp(
       return advisoryLock.withLock("session-run-admission", enqueue);
     },
   };
-  const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
   const swarms =
-    config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
+    config.swarmsEnabled !== false
       ? createSwarmService({
           defaults: config.swarmDefaults,
           store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
             runs,
             sessions,
-            ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
+            pg: pgArtifactMap.pool,
           }),
           sessions,
           runs,
@@ -1654,20 +1591,15 @@ export function buildApp(
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
-    processes = config.databaseUrl ? createPostgresProcessRegistry(config.databaseUrl) : createMemoryProcessRegistry();
+    processes = createPostgresProcessRegistry(databaseUrl);
   }
 
-  const appPageViews =
-    config.databaseUrl && config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(config.databaseUrl) : undefined;
-  const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
-  const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
-  const credentialUsage = config.databaseUrl
-    ? createPostgresCredentialUsageSink(config.databaseUrl)
-    : createCredentialUsageSink();
-  const egressAudit = config.databaseUrl ? createPostgresEgressAuditSink(config.databaseUrl) : createEgressAuditSink();
-  const runStreamEvents = config.databaseUrl
-    ? createPostgresNotifyBus<RunStreamEvent>(config.databaseUrl, "run_stream", "run-stream")
-    : createMemoryEventBus<RunStreamEvent>("run-stream");
+  const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
+  const brokerSessions = createPostgresBrokerSessions(databaseUrl);
+  const replayDedupe = createPostgresReplayDedupe(databaseUrl);
+  const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
+  const egressAudit = createPostgresEgressAuditSink(databaseUrl);
+  const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
@@ -1686,16 +1618,9 @@ export function buildApp(
     }
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
-  const sessionStateBus: SessionStateBus = config.databaseUrl
-    ? createPostgresSessionStateBus(config.databaseUrl)
-    : createMemorySessionStateBus();
-  const ledgerEventBus: LedgerEventBus = config.databaseUrl
-    ? createPostgresLedgerEventBus(config.databaseUrl)
-    : createMemoryLedgerEventBus();
-  const activityStore: RunActivityStore =
-    runStoreKind === "postgres"
-      ? createPostgresRunActivityStore(requireDbUrl("RUN_STORE"))
-      : createMemoryRunActivityStore();
+  const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
+  const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
+  const activityStore: RunActivityStore = createPostgresRunActivityStore(databaseUrl);
   const runActivity: RunActivityStore = {
     ...activityStore,
     async append(runId, entry) {
@@ -1705,7 +1630,7 @@ export function buildApp(
   };
   const deployStore = createDeployStore({
     deployments: artifactMap<Deployment>("deployments"),
-    ...(pgArtifactMap ? { pg: pgArtifactMap.pool } : {}),
+    pg: pgArtifactMap.pool,
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
       repoRoot: config.deployGitDir,
@@ -1735,8 +1660,6 @@ export function buildApp(
   const buildRenderDeploy = (): DeployProvider => {
     const render = config.renderDeploy;
     if (
-      !config.databaseUrl ||
-      !pgArtifactMap ||
       !config.s3Bucket ||
       !config.s3Endpoint ||
       !render.source ||
@@ -1819,24 +1742,14 @@ export function buildApp(
       });
     },
   };
-  if (
-    config.deployProvider === "fly" &&
-    (config.flyDeploy.dataVolumeSizeGb || config.flyDeploy.sharedAppName || config.flyDeploy.wireguardPeers) &&
-    !config.databaseUrl
-  ) {
-    throw new Error("Fly durable application storage requires DATABASE_URL for persistent rollback configuration");
-  }
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
     );
   }
-  const adminGrantPersist = config.databaseUrl
-    ? createPostgresAdminGrantStore(config.databaseUrl)
-    : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
-  const adminGrantStore = createAdminGrantStore(adminGrantPersist, {
-    seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
+  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
+    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -1847,7 +1760,7 @@ export function buildApp(
     onCaptureError: (e, scope) =>
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
-  const directory = config.databaseUrl ? createPostgresDirectoryStore(config.databaseUrl) : createDirectoryStore();
+  const directory = createPostgresDirectoryStore(databaseUrl);
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -1869,10 +1782,7 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
-  );
+  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -1929,9 +1839,7 @@ export function buildApp(
         }
       : {}),
   });
-  const environments = config.databaseUrl
-    ? createPostgresEnvironmentStore(config.databaseUrl)
-    : createMemoryEnvironmentStore();
+  const environments = createPostgresEnvironmentStore(databaseUrl);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
@@ -1958,7 +1866,7 @@ export function buildApp(
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
-  const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
+  const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
@@ -1980,34 +1888,34 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap?.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS turn_wall_clock_configs",
       "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
     ],
   });
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/connector_status/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS connector_status",
       "DELETE FROM durable_map_versions WHERE tbl = 'connector_status'",
     ],
   });
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/pinned_skills/0002-drop",
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/internal_member_overrides/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS internal_member_overrides",
       "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
     ],
   });
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     statements: [
       "DROP TABLE IF EXISTS approved_harness_configs",
@@ -2018,7 +1926,7 @@ export function buildApp(
       `DO $$ BEGIN IF to_regclass('swarms') IS NOT NULL THEN UPDATE swarms SET json = json #- '{template,harness}' WHERE (json -> 'template') ? 'harness'; END IF; END $$`,
     ],
   });
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
     statements: [
       "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
@@ -2031,7 +1939,7 @@ export function buildApp(
     artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
-  pgArtifactMap?.pool.registerMigration({
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
     legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
     statements: [
@@ -2317,18 +2225,10 @@ export function buildApp(
       createdAt: Date.now(),
     }));
   };
-  const surfaceCache: SurfaceCache = config.databaseUrl
-    ? createPostgresSurfaceCache(config.databaseUrl, { liveFallback })
-    : createMemorySurfaceCache({ liveFallback });
-  const channelPolicy: ChannelPolicyStore = config.databaseUrl
-    ? createPostgresChannelPolicyStore(config.databaseUrl)
-    : createMemoryChannelPolicyStore();
-  const ambientJudgments: AmbientJudgmentStore = config.databaseUrl
-    ? createPostgresAmbientJudgmentStore(config.databaseUrl)
-    : createMemoryAmbientJudgmentStore();
-  const ackEmojiPicks: AckEmojiPickStore = config.databaseUrl
-    ? createPostgresAckEmojiPickStore(config.databaseUrl)
-    : createMemoryAckEmojiPickStore();
+  const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
+  const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
+  const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
+  const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
   const screenSecurity: SecurityScreenProbe | undefined = agent.screenSecurity
     ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
@@ -2347,7 +2247,7 @@ export function buildApp(
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     shutdown: () => inlineShutdown.signal,
-    ...(pgArtifactMap ? { resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool) } : {}),
+    resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
@@ -2707,9 +2607,7 @@ export function buildApp(
     sessions,
     resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
-    ...(config.databaseUrl
-      ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
-      : {}),
+    jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
     sweepAsks: async (now) => {
       if (!ingressMaintenance)
         ingressMaintenance = admittedWork
@@ -3052,7 +2950,7 @@ export function buildApp(
   return {
     app,
     checkReadiness: async (signal) => {
-      await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
+      await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
     ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
@@ -3123,7 +3021,7 @@ export function buildApp(
     featureFlags,
     teams,
     ...(decisions ? { decisions } : {}),
-    ...(replayDedupe ? { replayDedupe } : {}),
+    replayDedupe,
     ...(brokerSessions ? { brokerSessions } : {}),
     directory,
     projects,
@@ -3184,7 +3082,7 @@ export function serverDeps(
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
     ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-    ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
+    replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),

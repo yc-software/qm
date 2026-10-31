@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -31,10 +30,10 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 
 function testStore() {
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: deriveConnectorKey(KEY_MATERIAL),
   });
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
@@ -103,10 +102,10 @@ test("user model credential store round-trips api key and oauth per user+provide
 test("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
   let refreshCalls = 0;
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: deriveConnectorKey(KEY_MATERIAL),
     refreshConnector: async (host, token) => {
       refreshCalls += 1;

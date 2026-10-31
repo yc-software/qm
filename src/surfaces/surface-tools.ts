@@ -27,7 +27,7 @@ import type {
   SurfaceDeleteInput,
   SurfaceSearchResult,
 } from "../tools/primitives.ts";
-import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../persistence/blob-transfer.ts";
+import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
@@ -39,13 +39,12 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../surface-c
 import { isoFromTs } from "../util/message-tag.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
-const SURFACE_FILE_MAX_CHARS = 100_000;
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -451,35 +450,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");
       if (!roster.length) return { ok: true, members: [] };
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
-    },
-    readFile: async (ref: string) => {
-      const id = ref.trim();
-      if (!/^[0-9a-f]{32}$/.test(id))
-        return {
-          ok: false,
-          message: "that doesn't look like a file I can read — pass the reference shown next to the file in a thread.",
-        };
-      let blob;
-      try {
-        blob = await blobTransfer.open(id);
-      } catch (e) {
-        return { ok: false, message: errMessage(e) };
-      }
-      if (!blob) return { ok: false, message: "I can't find that file — it may have expired." };
-      if (blob.sizeBytes > MAX_BLOB_BYTES) {
-        blob.stream.destroy();
-        return {
-          ok: false,
-          message: `that file is ${blob.sizeBytes} bytes — too large to read inline (limit ${MAX_BLOB_BYTES}).`,
-        };
-      }
-      const bytes = await collectBlob(blob.stream);
-      if (!headLooksLikeText(bytes.subarray(0, 8000)))
-        return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
-      const decoded = bytes.toString("utf8");
-      const content =
-        decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
-      return { ok: true, content, sizeBytes: blob.sizeBytes };
     },
     getStandingOrder: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };

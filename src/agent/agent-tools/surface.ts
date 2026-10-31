@@ -31,7 +31,6 @@ export function surfaceTool(kit: ToolKit) {
           Type.Literal("whats_new"),
           Type.Literal("search"),
           Type.Literal("read_members"),
-          Type.Literal("read_file"),
         ],
         {
           description:
@@ -39,8 +38,7 @@ export function surfaceTool(kit: ToolKit) {
             "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
             "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
             "OWN message), read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster), read_file (a shared file's " +
-            "contents by reference).",
+            "changed), search (find messages), read_members (the roster).",
         },
       ),
       text: Type.Optional(
@@ -82,8 +80,7 @@ export function surfaceTool(kit: ToolKit) {
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
-          description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
+          description: "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread).",
         }),
       ),
       limit: Type.Optional(
@@ -397,53 +394,12 @@ export function surfaceTool(kit: ToolKit) {
             text(body),
           );
         }
-        case "read_file": {
-          if (params.ref === undefined) return missing("ref");
-          await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref });
-          const r = await tc.readFile(params.ref);
-          if (!r.ok)
-            return recordResult(
-              callId,
-              { tool: surfaceName, action: "read_file", ok: false },
-              text(`[couldn't read that file] ${r.message ?? "unavailable"}`),
-              true,
-            );
-          if (r.content !== undefined) {
-            return recordExternalResult(
-              callId,
-              {
-                tool: surfaceName,
-                action: "read_file",
-                ok: true,
-                ...(r.name ? { name: r.name } : {}),
-                ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
-              },
-              text(r.content),
-              "surface file",
-            );
-          }
-          const kind = r.contentType ?? "binary";
-          const size = r.sizeBytes !== undefined ? ` (${r.sizeBytes} bytes)` : "";
-          return recordResult(
-            callId,
-            {
-              tool: surfaceName,
-              action: "read_file",
-              ok: true,
-              binary: true,
-              ...(r.name ? { name: r.name } : {}),
-              ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
-              ...(r.contentType ? { contentType: r.contentType } : {}),
-            },
-            text(`[${r.name ?? "file"}${size} — ${kind}; not text. Bring it onto your computer to work with it.]`),
-          );
-        }
         default:
           return recordResult(
             callId,
             { tool: surfaceName, error: "unknown_action" },
             text(
-              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members, read_file.`,
+              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members.`,
             ),
             true,
           );

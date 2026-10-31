@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Grant } from "../src/types.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const owner = "org:default-org";
 const ref = "service-cred:k";
 
 test("conditional grant compensation preserves a newer full-tuple write", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const original: Grant = {
     ownerScopeId: owner,
     ref,

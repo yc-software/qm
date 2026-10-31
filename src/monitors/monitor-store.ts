@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../triggers/types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -44,7 +44,7 @@ function defunctBefore(cutoff: number): (m: Monitor) => boolean {
   return (m) => !m.enabled && lastActivityAt(m) <= cutoff;
 }
 
-export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMap<Monitor>()): MonitorStore {
+export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -76,12 +76,7 @@ export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMa
       const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
       let deleted = 0;
       for (const m of (await backing.all()).filter(isDefunct)) {
-        if (backing.deleteIf) {
-          if (await backing.deleteIf(m.id, isDefunct)) deleted++;
-        } else {
-          await backing.delete(m.id);
-          deleted++;
-        }
+        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
       }
       return deleted;
     },

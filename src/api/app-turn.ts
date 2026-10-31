@@ -96,7 +96,7 @@ export function createTurnMethods(
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
-    return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+    return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
@@ -769,7 +769,7 @@ export function createTurnMethods(
         if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
         return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session, USER_STOP);
       };
-      return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+      return deps.advisoryLock.withLock("session-tree-admission", stop);
     },
 
     async activeRunForThread(threadRef, viewer) {

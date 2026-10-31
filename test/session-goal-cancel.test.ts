@@ -11,6 +11,7 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
@@ -102,6 +103,7 @@ for (const status of ["active", "paused"] as const) {
 
     const cancelling = built.app.cancelSessionGoal(session.id, "U1");
     await new Promise((r) => setTimeout(r, 200));
+    await settle(async () => status !== "active" || (await built.signals.pending(run!.id)).length > 0);
     assert.deepEqual(
       (await built.signals.pending(run!.id)).map((p) => p.signal.kind),
       status === "active" ? ["abort"] : [],
