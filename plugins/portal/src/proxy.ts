@@ -12,6 +12,8 @@ const FORWARD_REQUEST_HEADERS = [
   "user-agent",
   "accept-encoding",
   "sec-fetch-dest",
+  "x-content-sha256",
+  "x-file-name",
 ];
 
 const DROP_RESPONSE_HEADERS = new Set([
