@@ -95,6 +95,7 @@ interface HeldTurn {
   shutdown: AbortController;
   cancelled: boolean;
   yielding: boolean;
+  retryInMs?: number;
   done: Promise<void>;
   onCancel(): void;
 }
@@ -266,14 +267,11 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           ...stopErrorCode(stop),
         },
       });
-    else if (
-      !(await deps.ledger.handBack(run, token, {
-        stop,
-        delayMs: (deps.retryDelayMs ?? retryDelay)(run.errorAttempts),
-        countsAsError: true,
-      }))
-    )
-      console.warn(`[turns] turn ${run.id} could not be requeued after an error; its claim was already gone`);
+    else {
+      const delayMs = (deps.retryDelayMs ?? retryDelay)(run.errorAttempts);
+      if (await deps.ledger.handBack(run, token, { stop, delayMs, countsAsError: true })) held.retryInMs = delayMs;
+      else console.warn(`[turns] turn ${run.id} could not be requeued after an error; its claim was already gone`);
+    }
   } finally {
     claim.stop();
     clearTimeout(cancelTimer);
@@ -386,6 +384,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         if (inFlight.get(run.id) === held) inFlight.delete(run.id);
         settle();
         notify();
+        if (held.retryInMs !== undefined) setTimeout(notify, held.retryInMs).unref();
       });
   }
 
