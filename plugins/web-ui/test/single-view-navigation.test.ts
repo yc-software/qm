@@ -142,7 +142,7 @@ test("single and multiview headers render mutually exclusive tools and pane cont
     title.dispatchEvent(new MouseEvent("mouseenter"));
     return title.hasAttribute("data-qm-tooltip-anchor");
   };
-  assert.equal(hoverTitle(), true, "single-pane titles keep their original tooltip");
+  assert.equal(hoverTitle(), false, "single-pane titles do not repeat the title as a tooltip");
   assert.deepEqual(
     labels().filter((label) => ["Pane layout and tools", "Expand pane", "Close pane"].includes(label!)),
     [],
@@ -157,7 +157,7 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   await closePane(1);
   assert.equal(document.querySelector('.split-pane-actions [role="menu"]'), null);
   assert.equal(document.querySelector(".split-tools-btn"), null);
-  assert.equal(hoverTitle(), true, "closing the split restores the original title tooltip");
+  assert.equal(hoverTitle(), false, "closing the split keeps the title without a tooltip");
   assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
   assert.equal(document.querySelectorAll('.split-pane-actions [aria-label="Close pane"]').length, 0);
 });
