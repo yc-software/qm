@@ -1,5 +1,6 @@
 import { LRUCache } from "lru-cache";
-import { personalScope, type LoopItem } from "../types.ts";
+import { personalScope } from "../types.ts";
+import type { LoopItem } from "./types.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";

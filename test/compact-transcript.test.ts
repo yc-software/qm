@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
+import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq = 0, createdAt = 0): SessionEntry {

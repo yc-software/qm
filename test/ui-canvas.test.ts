@@ -14,6 +14,8 @@ import { uiStateId } from "../src/surfaces/ui-state.ts";
 import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
 import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -76,7 +78,11 @@ describe("ui canvas and ui observe", () => {
       sessionStateBus: built.sessionStateBus,
       runs: { get: async (id: string) => runs.get(id) ?? null } as never,
     };
-    agentServer = createServer(built.app, { signingSecret: SECRET, ...deps });
+    agentServer = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      ...deps,
+    });
     sourceServer = createInsecureTestServer(built.app, deps);
     await new Promise<void>((resolve) => agentServer.listen(0, resolve));
     await new Promise<void>((resolve) => sourceServer.listen(0, resolve));

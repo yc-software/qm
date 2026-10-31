@@ -5,10 +5,9 @@ import {
   SESSION_BUSY_USER_TEXT,
   standaloneFailureText,
   userFacingFailureClause,
-  userFacingFailureText,
 } from "../src/core/failure-copy.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
-import { GENERIC_FAILURE_TEXT } from "../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_TEXT, userFacingFailureText } from "../plugins/chassis/src/failure-copy.ts";
 
 test("the shared failure policy renders quarantine canned, refused reasons verbatim, everything else generic", () => {
   const quarantine = {

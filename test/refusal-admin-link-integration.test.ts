@@ -6,28 +6,28 @@ import { join } from "node:path";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createOrchestrator } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { processRun } from "../src/runs/worker.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { refusalNote } from "../src/slack/lib.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
@@ -56,13 +56,13 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildOrchestrator(sessions: SessionStore) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const config = testConfigStore(ORG);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ral-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "ral-deploy"),
     auditLog,
@@ -70,26 +70,25 @@ function buildOrchestrator(sessions: SessionStore) {
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness: createMockHarness(),
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    agent: createMockAgent(),
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
   });
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";

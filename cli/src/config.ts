@@ -24,7 +24,6 @@ import {
   targetsAllowingSandboxBackend,
 } from "./providers.ts";
 import { githubRepoUrl, isGitBranchName } from "./render-source.ts";
-import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
@@ -140,12 +139,6 @@ export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
-};
-
-export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
-  anthropic: ["pi", "claude"],
-  openai: ["pi"],
-  openrouter: ["pi"],
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>
@@ -843,36 +836,17 @@ function validate(raw: unknown, path: string): QmConfig {
   return out;
 }
 
-function configuredHarness(config: QmConfig): string {
-  return config.env.core?.HARNESS?.trim() || TARGET_ENV_DEFAULTS[config.target](config, "core", "HARNESS") || "pi";
-}
-
 export function effectiveModelProvider(config: QmConfig): ModelProvider | undefined {
   const override = config.env.core?.MODEL_PROVIDER?.trim();
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
-const HARNESSES = ["pi", "claude"];
-
 function validateModelProvider(config: QmConfig, path: string): void {
-  const harness = configuredHarness(config);
-  if (!HARNESSES.includes(harness)) {
-    throw new CliError(
-      `${path}: env.core.HARNESS "${harness}" is not recognized — use ${HARNESSES.join(", ")}, or unset it.`,
-    );
-  }
   const override = config.env.core?.MODEL_PROVIDER?.trim();
   if (override === "") delete config.env.core!.MODEL_PROVIDER;
   if (override !== undefined && override !== "" && !isModelProvider(override)) {
     throw new CliError(
       `${path}: env.core.MODEL_PROVIDER must be one of ${MODEL_PROVIDERS.join(", ")}, or unset to use "modelProvider"`,
-    );
-  }
-  const provider = effectiveModelProvider(config);
-  if (!provider) return;
-  if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
-    throw new CliError(
-      `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,
     );
   }
 }
@@ -1046,10 +1020,9 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
   if (hasPortal && protocol !== "https:") {
     throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
   }
-  const harness = configuredHarness(config);
   if (protocol !== "https:") {
     throw new CliError(
-      `${path}: AWS HARNESS=${harness} requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
+      `${path}: AWS requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
     );
   }
 }

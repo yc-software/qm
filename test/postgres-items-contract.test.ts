@@ -4,9 +4,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
 import { createLocalDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { applyPgMigrations, createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { DuplicateCallError } from "../src/sessions/session-store.ts";
 import {
@@ -16,7 +15,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -37,6 +36,7 @@ async function withSchema(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
@@ -225,44 +225,6 @@ test(
   },
 );
 
-test(
-  "pg items cutover drops legacy participant-activity triggers so participant windows stay exact",
-  { skip },
-  async () => {
-    await withSchema("items_residue", async ({ raw, url, store }) => {
-      await applyPgMigrations(
-        raw,
-        registeredPgMigrations(url).filter((migration) => migration.id < "sessions/store/0029"),
-      );
-      await raw.query(
-        await readFile(
-          new globalThis.URL("./fixtures/legacy-participant-activity-triggers.sql", import.meta.url),
-          "utf8",
-        ),
-      );
-      const scope = scopeId("personal", "alice");
-      const session = await store.getOrCreateByThread("web:residue", "dm", scope);
-      const { lease } = await store.acquireLease(session.id);
-      assert.ok(lease);
-      await store.append(lease, { type: "user", payload: { text: "one" }, scopeLabel: scope });
-      await store.releaseLease(lease);
-      await store.addParticipant(session.id, "bob", undefined, { includeHistory: true });
-      await store.addParticipant(session.id, "carol");
-      assert.deepEqual(
-        (
-          await raw.query("SELECT principal_id, valid_from_seq FROM participants WHERE session_id = $1 ORDER BY 1", [
-            session.id,
-          ])
-        ).rows.map((row) => [row.principal_id, row.valid_from_seq]),
-        [
-          ["bob", 0],
-          ["carol", 1],
-        ],
-      );
-    });
-  },
-);
-
 test("pg items hide a Slack reply receipt once the real message arrives", { skip }, async () => {
   await withSchema("items_receipts", async ({ store }) => {
     const scope = scopeId("personal", "alice");
@@ -288,5 +250,32 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
     assert.deepEqual(await texts(), [["sent from web", false]]);
     assert.equal(await store.countEntriesBefore(session.id, 10), 1);
     assert.equal((await store.getEntries(session.id)).length, 2);
+  });
+});
+
+test("message-only transcript reads filter before pagination and retain visibility", { skip }, async () => {
+  await withSchema("message_pages", async ({ store }) => {
+    const scope = scopeId("personal", "alice");
+    const session = await store.getOrCreateByThread("web:message-pages", "dm", scope);
+    await store.addParticipant(session.id, "alice");
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await store.append(lease, { type: "user", scopeLabel: scope, payload: { text: "question" } });
+    const answer = await store.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "answer" } });
+    await store.append(lease, {
+      type: "tool_result",
+      scopeLabel: scope,
+      payload: { callId: "read", tool: "read", result: "irrelevant tool output" },
+    });
+    await store.releaseLease(lease);
+    assert.deepEqual(
+      (await store.getEntries(session.id, { messagesOnly: true, limit: 1 })).map((e) => e.seq),
+      [answer.seq],
+    );
+    assert.deepEqual(
+      (await store.visibleEntries(session.id, "alice", { messagesOnly: true, limit: 1 })).map((e) => e.seq),
+      [answer.seq],
+    );
+    assert.deepEqual(await store.visibleEntries(session.id, "outsider", { messagesOnly: true, limit: 1 }), []);
   });
 });

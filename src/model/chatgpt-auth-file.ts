@@ -1,7 +1,3 @@
-import { readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-
 export type JsonObject = Record<string, unknown>;
 
 function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> | undefined {
@@ -57,30 +53,4 @@ export function chatgptAuthFromValue(value: unknown): JsonObject | null {
   const auth = asObject(value);
   if (!auth || (auth.auth_mode !== "chatgpt" && auth.auth_mode !== "chatgptAuthTokens")) return null;
   return authTokens(auth) && authAccountId(auth) ? auth : null;
-}
-
-function expandPath(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  return resolve(path);
-}
-
-export function codexAuthFileForEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const explicit = env.CODEX_AUTH_FILE?.trim();
-  return explicit ? expandPath(explicit) : undefined;
-}
-
-export function loadCodexAuthFile(path: string): JsonObject {
-  if (statSync(path).mode & 0o077) throw new Error(`${path} must not be readable by group or others (chmod 600 it)`);
-  const auth = chatgptAuthFromValue(JSON.parse(readFileSync(path, "utf8")));
-  if (!auth) throw new Error(`${path} is not a ChatGPT login auth.json`);
-  return auth;
-}
-
-export function readCodexOAuthAuthFile(path: string): JsonObject | null {
-  try {
-    return loadCodexAuthFile(path);
-  } catch {
-    return null;
-  }
 }

@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant, boundUrl, seedTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -31,6 +34,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
+  await seedTenant(url.toString());
   return {
     url: url.toString(),
     admin,
@@ -43,7 +47,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
 
 for (const duringClaim of [false, true]) {
   test(`notification wakes idle worker without a lost wakeup (during claim: ${duringClaim})`, async () => {
-    const { runs } = createMemoryRunStore();
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
     const bus = createMemoryEventBus<null>("availability test");
     runs.subscribeAvailable = (listener, options) => {
       const off = bus.subscribe(listener, options);
@@ -92,7 +96,7 @@ for (const duringClaim of [false, true]) {
 }
 
 test("missed notifications recover and reconnect checks immediately", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const bus = createMemoryEventBus<null>("availability test");
   runs.subscribeAvailable = (listener, options) => {
     const off = bus.subscribe(listener, options);
@@ -179,7 +183,7 @@ test(
       assert.equal((await writer.runs.reapExpired()).requeued, 1);
       await until(() => notifications > before);
       await admin.query(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN qm_run_available' AND application_name=$1",
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%LISTEN qm_run_available' AND application_name=$1",
         [new URL(url).searchParams.get("application_name")],
       );
       ids.push((await writer.runs.enqueue({ sessionId, request })).run.id);
@@ -266,7 +270,7 @@ test(
     const { url, cleanup } = await isolatedPostgres();
     const writer = createPostgresRunStore(url);
     const reader = createPostgresRunStore(url);
-    const direct = new pg.Pool({ connectionString: url });
+    const direct = new pg.Pool({ connectionString: boundUrl(url) });
     const observed: Array<{ id: string; at: number }> = [];
     const workers = Array.from({ length: 16 }, () =>
       createWorker({

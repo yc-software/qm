@@ -479,10 +479,10 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         target: "aws",
         publicUrl: "http://agent.acme.example",
         services: ["core"],
-        env: { core: { HARNESS: "pi" } },
+        env: {},
         aws: aws(["core"]),
       },
-      error: /HARNESS=pi requires an HTTPS publicUrl/,
+      error: /AWS requires an HTTPS publicUrl/,
     },
     {
       label: "apiUrl protocol differing from publicUrl",
@@ -552,7 +552,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /AWS HARNESS=pi requires an HTTPS publicUrl/);
+      assert.throws(() => loadConfigAt(path), /AWS requires an HTTPS publicUrl/);
     },
   );
   withConfig(
@@ -561,7 +561,6 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       publicUrl: "https://agent.acme.example",
       services: ["core", "web-ui", "portal"],
       env: {
-        core: { HARNESS: "pi" },
         portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
       },
       aws: aws(["core", "web-ui", "portal"]),
@@ -575,7 +574,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       target: "aws",
       publicUrl: "https://agent.acme.example",
       services: ["core", "web-ui", "portal"],
-      env: { core: { HARNESS: "pi" }, portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
+      env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
       aws: aws(["core", "web-ui", "portal"]),
     },
     ({ path }) => {
@@ -587,7 +586,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       target: "aws",
       publicUrl: "https://agent.acme.example",
       services: ["core", "web-ui", "portal"],
-      env: { core: { HARNESS: "pi" }, portal: { OIDC_PRINCIPAL_CLAIM: "email" } },
+      env: { portal: { OIDC_PRINCIPAL_CLAIM: "email" } },
       aws: aws(["core", "web-ui", "portal"]),
     },
     ({ path }) => {
@@ -1348,50 +1347,11 @@ test("aws.services logGroup and stopTimeout adopt live task-def values and valid
   }
 });
 
-test("modelProvider must name a vendor the configured harness can bill", () => {
-  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.modelProvider, "openrouter");
-  });
-  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "claude" } } }, ({ path }) => {
-    assert.throws(
-      () => loadConfigAt(path),
-      /model provider "openrouter" cannot serve a base model on env.core.HARNESS "claude"/,
-    );
-  });
-  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "claude" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /cannot serve a base model/);
-  });
-  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.modelProvider, "openai");
-  });
-  for (const harness of ["codex", "opencode", "mock"]) {
-    withConfig({ env: { core: { HARNESS: harness } } }, ({ path }) => {
-      assert.throws(() => loadConfigAt(path), new RegExp(`env.core.HARNESS "${harness}" is not recognized`));
-    });
-  }
-  withConfig({ modelProvider: "openrouter" }, ({ path }) => {
-    assert.equal(
-      loadConfigAt(path).config.modelProvider,
-      "openrouter",
-      "an unset harness is pi, which bills openrouter",
-    );
-  });
-});
-
 test("env.core.MODEL_PROVIDER is validated as the provider core will actually use", () => {
-  withConfig(
-    { modelProvider: "anthropic", env: { core: { HARNESS: "claude", MODEL_PROVIDER: "openai" } } },
-    ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /model provider "openai" cannot serve a base model/);
-    },
-  );
-  withConfig(
-    { modelProvider: "openai", env: { core: { HARNESS: "claude", MODEL_PROVIDER: "anthropic" } } },
-    ({ path }) => {
-      assert.equal(loadConfigAt(path).config.modelProvider, "openai", "the override decides, the declaration stays");
-    },
-  );
-  withConfig({ env: { core: { HARNESS: "pi", MODEL_PROVIDER: "bedrock" } } }, ({ path }) => {
+  withConfig({ modelProvider: "openai", env: { core: { MODEL_PROVIDER: "anthropic" } } }, ({ path }) => {
+    assert.equal(loadConfigAt(path).config.modelProvider, "openai", "the override decides, the declaration stays");
+  });
+  withConfig({ env: { core: { MODEL_PROVIDER: "bedrock" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /env.core.MODEL_PROVIDER must be one of/);
   });
 });
@@ -1412,7 +1372,7 @@ test("blank model provider overrides preserve the declared provider in runtime a
         services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
       },
       modelProvider: "openrouter",
-      env: { core: { HARNESS: "pi", MODEL_PROVIDER: "  " } },
+      env: { core: { MODEL_PROVIDER: "  " } },
     },
     ({ path }) => {
       const { config } = loadConfigAt(path);

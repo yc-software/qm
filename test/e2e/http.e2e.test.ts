@@ -22,7 +22,6 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
     const built = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "http-e2e-")),
-        harness: "pi",
         ...(process.env.PI_MODEL ? { modelId: process.env.PI_MODEL } : {}),
         ...(process.env.ANTHROPIC_API_KEY ? { anthropicApiKey: process.env.ANTHROPIC_API_KEY } : {}),
       }),

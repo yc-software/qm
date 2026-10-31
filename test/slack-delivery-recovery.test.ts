@@ -5,7 +5,7 @@ import { statusPlaceholderKey } from "../src/slack/lib.ts";
 
 const RECOVERED_AGE_MS = 60_000;
 
-function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<string, string> }) {
+function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<string, string> }) {
   const calls: Array<{ method: string; args: Record<string, unknown> }> = [];
   const record =
     (method: string, result: unknown = {}) =>
@@ -71,7 +71,7 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
 }
 
 test("a recovered run reply adopts the status placeholder it finds by metadata instead of posting beside it", async () => {
-  const h = harness({
+  const h = agent({
     thread: [
       { ts: "100.200", text: "the question" },
       {
@@ -96,7 +96,7 @@ test("a recovered run reply adopts the status placeholder it finds by metadata i
 });
 
 test("a recovered run reply with no placeholder in the thread posts normally after the probe", async () => {
-  const h = harness({ thread: [{ ts: "100.200", text: "the question" }] });
+  const h = agent({ thread: [{ ts: "100.200", text: "the question" }] });
   await h.deliver({ destination: {}, idempotencyKey: "run:r1", text: "the answer", ageMs: RECOVERED_AGE_MS });
   assert.deepEqual(h.methods(), ["conversations.replies", "conversations.replies", "chat.postMessage"]);
   assert.equal(h.calls[2]!.args.text, "the answer");
@@ -104,7 +104,7 @@ test("a recovered run reply with no placeholder in the thread posts normally aft
 });
 
 test("a recovered empty run reply deletes the orphaned placeholder it finds by metadata", async () => {
-  const h = harness({
+  const h = agent({
     thread: [
       {
         ts: "100.300",
@@ -118,7 +118,7 @@ test("a recovered empty run reply deletes the orphaned placeholder it finds by m
 });
 
 test("a recorded editRef skips the placeholder probe", async () => {
-  const h = harness({});
+  const h = agent({});
   await h.deliver({
     destination: { editRef: "100.300" },
     idempotencyKey: "run:r1",
@@ -142,7 +142,7 @@ for (const [label, destination, method, error] of [
       errors.push(args.join(" "));
     };
     try {
-      const h = harness({ errors: { [method]: error } });
+      const h = agent({ errors: { [method]: error } });
       await h.deliver({ destination, ageMs: RECOVERED_AGE_MS });
       assert.deepEqual(h.methods(), [method]);
       assert.deepEqual(h.acknowledgements, ["D1"]);
@@ -160,7 +160,7 @@ test("a delete refused for a reason other than a missing message still acks but 
     errors.push(args.join(" "));
   };
   try {
-    const h = harness({ errors: { "chat.delete": "cant_delete_message" } });
+    const h = agent({ errors: { "chat.delete": "cant_delete_message" } });
     await h.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
     assert.deepEqual(h.acknowledgements, ["D1"]);
     assert.equal(errors.length, 1);
@@ -172,16 +172,16 @@ test("a delete refused for a reason other than a missing message still acks but 
 
 test("fresh and recovered reaction, pin and delete rows act directly", async () => {
   for (const ageMs of [0, RECOVERED_AGE_MS]) {
-    const react = harness({});
+    const react = agent({});
     await react.deliver({ destination: { react: { messageTs: "100.200", emoji: "eyes" } }, ageMs });
     assert.deepEqual(react.methods(), ["reactions.add"]);
     assert.deepEqual(react.acknowledgements, ["D1"]);
 
-    const pin = harness({});
+    const pin = agent({});
     await pin.deliver({ destination: { pin: { messageTs: "100.200" } }, ageMs });
     assert.deepEqual(pin.methods(), ["pins.add"]);
 
-    const remove = harness({});
+    const remove = agent({});
     await remove.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs });
     assert.deepEqual(remove.methods(), ["chat.delete"]);
     assert.equal(remove.calls[0]!.args.ts, "100.500");

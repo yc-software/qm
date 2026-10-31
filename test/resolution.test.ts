@@ -1,19 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { composeSoul, createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { PersistedEgressPolicy, PersistedSoul } from "../src/resolution/config-store.ts";
+import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
 async function setup() {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setSoul(scopeId("personal", "U1"), "PERSONAL_SOUL");
   await config.setSoul(scopeId("channel", "C1"), "CHANNEL_SOUL");
-  return createResolutionService("default-org", config, createAclStore());
+  return createResolutionService("default-org", config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
 }
 
 test("DM mounts global + personal (the user's own workspace)", async () => {
@@ -55,11 +55,15 @@ test("resolution.systemPrompt is the org/scope policy layer only — protocol gu
 });
 
 test("egress floor includes the actor's team-scope denylist (resolved to the per-turn token)", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setEgress(scopeId("org", "default-org"), { allowedHosts: [], deniedHosts: ["org-bad.test"] });
   await config.setEgress(scopeId("team", "T1"), { allowedHosts: [], deniedHosts: ["team-bad.test"] });
   await config.setEgress(scopeId("personal", "U1"), { allowedHosts: [], deniedHosts: ["me-bad.test"] });
-  const res = createResolutionService("default-org", config, createAclStore());
+  const res = createResolutionService(
+    "default-org",
+    config,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const teamActor: Principal = { id: "U1", type: "internal", teamIds: ["T1"] };
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [teamActor] };
   const r = await res.resolve(conv, teamActor);
@@ -67,12 +71,16 @@ test("egress floor includes the actor's team-scope denylist (resolved to the per
 });
 
 test("egress floor includes the conversation scope policy for shared rooms", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setEgress(scopeId("channel", "C1"), {
     allowedHosts: ["channel-api.test"],
     deniedHosts: ["channel-bad.test"],
   });
-  const res = createResolutionService("default-org", config, createAclStore());
+  const res = createResolutionService(
+    "default-org",
+    config,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const conv: Conversation = { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] };
   const r = await res.resolve(conv, actor);
   assert.deepEqual(r.egress.allowedHosts, ["channel-api.test"]);
@@ -90,10 +98,14 @@ test("the writable layer is the scope, global is read-only", async () => {
 });
 
 test("resolution carries the durable effective security posture", async () => {
-  const config = createMemoryConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
+  const config = testConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
   await config.setSecurityPosture(scopeId("org", "default-org"), "auto");
   await config.setSecurityPosture(scopeId("personal", "U1"), "strict");
-  const res = createResolutionService("default-org", config, createAclStore());
+  const res = createResolutionService(
+    "default-org",
+    config,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);
   assert.deepEqual(resolved.securityPolicy, {
@@ -106,16 +118,20 @@ test("resolution carries the durable effective security posture", async () => {
 });
 
 test("resolution refreshes security config written by another instance", async () => {
-  const souls = createMemoryMap<PersistedSoul>();
-  const egressPolicies = createMemoryMap<PersistedEgressPolicy>();
-  const reader = createMemoryConfigStore("default-org", { souls, egressPolicies });
+  const souls = testMap<PersistedSoul>();
+  const egressPolicies = testMap<PersistedEgressPolicy>();
+  const reader = testConfigStore("default-org", { souls, egressPolicies });
   const personal = scopeId("personal", "U1");
   await souls.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
   await egressPolicies.put(personal, {
     scopeId: personal,
     policy: { allowedHosts: [], deniedHosts: ["blocked.example"] },
   });
-  const res = createResolutionService("default-org", reader, createAclStore());
+  const res = createResolutionService(
+    "default-org",
+    reader,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);
   assert.match(resolved.systemPrompt, /FLEET_LIVE/);
@@ -123,7 +139,7 @@ test("resolution refreshes security config written by another instance", async (
 });
 
 test("deployment screening mode is capped only by dangerous posture", async () => {
-  const config = createMemoryConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
+  const config = testConfigStore("default-org", { defaultSecurityPosture: "dangerous" });
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const expected = {
     off: { dangerous: "off", auto: "off", strict: "off" },
@@ -131,7 +147,12 @@ test("deployment screening mode is capped only by dangerous posture", async () =
     enforce: { dangerous: "observe", auto: "enforce", strict: "enforce" },
   } as const;
   for (const mode of ["off", "observe", "enforce"] as const) {
-    const res = createResolutionService("default-org", config, createAclStore(), mode);
+    const res = createResolutionService(
+      "default-org",
+      config,
+      createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      mode,
+    );
     for (const posture of ["dangerous", "auto", "strict"] as const) {
       await config.setSecurityPosture(scopeId("personal", "U1"), posture);
       const policy = (await res.resolve(conv, actor)).securityPolicy;
@@ -152,10 +173,14 @@ test("SOUL composition keeps organization precedence without duplicating identic
 });
 
 test("external audiences receive no organization or scope policy", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setSoul(scopeId("org", "default-org"), "PRIVATE_ORG");
   await config.setSoul(scopeId("channel", "C1"), "PRIVATE_SCOPE");
-  const resolution = createResolutionService("default-org", config, createAclStore());
+  const resolution = createResolutionService(
+    "default-org",
+    config,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   const conversation: Conversation = { kind: "channel", channelRef: "C1", threadRef: "C1:t", audience: [actor] };
   assert.equal((await resolution.resolve(conversation, actor, true)).systemPrompt, "");
 });

@@ -5,7 +5,7 @@ import {
   type PgMigrationDefinition,
   type Rows,
 } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, tenantPolicies } from "../tenants/migrations.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
@@ -13,42 +13,9 @@ import type { StagedEnvelopeRows } from "./envelope-staging.ts";
 import type { SlackSessionStatusRows, SlackSessionStatusState } from "./session-status.ts";
 import type { TaskAckRows, TaskAckState } from "./task-ack.ts";
 import type { SlackAccountLink, SlackAccountRows } from "../api/routes/composio.ts";
-import { currentTenant } from "../tenants/context.ts";
-
-const KEY_VALUE_TABLES = [
-  "slack_installation",
-  "slack_accounts",
-  "slack_staged_envelopes",
-  "slack_session_status",
-  "slack_task_acknowledgements",
-];
 
 const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
-  {
-    id: "tenancy/slack_0000/tenant",
-    statements: [
-      `DO $slack_tenant$
-       DECLARE
-         populated boolean := false;
-         tenant_count bigint;
-         kv text;
-       BEGIN
-         FOREACH kv IN ARRAY ARRAY['${KEY_VALUE_TABLES.join("', '")}'] LOOP
-           IF NOT populated AND to_regclass(kv) IS NOT NULL THEN
-             EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', kv) INTO populated;
-           END IF;
-         END LOOP;
-         SELECT count(*) INTO tenant_count FROM tenants;
-         IF populated AND tenant_count > 1 THEN
-           RAISE 'Slack rows need a tenant but this database has % tenants', tenant_count;
-         END IF;
-         IF populated AND tenant_count = 0 THEN
-           INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main');
-         END IF;
-       END $slack_tenant$`,
-    ],
-  },
   {
     id: "tenancy/slack_installation/0001-typed",
     statements: [
@@ -56,8 +23,9 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
       `CREATE TABLE IF NOT EXISTS slack_installation(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `ALTER TABLE slack_installation RENAME TO slack_installation_kv`,
       `ALTER INDEX slack_installation_pkey RENAME TO slack_installation_kv_pkey`,
+      `SELECT qm_tenant_column('slack_installation_kv')`,
       `CREATE TABLE slack_installation(
-         tenant_id UUID PRIMARY KEY DEFAULT qm_tenant_id() REFERENCES tenants,
+         tenant_id UUID PRIMARY KEY DEFAULT qm_bound_tenant() REFERENCES tenants,
          disabled BOOLEAN NOT NULL,
          service_blocked BOOLEAN NOT NULL DEFAULT false,
          bot_token_enc TEXT,
@@ -74,7 +42,7 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
        )`,
       `INSERT INTO slack_installation(tenant_id, disabled, service_blocked, bot_token_enc, app_token_enc, app_id,
          install_id, installed_at, team_id, team_name, updated_at, updated_by, version)
-       SELECT (SELECT id FROM tenants), COALESCE((json->>'disabled')::boolean, true),
+       SELECT tenant_id, COALESCE((json->>'disabled')::boolean, true),
          COALESCE((json->>'serviceBlocked')::boolean, false), json->>'botTokenEnc', json->>'appTokenEnc', json->>'appId',
          json->>'installId', (json->>'installedAt')::bigint, json->>'teamId', json->>'teamName',
          COALESCE((json->>'updatedAt')::bigint, 0), COALESCE(json->>'updatedBy', 'migration'),
@@ -190,7 +158,7 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "tenancy/slack_install_states/0001-create",
     statements: [
       `CREATE TABLE slack_install_states(
-         tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
+         tenant_id UUID NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants,
          nonce TEXT NOT NULL,
          expires_at BIGINT NOT NULL,
          PRIMARY KEY (tenant_id, nonce)
@@ -216,7 +184,7 @@ function defined<T extends Record<string, unknown>>(record: T): T {
 
 async function locked<T>(pg: PgPool, key: string, fn: (client: PoolQuery) => Promise<T>): Promise<T> {
   return withPgTransaction(await pg.pool(), async (client) => {
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1 || qm_tenant_id()::text))", [key]);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1 || qm_bound_tenant()::text))", [key]);
     return fn(client);
   });
 }
@@ -267,14 +235,14 @@ function installationRecord(row: Row): StoredSlackInstallation {
 }
 
 function pgSlackInstallationRows(pg: PgPool): SlackInstallationRows {
-  const select = `SELECT ${INSTALLATION_COLUMNS} FROM slack_installation WHERE tenant_id = qm_tenant_id()`;
+  const select = `SELECT ${INSTALLATION_COLUMNS} FROM slack_installation WHERE tenant_id = qm_bound_tenant()`;
   return {
     async read() {
       const row = (await pg.q(select))[0];
       return row ? installationRecord(row) : null;
     },
     async consumeState(nonce, expiresAt, now) {
-      await pg.q(`DELETE FROM slack_install_states WHERE tenant_id = qm_tenant_id() AND expires_at < $1`, [now]);
+      await pg.q(`DELETE FROM slack_install_states WHERE tenant_id = qm_bound_tenant() AND expires_at < $1`, [now]);
       const inserted = await pg.q(
         `INSERT INTO slack_install_states(nonce, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING nonce`,
         [nonce, expiresAt],
@@ -340,7 +308,7 @@ function pgStagedEnvelopeRows(pg: PgPool): StagedEnvelopeRows {
       return row;
     },
     async delete(key) {
-      await pg.q("DELETE FROM slack_staged_envelopes WHERE tenant_id = qm_tenant_id() AND key = $1", [key]);
+      await pg.q("DELETE FROM slack_staged_envelopes WHERE tenant_id = qm_bound_tenant() AND key = $1", [key]);
     },
   };
 }
@@ -411,7 +379,7 @@ async function forUpdate<T>(
 const STATUS_COLUMNS =
   "account, channel, thread_ts, writer, anchor_run_id, started_at, card_id, card_ts, card_content, follow_url";
 const STATUS_SELECT = `SELECT ${STATUS_COLUMNS} FROM slack_session_status
-  WHERE tenant_id = qm_tenant_id() AND account = $1 AND channel = $2 AND thread_ts = $3`;
+  WHERE tenant_id = qm_bound_tenant() AND account = $1 AND channel = $2 AND thread_ts = $3`;
 
 function statusRecord(row: Row): SlackSessionStatusState {
   return defined({
@@ -439,7 +407,7 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
   return {
     async entries() {
       const rows = await pg.q(
-        `SELECT ${STATUS_COLUMNS} FROM slack_session_status WHERE tenant_id = qm_tenant_id() ORDER BY account, channel, thread_ts`,
+        `SELECT ${STATUS_COLUMNS} FROM slack_session_status WHERE tenant_id = qm_bound_tenant() ORDER BY account, channel, thread_ts`,
       );
       return rows.map((row) => [JSON.stringify([row.account, row.channel, row.thread_ts]), statusRecord(row)]);
     },
@@ -474,7 +442,7 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
         await client.query(
           `UPDATE slack_session_status SET (writer, anchor_run_id, started_at, card_id, card_ts, card_content, follow_url)
              = ($4, $5, $6, $7, $8, $9, $10)
-           WHERE tenant_id = qm_tenant_id() AND account = $1 AND channel = $2 AND thread_ts = $3`,
+           WHERE tenant_id = qm_bound_tenant() AND account = $1 AND channel = $2 AND thread_ts = $3`,
           [
             ...statusKey(id),
             next.writer ?? null,
@@ -492,7 +460,7 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
       const deleted = await forUpdate(pg, STATUS_SELECT, statusKey(id), statusRecord, async (current, client) => {
         if (!predicate(current)) return null;
         await client.query(
-          "DELETE FROM slack_session_status WHERE tenant_id = qm_tenant_id() AND account = $1 AND channel = $2 AND thread_ts = $3",
+          "DELETE FROM slack_session_status WHERE tenant_id = qm_bound_tenant() AND account = $1 AND channel = $2 AND thread_ts = $3",
           statusKey(id),
         );
         return current;
@@ -510,7 +478,7 @@ export async function tenantsWithSessionStatus(pg: PgPool): Promise<Array<{ tena
 }
 
 const ACK_COLUMNS = "channel, emoji, target, previous, finished, synced";
-const ACK_SELECT = `SELECT ${ACK_COLUMNS} FROM slack_task_acknowledgements WHERE tenant_id = qm_tenant_id() AND run_id = $1`;
+const ACK_SELECT = `SELECT ${ACK_COLUMNS} FROM slack_task_acknowledgements WHERE tenant_id = qm_bound_tenant() AND run_id = $1`;
 
 function ackRecord(row: Row): TaskAckState {
   return defined({
@@ -532,7 +500,7 @@ function pgTaskAckRows(pg: PgPool): TaskAckRows {
     async unsettled() {
       const rows = await pg.q(
         `SELECT run_id, ${ACK_COLUMNS} FROM slack_task_acknowledgements
-         WHERE tenant_id = qm_tenant_id() AND (NOT synced OR NOT finished) ORDER BY run_id`,
+         WHERE tenant_id = qm_bound_tenant() AND (NOT synced OR NOT finished) ORDER BY run_id`,
       );
       return rows.map((row) => [String(row.run_id), ackRecord(row)]);
     },
@@ -554,7 +522,7 @@ function pgTaskAckRows(pg: PgPool): TaskAckRows {
         const next = fn(current);
         await client.query(
           `UPDATE slack_task_acknowledgements SET (${ACK_COLUMNS}) = ($2, $3, $4, $5, $6, $7)
-           WHERE tenant_id = qm_tenant_id() AND run_id = $1`,
+           WHERE tenant_id = qm_bound_tenant() AND run_id = $1`,
           [runId, ...ackValues(next)],
         );
         return next;
@@ -575,7 +543,7 @@ function pgSlackAccountRows(pg: PgPool): SlackAccountRows {
       const row = (
         await pg.q(
           `SELECT principal_id, account_id, member_id, user_id, team_id, user_name, workspace FROM slack_accounts
-           WHERE tenant_id = qm_tenant_id() AND principal_id = $1`,
+           WHERE tenant_id = qm_bound_tenant() AND principal_id = $1`,
           [principalId],
         )
       )[0];
@@ -617,34 +585,3 @@ export function createSlackTables(databaseUrl: string) {
 }
 
 export type SlackTables = ReturnType<typeof createSlackTables>;
-
-export function memorySlackRows(): { installation: SlackInstallationRows; accounts: SlackAccountRows } {
-  const installations = new Map<string, StoredSlackInstallation>();
-  const accounts = new Map<string, SlackAccountLink>();
-  const states = new Set<string>();
-  const accountKey = (principalId: string) => JSON.stringify([currentTenant(), principalId]);
-  return {
-    installation: {
-      read: async () => installations.get(currentTenant()) ?? null,
-      async consumeState(nonce) {
-        const key = JSON.stringify([currentTenant(), nonce]);
-        if (states.has(key)) return false;
-        states.add(key);
-        return true;
-      },
-      async mutate(fn) {
-        const tenant = currentTenant();
-        const current = installations.get(tenant) ?? null;
-        const next = fn(current);
-        if (next && next !== current) installations.set(tenant, next);
-        return next;
-      },
-    },
-    accounts: {
-      get: async (principalId) => accounts.get(accountKey(principalId)) ?? null,
-      async put(principalId, link) {
-        accounts.set(accountKey(principalId), link);
-      },
-    },
-  };
-}

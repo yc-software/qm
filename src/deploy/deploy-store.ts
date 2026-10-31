@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
   type DeployGitInputFile,
-  type DeployGitStore,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -129,9 +129,9 @@ export interface DeployStore {
 }
 
 export interface DeployStoreBackings {
-  deployments?: DurableMap<Deployment>;
+  deployments: DurableMap<Deployment>;
   git?: DeployGitStoreOptions;
-  pg?: PgPool;
+  pg: PgPool;
   touchDebounceMs?: number;
 }
 
@@ -140,50 +140,11 @@ const versionRef = (version: number): string => `refs/versions/${version}`;
 const NAME_INDEX = "deployments_name_unique";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
-function normalizeBackings(backing?: DurableMap<Deployment> | DeployStoreBackings): {
-  deployments: DurableMap<Deployment>;
-  git: DeployGitStore;
-  pg?: PgPool;
-  touchDebounceMs: number;
-} {
-  if (!backing)
-    return {
-      deployments: createMemoryMap<Deployment>(),
-      git: createDeployGitStore(),
-      touchDebounceMs: TOUCH_DEBOUNCE_MS,
-    };
-  if ("get" in backing && "put" in backing)
-    return { deployments: backing, git: createDeployGitStore(), touchDebounceMs: TOUCH_DEBOUNCE_MS };
-  return {
-    deployments: backing.deployments ?? createMemoryMap<Deployment>(),
-    git: createDeployGitStore(backing.git),
-    ...(backing.pg ? { pg: backing.pg } : {}),
-    touchDebounceMs: backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS,
-  };
-}
-
 interface DeployAccess {
   readOne(id: string): Promise<number | null>;
   readAll(): Promise<Map<string, number>>;
   write(id: string, at: number): Promise<boolean>;
   findByName?(name: string): Promise<Deployment | null>;
-}
-
-function createMemoryDeployAccess(deployments: DurableMap<Deployment>): DeployAccess {
-  const accessAt = new Map<string, number>();
-  return {
-    async readOne(id) {
-      return accessAt.get(id) ?? null;
-    },
-    async readAll() {
-      return new Map(accessAt);
-    },
-    async write(id, at) {
-      if (!(await deployments.get(id))) return false;
-      accessAt.set(id, Math.max(accessAt.get(id) ?? 0, at));
-      return true;
-    },
-  };
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
@@ -197,12 +158,17 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       )`,
     ],
   };
-  pg.registerMigration(migration);
+  const migrations = [
+    TENANCY_BASE,
+    migration,
+    tenantTables("deploy/access/0002-tenants", [{ table: "deployment_access", primaryKey: "id" }]),
+  ];
+  for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
-        await pg.migrate(migration);
+        for (const definition of migrations) await pg.migrate(definition);
         await pg
           .q(
             `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
@@ -237,7 +203,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
+         ON CONFLICT (tenant_id, id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
         [id, at],
       );
       return res.rowCount > 0;
@@ -260,9 +226,11 @@ function isNameConflict(e: unknown): boolean {
   return err?.code === "23505" && err?.constraint === NAME_INDEX;
 }
 
-export function createDeployStore(backing?: DurableMap<Deployment> | DeployStoreBackings): DeployStore {
-  const { deployments: backingMap, git, pg, touchDebounceMs } = normalizeBackings(backing);
-  const access = pg ? createPgDeployAccess(pg) : createMemoryDeployAccess(backingMap);
+export function createDeployStore(backing: DeployStoreBackings): DeployStore {
+  const backingMap = backing.deployments;
+  const git = createDeployGitStore(backing.git);
+  const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
+  const access = createPgDeployAccess(backing.pg);
   const lastTouch = new Map<string, number>();
 
   function withAccess(d: Deployment, at: number | null | undefined): Deployment {

@@ -307,6 +307,7 @@ test("a user entry carrying huge model-only context no longer hides the turns be
         text: `ask ${turn}`,
         environment: context,
         environmentSnapshot: { hashes: { Skills: "abc" }, sessionId: "s" },
+        rosterSnapshot: { roster: [{ id: "U1", name: "a" }], sessionId: "s" },
         memoryRecall: { body: context },
       },
     });

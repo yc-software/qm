@@ -11,7 +11,7 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
-import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { pgTenants, singleTenantResolver } from "./tenants/resolver.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { instanceTenant } from "./tenants/instance.ts";
@@ -32,34 +32,28 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const resolver = config.databaseUrl ? singleTenantResolver(pgTenants(createPgPool(config.databaseUrl))) : undefined;
-const slackRuntime =
-  resolver && built.slackTables && built.slackInstallation
-    ? createSlackRuntime({
-        env: process.env,
-        core: built.slackCore,
-        tables: built.slackTables,
-        installation: built.slackInstallation,
-        resolver,
-        managed: Boolean(process.env.QM_SLACK_SERVICE_URL),
-      })
-    : undefined;
-if (!slackRuntime && slackEnvironmentState !== "absent")
-  console.warn("[qm] Slack is configured but needs a Postgres database (DATABASE_URL); Slack will not start");
-const managedSlack =
-  process.env.QM_SLACK_SERVICE_URL && resolver && slackRuntime && built.slackInstallation
-    ? createManagedSlack({
-        serviceUrl: process.env.QM_SLACK_SERVICE_URL,
-        token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
-        stateSecret: config.connectorSecretKey
-          ? deriveConnectorKey(config.connectorSecretKey, "slack-install-state").current.toString("base64url")
-          : "",
-        appId: process.env.QM_SLACK_APP_ID ?? "",
-        store: built.slackInstallation,
-        resolver,
-        runtimes: slackRuntime,
-      })
-    : undefined;
+const resolver = singleTenantResolver(pgTenants(built.slackTables.pool));
+const slackRuntime = createSlackRuntime({
+  env: process.env,
+  core: built.slackCore,
+  tables: built.slackTables,
+  installation: built.slackInstallation,
+  resolver,
+  managed: Boolean(process.env.QM_SLACK_SERVICE_URL),
+});
+const managedSlack = process.env.QM_SLACK_SERVICE_URL
+  ? createManagedSlack({
+      serviceUrl: process.env.QM_SLACK_SERVICE_URL,
+      token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
+      stateSecret: config.connectorSecretKey
+        ? deriveConnectorKey(config.connectorSecretKey, "slack-install-state").current.toString("base64url")
+        : "",
+      appId: process.env.QM_SLACK_APP_ID ?? "",
+      store: built.slackInstallation,
+      resolver,
+      runtimes: slackRuntime,
+    })
+  : undefined;
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
@@ -67,15 +61,15 @@ const server = createServer(built.app, {
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
-await built.identity.hydrate();
+await built.identity.refresh();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
 
@@ -90,7 +84,7 @@ if (config.deployAppsDomain) {
   });
 }
 
-if (config.databaseUrl && !config.adminGrants) {
+if (!config.adminGrants) {
   console.warn(
     "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
   );
@@ -111,7 +105,7 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime?.start();
+if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime.start();
 
 let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
 if (built.backgroundOwnership) {
@@ -124,7 +118,7 @@ if (built.backgroundOwnership) {
     void built.runtime
       .stopBackgroundClaims()
       .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
-    void slackRuntime?.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
+    void slackRuntime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
   };
   backgroundController = createBackgroundController({
     store: built.backgroundOwnership.store,
@@ -139,12 +133,12 @@ if (built.backgroundOwnership) {
       await built.scheduler.ready();
       if (signal.aborted || epoch !== activationEpoch) return;
       if (signal.aborted) return;
-      slackRuntime?.start();
-      await slackRuntime?.reconcile();
+      slackRuntime.start();
+      await slackRuntime.reconcile();
     },
     fence: stopPeriodic,
     async relinquish() {
-      await Promise.all([built.runtime.stopBackgroundClaims(), built.scheduler.stopClaims(), slackRuntime?.stop()]);
+      await Promise.all([built.runtime.stopBackgroundClaims(), built.scheduler.stopClaims(), slackRuntime.stop()]);
     },
     async drained() {
       await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
@@ -160,7 +154,7 @@ function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
-  void slackRuntime?.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
+  void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
   server.close();

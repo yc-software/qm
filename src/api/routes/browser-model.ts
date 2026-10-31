@@ -1,7 +1,5 @@
 import { modelRequestOverrides } from "../../model/pi-models.ts";
 import { gatewayRoot } from "../../model/provider-endpoints.ts";
-import { orgId } from "../../config.ts";
-import { scopeId } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
@@ -66,11 +64,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
           error:
             "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
         });
-      const companyHarness =
-        (await deps.config?.getRuntimeSelectionDurable(scopeId("personal", capability.actorId)))?.harnessId ??
-        (await deps.config?.getRuntimeSelectionDurable(scopeId("org", orgId())))?.harnessId ??
-        deps.harnessId;
-      const useCompanySubscription = selected.account === "company" && companyHarness === deps.harnessId;
+      const useCompanySubscription = selected.account === "company";
       return sendJson(
         res,
         200,
@@ -80,7 +74,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
           credentials: deps.userModelCredentials,
           companyProviderKeys:
             selected.account === "company" ? await deps.resolveBrowserCompanyKeys?.(useCompanySubscription) : undefined,
-          companySubscriptionProvider: useCompanySubscription ? deps.harnessCarriedModelAuth : undefined,
+          companySubscriptionProvider: useCompanySubscription ? deps.companySubscriptionAuth : undefined,
           actorId: capability.actorId,
           body: input,
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),

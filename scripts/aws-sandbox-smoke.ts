@@ -9,7 +9,12 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { scopeStorageKey } from "../cli/src/scope-storage-key.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const region = process.env.AWS_SANDBOX_REGION ?? "us-west-2";
 const profile = process.env.AWS_SANDBOX_PROFILE ?? "dev";
@@ -23,7 +28,7 @@ async function main(): Promise<void> {
   if (!s3Bucket) throw new Error("AWS_SANDBOX_S3_BUCKET is required");
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "aws-smoke-ws-")));
   const sandbox = createAwsSandbox(ws, {
-    store: createMemoryMap(),
+    store: smokeMap("aws_sandbox"),
     advisoryLock: createNoopAdvisoryLock(),
     region,
     profile,

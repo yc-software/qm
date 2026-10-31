@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { createSlackTables, type SlackTables } from "../../src/slack/slack-tables.ts";
+import { seedTestTenants } from "./tenant-seed.ts";
+import { testDatabaseUrl } from "./test-database.ts";
 
 export const skipWithoutPg = process.env.DATABASE_URL
   ? false
@@ -53,4 +55,10 @@ export async function withSlackDb(
     await admin.query(`DROP ROLE IF EXISTS ${role}`);
     await admin.end();
   }
+}
+
+export async function slackTestTables(): Promise<SlackTables> {
+  const url = testDatabaseUrl();
+  await seedTestTenants(url);
+  return createSlackTables(url);
 }

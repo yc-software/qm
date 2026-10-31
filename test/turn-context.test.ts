@@ -1,27 +1,23 @@
 import { createAclStore } from "../src/acl/acl-store.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
 import type { Resolution, Session } from "../src/types.ts";
 import { renderRecall } from "../src/memory/cross-scope.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 async function fixture() {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
-  const memory = createMemoryService(workspace);
-  const config = createMemoryConfigStore("test", { defaultSharingPosture: "open" });
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const auditLog = createAuditLog();
+  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const config = testConfigStore("test", { defaultSharingPosture: "open" });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   let member = true;
   const resolution = {
     layers: [
@@ -32,7 +28,9 @@ async function fixture() {
     sharingPosture: "open",
     grantedHandles: [],
   } as unknown as Resolution;
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const input: Parameters<typeof resolveTurnContext>[0] = {
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],

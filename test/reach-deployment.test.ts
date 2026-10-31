@@ -9,17 +9,20 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 function appWithFakeRuntime() {
-  const deployStore = createDeployStore();
-  const acl: AclStore = createAclStore();
+  const deployStore = createDeployStore(testDeployBackings());
+  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -32,14 +35,14 @@ function appWithFakeRuntime() {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "reach-")),
   });
-  const directory = createDirectoryStore();
-  const sessions = createMemorySessionStore();
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const app = createApp({
     deploy,
     acl,
     directory,
     sessions,
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, acl, directory, sessions };
 }
@@ -271,6 +274,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   );
   const secret = "deployments-list-secret".repeat(3);
   const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     apiBaseUrl: "https://core.test",
     publicUrl: "https://web.test",

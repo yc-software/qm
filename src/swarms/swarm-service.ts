@@ -15,7 +15,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../harness/goal.ts";
+import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../agent/goal.ts";
 import { Check } from "typebox/value";
 import {
   assertSwarmOpen,
@@ -53,7 +53,7 @@ interface MessageInput {
   audience: string[] | "all";
   text: string;
   replyTo?: string;
-  notify?: boolean;
+  wake?: boolean;
   goal?: unknown;
 }
 
@@ -184,7 +184,6 @@ function dispatchContract(input: OrchestratorInput) {
     unattendedGrants: input.unattendedGrants,
     readOnly: input.readOnly,
     skipMemory: input.skipMemory,
-    harness: input.harness,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
     fastMode: input.fastMode,
@@ -439,8 +438,8 @@ export function createSwarmService(deps: {
 
   async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
-    const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
-    await claim(phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`, async () => {
+    const key = phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`;
+    await deps.lock.tryWithLock(key, async () => {
       const pending = new Set<Promise<unknown>>();
       const step = <Result>(
         start: () => Promise<Result>,
@@ -734,9 +733,13 @@ export function createSwarmService(deps: {
       boundedText(input.requestId, 128, "requestId");
       const { auth, swarm } = await load(caller);
       boundedText(input.text, swarm.settings.textBytes, "text");
-      input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
+      input = {
+        ...input,
+        audience: canonicalAudience(input.audience, swarm.settings.agents),
+        wake: input.wake !== false,
+      };
       const goal = swarmGoal(input.goal);
-      if (goal && input.notify === false) throw new Error("a goal needs notify");
+      if (goal && input.wake === false) throw new Error("a goal must wake its recipient; drop wake:false");
       const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
       const fingerprint = signature(input);
       const previous = swarm.messageRequests[key];
@@ -769,18 +772,15 @@ export function createSwarmService(deps: {
         if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
           throw new Error("reply target is not in this swarm");
         const broadcast = input.audience === "all";
-        const recipients =
-          input.notify === false
-            ? []
-            : audience.filter((peer) =>
-                peer === auth.memberId ? !!goal && !broadcast : !(goal && broadcast && peer === swarm.id),
-              );
+        const recipients = audience.filter((peer) =>
+          peer === auth.memberId ? !!goal && !broadcast : !(goal && broadcast && peer === swarm.id),
+        );
         if (goal && (!recipients.length || recipients.includes(swarm.id)))
           throw new Error("goals can only be assigned to workers");
-        const wakes = input.notify ?? (!!goal || caller.kind === "human");
+        const wakes = input.wake !== false;
         const woken = wakes ? recipients.length : 0;
         if (swarm.notificationCount + woken > (swarm.settings.notifications ?? Infinity))
-          throw new Error("swarm notification budget exhausted");
+          throw new Error("swarm notification budget exhausted; wake:false still leaves messages in mailboxes");
         swarm.notificationCount += woken;
         swarm.messages.push({
           id,
@@ -803,7 +803,7 @@ export function createSwarmService(deps: {
       return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
     },
     async read(caller, options) {
-      let { swarm } = await load(caller);
+      let { auth, swarm } = await load(caller);
       const waitMs = options.waitMs ?? 0;
       const after = options.after ?? 0;
       if (
@@ -815,13 +815,23 @@ export function createSwarmService(deps: {
       )
         throw new Error("invalid read bounds");
       const deadline = Date.now() + waitMs;
-      for (;;) {
-        const messages = swarm.messages
+      const pick = (current: Swarm) =>
+        current.messages
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
+      for (;;) {
+        let messages = pick(swarm);
+        const unread = (current: Swarm) =>
+          pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
+        if (caller.kind === "agent" && options.replyTo && unread(swarm).length)
+          messages = pick(
+            await update(auth, (current) => {
+              for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
+            }),
+          );
         if (messages.length || Date.now() >= deadline) return messages;
         await sleep(Math.min(200, deadline - Date.now()));
-        ({ swarm } = await load(caller));
+        ({ auth, swarm } = await load(caller));
       }
     },
     enabledFor,

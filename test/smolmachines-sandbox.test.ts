@@ -17,10 +17,9 @@ import {
 } from "./support/fake-smolmachines.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;
@@ -40,8 +39,8 @@ const preCreate = (name: string): Promise<Response> =>
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
-    store: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+    store: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: FAKE_SMOLMACHINES_TOKEN,
     namePrefix: "qmt",
     fetchImpl: fake.fetchImpl,
@@ -447,8 +446,8 @@ test("exec is never retried and its failure names the request id", async () => {
 for (const lostResponse of ["disconnect", "503"] as const) {
   test(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
     const snapshots = createMemorySnapshotStore();
-    const store = createMemoryMap<StoredSmolmachinesSandbox>();
-    const advisoryLock = createMemoryAdvisoryLock();
+    const store = testMap<StoredSmolmachinesSandbox>();
+    const advisoryLock = testAdvisoryLock();
     const first = make({ snapshots, store, advisoryLock });
     const original = await first.provision(layers);
     await first.writeFile(original, "notes.txt", "preserve me");
@@ -476,7 +475,7 @@ for (const lostResponse of ["disconnect", "503"] as const) {
 }
 
 test("destructive teardown waits for another core's lifecycle lock", async () => {
-  const shared = createMemoryAdvisoryLock();
+  const shared = testAdvisoryLock();
   const requested = Promise.withResolvers<void>();
   let destroying = false;
   const adapter = make({

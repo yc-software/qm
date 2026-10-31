@@ -18,7 +18,7 @@ export interface TaskAckRows {
   unsettled(): Promise<Array<[string, TaskAckState]>>;
   get(runId: string): Promise<TaskAckState | null>;
   putIfAbsent(runId: string, state: TaskAckState): Promise<TaskAckState>;
-  update?(runId: string, fn: (state: TaskAckState) => TaskAckState): Promise<TaskAckState | null>;
+  update(runId: string, fn: (state: TaskAckState) => TaskAckState): Promise<TaskAckState | null>;
 }
 
 interface ReactionClient {
@@ -33,7 +33,6 @@ export function createTaskAcknowledgements(
   lease: LeaderLease,
   recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
 ) {
-  if (!store.update) throw new Error("Task acknowledgements require atomic updates");
   const update = store.update.bind(store);
   const queue = createKeyedQueue<string>();
   const change = (

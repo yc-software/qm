@@ -199,8 +199,7 @@
   font-weight: 400;
   line-height: 13px;
 }
-.loadout-name,
-.loadout-harness {
+.loadout-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -439,15 +438,11 @@
 }
 .loadout-add:hover,
 .loadout-add.open,
-.loadout-setting:not([role="menuitemcheckbox"]):not(.loadout-setting-static):hover,
+.loadout-setting:not([role="menuitemcheckbox"]):hover,
 .loadout-setting.open,
-.loadout-effort:not([aria-disabled="true"]):hover,
+.loadout-effort:hover,
 .loadout-back:hover {
   background: var(--secondary);
-}
-.loadout-effort[aria-disabled="true"] {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 .loadout-setting[role="menuitemcheckbox"]:disabled {
   opacity: 1;
@@ -471,9 +466,6 @@
 }
 .loadout-setting-label {
   font-weight: 400;
-}
-.loadout-setting-static {
-  cursor: default;
 }
 .loadout-setting-value {
   display: inline-flex;
@@ -560,20 +552,6 @@
 .loadout-effort > svg {
   margin-left: auto;
   color: var(--foreground);
-}
-.loadout-harness-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.loadout-harness-option .model-mark {
-  flex: none;
-}
-.loadout-harness-option > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .loadout-toggle {
   position: relative;

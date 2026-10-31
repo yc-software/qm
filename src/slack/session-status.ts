@@ -28,11 +28,11 @@ export interface SlackSessionStatusRows {
   entries(): Promise<Array<[string, SlackSessionStatusState]>>;
   get(id: string): Promise<SlackSessionStatusState | null>;
   putIfAbsent(id: string, state: SlackSessionStatusState): Promise<SlackSessionStatusState>;
-  update?(
+  update(
     id: string,
     fn: (state: SlackSessionStatusState) => SlackSessionStatusState,
   ): Promise<SlackSessionStatusState | null>;
-  deleteIf?(id: string, predicate: (state: SlackSessionStatusState) => boolean): Promise<boolean>;
+  deleteIf(id: string, predicate: (state: SlackSessionStatusState) => boolean): Promise<boolean>;
 }
 
 interface StatusClient {
@@ -54,7 +54,6 @@ export function createSlackSessionStatus(
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
-  if (!store.update || !store.deleteIf) throw new Error("Slack status requires atomic durable updates");
   const update = store.update.bind(store);
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();

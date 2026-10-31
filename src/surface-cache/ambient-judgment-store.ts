@@ -1,11 +1,11 @@
-import { orgId as configOrgId } from "../config.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
 type AmbientJudgment = {
   id?: number;
-  orgId?: string;
   surface: string;
   container: string;
   decision: AmbientDecisionKind;
@@ -40,25 +40,40 @@ export interface AmbientJudgmentStore {
 const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane: 0 });
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
-  const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/ambient-judgment/0001", [
-    `CREATE TABLE IF NOT EXISTS ambient_judgments(
+  const { q, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    {
+      id: "surface-cache/ambient-judgment/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS ambient_judgments(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, container TEXT NOT NULL,
         decision TEXT NOT NULL, reason TEXT, asked_by TEXT, prompt TEXT, model TEXT,
         latency_ms INT, ts_from TEXT, ts_to TEXT, created_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created
+        `ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT`,
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created
         ON ambient_judgments(org_id, container, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_created
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_created
         ON ambient_judgments(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision
         ON ambient_judgments(org_id, decision)`,
+      ],
+    },
+    tenantTables("surface-cache/ambient-judgment/0002-tenants", [
+      {
+        table: "ambient_judgments",
+        primaryKey: "id",
+        replacesOrgId: [
+          { name: "ambient_judgments_container_created", columns: "container, created_at DESC" },
+          { name: "ambient_judgments_created", columns: "created_at DESC, id DESC" },
+          { name: "ambient_judgments_decision", columns: "decision" },
+        ],
+      },
+    ]),
   ]);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),
-    orgId: r.org_id as string,
     surface: r.surface as string,
     container: r.container as string,
     decision: r.decision as AmbientDecisionKind,
@@ -74,10 +89,10 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
   return {
     async record(j) {
       await q(
-        `INSERT INTO ambient_judgments(org_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
+        `INSERT INTO ambient_judgments(tenant_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
-          configOrgId(),
+          currentTenant(),
           j.surface,
           j.container,
           j.decision,
@@ -94,8 +109,8 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
     },
     async list(opts) {
       const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const where = ["org_id = $1"];
-      const args: unknown[] = [orgId];
+      const where = ["tenant_id = $1"];
+      const args: unknown[] = [currentTenant()];
       if (opts?.container) {
         args.push(opts.container);
         where.push(`container = $${args.length}`);
@@ -119,19 +134,19 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       }
       args.push(limit);
       const rows = await q(
-        `SELECT id, org_id, surface, container, decision, reason, asked_by, model, latency_ms, ts_from, ts_to, created_at
+        `SELECT id, tenant_id, surface, container, decision, reason, asked_by, model, latency_ms, ts_from, ts_to, created_at
          FROM ambient_judgments WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT $${args.length}`,
         args,
       );
       return rows.map(row);
     },
     async get(id) {
-      const rows = await q("SELECT * FROM ambient_judgments WHERE org_id = $1 AND id = $2", [orgId, id]);
+      const rows = await q("SELECT * FROM ambient_judgments WHERE tenant_id = $1 AND id = $2", [currentTenant(), id]);
       return rows[0] ? row(rows[0]) : null;
     },
     async counts(opts) {
-      const args: unknown[] = [orgId];
-      let where = "org_id = $1";
+      const args: unknown[] = [currentTenant()];
+      let where = "tenant_id = $1";
       if (opts?.container) {
         args.push(opts.container);
         where += ` AND container = $${args.length}`;
@@ -145,43 +160,5 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       return out;
     },
     close,
-  };
-}
-
-export function createMemoryAmbientJudgmentStore(): AmbientJudgmentStore {
-  const judgments: AmbientJudgment[] = [];
-  let seq = 0;
-  const filtered = (opts?: { container?: string }) =>
-    judgments.filter((j) => !opts?.container || j.container === opts.container);
-  return {
-    async record(j) {
-      const a = judgments;
-      a.push({ ...j, id: ++seq });
-      if (a.length > 5000) a.splice(0, a.length - 5000);
-    },
-    async list(opts) {
-      const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const all = filtered(opts)
-        .filter(
-          (j) =>
-            (!opts?.decision?.length || opts.decision.includes(j.decision)) &&
-            (opts?.before == null ||
-              (opts.beforeId != null
-                ? j.createdAt < opts.before || (j.createdAt === opts.before && (j.id ?? 0) < opts.beforeId)
-                : j.createdAt < opts.before)),
-        )
-        .slice()
-        .sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
-      return all.slice(0, limit).map(({ prompt: _p, ...rest }) => rest);
-    },
-    async get(id) {
-      return judgments.find((j) => j.id === id) ?? null;
-    },
-    async counts(opts) {
-      const out = emptyCounts();
-      for (const j of filtered(opts)) if (j.decision in out) out[j.decision] += 1;
-      return out;
-    },
-    async close() {},
   };
 }

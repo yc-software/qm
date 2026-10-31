@@ -17,10 +17,9 @@ const env = await browserEnv({
     if (path.startsWith("/api/runtime-config"))
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "m" },
+        effective: { modelId: "m" },
       });
     if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
     if (path.startsWith("/api/sessions?")) return Response.json({ sessions: known });

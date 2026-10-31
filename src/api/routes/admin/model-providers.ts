@@ -69,9 +69,7 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     providers,
     models,
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    ...(ctx.deps.harnessCarriedModelAuth
-      ? { harnessAuth: { harnessId: ctx.deps.harnessId ?? "pi", provider: ctx.deps.harnessCarriedModelAuth } }
-      : {}),
+    ...(ctx.deps.companySubscriptionAuth ? { subscriptionAuth: { provider: ctx.deps.companySubscriptionAuth } } : {}),
   });
 }
 

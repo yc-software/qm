@@ -1,6 +1,7 @@
 import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
@@ -74,7 +75,27 @@ export function createPostgresTeamStore(
   flags: Pick<FeatureFlagStore, "enabled">,
   orgScope: ScopeId,
 ): TeamStore {
-  const { q, pool } = createPgPool(connectionString, "teams/0001", SCHEMA);
+  const { q, pool } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    { id: "teams/0001", statements: SCHEMA },
+    tenantTables(
+      "teams/0002-tenants",
+      [
+        { table: "teams", primaryKey: "team_id" },
+        { table: "team_members", primaryKey: "team_id, principal_id" },
+        { table: "team_rooms", primaryKey: "team_id, scope_id" },
+      ],
+      {
+        foreignKeys: ["team_members", "team_rooms"].map((table) => ({
+          table,
+          name: `${table}_team_id_fkey`,
+          columns: "team_id",
+          references: "teams(tenant_id, team_id)",
+          onDelete: "CASCADE" as const,
+        })),
+      },
+    ),
+  ]);
   const enabled = () => flags.enabled("team_scopes", orgScope);
   return {
     async list() {
@@ -101,7 +122,7 @@ export function createPostgresTeamStore(
            array_agg(m.principal_id) AS present
          FROM team_members m JOIN teams t ON t.team_id = m.team_id
          WHERE m.principal_id = ANY($2)
-         GROUP BY t.team_id ORDER BY t.team_id`,
+         GROUP BY t.tenant_id, t.team_id ORDER BY t.team_id`,
         [scope, [...new Set(principalIds.flatMap(keysOf))]],
       );
       return rows.map((r) => ({
@@ -130,7 +151,7 @@ export function createPostgresTeamStore(
         await db.query(
           `INSERT INTO teams (team_id, name, isolated_in_open, created_by, created_at)
            VALUES ($1, COALESCE($2, $1), COALESCE($3, FALSE), $4, $5)
-           ON CONFLICT (team_id) DO UPDATE SET
+           ON CONFLICT (tenant_id, team_id) DO UPDATE SET
              name = COALESCE($2, teams.name),
              isolated_in_open = COALESCE($3, teams.isolated_in_open)`,
           [c.id, c.name ?? null, c.isolatedInOpen ?? null, actorId, now],
@@ -143,7 +164,7 @@ export function createPostgresTeamStore(
           await db.query(
             `INSERT INTO team_members (team_id, principal_id, role, added_by, added_at)
              SELECT $1, p, r, $4, $5 FROM unnest($2::text[], $3::text[]) AS x(p, r)
-             ON CONFLICT (team_id, principal_id) DO UPDATE SET role = EXCLUDED.role`,
+             ON CONFLICT (tenant_id, team_id, principal_id) DO UPDATE SET role = EXCLUDED.role`,
             [c.id, people.map(([p]) => p), people.map(([, r]) => r), actorId, now],
           );
         if (c.drop?.length)

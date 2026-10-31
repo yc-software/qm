@@ -2,11 +2,12 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as modalClient from "../src/sandbox/modal-client.ts";
-import * as mockHarness from "./support/mock-harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
@@ -17,24 +18,24 @@ import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 
 const screenedPayloads: string[] = [];
-let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
+let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
 
 const fake = installFakeModal();
 mock.module("../src/sandbox/modal-client.ts", {
   namedExports: { ...modalClient, createSdkModalClient: () => fake.client },
 });
-mock.module("./support/mock-harness.ts", {
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      const screen = harness.models.screenSecurity!;
-      harness.models.screenSecurity = async (input) => {
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      const screen = agent.screenSecurity!;
+      agent.screenSecurity = async (input) => {
         screenedPayloads.push(input.payload);
         return screen(input);
       };
-      const runTurn = harness.turns.runTurn;
-      harness.turns.runTurn = async (turn) => {
+      const runTurn = agent.runTurn;
+      agent.runTurn = async (turn) => {
         const outcome = await exerciseTurn?.(turn);
         if (outcome?.stopped || turn.cancel?.aborted) return { reply: "", stopped: true };
         return runTurn(
@@ -43,7 +44,7 @@ mock.module("./support/mock-harness.ts", {
             : turn,
         );
       };
-      return harness;
+      return agent;
     },
   },
 });
@@ -190,264 +191,231 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
   }
 });
 
-for (const storage of ["memory", "postgres"] as const) {
-  test(
-    `${storage}: HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials`,
-    { skip: storage === "postgres" && !process.env.SWARM_TEST_DATABASE_URL },
-    async () => {
-      let databaseUrl: string | undefined;
-      let cleanupDatabase = async () => {};
-      let recordedErrors: (() => Promise<number>) | undefined;
-      let errorsAfterStop: number | undefined;
-      if (storage === "postgres") {
-        const { default: pg } = await import("pg");
-        const url = new URL(process.env.SWARM_TEST_DATABASE_URL!);
-        const schema = `swarm_http_${process.pid}`;
-        const pool = new pg.Pool({ connectionString: url.toString() });
-        await pool.query(`CREATE SCHEMA ${schema}`);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        databaseUrl = url.toString();
-        recordedErrors = async () =>
-          Number((await pool.query(`SELECT COUNT(*) AS n FROM ${schema}.error_events`)).rows[0].n);
-        cleanupDatabase = async () => {
-          try {
-            await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await pool.end();
-          }
-        };
-      }
-      const config = testConfig({
-        databaseUrl,
-        sessionStore: storage,
-        runStore: storage,
-
-        modalSandbox: { tokenId: "test", tokenSecret: "test" },
-        signingSecret: "swarm-http-source-signing-key-distinct",
-        portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
-        apiBaseUrl: "http://core.test",
-      });
-      if (storage === "postgres") {
-        for (const overrides of [{ runStore: "memory" as const }, { sessionStore: "memory" as const }]) {
-          const mixed = buildApp({ ...config, ...overrides });
-          assert.equal(mixed.app.swarms, undefined);
-          await mixed.runtime.stop();
-        }
-      }
-      let built = buildApp(config);
-      const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
-      const issuedTokens = new Map<string, string>();
-      const captureIssuedTokens = () => {
-        const run = built.sandbox.run.bind(built.sandbox);
-        built.sandbox.run = async (handle, command, opts) => {
-          if (command === tokenCommand) {
-            const token = handle.env?.AGENT_API_TOKEN;
-            assert.ok(token, "the orchestrator supplies a capability to the sandbox");
-            const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
-            assert.ok(claims?.sessionId);
-            assert.ok(claims?.runId);
-            issuedTokens.set(`${claims.sessionId}:${claims.runId}`, token);
-          }
-          return run(handle, command, opts);
-        };
-      };
-      captureIssuedTokens();
-      const { serverDeps } = await import("../src/wiring.ts");
-      let server = createServer(built.app, serverDeps(config, built));
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-      let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      let rootId = "";
-      const childIds = new Set<string>();
-      const issued: Array<{ sessionId: string; attempt: number }> = [];
-      exerciseTurn = async (turn) => {
-        if (turn.input !== "http-swarm-root" && !turn.input.includes("http-swarm-worker")) return;
-        const result = await turn.tools.execute(tokenCommand);
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.stdout, "<redacted:credential>");
-        const token = issuedTokens.get(`${turn.session.id}:${turn.runId}`);
-        assert.ok(token, "the HTTP fixture uses the actual issued capability, outside tool output");
+test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const config = testConfig({
+    databaseUrl,
+    modalSandbox: { tokenId: "test", tokenSecret: "test" },
+    signingSecret: "swarm-http-source-signing-key-distinct",
+    portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
+    apiBaseUrl: "http://core.test",
+  });
+  let errorsAfterStop: number;
+  let built = buildApp(config);
+  const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
+  const issuedTokens = new Map<string, string>();
+  const captureIssuedTokens = () => {
+    const run = built.sandbox.run.bind(built.sandbox);
+    built.sandbox.run = async (handle, command, opts) => {
+      if (command === tokenCommand) {
+        const token = handle.env?.AGENT_API_TOKEN;
+        assert.ok(token, "the orchestrator supplies a capability to the sandbox");
         const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
-        assert.equal(claims?.sessionId, turn.session.id);
-        assert.equal(claims?.runId, turn.runId);
-        assert.ok(claims?.runAttempt);
-        assert.ok(claims?.runLeaseToken);
-        issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
-        const root = turn.input === "http-swarm-root";
-        if (root) rootId = turn.session.id;
-        else childIds.add(turn.session.id);
-        const body = root
-          ? {
-              action: "spawn",
-              requestId: "pool",
-              count: 3,
-              backend: "sprites",
-              settings: { agents: 8, turnMs: 900_000 },
-              text: "http-swarm-worker",
-            }
-          : {
-              action: "send",
-              requestId: "reply",
-              audience: [rootId],
-              notify: true,
-              text: "http-worker-result",
-            };
-        const response = await fetch(`${base}/v1/swarm`, {
-          method: "POST",
-          headers: { "x-agent-capability": token, "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        assert.equal(response.status, 202, await response.text());
-        if (!root) {
-          const headers = { "x-agent-capability": token, "content-type": "application/json" };
-          const inspected = await fetch(`${base}/v1/swarm`, { headers });
-          const view = (await inspected.json()) as {
-            self: { id: string };
-            peers: unknown[];
-            settings: { agents: number; turnMs: number };
-            backend: string;
-          };
-          assert.equal(view.peers.length, 4);
-          assert.equal(view.settings.turnMs, 900_000);
-          assert.equal(view.settings.agents, 8);
-          assert.equal(view.backend, "sprites");
-          for (const message of [
-            { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
-            { action: "send", requestId: "all", audience: "all", notify: false, text: "http-shared-note" },
-          ]) {
-            const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
-            assert.equal(sent.status, 202, await sent.text());
-          }
-          for (const invalid of [
-            { action: "send", requestId: "forged", audience: [view.self.id, "forged-peer"], text: "must reject" },
-            { action: "spawn", requestId: "reconfigure", settings: { turnMs: 10 }, text: "must reject" },
-          ]) {
-            const rejected = await fetch(`${base}/v1/swarm`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify(invalid),
-            });
-            assert.equal(rejected.status, 400);
-          }
-          const history = await fetch(`${base}/v1/swarm?read=1`, { headers });
-          assert.match(await history.text(), /http-shared-note/);
-        }
-      };
-      try {
-        const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
-        await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
-        const body = JSON.stringify({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: "http-swarm-root" },
-          text: "http-swarm-root",
-        });
-        const rootResponse = await fetch(`${base}/v1/turns`, {
-          method: "POST",
-          headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
-            "content-type": "application/json",
-          }),
-          body,
-        });
-        assert.equal(rootResponse.status, 200);
-        const root = (await rootResponse.json()) as { status: string };
-        assert.equal(root.status, "ok", JSON.stringify(root));
-        if (storage === "postgres") {
-          await new Promise<void>((resolve) => server.close(() => resolve()));
-          await built.runtime.stop();
-          built = buildApp(config);
-          captureIssuedTokens();
-          server = createServer(built.app, serverDeps(config, built));
-          await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-          base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        }
-        await built.app.swarms!.sweep();
-        const workers = (await built.runs.list()).filter((run) => run.request.swarm);
-        assert.equal(workers.length, 3);
-        const worker = workers[0]!;
-        built.runtime.start();
-        const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
-        for (const run of completed) {
-          assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
-          assert.equal(runResultDelivery(run), null);
-        }
-        await built.app.swarms!.sweep();
-        const replies = (await built.runs.list()).filter(
-          (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
-        );
-        assert.equal(replies.length, 3);
-        for (const reply of replies) assert.equal((await built.runs.waitFor(reply.id, 15_000)).result?.status, "ok");
-        assert.equal(issued.length, 4);
-        assert.equal(childIds.size, 3);
-        for (const childId of childIds) {
-          assert.notEqual(childId, rootId);
-          assert.ok(await built.app.getSessionForViewer(childId, "U1"));
-          assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
-        }
-        const view = await built.app.getSessionForViewer(rootId, "U1");
-        assert.ok(JSON.stringify(view?.entries).includes("http-worker-result"));
-        built.app.swarms!.stop();
-        const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };
-        const entered = Promise.withResolvers<string>();
-        exerciseTurn = async (turn) => {
-          if (!turn.input.includes("http-cancel-worker")) return;
-          const aborted = Promise.withResolvers<void>();
-          const stopPoll = startSignalPoll(built.signals, turn.runId!, {
-            onSteer: async () => {},
-            onAbort: async () => aborted.resolve(),
-          });
-          entered.resolve(turn.runId!);
-          try {
-            await withTimeout(() => aborted.promise, 15_000, "abort signal");
-            return { stopped: true };
-          } finally {
-            await stopPoll();
-          }
-        };
-        await built.app.swarms!.spawn(human, { requestId: "cancel", text: "http-cancel-worker" });
-        await built.app.swarms!.sweep();
-        const cancelRunId = await withTimeout(() => entered.promise, 15_000, "worker start");
-        const stopPath = `/v1/runs/${cancelRunId}/signal`;
-        const stopBody = JSON.stringify({ kind: "abort" });
-        const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
-        const stopped = await fetch(`${base}${stopPath}`, {
-          method: "POST",
-          headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {
-            "content-type": "application/json",
-            "x-portal-identity": portal,
-          }),
-          body: stopBody,
-        });
-        assert.equal(stopped.status, 200, await stopped.text());
-        const cancelled = await built.runs.waitFor(cancelRunId, 15_000);
-        assert.equal(cancelled.result?.stopped, true, JSON.stringify(cancelled.result));
-        let revokedExecuted = false;
-        exerciseTurn = async (turn) => {
-          if (turn.input.includes("http-revoked-work")) revokedExecuted = true;
-        };
-        const revoked = await built.app.swarms!.send(human, {
-          requestId: "revoke",
-          audience: [worker.request.swarm!.recipientId],
-          text: "http-revoked-work",
-        });
-        await built.sessions.addParticipant(rootId, "U2");
-        await built.app.swarms!.sweep();
-        const blocked = (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id)!;
-        assert.ok(blocked);
-        const rejected = await built.runs.waitFor(blocked.id, 15_000);
-        assert.equal(rejected.status, "failed");
-        assert.equal(rejected.errorAttempts, 1);
-        assert.equal(revokedExecuted, false);
-      } finally {
-        exerciseTurn = undefined;
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        await built.runtime.stop();
-        errorsAfterStop = await recordedErrors?.();
-        await cleanupDatabase();
+        assert.ok(claims?.sessionId);
+        assert.ok(claims?.runId);
+        issuedTokens.set(`${claims.sessionId}:${claims.runId}`, token);
       }
-      if (storage === "postgres") assert.ok(errorsAfterStop! > 0);
-    },
-  );
-}
+      return run(handle, command, opts);
+    };
+  };
+  captureIssuedTokens();
+  const { serverDeps } = await import("../src/wiring.ts");
+  let server = createServer(built.app, serverDeps(config, built));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  let rootId = "";
+  const childIds = new Set<string>();
+  const issued: Array<{ sessionId: string; attempt: number }> = [];
+  exerciseTurn = async (turn) => {
+    if (turn.input !== "http-swarm-root" && !turn.input.includes("http-swarm-worker")) return;
+    const result = await turn.tools.execute(tokenCommand);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "<redacted:credential>");
+    const token = issuedTokens.get(`${turn.session.id}:${turn.runId}`);
+    assert.ok(token, "the HTTP fixture uses the actual issued capability, outside tool output");
+    const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
+    assert.equal(claims?.sessionId, turn.session.id);
+    assert.equal(claims?.runId, turn.runId);
+    assert.ok(claims?.runAttempt);
+    assert.ok(claims?.runLeaseToken);
+    issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
+    const root = turn.input === "http-swarm-root";
+    if (root) rootId = turn.session.id;
+    else childIds.add(turn.session.id);
+    const body = root
+      ? {
+          action: "spawn",
+          requestId: "pool",
+          count: 3,
+          backend: "sprites",
+          settings: { agents: 8, turnMs: 900_000 },
+          text: "http-swarm-worker",
+        }
+      : {
+          action: "send",
+          requestId: "reply",
+          audience: [rootId],
+          wake: true,
+          text: "http-worker-result",
+        };
+    const response = await fetch(`${base}/v1/swarm`, {
+      method: "POST",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 202, await response.text());
+    if (!root) {
+      const headers = { "x-agent-capability": token, "content-type": "application/json" };
+      const inspected = await fetch(`${base}/v1/swarm`, { headers });
+      const view = (await inspected.json()) as {
+        self: { id: string };
+        peers: unknown[];
+        settings: { agents: number; turnMs: number };
+        backend: string;
+      };
+      assert.equal(view.peers.length, 4);
+      assert.equal(view.settings.turnMs, 900_000);
+      assert.equal(view.settings.agents, 8);
+      assert.equal(view.backend, "sprites");
+      for (const message of [
+        { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
+        { action: "send", requestId: "all", audience: "all", wake: false, text: "http-shared-note" },
+      ]) {
+        const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
+        assert.equal(sent.status, 202, await sent.text());
+      }
+      for (const invalid of [
+        { action: "send", requestId: "forged", audience: [view.self.id, "forged-peer"], text: "must reject" },
+        { action: "spawn", requestId: "reconfigure", settings: { turnMs: 10 }, text: "must reject" },
+      ]) {
+        const rejected = await fetch(`${base}/v1/swarm`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(invalid),
+        });
+        assert.equal(rejected.status, 400);
+      }
+      const history = await fetch(`${base}/v1/swarm?read=1`, { headers });
+      assert.match(await history.text(), /http-shared-note/);
+    }
+  };
+  try {
+    const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
+    await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const body = JSON.stringify({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "http-swarm-root" },
+      text: "http-swarm-root",
+    });
+    const rootResponse = await fetch(`${base}/v1/turns`, {
+      method: "POST",
+      headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
+        "content-type": "application/json",
+      }),
+      body,
+    });
+    assert.equal(rootResponse.status, 200);
+    const root = (await rootResponse.json()) as { status: string };
+    assert.equal(root.status, "ok", JSON.stringify(root));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+    built = buildApp(config);
+    captureIssuedTokens();
+    server = createServer(built.app, serverDeps(config, built));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await built.app.swarms!.sweep();
+    const workers = (await built.runs.list()).filter((run) => run.request.swarm);
+    assert.equal(workers.length, 3);
+    const worker = workers[0]!;
+    built.runtime.start();
+    const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
+    for (const run of completed) {
+      assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
+      assert.equal(runResultDelivery(run), null);
+    }
+    await built.app.swarms!.sweep();
+    const replies = (await built.runs.list()).filter(
+      (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
+    );
+    assert.equal(replies.length, 3);
+    for (const reply of replies) assert.equal((await built.runs.waitFor(reply.id, 15_000)).result?.status, "ok");
+    assert.equal(issued.length, 4);
+    assert.equal(childIds.size, 3);
+    for (const childId of childIds) {
+      assert.notEqual(childId, rootId);
+      assert.ok(await built.app.getSessionForViewer(childId, "U1"));
+      assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
+    }
+    const view = await built.app.getSessionForViewer(rootId, "U1");
+    assert.ok(JSON.stringify(view?.entries).includes("http-worker-result"));
+    built.app.swarms!.stop();
+    const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };
+    const entered = Promise.withResolvers<string>();
+    exerciseTurn = async (turn) => {
+      if (!turn.input.includes("http-cancel-worker")) return;
+      const aborted = Promise.withResolvers<void>();
+      const stopPoll = startSignalPoll(built.signals, turn.runId!, {
+        onSteer: async () => {},
+        onAbort: async () => aborted.resolve(),
+      });
+      entered.resolve(turn.runId!);
+      try {
+        await withTimeout(() => aborted.promise, 15_000, "abort signal");
+        return { stopped: true };
+      } finally {
+        await stopPoll();
+      }
+    };
+    await built.app.swarms!.spawn(human, { requestId: "cancel", text: "http-cancel-worker" });
+    await built.app.swarms!.sweep();
+    const cancelRunId = await withTimeout(() => entered.promise, 15_000, "worker start");
+    const stopPath = `/v1/runs/${cancelRunId}/signal`;
+    const stopBody = JSON.stringify({ kind: "abort" });
+    const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
+    const stopped = await fetch(`${base}${stopPath}`, {
+      method: "POST",
+      headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {
+        "content-type": "application/json",
+        "x-portal-identity": portal,
+      }),
+      body: stopBody,
+    });
+    assert.equal(stopped.status, 200, await stopped.text());
+    const cancelled = await built.runs.waitFor(cancelRunId, 15_000);
+    assert.equal(cancelled.result?.stopped, true, JSON.stringify(cancelled.result));
+    let revokedExecuted = false;
+    exerciseTurn = async (turn) => {
+      if (turn.input.includes("http-revoked-work")) revokedExecuted = true;
+    };
+    const revoked = await built.app.swarms!.send(human, {
+      requestId: "revoke",
+      audience: [worker.request.swarm!.recipientId],
+      text: "http-revoked-work",
+    });
+    await built.sessions.addParticipant(rootId, "U2");
+    await built.app.swarms!.sweep();
+    const blocked = (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id)!;
+    assert.ok(blocked);
+    const rejected = await built.runs.waitFor(blocked.id, 15_000);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.errorAttempts, 1);
+    assert.equal(revokedExecuted, false);
+  } finally {
+    exerciseTurn = undefined;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+    try {
+      errorsAfterStop = Number((await pool.query("SELECT COUNT(*) AS n FROM error_events")).rows[0].n);
+    } finally {
+      await pool.end();
+    }
+  }
+  assert.ok(errorsAfterStop > 0);
+});
 
 test("unbound request fields cannot claim verified swarm provenance", async () => {
   const built = buildApp(testConfig());
@@ -486,7 +454,7 @@ test("a resolved command approval informs the model without changing its request
     conversation: { kind: "dm", threadRef: "web:U1:approval-hint" },
     text: "!run printf approval-isolation",
   };
-  const turns: HarnessTurnInput[] = [];
+  const turns: AgentTurnInput[] = [];
   exerciseTurn = async (turn) => {
     turns.push(turn);
   };
@@ -624,11 +592,9 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
     });
     await built.app.swarms!.sweep();
     const worker = (await built.runs.list()).find((run) => run.request.swarm)!;
-    const seen: Array<Pick<HarnessTurnInput, "goal" | "turnWallClockMs" | "goalContinuation">> = [];
+    const seen: Array<Pick<AgentTurnInput, "goal" | "turnWallClockMs">> = [];
     exerciseTurn = async (turn) => {
-      if (!turn.input.startsWith("Swarm ") && !turn.goalContinuation) return;
-      seen.push({ goal: turn.goal, turnWallClockMs: turn.turnWallClockMs, goalContinuation: turn.goalContinuation });
-      if (turn.goalContinuation) return { stopped: true };
+      if (turn.input.startsWith("Swarm ")) seen.push({ goal: turn.goal, turnWallClockMs: turn.turnWallClockMs });
     };
     built.runtime.start();
     const completed = await built.runs.waitFor(worker.id, 15_000);
@@ -636,10 +602,6 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
     assert.equal(seen[0]?.goal?.objective, "Exhaust the lane");
     assert.equal(seen[0]?.goal?.capTokens, 50_000);
     assert.equal(seen[0]?.turnWallClockMs, 0);
-    assert.ok(
-      seen.some((turn) => turn.goalContinuation),
-      "the goal kept the worker going after its first reply",
-    );
     const goals = await built.sessions.goals([completed.result!.sessionId!]);
     assert.equal(goals.get(completed.result!.sessionId!)?.objective, "Exhaust the lane");
   } finally {
@@ -674,7 +636,6 @@ test("a worker with an open goal answers messages as a goal turn without the swa
     const first = (await built.runs.list()).find((run) => run.request.swarm)!;
     const seen: Array<{ deadline?: number; inbox: boolean }> = [];
     exerciseTurn = async (turn) => {
-      if (turn.goalContinuation) return { stopped: true };
       if (turn.input.startsWith("Swarm ")) seen.push({ deadline: turn.turnWallClockMs, inbox: !!turn.goalInbox });
     };
     built.runtime.start();
@@ -693,79 +654,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
   }
 });
 
-for (const stopped of [false, true])
-  test(`a replacement goal sent to a busy worker takes over its running goal turn (turn ${stopped ? "stopped" : "finishes"})`, async () => {
-    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
-    try {
-      const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
-      await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
-      const rootTurn = await built.app.turn({
-        surface: "test",
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `swarm-goal-replace-root-${stopped}` },
-        origin: { kind: "human" },
-        text: "Coordinate work",
-      });
-      const root = (await built.sessions.get(rootTurn.sessionId!))!;
-      const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
-      const caller = { kind: "human" as const, actorId: "U1", sessionId: root.id, runId: rootRun.id };
-      const [member] = await built.app.swarms!.spawn(caller, {
-        requestId: "replace-worker",
-        text: "Work lane A",
-        goal: { objective: "Exhaust lane A", floor: { minMs: 3_600_000 } },
-      });
-      await built.app.swarms!.sweep();
-      const worker = (await built.runs.list()).find((run) => run.request.swarm)!;
-      const seen: Array<{ objective?: string; input: string }> = [];
-      let replacement: { id: string } | undefined;
-      let heldUntilTurnEnd = false;
-      exerciseTurn = async (turn) => {
-        if (!turn.input.startsWith("Swarm ") && !turn.goalContinuation) return;
-        seen.push({ objective: turn.goal?.objective, input: turn.input });
-        if (!replacement) {
-          replacement = await built.app.swarms!.send(caller, {
-            requestId: "replace-goal",
-            audience: [member!.id],
-            text: "Drop lane A and take lane B",
-            goal: { objective: "Exhaust lane B" },
-          });
-          await built.app.swarms!.sweep();
-          assert.ok((await built.runs.list()).some((run) => run.request.swarm?.messageId === replacement!.id));
-          return;
-        }
-        if (turn.goal?.objective === "Exhaust lane B") {
-          const queued = await built.app.swarms!.queuedMessages(worker.request);
-          heldUntilTurnEnd = queued.some((message) => message.id === replacement!.id);
-          if (stopped) return { stopped: true };
-          turn.goal!.status = "complete";
-          return;
-        }
-      };
-      built.runtime.start();
-      const completed = await built.runs.waitFor(worker.id, 15_000);
-      assert.equal(completed.status, "done", JSON.stringify(completed.result));
-      const handed = seen.find((turn) => turn.input.includes("Drop lane A and take lane B"));
-      assert.ok(handed, JSON.stringify(seen));
-      assert.equal(handed.objective, "Exhaust lane B");
-      assert.match(handed.input, /assigns you a new goal[\s\S]*Exhaust lane B/);
-      assert.ok(heldUntilTurnEnd, "a shown message stays queued until the turn that showed it has finished");
-      const state = (await built.app.swarms!.read(caller, { after: 0 })).find(
-        (message) => message.id === replacement!.id,
-      )?.notifications[member!.id]?.state;
-      if (stopped) assert.notEqual(state, "handed", "a stopped turn leaves what it showed queued");
-      else {
-        assert.equal(state, "handed");
-        assert.ok(!(await built.runs.list()).some((run) => run.request.swarm?.messageId === replacement!.id));
-      }
-      const goals = await built.sessions.goals([completed.result!.sessionId!]);
-      assert.equal(goals.get(completed.result!.sessionId!)?.objective, "Exhaust lane B");
-    } finally {
-      exerciseTurn = undefined;
-      await built.runtime.stop();
-    }
-  });
-
-test("a worker's reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
+test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
@@ -802,7 +691,13 @@ test("a worker's reply waits in the root's mailbox and reaches the root's next h
             exp: Date.now() + 60_000,
           },
         },
-        { requestId: "ack", audience: [root.id], replyTo: worker.request.swarm!.messageId, text: "brief read" },
+        {
+          requestId: "ack",
+          audience: [root.id],
+          replyTo: worker.request.swarm!.messageId,
+          wake: false,
+          text: "brief read",
+        },
       );
     };
     built.runtime.start();
@@ -813,7 +708,7 @@ test("a worker's reply waits in the root's mailbox and reaches the root's next h
       !(await built.runs.list()).some(
         (run) => run.request.swarm && run.request.conversation.threadRef === root.threadRef,
       ),
-      "the reply does not start a root turn",
+      "the wake:false reply does not start a root turn",
     );
     const environments: string[] = [];
     exerciseTurn = async (turn) => {

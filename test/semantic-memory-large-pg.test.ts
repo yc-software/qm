@@ -4,6 +4,9 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
+import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const url = process.env.DATABASE_URL;
 
@@ -12,7 +15,7 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
   const model = `large-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = new pg.Client({ connectionString: url! });
+  const client = new pg.Client({ connectionString: boundUrl(url!) });
   await client.connect();
   t.after(async () => {
     await client.end();

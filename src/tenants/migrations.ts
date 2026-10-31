@@ -1,6 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const TENANT = "qm_tenant_id()";
+export const TENANT = "qm_bound_tenant()";
 const MATCH = `tenant_id = ${TENANT}`;
 
 const TENANT_FUNCTIONS = [
@@ -8,8 +8,8 @@ const TENANT_FUNCTIONS = [
      AS $qm_tenant_unbound$ BEGIN
        RAISE 'No tenant is bound to this transaction' USING ERRCODE = 'insufficient_privilege';
      END $qm_tenant_unbound$`,
-  `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
-     AS $qm_tenant_id$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_tenant_id$`,
+  `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
+     AS $qm_bound_tenant$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_bound_tenant$`,
 ];
 
 function grantsWhereAllowed(statements: readonly string[]): string {
@@ -47,7 +47,7 @@ export const TENANCY_BASE: PgMigrationDefinition = {
          RAISE 'qm_app and qm_reader must not bypass row-level security';
        END IF;
      END $qm_logins$`,
-    `CREATE TABLE tenants(
+    `CREATE TABLE IF NOT EXISTS tenants(
        id UUID PRIMARY KEY,
        slug TEXT NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
        name TEXT NOT NULL,
@@ -55,6 +55,7 @@ export const TENANCY_BASE: PgMigrationDefinition = {
      )`,
     ...["tenants", "qm_schema_migrations"].flatMap((table) => [
       `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+      `DROP POLICY IF EXISTS read_only ON ${table}`,
       `CREATE POLICY read_only ON ${table} FOR SELECT TO qm_app, qm_reader USING (true)`,
     ]),
     grantsWhereAllowed([
@@ -81,15 +82,14 @@ export const TENANCY_BASE: PgMigrationDefinition = {
          INTO present;
        IF populated THEN
          SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-         IF tenant_count > 1 THEN
-           RAISE 'Rows in % need a tenant but this database has % tenants', target, tenant_count;
-         END IF;
-         IF tenant IS NULL THEN
+         IF tenant_count = 0 THEN
            IF to_regclass('qm_tenant') IS NOT NULL THEN
              EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
            END IF;
            INSERT INTO tenants(id, slug, name) VALUES (COALESCE(tenant, gen_random_uuid()), 'main', 'Main')
              RETURNING id INTO tenant;
+         ELSIF tenant_count > 1 AND NOT present THEN
+           RAISE 'Rows in % need a tenant but this database has % tenants', target, tenant_count;
          END IF;
        END IF;
        IF NOT present AND populated THEN
@@ -97,8 +97,11 @@ export const TENANCY_BASE: PgMigrationDefinition = {
        ELSIF NOT present THEN
          EXECUTE format('ALTER TABLE %s ADD COLUMN tenant_id UUID NOT NULL', target);
        END IF;
-       EXECUTE format('ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id(),
-         ADD FOREIGN KEY (tenant_id) REFERENCES tenants', target);
+       EXECUTE format('ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()', target);
+       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = target AND contype = 'f'
+                        AND confrelid = 'tenants'::regclass) THEN
+         EXECUTE format('ALTER TABLE %s ADD FOREIGN KEY (tenant_id) REFERENCES tenants', target);
+       END IF;
      END $qm_tenant_column$`,
     grantsWhereAllowed([`'REVOKE ALL ON FUNCTION qm_tenant_column(regclass) FROM PUBLIC'`]),
   ],
@@ -107,6 +110,8 @@ export const TENANCY_BASE: PgMigrationDefinition = {
 export function tenantPolicies(table: string): string[] {
   return [
     `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `DROP POLICY IF EXISTS tenant_app ON ${table}`,
+    `DROP POLICY IF EXISTS tenant_reader ON ${table}`,
     `CREATE POLICY tenant_app ON ${table} FOR ALL TO qm_app USING (${MATCH}) WITH CHECK (${MATCH})`,
     `CREATE POLICY tenant_reader ON ${table} FOR SELECT TO qm_reader USING (${MATCH})`,
   ];
@@ -134,12 +139,22 @@ export interface TenantForeignKey {
 }
 
 const indexOn = (table: string, { name, columns, where }: TenantIndex, unique = false): string =>
-  `CREATE ${unique ? "UNIQUE " : ""}INDEX ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`;
+  `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`;
 
 function tenantTableStatements({ table, primaryKey, unique = [], replacesOrgId }: TenantTable): string[] {
   return [
     `SELECT qm_tenant_column('${table}')`,
-    ...(replacesOrgId ? [`ALTER TABLE ${table} DROP COLUMN org_id`] : []),
+    ...(replacesOrgId
+      ? [
+          `DO $qm_one_org$ BEGIN
+             IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'org_id') THEN
+               DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
+                 (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1);
+             END IF;
+           END $qm_one_org$`,
+          `ALTER TABLE ${table} DROP COLUMN IF EXISTS org_id`,
+        ]
+      : []),
     ...(primaryKey === undefined
       ? []
       : [
@@ -170,7 +185,7 @@ export function tenantTables(
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       ...before,
-      ...foreignKeys.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT ${name}`),
+      ...foreignKeys.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}`),
       ...tables.flatMap(tenantTableStatements),
       ...foreignKeys.map(
         ({ table, name, columns, references, onDelete }) =>
@@ -211,9 +226,9 @@ const SPEND_TRIGGERS = [
 const ITEM_SEARCH = [
   `DO $qm_search_items$ BEGIN
      EXECUTE format($create$
-       CREATE FUNCTION qm_search_items(query tsquery) RETURNS TABLE(session_id text, seq bigint)
+       CREATE OR REPLACE FUNCTION qm_search_items(query tsquery) RETURNS TABLE(session_id text, seq bigint)
          LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp
-         AS $body$ SELECT i.session_id, i.seq FROM items i WHERE i.tenant_id = qm_tenant_id() AND i.search @@ query $body$
+         AS $body$ SELECT i.session_id, i.seq FROM items i WHERE i.tenant_id = qm_bound_tenant() AND i.search @@ query $body$
      $create$, current_schema());
    END $qm_search_items$`,
   grantsWhereAllowed([
@@ -224,7 +239,7 @@ const ITEM_SEARCH = [
 
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
-    id: "sessions/store/0047-tenants",
+    id: "sessions/store/0048-tenants",
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       ...TENANT_FUNCTIONS,
@@ -232,13 +247,18 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       `SELECT qm_tenant_column('blobs')`,
       ...tenantPolicies("items"),
       ...tenantPolicies("blobs"),
-      `INSERT INTO tenants(id, slug, name) SELECT id, 'main', 'Main' FROM qm_tenant
-         WHERE EXISTS (SELECT 1 FROM sessions) AND NOT EXISTS (SELECT 1 FROM tenants)`,
-      `DROP TABLE qm_tenant`,
+      `DO $qm_tenant_seed$ BEGIN
+         IF to_regclass('qm_tenant') IS NOT NULL THEN
+           INSERT INTO tenants(id, slug, name) SELECT id, 'main', 'Main' FROM qm_tenant
+            WHERE EXISTS (SELECT 1 FROM sessions) AND NOT EXISTS (SELECT 1 FROM tenants);
+         END IF;
+       END $qm_tenant_seed$`,
+      `DROP FUNCTION IF EXISTS qm_tenant_id()`,
+      `DROP TABLE IF EXISTS qm_tenant`,
     ],
   },
   tenantTables(
-    "sessions/store/0048-tenant-sessions",
+    "sessions/store/0049-tenant-sessions",
     [
       {
         table: "sessions",
@@ -274,11 +294,11 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
           onDelete: "CASCADE",
         },
       ],
-      after: [...SPEND_TRIGGERS, ...ITEM_SEARCH, `DROP TABLE qm_settings`],
+      after: [...SPEND_TRIGGERS, ...ITEM_SEARCH, `DROP TABLE IF EXISTS qm_settings`],
     },
   ),
   {
-    id: "sessions/store/0049-agent-reply-index",
+    id: "sessions/store/0050-agent-reply-index",
     statements: [
       `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply
          ON items(tenant_id, session_id, created_at DESC) WHERE kind = 'AgentMessage'`,

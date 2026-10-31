@@ -47,10 +47,9 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
         approvals: [],
         items: [],
         scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "" },
+        effective: { modelId: "" },
       });
     },
   };

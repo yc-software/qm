@@ -14,6 +14,8 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -56,6 +58,7 @@ describe("POST /v1/reach with files", () => {
     ]);
     await selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol"));
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       sandbox: built.sandbox,
       blobTransfer: built.blobTransfer,
@@ -64,8 +67,12 @@ describe("POST /v1/reach with files", () => {
       auditLog: built.auditLog,
       sandboxResources: built.sandboxResources,
     });
-    bare = createServer(built.app, { signingSecret: SECRET });
+    bare = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     noSandbox = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       blobTransfer: built.blobTransfer,
       files: built.files,

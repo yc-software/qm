@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.ur
 const readme = read("README.md");
 const index = read("src/index.ts");
 const server = read("src/api/server.ts");
-const agentTools = read("src/harness/agent-tools.ts");
+const agentTools = read("src/agent/agent-tools/wrappers.ts");
 const adminUi = read("plugins/admin/public/index.html");
 const rootPackage = JSON.parse(read("package.json")) as { dependencies: Record<string, string> };
 const webPackage = JSON.parse(read("plugins/web-ui/package.json")) as {
