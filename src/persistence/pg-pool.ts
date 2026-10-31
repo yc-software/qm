@@ -521,6 +521,7 @@ export function createPgPool(
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
       ownerPoolP?.then((instance) => releasePool(ownerUrl, instance, "owner")),
+      ownerPoolP?.then((instance) => releasePool(connectionString, instance, "owner")),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {

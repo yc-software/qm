@@ -5,7 +5,7 @@ import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import { createSlackTables, type SlackTables } from "./slack/slack-tables.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createPostgresApprovalStore } from "./slack/approval-store.ts";
 import { createPostgresApprovalGrantStore } from "./core/approval-grant-store.ts";
@@ -41,7 +41,6 @@ import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync }
 import { boundTenant, perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox } from "./sessions/session-mailbox.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
 import { createLoopTables } from "./loops/tables.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
@@ -71,7 +70,6 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import { createPostgresSessionShareStore, type SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { Config } from "./config.ts";
@@ -89,7 +87,7 @@ import {
   createPrincipalLinkService,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink } from "./api/routes/composio.ts";
+import type { SlackAccountRows } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import { createPostgresExternalMemberStore } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -424,6 +422,7 @@ export interface BuiltApp {
   runtime: Runtime;
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
+  slackTables: SlackTables;
   slackInstallation: SlackInstallationStore;
   composioNamespace: () => Promise<string>;
   tenantName: () => Promise<string>;
@@ -460,7 +459,7 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
+  slackAccounts: SlackAccountRows;
   composioReturns: ComposioReturnRows;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
@@ -635,8 +634,9 @@ export function buildApp(
   const featureFlags = createPostgresFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags);
   const decisions = createPostgresDecisionStore(databaseUrl);
+  const slackTables = createSlackTables(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
-    artifactMap("slack_installation"),
+    slackTables.installation,
     connectorSecretKey,
   );
   const deploymentLayer = config.deploymentLayerDir
@@ -2056,14 +2056,14 @@ export function buildApp(
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    taskAcknowledgements: slackTables.taskAcknowledgements,
+    sessionStatus: slackTables.sessionStatus,
     statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
+    stagedEnvelopes: slackTables.stagedEnvelopes,
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -2706,6 +2706,7 @@ export function buildApp(
     runtime,
     config: configStore,
     connectorTokens,
+    slackTables,
     slackInstallation,
     composioNamespace: composioNamespaceReader(pgArtifactMap?.pool ?? null),
     tenantName: tenantNameReader(pgArtifactMap?.pool ?? null),
@@ -2743,7 +2744,7 @@ export function buildApp(
     egressAudit,
     identity,
     principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    slackAccounts: slackTables.accounts,
     composioReturns,
     workspace,
     memory,

@@ -1,6 +1,5 @@
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
@@ -25,6 +24,17 @@ export interface SlackSessionStatusState {
   followUrl?: string;
 }
 
+export interface SlackSessionStatusRows {
+  entries(): Promise<Array<[string, SlackSessionStatusState]>>;
+  get(id: string): Promise<SlackSessionStatusState | null>;
+  putIfAbsent(id: string, state: SlackSessionStatusState): Promise<SlackSessionStatusState>;
+  update(
+    id: string,
+    fn: (state: SlackSessionStatusState) => SlackSessionStatusState,
+  ): Promise<SlackSessionStatusState | null>;
+  deleteIf(id: string, predicate: (state: SlackSessionStatusState) => boolean): Promise<boolean>;
+}
+
 interface StatusClient {
   apiCall(method: string, args: Record<string, unknown>): Promise<unknown>;
 }
@@ -37,7 +47,7 @@ export interface SlackStatusActivity {
 }
 
 export function createSlackSessionStatus(
-  store: DurableMap<SlackSessionStatusState>,
+  store: SlackSessionStatusRows,
   lease: LeaderLease,
   runs: Pick<RunStore, "get" | "inFlightForThread">,
   flags: Pick<FeatureFlagStore, "enabled">,

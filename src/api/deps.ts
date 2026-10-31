@@ -83,7 +83,7 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { TenantResolver } from "../tenants/resolver.ts";
 import type { RowTenants } from "../tenants/row-tenant.ts";
 
-import type { SlackAccountLink } from "./routes/composio.ts";
+import type { SlackAccountRows } from "./routes/composio.ts";
 import type { ComposioReturnRows } from "../connectors/link-tables.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 
@@ -94,7 +94,7 @@ export interface ServerDeps {
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: () => Promise<ModelGatewayTransportConfig | undefined>;
   resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
-  slackAccounts?: DurableMap<SlackAccountLink>;
+  slackAccounts?: SlackAccountRows;
   composioReturns?: ComposioReturnRows;
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
