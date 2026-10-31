@@ -11,18 +11,24 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { orgId } from "../src/config.ts";
+import { scopeId } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+await built.featureFlags.setEnabled("web_ui", scopeId("org", orgId()), true, "test");
 await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
-const core = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
+const core = createServer(built.app, {
+  featureFlags: built.featureFlags,
+  signingSecret: SECRET,
+  scheduler: built.scheduler,
+});
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);

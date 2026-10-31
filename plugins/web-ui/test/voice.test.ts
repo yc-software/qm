@@ -26,10 +26,10 @@ const audioFile = async (bytes: number[]) => {
 const req = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
 
 test("voice requires explicit rollout, key, signing, and account access", () => {
-  const env = { OPENAI_API_KEY: "test-key", CORE_SIGNING_SECRET: "test-secret", WEB_UI_VOICE_USERS: "alice" };
-  assert.equal(voiceEnabled("alice", env), true);
-  assert.equal(voiceEnabled("bob", env), false);
-  for (const name of Object.keys(env)) assert.equal(voiceEnabled("alice", { ...env, [name]: " " }), false);
+  const env = { OPENAI_API_KEY: "test-key", CORE_SIGNING_SECRET: "test-secret" };
+  assert.equal(voiceEnabled(true, env), true);
+  assert.equal(voiceEnabled(false, env), false);
+  for (const name of Object.keys(env)) assert.equal(voiceEnabled(true, { ...env, [name]: " " }), false);
 });
 
 test("voice requests come from the web origin or a verified native client", () => {

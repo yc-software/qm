@@ -10,11 +10,6 @@ let lastPortalIdentity: string | null = null;
 let transientWhoamiFailures = 0;
 let whoamiRequests = 0;
 const core = createServer((req: IncomingMessage, res) => {
-  if ((req.url ?? "").startsWith("/v1/inbox/access?")) {
-    const principal = new URL(req.url ?? "", "http://core").searchParams.get("principalId");
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ enabled: principal === "U-admin" }));
-  }
   if (req.method === "GET" && (req.url ?? "").startsWith("/v1/admin/whoami")) {
     whoamiRequests++;
     if (transientWhoamiFailures > 0) {
@@ -84,7 +79,6 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
-    permissions: ["inbox"],
   });
   assert.equal(lastActor, "U-admin@acme", "x-admin-actor forwarded as <sub>@<org>");
   assert.equal(lastSigned, true, "source-auth headers present when CORE_SIGNING_SECRET is set");
@@ -93,7 +87,7 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
 test("/api/whoami with cookie admin=U-rando → 200 { isAdmin:false } (any non-empty cookie is trusted identity; the core decides)", async () => {
   const r = await api("/api/whoami", "admin=U-rando");
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false, permissions: [] });
+  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false });
 });
 
 test("/api/whoami with NO admin cookie → 401 signed_out", async () => {
@@ -145,7 +139,6 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:acme",
-    permissions: ["inbox"],
   });
 });
 

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const sharedTemplate = new URL("../dist-web/shared.html", import.meta.url);
 const createdTemplate = !existsSync(sharedTemplate);
@@ -18,6 +19,7 @@ test.after(() => {
 
 const calls: Array<{ path: string; method: string; body: string; actor: string | undefined }> = [];
 const core = createServer(async (req, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let body = "";
   for await (const chunk of req) body += chunk;
   calls.push({

@@ -32,8 +32,8 @@ const core = createServer((req: IncomingMessage, res) => {
       body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
     });
     res.setHeader("content-type", "application/json");
-    if (url.startsWith("/v1/inbox/access")) {
-      res.end(JSON.stringify({ enabled: inboxEnabled }));
+    if (url.startsWith("/v1/features")) {
+      res.end(JSON.stringify({ enabled: inboxEnabled ? ["web_ui", "inbox_loops"] : ["web_ui"] }));
       return;
     }
     if (url.startsWith("/v1/approvals/a-inbox")) {
@@ -121,7 +121,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "approvals-route-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

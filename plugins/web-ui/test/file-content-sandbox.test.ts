@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerFeatures } from "./core-features.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (u.startsWith("/v1/files/") && u.includes("/content")) {
     if (u.includes("/v1/files/some-pdf/")) {
@@ -27,7 +29,6 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = "file-content-test-secret";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
