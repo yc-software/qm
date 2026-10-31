@@ -91,12 +91,10 @@ async function keyedApp(...args: Parameters<typeof freshApp>) {
 
 async function posturedApp(
   posture: { security?: SecurityPosture; sharing?: SharingPosture },
-  securityScreener?: SecurityScreener,
-  settings?: TenantSettingValues,
-  overrides: Partial<Config> = {},
+  ...args: Parameters<typeof freshApp>
 ) {
-  const built = freshApp(overrides, securityScreener, settings);
-  const org = scopeId("org", overrides.orgId ?? loadConfig({}).orgId);
+  const built = freshApp(...args);
+  const org = scopeId("org", args[0]?.orgId ?? loadConfig({}).orgId);
   if (posture.security) await built.config.setSecurityPosture(org, posture.security);
   if (posture.sharing) await built.config.setSharingPosture(org, posture.sharing);
   return built;
@@ -4390,7 +4388,7 @@ function fixtureScreen(): SecurityScreener {
 }
 
 test("enforced screening quarantines auto-posture tool output with once-only release", async () => {
-  const built = await posturedApp({ security: "auto" }, fixtureScreen());
+  const built = await posturedApp({ security: "auto" }, {}, fixtureScreen());
   const cmd = "!screened-run printf SCREENING_FIXTURE_BLOCK";
   const first = await built.app.turn(dm(cmd));
   assert.equal(first.status, "ok");
@@ -4419,7 +4417,7 @@ test("enforced screening quarantines auto-posture tool output with once-only rel
 });
 
 test("enforced screening flags strict-posture inbound data before model execution", async () => {
-  const built = await posturedApp({ security: "strict" }, fixtureScreen());
+  const built = await posturedApp({ security: "strict" }, {}, fixtureScreen());
   const request = dm("summarize the event", {
     surface: "webhook",
     triggered: true,
@@ -4439,6 +4437,7 @@ for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {
     const built = await posturedApp(
       { security: "auto" },
+      { securityScreenTimeoutMs: 10 },
       {
         provider: "fixture-screen",
         async classify() {
@@ -4446,8 +4445,6 @@ for (const failure of ["error", "timeout"] as const) {
           throw new Error("fixture unavailable");
         },
       },
-      undefined,
-      { securityScreenTimeoutMs: 10 },
     );
     const result = await built.app.turn(
       dm("summarize the event", { surface: "webhook", triggered: true, securityScreenData: "ordinary fixture data" }),
@@ -4479,6 +4476,7 @@ async function screenEvent(built: ReturnType<typeof freshApp>, status: string) {
 test("observe screening never waits on a hung classifier", async () => {
   const built = await posturedApp(
     { security: "auto" },
+    {},
     { provider: "fixture-screen", classify: () => new Promise(() => {}) },
     { SECURITY_SCREEN: "observe" },
   );
@@ -4499,7 +4497,7 @@ for (const [securityPosture, securityScreen] of [
   ["dangerous", "enforce"],
 ] as const) {
   test(`${securityScreen} screening under ${securityPosture} posture records would-block verdicts without quarantine`, async () => {
-    const built = await posturedApp({ security: securityPosture }, fixtureScreen(), {
+    const built = await posturedApp({ security: securityPosture }, {}, fixtureScreen(), {
       SECURITY_SCREEN: securityScreen,
     });
     const inbound = await built.app.turn(
