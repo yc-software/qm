@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { configurePgPooling, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 
 export const PG_URL = process.env.DATABASE_URL;
 export const skipWithoutPg = PG_URL ? false : "set DATABASE_URL (a Postgres) to run typed-table tests";
@@ -43,10 +43,12 @@ export async function withTypedTableDb<S extends Closable>(
     if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
     const otherTenant = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
+    configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
     store = make(appUrl.toString());
     await fn({ store, admin, url: appUrl.toString(), tenant, otherTenant });
   } finally {
     await store?.close?.();
+    configurePgPooling({});
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.query(`DROP OWNED BY ${role}`).catch(() => undefined);
     await admin.query(`DROP ROLE IF EXISTS ${role}`);

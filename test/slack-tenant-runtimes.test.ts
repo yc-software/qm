@@ -39,9 +39,9 @@ function fakeCore(rows: Delivery[]) {
       return () => {};
     },
     onContextRequest: (fn: (r: SurfaceContextRequest) => void) => {
-      const entry = { tenant: boundTenant(), fn };
-      listeners.context.push(entry);
-      return () => listeners.context.splice(listeners.context.indexOf(entry), 1);
+      const listener = { tenant: boundTenant(), fn };
+      listeners.context.push(listener);
+      return () => void listeners.context.splice(listeners.context.indexOf(listener), 1);
     },
     onScopeModelChanged: (fn: (scope: string) => void) => void listeners.model.push(fn),
     onChannelHeaderPinChanged: (fn: (scope: string) => void) => void listeners.pin.push(fn),

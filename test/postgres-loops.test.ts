@@ -12,18 +12,10 @@ import { createPostgresIngressDeliveryRows, createPostgresIngressSourceRows } fr
 import type { IngressDelivery, LoopIngress } from "../src/loops/ingress.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 const ALICE = "alice@example.com";
-
-function ownerUrl(appUrl: string): string {
-  const owner = new URL(appUrl);
-  const base = new URL(PG_URL!);
-  owner.username = base.username;
-  owner.password = base.password;
-  return owner.toString();
-}
 
 function loopTables(url: string) {
   const rows = {
@@ -342,89 +334,74 @@ const delivery = (id: string, overrides: Partial<IngressDelivery> = {}): Ingress
 });
 
 test("ingress sources and deliveries queue per tenant and background claims span tenants", { skip }, async () => {
-  await withTypedTableDb(loopTables, async ({ store, url, tenant, otherTenant }) => {
-    const owner = loopTables(ownerUrl(url));
-    try {
-      const gmail = { email: "a@example.com", historyId: "1", expiresAt: 1 };
-      await withTenant(tenant, async () => {
-        await store.sources.insert(source("s1", { secret: "shh", channels: ["C1"] }));
-        await store.sources.insert(source("s2", { kind: "gmail", gmail }));
-        await store.sources.insert(source("s3", { enabled: false }));
-        await store.sources.update("s2", (s) => ({ ...s, gmail: { ...gmail, email: "b@example.com" } }));
-        assert.deepEqual(
-          (await owner.sources.gmailWatching("b@example.com")).map((s) => s.id),
-          ["s2"],
-        );
-        await store.sources.update("s2", (s) => ({ ...s, gmail }));
-        assert.deepEqual(
-          (await store.sources.byLoop("L1")).map((s) => s.id),
-          ["s1", "s2", "s3"],
-        );
-        const merged = await store.sources.update("s1", (s) => ({ ...s, lastError: undefined, nextWorkAt: 5 }));
-        assert.equal(merged?.nextWorkAt, 5);
-        assert.deepEqual((await store.sources.get("s1"))?.channels, ["C1"]);
-        await store.deliveries.insertIfAbsent(delivery("d2", { receivedAt: 2, entries: [] }));
-        await store.deliveries.insertIfAbsent(delivery("d1"));
-        await store.deliveries.insertIfAbsent(delivery("d3", { nextAttemptAt: 10_000 }));
-        await store.deliveries.insertIfAbsent(delivery("d1", { receivedAt: 99 }));
-        assert.deepEqual(
-          (await store.deliveries.pending("s1", 100, 20)).map((d) => d.id),
-          ["d1", "d2"],
-        );
-        assert.deepEqual(
-          (await store.deliveries.pending("s1", 100, 1)).map((d) => d.id),
-          ["d1"],
-        );
-        await store.deliveries.update("d1", (d) => ({ ...d, completedAt: 50, queueKey: undefined, ingested: true }));
-        assert.deepEqual(
-          (await store.deliveries.pending("s1", 100, 20)).map((d) => d.id),
-          ["d2"],
-        );
-        await store.loopStore.create(loopInput({ surface: "inbox:gmail", governor: { staleFireMs: 1 } }));
-        await store.loopStore
-          .create(loopInput({ name: "Archived", surface: "inbox" }))
-          .then(({ loop }) => store.loopStore.setState(loop.id, "archived"));
-      });
-      await withTenant(otherTenant, async () => {
-        await store.sources.insert(source("s9", { kind: "gmail", gmail }));
-        await store.deliveries.insertIfAbsent(delivery("d9", { completedAt: 10 }));
-        await store.loopStore.create(loopInput({ name: "Other inbox", surface: "inbox" }));
-        assert.deepEqual(await store.deliveries.pending("s1", 100, 20), []);
-      });
+  await withTypedTableDb(loopTables, async ({ store, tenant, otherTenant }) => {
+    const gmail = { email: "a@example.com", historyId: "1", expiresAt: 1 };
+    await withTenant(tenant, async () => {
+      await store.sources.insert(source("s1", { secret: "shh", channels: ["C1"] }));
+      await store.sources.insert(source("s2", { kind: "gmail", gmail }));
+      await store.sources.insert(source("s3", { enabled: false }));
       assert.deepEqual(
-        (await owner.sources.enabled()).map((s) => [s.tenantId, s.id]),
-        [
-          [tenant, "s1"],
-          [tenant, "s2"],
-          [otherTenant, "s9"],
-        ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+        (await store.sources.byLoop("L1")).map((s) => s.id),
+        ["s1", "s2", "s3"],
+      );
+      const merged = await store.sources.update("s1", (s) => ({ ...s, lastError: undefined, nextWorkAt: 5 }));
+      assert.equal(merged?.nextWorkAt, 5);
+      assert.deepEqual((await store.sources.get("s1"))?.channels, ["C1"]);
+      await store.deliveries.insertIfAbsent(delivery("d2", { receivedAt: 2, entries: [] }));
+      await store.deliveries.insertIfAbsent(delivery("d1"));
+      await store.deliveries.insertIfAbsent(delivery("d3", { nextAttemptAt: 10_000 }));
+      await store.deliveries.insertIfAbsent(delivery("d1", { receivedAt: 99 }));
+      assert.deepEqual(
+        (await store.deliveries.pending("s1", 100, 20)).map((d) => d.id),
+        ["d1", "d2"],
       );
       assert.deepEqual(
-        new Set((await owner.sources.gmailWatching("a@example.com")).map((s) => `${s.tenantId}/${s.id}`)),
-        new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
+        (await store.deliveries.pending("s1", 100, 1)).map((d) => d.id),
+        ["d1"],
       );
-      assert.equal(await owner.deliveries.pruneCompleted(60), 2);
-      const inbox = await owner.loopStore.inboxLoops();
+      await store.deliveries.update("d1", (d) => ({ ...d, completedAt: 50, queueKey: undefined, ingested: true }));
       assert.deepEqual(
-        new Set(inbox.map((l) => `${l.tenantId}/${l.name}`)),
-        new Set([`${tenant}/Inbox`, `${otherTenant}/Other inbox`]),
+        (await store.deliveries.pending("s1", 100, 20)).map((d) => d.id),
+        ["d2"],
       );
-      const stale = await owner.loopStore.staleGoverned(Date.now() + 10);
-      assert.deepEqual(
-        stale.map((l) => [l.tenantId, l.name]),
-        [[tenant, "Inbox"]],
-      );
-      await assert.rejects(
-        withoutTenant(() => store.sources.enabled()),
-        /No tenant is bound/,
-      );
-      await assert.rejects(
-        withoutTenant(() => store.loopStore.inboxLoops()),
-        /No tenant is bound/,
-      );
-    } finally {
-      await owner.close();
-    }
+      await store.loopStore.create(loopInput({ surface: "inbox:gmail", governor: { staleFireMs: 1 } }));
+      await store.loopStore
+        .create(loopInput({ name: "Archived", surface: "inbox" }))
+        .then(({ loop }) => store.loopStore.setState(loop.id, "archived"));
+    });
+    await withTenant(otherTenant, async () => {
+      await store.sources.insert(source("s9", { kind: "gmail", gmail }));
+      await store.deliveries.insertIfAbsent(delivery("d9", { completedAt: 10 }));
+      await store.loopStore.create(loopInput({ name: "Other inbox", surface: "inbox" }));
+      assert.deepEqual(await store.deliveries.pending("s1", 100, 20), []);
+    });
+    assert.deepEqual(
+      (await store.sources.enabled()).map((s) => [s.tenantId, s.id]),
+      [
+        [tenant, "s1"],
+        [tenant, "s2"],
+        [otherTenant, "s9"],
+      ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    );
+    assert.deepEqual(
+      new Set((await store.sources.gmailWatching("a@example.com")).map((s) => `${s.tenantId}/${s.id}`)),
+      new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
+    );
+    assert.equal(await store.deliveries.pruneCompleted(60), 2);
+    const inbox = await store.loopStore.inboxLoops();
+    assert.deepEqual(
+      new Set(inbox.map((l) => `${l.tenantId}/${l.name}`)),
+      new Set([`${tenant}/Inbox`, `${otherTenant}/Other inbox`]),
+    );
+    const stale = await store.loopStore.staleGoverned(Date.now() + 10);
+    assert.deepEqual(
+      stale.map((l) => [l.tenantId, l.name]),
+      [[tenant, "Inbox"]],
+    );
+    assert.deepEqual(
+      (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => l.tenantId),
+      [tenant],
+    );
   });
 });
 

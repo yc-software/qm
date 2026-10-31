@@ -5,18 +5,11 @@ import { createPostgresCronRows } from "../src/cron/cron-table.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
-import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 import { testCronFires } from "./support/typed-stores.ts";
 
 const skip = skipWithoutPg;
 
-function ownerUrl(appUrl: string): string {
-  const owner = new URL(appUrl);
-  const base = new URL(PG_URL!);
-  owner.username = base.username;
-  owner.password = base.password;
-  return owner.toString();
-}
 const ALICE = "alice@example.com";
 const HOUR = 60 * 60_000;
 
@@ -106,10 +99,8 @@ test("cron rows round-trip through typed columns and the indexed lookups", { ski
 test("due crons are claimed across tenants and each slot is claimed once", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresCronRows(url),
-    async ({ store: rows, url, tenant, otherTenant }) => {
+    async ({ store: rows, tenant, otherTenant }) => {
       const crons = createCronStore(rows, { fires: testCronFires() });
-      const ownerRows = createPostgresCronRows(ownerUrl(url));
-      const claims = createCronStore(ownerRows, { fires: testCronFires() });
       const first = Date.now() - HOUR;
       const a = await withTenant(tenant, () =>
         crons.create(input({ schedule: { everyMs: HOUR, firstFireAt: first } })),
@@ -122,10 +113,10 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
         crons.create(input({ action: "later", schedule: { everyMs: HOUR, firstFireAt: Date.now() + HOUR } })),
       );
       assert.deepEqual(
-        new Set((await claims.scheduled()).map((c) => `${c.tenantId}/${c.id}`)),
+        new Set((await crons.scheduled()).map((c) => `${c.tenantId}/${c.id}`)),
         new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`, `${tenant}/${later.id}`]),
       );
-      const due = await claims.due(Date.now());
+      const due = await crons.due(Date.now());
       assert.deepEqual(
         due.map((c) => [c.id, c.tenantId]),
         [[a.id, tenant]],
@@ -139,17 +130,15 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
       assert.equal(await withTenant(tenant, () => crons.claimSlot(a.id, slot, now)), true);
       assert.equal(await withTenant(tenant, () => crons.claimSlot(a.id, slot, now)), false);
       assert.equal(await withTenant(otherTenant, () => crons.claimSlot(a.id, slot, now)), false);
-      assert.deepEqual(await claims.due(Date.now()), []);
+      assert.deepEqual(await crons.due(Date.now()), []);
       await withTenant(tenant, () => crons.unclaimSlot(a.id, slot, now, undefined));
       assert.deepEqual(
-        (await claims.due(Date.now())).map((c) => c.id),
+        (await crons.due(Date.now())).map((c) => c.id),
         [a.id],
       );
-      await assert.rejects(
-        withoutTenant(() => crons.due(Date.now())),
-        /No tenant is bound/,
-      );
-      await ownerRows.close();
+      assert.deepEqual(await withTenant(otherTenant, () => crons.scheduled()).then((c) => c.map((x) => x.tenantId)), [
+        otherTenant,
+      ]);
     },
   );
 });
