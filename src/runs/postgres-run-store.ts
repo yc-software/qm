@@ -134,10 +134,17 @@ END $base_schema$`,
   ]);
   const { query: q, close: closePool } = db;
   const tenantFilter = (param: number) => `($${param}::uuid IS NULL OR tenant_id = $${param}::uuid)`;
-  const acrossTenants = (text: string, params: unknown[]): Promise<Rows> =>
-    claimAcrossTenants(db, text, [...params, boundTenant() ?? null]);
-  const ownerProbe = async (text: string, params: unknown[]): Promise<boolean> =>
-    (await (await db.ownerPool()).query(text, [...params, boundTenant() ?? null])).rows[0]?.found === true;
+  const acrossTenants = (text: string, params: unknown[]): Promise<Rows> => {
+    const tenant = boundTenant();
+    return tenant ? db.q(text, [...params, tenant]) : claimAcrossTenants(db, text, [...params, null]);
+  };
+  const ownerProbe = async (text: string, params: unknown[]): Promise<boolean> => {
+    const tenant = boundTenant();
+    const rows = tenant
+      ? await db.q(text, [...params, tenant])
+      : (await (await db.ownerPool()).query(text, [...params, null])).rows;
+    return rows[0]?.found === true;
+  };
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;

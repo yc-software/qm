@@ -96,8 +96,10 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     ]),
   ]);
   const { q, query } = db;
-  const acrossTenants = (text: string, params: unknown[]): Promise<Rows> =>
-    claimAcrossTenants(db, text, [...params, boundTenant() ?? null]);
+  const acrossTenants = (text: string, params: unknown[]): Promise<Rows> => {
+    const tenant = boundTenant();
+    return tenant ? q(text, [...params, tenant]) : claimAcrossTenants(db, text, [...params, null]);
+  };
 
   const enqueueListeners = new Set<() => void>();
 
