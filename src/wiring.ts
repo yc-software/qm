@@ -107,6 +107,9 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
+import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
+import { boundTenant, currentTenant, tenantKey, withoutTenant } from "./tenants/context.ts";
+import { pgTenants } from "./tenants/resolver.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -443,7 +446,9 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
+  eachTenant: EachTenant;
+  boot(): Promise<void>;
+  skillsReady(): Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
@@ -555,6 +560,7 @@ export function buildApp(
   configurePgPooling({
     databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
@@ -627,15 +633,24 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
+  const tenants = eachTenant(pgTenants(pgArtifactMap.pool));
+  const tenantLease: LeaderLease = {
+    async hold(key, fn) {
+      await leaderLease.hold(key, (lost) => {
+        let held = true;
+        void lost.then(() => (held = false));
+        return tenants(async () => held && fn(lost));
+      });
+      return null;
+    },
+  };
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -685,35 +700,37 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const deploymentLayerRefresh = createUntrackedSweeper(() => tenants(() => deploymentLayerStore.hydrate()), 30_000, {
     label: "deployment layer refresh",
   });
-  let skillsReady: Promise<void>;
-  if (config.seedSkills) {
-    const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-          respectArchived: true,
-        });
-      }
-    };
-    skillsReady = Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-    ]).then(() => undefined);
-  } else {
-    skillsReady = deploymentLayerReady.then(
-      () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
-  }
+  const installCatalogs = async (): Promise<void> => {
+    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+    for (const dir of config.pluginSkillDirs) {
+      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
+      await installSeedSkills(skills, {
+        dir,
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+        respectArchived: true,
+      });
+    }
+  };
+  const seededTenants = new Map<string, Promise<void>>();
+  const skillsReady = (): Promise<void> => {
+    const tenant = boundTenant() ?? "";
+    let ready = seededTenants.get(tenant);
+    if (!ready) {
+      ready = Promise.all([
+        config.seedSkills
+          ? installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)))
+          : undefined,
+        deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
+      ]).then(() => undefined);
+      seededTenants.set(tenant, ready);
+    }
+    return ready;
+  };
   const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
   const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
@@ -774,7 +791,7 @@ export function buildApp(
     databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
-    leaderLease,
+    leaderLease: tenantLease,
     createSweeper,
   });
   const memorySessions: { store?: SessionStore } = {};
@@ -1255,9 +1272,10 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
-  if (config.brokerCredentials?.length) {
+  const checkBrokerCredentials = async (): Promise<void> => {
+    if (!config.brokerCredentials?.length) return;
     const reserved = new Set(config.brokerCredentials.map((c) => c.slug));
-    void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
+    await credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
       (stored) => {
         const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
         if (shadowed.length)
@@ -1266,10 +1284,11 @@ export function buildApp(
       (error) =>
         console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
     );
-  }
+  };
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    tenants,
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -1557,7 +1576,7 @@ export function buildApp(
           });
         return result;
       };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return advisoryLock.withLock(tenantKey("session-run-admission"), enqueue);
     },
   };
   const swarms =
@@ -1574,6 +1593,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
+          tenants,
           enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
             if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
@@ -2190,8 +2210,7 @@ export function buildApp(
   const pokeReaper = (): void => {
     if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+    void withoutTenant(() => leaderLease.hold(REAPER_LEASE_KEY, () => reaper.sweep()))
       .catch(swallowAs("wake: reaper poke", null))
       .finally(() => {
         reapInFlight = false;
@@ -2404,7 +2423,7 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock
-      .withLock("session-tree-admission", async () => {
+      .withLock(tenantKey("session-tree-admission"), async () => {
         const settled = await deliverSubagentMail(
           {
             sessions,
@@ -2433,12 +2452,15 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      for (const run of batch)
+        await inTenantOf(run.tenantId, () => returnSessionRun(run)).catch(
+          swallowAs("sessions: recover return", undefined),
+        );
       afterId = batch.at(-1)!.id;
     }
   };
   const approvalDeliverySweeper = createSweeper(
-    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
+    () => tenants(() => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending())),
     30_000,
     {
       label: "approval-deliveries",
@@ -2457,10 +2479,12 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      for (const { runId, tenantId } of await runSignals.pendingRuns()) {
+        await inTenantOf(tenantId, async () => {
+          const run = await runs.get(runId);
+          if (!run || isTerminal(run.status))
+            await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+        });
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
@@ -2580,7 +2604,7 @@ export function buildApp(
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
+  const ingressMaintenance = new Map<string, Promise<void>>();
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
@@ -2608,14 +2632,17 @@ export function buildApp(
     resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
+    tenants,
     sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
+      const tenant = currentTenant();
+      if (!ingressMaintenance.has(tenant))
+        ingressMaintenance.set(
+          tenant,
+          admittedWork
+            .run(() => loopIngress.maintain())
+            .catch(swallowAs("Loop ingress maintenance", undefined))
+            .finally(() => ingressMaintenance.delete(tenant)),
+        );
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
@@ -2649,7 +2676,7 @@ export function buildApp(
           currentScopeMembers,
           sessions,
           resolveRecipient,
-          leaderLease,
+          leaderLease: tenantLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
@@ -2658,7 +2685,7 @@ export function buildApp(
     packs: skillPacks,
     fetcher: skillFetcher,
     reconcile: (id) => app.syncSkillPack(id),
-    leaderLease,
+    leaderLease: tenantLease,
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
@@ -2726,14 +2753,14 @@ export function buildApp(
               }),
             }
           : {}),
-        leaderLease,
+        leaderLease: tenantLease,
       })
     : null;
   const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
   const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
   const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
   const spendSweeper = sessions.refreshSpendRollup
-    ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
+    ? createSweeper(() => tenantLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
         label: "spend-refresh",
         immediate: true,
       })
@@ -2741,7 +2768,7 @@ export function buildApp(
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? createSweeper(
         () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
+          tenantLease.hold("llm-capture:retention", async (lost) => {
             let leaseLost = false;
             void lost.then(() => (leaseLost = true));
             const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
@@ -2755,7 +2782,7 @@ export function buildApp(
       )
     : null;
   const monitorRetentionSweeper = createSweeper(
-    () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
+    () => tenantLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
     { label: "monitor-retention", immediate: true },
   );
@@ -2763,10 +2790,11 @@ export function buildApp(
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-    },
+    () =>
+      tenants(async () => {
+        for (const [id, entry] of await composioReturns.entries())
+          if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+      }),
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
@@ -2779,10 +2807,16 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(
+          () => tenants(() => app.reapIdleDeployments(deployIdleTtlMs)),
+          Math.max(5_000, Math.floor(deployIdleTtlMs / 4)),
+        )
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const deployMaintenanceSweeper = createSweeper(
+    () => tenants(() => app.maintainDeployments()),
+    DEPLOY_MAINTENANCE_INTERVAL_MS,
+  );
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2956,7 +2990,18 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    deploymentLayerReady,
+    eachTenant: tenants,
+    boot: () =>
+      tenants(async () => {
+        await sandboxResources.initialize();
+        await configStore.hydrate?.();
+        await identity.refresh();
+        await refreshCustomProviders();
+        await mcpToolService.refresh();
+        await skillsReady();
+        await checkBrokerCredentials();
+      }),
+    skillsReady,
     deploymentLayerRefresh,
     sessions,
     runs,

@@ -1,6 +1,7 @@
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
 export function createMemoryVectorIndexer(opts: {
@@ -16,13 +17,14 @@ export function createMemoryVectorIndexer(opts: {
   let active: AbortController | undefined;
   let model: string | undefined;
   let dimensions: number | undefined;
-  let afterId: string | undefined;
+  const afterIds = new Map<string, string>();
   let nextProbeAt = 0;
   async function run(): Promise<void> {
     const controller = (active = new AbortController());
     await opts.leaderLease.hold("memory:vector-index", async (lost) => {
       const current = await opts.resolve();
       if (!current) return;
+      const tenant = currentTenant();
       void lost.then(() => controller.abort());
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
       signal.throwIfAborted();
@@ -33,7 +35,7 @@ export function createMemoryVectorIndexer(opts: {
         if (probe.length !== 1) throw new Error("Invalid memory index dimension probe");
         const width = unitVector(probe[0]).length;
         if (width > 16000) throw new Error("Memory embedding exceeds pgvector dimensions");
-        if (model !== embedder.id || dimensions !== width) afterId = undefined;
+        if (model !== embedder.id || dimensions !== width) afterIds.clear();
         model = embedder.id;
         dimensions = width;
         nextProbeAt = now + 10 * 60_000;
@@ -41,9 +43,12 @@ export function createMemoryVectorIndexer(opts: {
       try {
         do {
           signal.throwIfAborted();
-          const facts = await store.missing(embedder.id, 64, dimensions, signal, afterId);
-          afterId = facts.at(-1)?.factId;
-          if (!facts.length) break;
+          const facts = await store.missing(embedder.id, 64, dimensions, signal, afterIds.get(tenant));
+          if (!facts.length) {
+            afterIds.delete(tenant);
+            break;
+          }
+          afterIds.set(tenant, facts.at(-1)!.factId);
           const vectors = await embedder.embed(
             facts.map((fact) => fact.text.slice(0, 8000)),
             signal,
@@ -59,7 +64,7 @@ export function createMemoryVectorIndexer(opts: {
           if (rows.some((row) => row.vector.length !== dimensions)) {
             dimensions = undefined;
             nextProbeAt = 0;
-            afterId = undefined;
+            afterIds.clear();
             throw new Error("Memory embedding dimensions changed during indexing");
           }
           signal.throwIfAborted();

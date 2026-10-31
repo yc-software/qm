@@ -20,6 +20,7 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { tenantKey } from "../tenants/context.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -634,7 +635,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         },
         async open(input) {
           return lock
-            .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
+            .withLock(tenantKey("session-tree-admission"), async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
@@ -734,7 +735,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
         async write(input) {
           return lock
-            .withLock("session-tree-admission", async (): Promise<SessionWriteResult> => {
+            .withLock(tenantKey("session-tree-admission"), async (): Promise<SessionWriteResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();

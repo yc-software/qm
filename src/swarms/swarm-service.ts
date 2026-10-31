@@ -11,6 +11,8 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { eachTenant, type EachTenant } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
@@ -235,6 +237,7 @@ export function createSwarmService(deps: {
   enabled?(actorId: string): Promise<boolean>;
   signals?: Pick<RunSignalStore, "send">;
   defaults?: SwarmSettings;
+  tenants: EachTenant;
 }): SwarmService {
   const enabledFor = deps.enabled ?? (async () => true);
   const { store, sessions, runs } = deps;
@@ -549,8 +552,8 @@ export function createSwarmService(deps: {
   }
 
   let sweeping: Promise<void> | undefined;
-  let selecting: Promise<Swarm[]> | undefined;
-  let afterId: string | undefined;
+  const selecting = new Map<string, Promise<Swarm[]>>();
+  const afterIds = new Map<string, string>();
   const reconciling = {
     resources: new Map<string, Promise<void>>(),
     delivery: new Map<string, Promise<void>>(),
@@ -582,17 +585,21 @@ export function createSwarmService(deps: {
     );
   }
   const sweep = (): Promise<void> => {
-    sweeping ??= (async () => {
-      selecting ??= store.pending(afterId).finally(() => {
-        selecting = undefined;
+    sweeping ??= deps
+      .tenants(async () => {
+        const tenant = currentTenant();
+        const pending =
+          selecting.get(tenant) ?? store.pending(afterIds.get(tenant)).finally(() => selecting.delete(tenant));
+        selecting.set(tenant, pending);
+        const batch = await withTimeout(() => pending, SWARM_LIMITS.reconcileMs, "swarm pending batch");
+        if (batch.length === SWARM_LIMITS.sweepBatch) afterIds.set(tenant, batch.at(-1)!.id);
+        else afterIds.delete(tenant);
+        await reconcileBatch(batch, "resources");
+        await reconcileBatch(batch, "delivery");
+      })
+      .finally(() => {
+        sweeping = undefined;
       });
-      const batch = await withTimeout(() => selecting!, SWARM_LIMITS.reconcileMs, "swarm pending batch");
-      afterId = batch.length === SWARM_LIMITS.sweepBatch ? batch.at(-1)!.id : undefined;
-      await reconcileBatch(batch, "resources");
-      await reconcileBatch(batch, "delivery");
-    })().finally(() => {
-      sweeping = undefined;
-    });
     return sweeping;
   };
   const sweeper = createSweeper(sweep, 2_000, { label: "swarm-outbox", immediate: true });

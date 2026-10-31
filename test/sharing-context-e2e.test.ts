@@ -17,7 +17,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
   await built.config.hydrate?.();
   await built.identity.refresh();
-  await built.deploymentLayerReady;
+  await built.skillsReady();
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();

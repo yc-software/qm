@@ -2,7 +2,9 @@ import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import type { CommandApprovalGrant, PendingApprovalRecord } from "../../src/types.ts";
+import { eachTenant } from "../../src/tenants/claim.ts";
 import { testMap } from "./test-database.ts";
+import { TEST_TENANT } from "./tenant-seed.ts";
 
 export const singleProcessDeps = () => ({
   advisoryLock: createNoopAdvisoryLock(),
@@ -10,4 +12,5 @@ export const singleProcessDeps = () => ({
   approvals: testMap<PendingApprovalRecord>(),
   approvalGrants: testMap<CommandApprovalGrant>(),
   blobTransfer: createMemoryBlobTransferStore(),
+  tenants: eachTenant(async () => [TEST_TENANT]),
 });

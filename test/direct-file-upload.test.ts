@@ -45,6 +45,10 @@ function fixture() {
         (r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed",
       );
     },
+    async completingUploadId(id) {
+      const row = rows.get(id);
+      return row?.state === "completing" ? row.uploadId : null;
+    },
   };
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const calls: Array<{ name: string; input: Record<string, any> }> = [];

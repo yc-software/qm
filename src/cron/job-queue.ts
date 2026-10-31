@@ -3,6 +3,7 @@ import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
+  tenantId?: string;
   cronId: string;
   scheduledAt: number;
   notBefore?: number;
@@ -35,7 +36,7 @@ export function createPgBossCronQueue(
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");
-        return (await pg.pool()).query(text, values);
+        return (await pg.ownerPool()).query(text, values);
       },
     },
   });
@@ -90,7 +91,7 @@ export function createPgBossCronQueue(
       await boss
         .send(FIRE_QUEUE, job, {
           startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),
-          singletonKey: `${job.cronId}:${job.scheduledAt}`,
+          singletonKey: `${job.tenantId ?? ""}:${job.cronId}:${job.scheduledAt}`,
           retryLimit: 0,
         })
         .catch((e: unknown) => {

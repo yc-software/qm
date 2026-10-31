@@ -1,11 +1,11 @@
-import { orgId as configOrgId } from "../config.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
 type AmbientJudgment = {
   id?: number;
-  orgId?: string;
   surface: string;
   container: string;
   decision: AmbientDecisionKind;
@@ -40,8 +40,8 @@ export interface AmbientJudgmentStore {
 const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane: 0 });
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
-  const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "surface-cache/ambient-judgment/0001",
       statements: [
@@ -60,10 +60,20 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
         ON ambient_judgments(org_id, decision)`,
       ],
     },
+    tenantTables("surface-cache/ambient-judgment/0002-tenants", [
+      {
+        table: "ambient_judgments",
+        primaryKey: "id",
+        replacesOrgId: [
+          { name: "ambient_judgments_container_created", columns: "container, created_at DESC" },
+          { name: "ambient_judgments_created", columns: "created_at DESC, id DESC" },
+          { name: "ambient_judgments_decision", columns: "decision" },
+        ],
+      },
+    ]),
   ]);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),
-    orgId: r.org_id as string,
     surface: r.surface as string,
     container: r.container as string,
     decision: r.decision as AmbientDecisionKind,
@@ -79,10 +89,10 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
   return {
     async record(j) {
       await q(
-        `INSERT INTO ambient_judgments(org_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
+        `INSERT INTO ambient_judgments(tenant_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
-          configOrgId(),
+          currentTenant(),
           j.surface,
           j.container,
           j.decision,
@@ -99,8 +109,8 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
     },
     async list(opts) {
       const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const where = ["org_id = $1"];
-      const args: unknown[] = [orgId];
+      const where = ["tenant_id = $1"];
+      const args: unknown[] = [currentTenant()];
       if (opts?.container) {
         args.push(opts.container);
         where.push(`container = $${args.length}`);
@@ -124,19 +134,19 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       }
       args.push(limit);
       const rows = await q(
-        `SELECT id, org_id, surface, container, decision, reason, asked_by, model, latency_ms, ts_from, ts_to, created_at
+        `SELECT id, tenant_id, surface, container, decision, reason, asked_by, model, latency_ms, ts_from, ts_to, created_at
          FROM ambient_judgments WHERE ${where.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT $${args.length}`,
         args,
       );
       return rows.map(row);
     },
     async get(id) {
-      const rows = await q("SELECT * FROM ambient_judgments WHERE org_id = $1 AND id = $2", [orgId, id]);
+      const rows = await q("SELECT * FROM ambient_judgments WHERE tenant_id = $1 AND id = $2", [currentTenant(), id]);
       return rows[0] ? row(rows[0]) : null;
     },
     async counts(opts) {
-      const args: unknown[] = [orgId];
-      let where = "org_id = $1";
+      const args: unknown[] = [currentTenant()];
+      let where = "tenant_id = $1";
       if (opts?.container) {
         args.push(opts.container);
         where += ` AND container = $${args.length}`;

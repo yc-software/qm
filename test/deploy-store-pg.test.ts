@@ -7,6 +7,9 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";

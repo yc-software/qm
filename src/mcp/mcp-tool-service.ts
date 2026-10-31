@@ -14,6 +14,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import type { EachTenant } from "../tenants/claim.ts";
 import type { AddressFetch } from "../util/network.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -173,6 +174,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  tenants?: EachTenant;
   fetch?: AddressFetch;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
@@ -368,9 +370,10 @@ export function createMcpToolService(opts: {
     if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  const timer = setInterval(() => {
+    if (!closed && opts.tenants) void opts.tenants(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
+  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  refreshInBackground();
 
   return {
     toolDefs: () => snapshot,
