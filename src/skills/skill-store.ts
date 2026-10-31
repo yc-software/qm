@@ -2,9 +2,9 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -77,8 +77,8 @@ export interface SkillResolution {
 
 export interface SkillStoreOptions {
   signingSecret?: string;
-  backing?: DurableMap<Skill>;
-  advisoryLock?: AdvisoryLock;
+  backing: DurableMap<Skill>;
+  advisoryLock: AdvisoryLock;
 }
 
 export interface SkillStore {
@@ -167,15 +167,15 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
-export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
-  const skills = opts.backing ?? createMemoryMap<Skill>();
+export function createSkillStore(opts: SkillStoreOptions): SkillStore {
+  const skills = opts.backing;
   const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
     const wanted = new Set<string>(scopes);
     const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
     return rows.filter((skill) => wanted.has(skill.scopeId));
   };
   const secret = opts.signingSecret ?? randomUUID();
-  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
 

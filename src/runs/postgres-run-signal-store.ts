@@ -1,6 +1,5 @@
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 

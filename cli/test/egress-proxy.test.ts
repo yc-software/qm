@@ -22,7 +22,7 @@ const config: QmConfig = {
   plugins: [],
   skills: [],
   imageOverrides: {},
-  env: { core: { HARNESS: "pi", AWS_DEPLOY_IMAGE: "acme-qm-sandbox" } },
+  env: { core: { AWS_DEPLOY_IMAGE: "acme-qm-sandbox" } },
   aws: {
     accountId: "123456789012",
     region: "us-west-2",

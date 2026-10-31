@@ -4,12 +4,12 @@ import { sleep } from "../util/async.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
-  withSharedLock?<T>(key: string, fn: () => Promise<T>): Promise<T>;
-  tryWithLocks?<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
-  tryWithLock?<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
+  withSharedLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
+  tryWithLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
+  tryWithLock<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
 }
 
-function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
+function withMultiLocks(lock: Omit<AdvisoryLock, "tryWithLocks">): AdvisoryLock {
   const multi = new AsyncLocalStorage<{ keys: Set<string>; active: boolean; pending: Set<Promise<unknown>> }>();
   return {
     ...lock,
@@ -37,7 +37,7 @@ function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
                 scope.active = false;
               }
             })
-          : lock.tryWithLock!(unique[index]!, () => acquire(index + 1));
+          : lock.tryWithLock(unique[index]!, () => acquire(index + 1));
       try {
         return await acquire(0);
       } finally {
@@ -60,39 +60,6 @@ export function createNoopAdvisoryLock(): AdvisoryLock {
     },
     async tryWithLock<T>(_key: string, fn: () => Promise<T>): Promise<T | null> {
       return fn();
-    },
-  });
-}
-
-export function createMemoryAdvisoryLock(): AdvisoryLock {
-  const states = new Map<string, { tail: Promise<void>; readers: Set<Promise<void>>; pending: number }>();
-  const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean): Promise<T> => {
-    let state = states.get(key);
-    if (!state) {
-      state = { tail: Promise.resolve(), readers: new Set(), pending: 0 };
-      states.set(key, state);
-    }
-    const done = Promise.withResolvers<void>();
-    const before = shared ? state.tail : Promise.all([state.tail, ...state.readers]);
-    state.pending++;
-    if (shared) state.readers.add(done.promise);
-    else state.tail = done.promise;
-    try {
-      await before;
-      return await fn();
-    } finally {
-      state.readers.delete(done.promise);
-      state.pending--;
-      done.resolve();
-      if (!state.pending) states.delete(key);
-    }
-  };
-  return withMultiLocks({
-    withLock: (key, fn) => run(key, fn, false),
-    withSharedLock: (key, fn) => run(key, fn, true),
-    async tryWithLock(key, fn) {
-      if (states.has(key)) return null;
-      return run(key, fn, false);
     },
   });
 }

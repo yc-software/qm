@@ -20,7 +20,6 @@
       "ADMIN_BASE_PATH": "/admin",
     },
     "core": {
-      "HARNESS": "pi",
       "PI_DETECT_MODEL": "claude-opus-4-8",
       "SNAPSHOT_STORE": "s3",
       "TRANSFER_STORE": "s3",

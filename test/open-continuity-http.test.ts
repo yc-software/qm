@@ -3,19 +3,21 @@ import { test, mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
-import { createMockHarness } from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-mock.module("./support/mock-harness.ts", {
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    createMockHarness: () => {
-      const h = createMockHarness();
-      const run = h.turns.runTurn;
-      h.turns.runTurn = async (turn: HarnessTurnInput) => {
+    createMockAgent: () => {
+      const h = createMockAgent();
+      const run = h.runTurn;
+      h.runTurn = async (turn: AgentTurnInput) => {
         const match = /!proof (\{[^\n]+\})/.exec(turn.input);
         if (!match) return run(turn);
         const command = JSON.parse(match[1]!) as {
@@ -49,7 +51,7 @@ const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const })
 async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
-  await b.identity.hydrate();
+  await b.identity.refresh();
   await b.deploymentLayerReady;
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
@@ -68,6 +70,7 @@ async function fixture(t: TestContext) {
   const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
   await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     scheduler: b.scheduler,
     config: b.config,

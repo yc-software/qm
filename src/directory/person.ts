@@ -59,16 +59,20 @@ export function personKeys(member: RosterPerson | null | undefined, rawId: strin
   return keys;
 }
 
-export async function samePersonInDirectory(
-  directory: { get(principalId: string): Promise<RosterPerson | null> },
-  a: string,
-  b: string,
-): Promise<boolean> {
+type RosterLookup = { get(principalId: string): Promise<RosterPerson | null> };
+
+async function rosterRow(directory: RosterLookup, id: string, label: string): Promise<RosterPerson | null> {
+  const canonical = canonicalPerson(id);
+  const row = await directory.get(canonical).catch(swallowAs(label, null));
+  return row ?? (canonical === id ? null : await directory.get(id).catch(swallowAs(label, null)));
+}
+
+export async function samePersonInDirectory(directory: RosterLookup, a: string, b: string): Promise<boolean> {
   if (samePerson(a, b)) return true;
   if (!personKey(a) || !personKey(b)) return false;
   const [ma, mb] = await Promise.all([
-    directory.get(a).catch(swallowAs("samePerson: directory lookup", null)),
-    directory.get(b).catch(swallowAs("samePerson: directory lookup", null)),
+    rosterRow(directory, a, "samePerson: directory lookup"),
+    rosterRow(directory, b, "samePerson: directory lookup"),
   ]);
   const bKeys = personKeys(mb, b);
   for (const key of personKeys(ma, a)) if (bKeys.has(key)) return true;
@@ -76,10 +80,10 @@ export async function samePersonInDirectory(
 }
 
 export async function samePersonMatcher(
-  directory: { get(principalId: string): Promise<RosterPerson | null> },
+  directory: RosterLookup,
   actorId: string,
 ): Promise<(id: string) => Promise<boolean>> {
-  const row = await directory.get(actorId).catch(swallowAs("directory lookup", null));
+  const row = await rosterRow(directory, actorId, "directory lookup");
   const keys = personKeys(row, actorId);
   return async (id) => {
     if (keys.has(personKey(id))) return true;

@@ -81,8 +81,7 @@ let currentEnvSha = "";
 let currentGitSha = "";
 let handle = "";
 let sandbox: SandboxResolution | null = null;
-let durability = { sessionStore: "memory", runStore: "memory", databaseUrl: "" };
-let harness = "pi";
+let durability = { databaseUrl: "" };
 let watch = true;
 let bootId = "";
 let bootedAt: number | null = null;
@@ -276,8 +275,6 @@ function writeLegacyMeta(booting: boolean): void {
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),
-    session_store: durability.sessionStore,
-    run_store: durability.runStore,
     watch: watch ? "1" : "0",
     slack: slackOn(readBootSpec()) ? "1" : "0",
     web: readBootSpec().web === false ? "0" : "1",
@@ -305,7 +302,6 @@ function persistState(): void {
     envSha: currentEnvSha,
     gitSha: currentGitSha,
     sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : null,
-    harness,
   });
 }
 
@@ -318,11 +314,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  harness = assembled.harness;
-  let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
-  if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
-  if (assembled.codexAuthSource) harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
-  phase("env", "ok", harnessDetail);
+  phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
 
   phase("deps", "start");
   await ensureDeps(
@@ -344,16 +336,16 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   for (const w of sandbox.warnings) phase("sandbox", "warn", w);
   phase("sandbox", "ok", sandbox.detail);
 
-  const { sessionStore, runStore, databaseUrl, adminGrantsSeed, durableAdminPrincipal } = await prepareDurability({
+  const { databaseUrl, adminGrantsSeed, durableAdminPrincipal } = await prepareDurability({
     worktree,
     env: assembled.env,
     liveEnvFile: assembled.liveEnvFile,
     log,
     phase,
   });
-  durability = { sessionStore, runStore, databaseUrl };
+  durability = { databaseUrl };
 
-  completeDevSecuritySecrets(assembled.env, databaseUrl || worktree);
+  completeDevSecuritySecrets(assembled.env, databaseUrl);
   const portalSessionSecret = assembled.env.PORTAL_SESSION_SECRET!;
   let portalDevPrincipal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || "";
   if (!portalDevPrincipal && adminGrantsSeed) portalDevPrincipal = adminGrantsSeed.split(":")[0] ?? "";
@@ -375,8 +367,6 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     web: spec.web,
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
-    sessionStore,
-    runStore,
     databaseUrl,
     adminGrantsSeed,
     coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
@@ -765,11 +755,8 @@ async function statusReport(): Promise<StatusReport> {
     gitSha: currentGitSha,
     sandbox: sandbox ? { backend: sandbox.backend, detail: sandbox.detail } : { backend: "none", detail: "" },
     durability: {
-      sessionStore: durability.sessionStore,
-      runStore: durability.runStore,
       databaseUrl: Boolean(durability.databaseUrl),
     },
-    harness,
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,

@@ -389,8 +389,6 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     Object.assign(out, serviceUrlEnv("core", config.publicUrl, config.services.includes("portal"), brandEnvOf(config)));
     out.PORT = "8080";
     out.DATA_DIR = "/data";
-    out.SESSION_STORE = "postgres";
-    out.RUN_STORE = "postgres";
     const layerSubs = existingLayerSubdirs(ctx);
     if (layerSubs.length) out.DEPLOYMENT_LAYER = "/layer";
     Object.assign(out, ctx.sandboxEnv);

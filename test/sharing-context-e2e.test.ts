@@ -16,7 +16,7 @@ import { sleep } from "../src/util/async.ts";
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
   await built.config.hydrate?.();
-  await built.identity.hydrate();
+  await built.identity.refresh();
   await built.deploymentLayerReady;
   t.after(async () => {
     built.scheduler.stop();
@@ -470,7 +470,7 @@ test("sharing e2e: screening off preserves carried skills without model calls", 
     await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
     "SHARED_SKILL_OK",
   );
-  assert.equal(b.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(b.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {
@@ -714,6 +714,7 @@ test("shared conversations run named credentials on the turn's scratch computer 
     "True True",
   );
   assert.ok(provisions.slice(before).every((key) => !key.startsWith("turn:")));
+  await b.environments.create({ id: "personal:U1", ownerActorId: "U1" });
   await b.environments.attach("channel:C1", "personal:U1", "U1");
   const attached = provisions.length;
   assert.equal(

@@ -103,7 +103,7 @@ test("shared URL propagates for managed and own-app accounts without installatio
 });
 
 test("explicit read tools notify only for human Slack turns, using their original destination", async () => {
-  const { createSurfaceToolDeps } = await import("../src/core/orchestrator/surface-tools.ts");
+  const { createSurfaceToolDeps } = await import("../src/surfaces/surface-tools.ts");
   for (const kind of ["human", "ambient", "automation"] as const) {
     const queries: any[] = [];
     const tools = createSurfaceToolDeps({

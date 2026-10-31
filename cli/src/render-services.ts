@@ -55,8 +55,6 @@ export type RenderWorkload = RenderBuild & {
 export function renderManagedCoreEnv(render: RenderConfig): Record<string, string> {
   return {
     DATA_DIR: "/data",
-    SESSION_STORE: "postgres",
-    RUN_STORE: "postgres",
     WORKSPACE_STORE: "postgres",
     SNAPSHOT_STORE: "s3",
     TRANSFER_STORE: "s3",
@@ -133,7 +131,6 @@ export function renderServiceEnv(
   }
   if (service === "core")
     Object.assign(out, {
-      HARNESS: config.env.core?.HARNESS ?? "pi",
       ...renderManagedCoreEnv(render),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),

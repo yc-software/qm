@@ -54,7 +54,7 @@ export function createPgBossCronQueue(
   return {
     async start(handlers) {
       if (started) return;
-      pg ??= createPgPool(ownerDatabaseUrl(databaseUrl), []);
+      pg ??= createPgPool(ownerDatabaseUrl(databaseUrl));
       try {
         if (!initialized) {
           await boss.start();

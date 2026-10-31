@@ -47,7 +47,7 @@ function deployment(t: TestContext, portal = false) {
   raw.services = portal ? ["core", "web-ui", "portal", "auth", "admin"] : ["core", "web-ui"];
   raw.env = {
     ...(portal ? { auth: { ...raw.env.auth, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } : {}),
-    core: { ...raw.env.core, HARNESS: "pi" },
+    core: { ...raw.env.core },
   };
   delete raw.modelProvider;
   delete raw.secretEnv;
@@ -430,7 +430,6 @@ function cloud(t: TestContext, d: Deployment) {
 
 test("Render validates local inputs before creating provider-managed values", async (t) => {
   const d = deployment(t);
-  d.ctx.config.env.core!.HARNESS = "pi";
   const c = cloud(t, d);
   assert.doesNotMatch(readFileSync(join(d.ctx.configDir, ".env"), "utf8"), /PUBLIC_API_URL|DATABASE_URL/);
   await d.backend.doctor!();

@@ -23,7 +23,6 @@ import {
   listLeases,
   lockDir,
   myLease,
-  readMeta,
   readPidFile,
   releaseSlotLock,
   supervisorAlive,
@@ -303,7 +302,6 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
 function printSuccess(result: BootResult, branch: string): void {
   const ports = slotPorts(result.slot);
   const lock = lockDir(result.slot, store);
-  const meta = readMeta(lock);
   out("");
   const slackLive = result.slackEnabled !== false;
   out(
@@ -314,9 +312,7 @@ function printSuccess(result: BootResult, branch: string): void {
   out(`   branch : ${branch}`);
   if (result.webEnabled !== false)
     out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
-  out(
-    `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
-  );
+  out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   if (result.webEnabled !== false)
     out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);

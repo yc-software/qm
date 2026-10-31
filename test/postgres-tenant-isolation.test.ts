@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas, withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -91,58 +91,62 @@ test("a tenant sees and writes only its own items, even as the table owner", { s
 });
 
 test("items fail closed when no tenant is bound, including on a connection a tenant just used", { skip }, async () => {
-  await asAppRole(async ({ app, sessionId, tenant }) => {
-    await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
-    const pool = await app.pool();
-    const client = await pool.connect();
-    try {
-      await withTenant(tenant, () => client.query(countItems, [sessionId]));
-      await assert.rejects(client.query(countItems, [sessionId]), /No tenant is bound to this transaction/);
-      await assert.rejects(client.query(insertItem, [sessionId, 5]), /No tenant is bound to this transaction/);
-    } finally {
-      client.release();
-    }
-    await assert.rejects(app.q("SELECT count(*) FROM items"), /No tenant is bound to this transaction/);
-  });
+  await withoutTenant(() =>
+    asAppRole(async ({ app, sessionId, tenant }) => {
+      await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
+      const pool = await app.pool();
+      const client = await pool.connect();
+      try {
+        await withTenant(tenant, () => client.query(countItems, [sessionId]));
+        await assert.rejects(client.query(countItems, [sessionId]), /No tenant is bound to this transaction/);
+        await assert.rejects(client.query(insertItem, [sessionId, 5]), /No tenant is bound to this transaction/);
+      } finally {
+        client.release();
+      }
+      await assert.rejects(app.q("SELECT count(*) FROM items"), /No tenant is bound to this transaction/);
+    }),
+  );
 });
 
 test("transactions and queued pool queries keep the tenant of the caller that issued them", { skip }, async () => {
-  await asAppRole(async ({ app, sessionId, tenant }) => {
-    const other = randomUUID();
-    await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
-    const inTransaction = await withTenant(tenant, async () =>
-      withPgTransaction(await app.pool(), async (client) => {
-        await client.query(insertItem, [sessionId, 1]);
-        return (await client.query(countItems, [sessionId])).rows;
-      }),
-    );
-    assert.deepEqual(inTransaction, [{ n: 2 }]);
-    const pool = await app.pool();
-    const callers = [tenant, other, undefined];
-    const counts = await Promise.allSettled(
-      Array.from({ length: 30 }, (_, index) => {
-        const caller = callers[index % 3];
-        const count = () => pool.query(countItems, [sessionId]).then((result) => result.rows[0].n as number);
-        return caller ? withTenant(caller, count) : count();
-      }),
-    );
-    assert.deepEqual(
-      counts.map((outcome) => (outcome.status === "fulfilled" ? outcome.value : "rejected")),
-      counts.map((_, index) => [2, 0, "rejected"][index % 3]),
-    );
-    const client = await pool.connect();
-    try {
-      await withTenant(tenant, () => client.query("BEGIN"));
-      await assert.rejects(
-        withTenant(other, () => client.query(countItems, [sessionId])),
-        /This transaction is bound to another tenant/,
+  await withoutTenant(() =>
+    asAppRole(async ({ app, sessionId, tenant }) => {
+      const other = randomUUID();
+      await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
+      const inTransaction = await withTenant(tenant, async () =>
+        withPgTransaction(await app.pool(), async (client) => {
+          await client.query(insertItem, [sessionId, 1]);
+          return (await client.query(countItems, [sessionId])).rows;
+        }),
       );
-      assert.deepEqual((await withTenant(tenant, () => client.query(countItems, [sessionId]))).rows, [{ n: 2 }]);
-    } finally {
-      await client.query("ROLLBACK");
-      client.release();
-    }
-    const simple = await withTenant(tenant, () => pool.query("SELECT count(*)::int AS n FROM items"));
-    assert.deepEqual(simple.rows, [{ n: 2 }]);
-  });
+      assert.deepEqual(inTransaction, [{ n: 2 }]);
+      const pool = await app.pool();
+      const callers = [tenant, other, undefined];
+      const counts = await Promise.allSettled(
+        Array.from({ length: 30 }, (_, index) => {
+          const caller = callers[index % 3];
+          const count = () => pool.query(countItems, [sessionId]).then((result) => result.rows[0].n as number);
+          return caller ? withTenant(caller, count) : count();
+        }),
+      );
+      assert.deepEqual(
+        counts.map((outcome) => (outcome.status === "fulfilled" ? outcome.value : "rejected")),
+        counts.map((_, index) => [2, 0, "rejected"][index % 3]),
+      );
+      const client = await pool.connect();
+      try {
+        await withTenant(tenant, () => client.query("BEGIN"));
+        await assert.rejects(
+          withTenant(other, () => client.query(countItems, [sessionId])),
+          /This transaction is bound to another tenant/,
+        );
+        assert.deepEqual((await withTenant(tenant, () => client.query(countItems, [sessionId]))).rows, [{ n: 2 }]);
+      } finally {
+        await client.query("ROLLBACK");
+        client.release();
+      }
+      const simple = await withTenant(tenant, () => pool.query("SELECT count(*)::int AS n FROM items"));
+      assert.deepEqual(simple.rows, [{ n: 2 }]);
+    }),
+  );
 });

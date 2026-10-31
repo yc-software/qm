@@ -78,27 +78,32 @@ const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/channel-policy/0001", [
-    `CREATE TABLE IF NOT EXISTS channel_policy(
+  const { q, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/channel-policy/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS channel_policy(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL DEFAULT '', bots JSONB NOT NULL DEFAULT '{}'::jsonb,
         set_by TEXT, updated_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container)
       )`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
-    `CREATE TABLE IF NOT EXISTS channel_policy_history(
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
+        `CREATE TABLE IF NOT EXISTS channel_policy_history(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL, set_by TEXT, session_id TEXT,
         created_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `CREATE INDEX IF NOT EXISTS channel_policy_history_container
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `CREATE INDEX IF NOT EXISTS channel_policy_history_container
         ON channel_policy_history(org_id, container, id DESC)`,
+      ],
+    },
   ]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,
@@ -176,52 +181,5 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
       return rows.map(row);
     },
     close,
-  };
-}
-
-export function createMemoryChannelPolicyStore(): ChannelPolicyStore {
-  const policies = new Map<string, ChannelPolicy>();
-  const history: ChannelPolicyRevision[] = [];
-  return {
-    async get(container) {
-      return policies.get(container) ?? null;
-    },
-    async set(container, orders, opts) {
-      const existing = policies.get(container);
-      if (opts?.expectedOrders !== undefined && existing?.orders !== opts.expectedOrders)
-        throw new Error("Channel guidance changed; read it and retry the edit.");
-      const now = Date.now();
-      const ambientEnabled =
-        opts?.ambientEnabled === undefined ? existing?.ambientEnabled : (opts.ambientEnabled ?? undefined);
-      const p: ChannelPolicy = {
-        container,
-        orders: orders ?? existing?.orders ?? "",
-        bots: opts?.bots ?? existing?.bots ?? {},
-        ...(ambientEnabled !== undefined ? { ambientEnabled } : {}),
-        ...(opts?.setBy ? { setBy: opts.setBy } : {}),
-        updatedAt: now,
-      };
-      policies.set(container, p);
-      history.push({
-        container,
-        orders: p.orders,
-        bots: p.bots,
-        ...(p.ambientEnabled !== undefined ? { ambientEnabled: p.ambientEnabled } : {}),
-        ...(opts?.setBy ? { setBy: opts.setBy } : {}),
-        ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
-        createdAt: now,
-      });
-      return p;
-    },
-    async history(container, limit = HISTORY_DEFAULT_LIMIT) {
-      return history
-        .filter((r) => r.container === container)
-        .slice(-limit)
-        .reverse();
-    },
-    async list() {
-      return [...policies.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-    },
-    async close() {},
   };
 }

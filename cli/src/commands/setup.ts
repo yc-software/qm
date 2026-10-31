@@ -1,4 +1,3 @@
-import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
@@ -16,8 +15,7 @@ import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
 import {
   computedSecrets,
   emailSecretNames,
-  MINT_JWK,
-  MINT_LOCALLY,
+  mintLocalSecret,
   serviceSecretValue,
   type ComputedSecret,
 } from "../secrets.ts";
@@ -35,10 +33,6 @@ export function adminGrantEmails(adminGrants: string | undefined): string {
     })
     .filter((principal) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(principal))
     .join(",");
-}
-
-export function mintSigningJwk(): string {
-  return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
 }
 
 const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
@@ -275,14 +269,9 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
       note(`  ${secret.description}`);
       for (const line of playbookFor(secret.name, config)) note(`  ${dim(line)}`);
 
-      if (secret.generate === MINT_LOCALLY) {
-        collected.set(secret.name, randomBytes(32).toString("hex"));
-        ok(`  generated locally\n`);
-        continue;
-      }
-
-      if (secret.generate === MINT_JWK) {
-        collected.set(secret.name, mintSigningJwk());
+      const minted = mintLocalSecret(secret);
+      if (minted) {
+        collected.set(secret.name, minted);
         ok(`  generated locally\n`);
         continue;
       }

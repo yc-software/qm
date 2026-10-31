@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import type { Webhook } from "../types.ts";
+import type { Webhook } from "../triggers/types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 
 export interface VerifierInput {

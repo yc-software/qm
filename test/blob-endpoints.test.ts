@@ -68,3 +68,67 @@ test("GET /v1/blobs/:id is 404 for an unknown id", async () => {
     await s.close();
   }
 });
+
+function startWithDeadline(deadlineMs: number): { base: string; close: () => Promise<void> } {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
+  const server = createInsecureTestServer(built.app, {
+    blobTransfer: built.blobTransfer,
+    requestBodyDeadlineMs: deadlineMs,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
+function slowBody(chunks: Buffer[], gapMs: number): ReadableStream<Uint8Array> {
+  let i = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      if (i > 0) await new Promise((r) => setTimeout(r, gapMs));
+      if (i >= chunks.length) return controller.close();
+      controller.enqueue(chunks[i++]!);
+    },
+  });
+}
+
+test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the default body deadline", async () => {
+  const s = startWithDeadline(100);
+  try {
+    const chunks = Array.from({ length: 6 }, (_, n) => Buffer.alloc(64 * 1024, n));
+    const whole = Buffer.concat(chunks);
+    const up = await fetch(`${s.base}/v1/blobs`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream", "x-content-sha256": sha(whole) },
+      body: slowBody(chunks, 60),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    assert.equal(
+      up.status,
+      200,
+      "a slow but progressing attachment upload must not be cut off at the default deadline",
+    );
+    const { sizeBytes } = (await up.json()) as { sizeBytes: number };
+    assert.equal(sizeBytes, whole.length);
+  } finally {
+    await s.close();
+  }
+});
+
+test("other routes still enforce the default body deadline", async () => {
+  const s = startWithDeadline(100);
+  try {
+    const chunks = Array.from({ length: 6 }, () => Buffer.from('{"x":1}'.padEnd(64, " ")));
+    const res = await fetch(`${s.base}/v1/sessions/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: slowBody(chunks, 60),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" }).catch((e: unknown) => e);
+    assert.ok(
+      res instanceof Error || (res as Response).status >= 400,
+      "a body still trickling in past the default deadline is refused",
+    );
+  } finally {
+    await s.close();
+  }
+});

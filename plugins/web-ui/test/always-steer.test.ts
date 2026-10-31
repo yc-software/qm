@@ -70,20 +70,16 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       contextWindow: 100_000,
       maxTokens: 4096,
     };
-    const seed = (harness: string): void => {
-      invalidateRuntimeConfigs();
-      seedRuntimeConfig("personal:tester", {
-        scopeId: "personal:tester",
-        approvedHarnesses: [harness],
-        modelsByHarness: { [harness]: ["alpha"] },
-        modelCatalog: { alpha: model },
-        orgDefault: { harnessId: harness, modelId: "alpha", revision: 1 },
-        effective: { harnessId: harness, modelId: "alpha" },
-        scopeOverride: null,
-        upgradeAvailable: false,
-      });
-    };
-    seed("pi");
+    invalidateRuntimeConfigs();
+    seedRuntimeConfig("personal:tester", {
+      scopeId: "personal:tester",
+      models: ["alpha"],
+      modelCatalog: { alpha: model },
+      orgDefault: { modelId: "alpha", revision: 1 },
+      effective: { modelId: "alpha" },
+      scopeOverride: null,
+      upgradeAvailable: false,
+    });
     const threadRef = "web:tester:always-steer";
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agentState = { isStreaming: true, model, messages: [] as unknown[] };
@@ -161,22 +157,6 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       );
       assert.equal(seenTags.has("Queued"), false);
       reset();
-    });
-
-    await t.test("a harness that cannot steer falls back to the queue", async () => {
-      seed("codex");
-      ctx.chat.state.threadRef = "web:tester:codex-thread";
-      assert.equal(composer!.currentModelOption()?.harnessId, "codex");
-      try {
-        await send("third");
-        assert.deepEqual(signalled, []);
-        assert.deepEqual(chips(), ["Queued"]);
-      } finally {
-        seed("pi");
-        composer!.setQueuedRuns(ctx.chat.state.threadRef!, []);
-        ctx.chat.state.threadRef = threadRef;
-        reset();
-      }
     });
 
     await t.test("a run that has no live handle falls back to the queue", async () => {

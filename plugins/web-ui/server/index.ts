@@ -131,7 +131,6 @@ async function brandIndexHtml(html: string): Promise<string> {
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
-const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
@@ -140,7 +139,6 @@ function threadKey(user: string, threadRef: string): string {
 }
 
 function forgetRun(runId: string): void {
-  runOwners.delete(runId);
   const key = runThreadKeys.get(runId);
   if (key) {
     const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
@@ -151,11 +149,10 @@ function forgetRun(runId: string): void {
 }
 
 function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runOwners.size > 5000) {
-    const oldest = runOwners.keys().next().value;
+  if (runThreadKeys.size > 5000) {
+    const oldest = runThreadKeys.keys().next().value;
     if (oldest !== undefined) forgetRun(oldest);
   }
-  runOwners.set(runId, user);
   const key = threadKey(user, threadRef);
   runThreadKeys.set(runId, key);
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
@@ -2629,7 +2626,6 @@ const apiRoutes: readonly WebRoute[] = [
       let text = "";
       let threadRef = `${ownPrefix}default`;
       let model: string | undefined;
-      let harness: string | undefined;
       let thinkingLevel: string | undefined;
       let fastMode: boolean | undefined;
       let timezone: string | undefined;
@@ -2672,7 +2668,6 @@ const apiRoutes: readonly WebRoute[] = [
         if (typeof p.scopeId === "string" && p.scopeId) scope = p.scopeId;
         if (typeof p.channelName === "string" && p.channelName.trim()) channelName = p.channelName.trim().slice(0, 200);
         if (typeof p.model === "string" && p.model) model = p.model;
-        if (typeof p.harness === "string") harness = p.harness;
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
         if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
@@ -2705,7 +2700,6 @@ const apiRoutes: readonly WebRoute[] = [
 
       const turn = {
         ...(await webTurnBase(req, user, resolved.conversation, threadRef, text)),
-        ...(harness ? { harness } : {}),
         ...(model ? { model } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),

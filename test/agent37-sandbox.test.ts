@@ -10,11 +10,11 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;
@@ -122,7 +122,7 @@ test("instance is reused across provisions and warm start is reported", async ()
 });
 
 test("a shared advisory lock prevents duplicate instances across core replicas", async () => {
-  const advisoryLock = createMemoryAdvisoryLock();
+  const advisoryLock = testAdvisoryLock();
   const [a, b] = await Promise.all([
     make({ advisoryLock }).provision(layers),
     make({ advisoryLock }).provision(layers),

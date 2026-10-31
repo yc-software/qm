@@ -12,11 +12,14 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import type { DirectoryStore } from "../src/directory/directory-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeIdentity() {
   return {
@@ -49,18 +52,18 @@ function service(
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
-    directory?: ReturnType<typeof createDirectoryStore>;
+    directory?: DirectoryStore;
     resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
-  const loops = createLoopStore();
-  const crons = createCronStore();
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
-  const grants = overrides?.grants ?? createShipGrantStore();
+  const loops = createLoopStore(testMap());
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
+  const grants = overrides?.grants ?? createShipGrantStore(testMap());
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
-  const idempotency = createIdempotencyStore();
+  const idempotency = createIdempotencyStore(testMap());
   const fire = createLoopFireService({
     admittedWork: overrides?.admittedWork,
     crons,
@@ -358,7 +361,7 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 });
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
-  const directory = createDirectoryStore();
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
     { principalId: "josh", displayName: "Josh", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
@@ -374,7 +377,10 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
 });
 
 test("a stale-loop ping still reaches the owner's web conversation", async () => {
-  const s = service(HAPPY, { directory: createDirectoryStore(), resolveRecipient: async () => ({ kind: "none" }) });
+  const s = service(HAPPY, {
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    resolveRecipient: async () => ({ kind: "none" }),
+  });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
     destination: { type: "web", target: "web:josh:t1", audienceScopeId: base.ownerScopeId },
@@ -435,7 +441,7 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
 });
 
 test("an auto grant ships the matching slice without a person", async () => {
-  const grants = createShipGrantStore();
+  const grants = createShipGrantStore(testMap());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(
@@ -454,7 +460,7 @@ test("an auto grant ships the matching slice without a person", async () => {
 });
 
 test("revoking an auto grant during work leaves the output held", async () => {
-  const grants = createShipGrantStore();
+  const grants = createShipGrantStore(testMap());
   let grantId = "";
   const s = service(
     (req) => {
@@ -481,7 +487,7 @@ test("revoking an auto grant during work leaves the output held", async () => {
 });
 
 test("a policy version bump during work leaves the output held", async () => {
-  const grants = createShipGrantStore();
+  const grants = createShipGrantStore(testMap());
   let loopId = "";
   const s = service(
     (req) => {
@@ -508,7 +514,7 @@ test("a policy version bump during work leaves the output held", async () => {
 });
 
 test("a stale grant does not auto-ship after a semantic policy change", async () => {
-  const grants = createShipGrantStore();
+  const grants = createShipGrantStore(testMap());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(
@@ -1051,14 +1057,12 @@ test("inbox followup runtime and attachments affect only that item turn", async 
   const attachments = [{ name: "notes.txt", mimetype: "text/plain", blobId: "staged-file", sizeBytes: 12 }];
   await s.fire.followUp(loop, item!, "Use these notes", "josh", {
     model: "gpt-5.6-terra",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     attachments,
   });
   const turn = s.turns[0]!;
   assert.equal(turn.model, "gpt-5.6-terra");
-  assert.equal(turn.harness, "pi");
   assert.equal(turn.thinkingLevel, "high");
   assert.equal(turn.fastMode, true);
   assert.deepEqual(turn.attachments, attachments);
@@ -1068,7 +1072,6 @@ test("inbox followup runtime and attachments affect only that item turn", async 
   await s.fire.fire(loop.id, "scheduled-after-followup");
   for (const scheduled of s.turns.slice(1)) {
     assert.equal(scheduled.model, undefined);
-    assert.equal(scheduled.harness, undefined);
     assert.equal(scheduled.fastMode, undefined);
     assert.equal(scheduled.thinkingLevel, undefined);
     assert.equal(scheduled.attachments, undefined);

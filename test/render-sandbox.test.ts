@@ -9,8 +9,6 @@ import {
   type StoredRenderCleanup,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
@@ -21,6 +19,7 @@ import { AWS_CLI_ENSURE } from "../src/sandbox/aws-cli.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
+import { testMap, testAdvisoryLock } from "./support/test-database.ts";
 
 function setup(
   t: TestContext,
@@ -32,10 +31,10 @@ function setup(
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
   const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
-  const store = createMemoryMap<StoredRenderSandbox>();
-  const scratchStore = createMemoryMap<StoredRenderScratch>();
-  const cleanupStore = createMemoryMap<StoredRenderCleanup>();
-  const advisoryLock = createMemoryAdvisoryLock();
+  const store = testMap<StoredRenderSandbox>();
+  const scratchStore = testMap<StoredRenderScratch>();
+  const cleanupStore = testMap<StoredRenderCleanup>();
+  const advisoryLock = testAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
   const make = (checkpointIntervalMs = -1) =>
     createRenderSandbox(workspace, {
@@ -342,8 +341,8 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const { make, fake, layers, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
-    records: createMemoryMap(),
-    defaults: createMemoryMap(),
+    records: testMap(),
+    defaults: testMap(),
     backends: { render },
     defaultBackend: "render",
     lock: advisoryLock,

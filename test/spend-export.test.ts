@@ -5,13 +5,15 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
@@ -22,9 +24,11 @@ const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
 function fixture(options: { token?: string | null; sessions?: SessionStore | null } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const sessions = options.sessions === null ? undefined : (options.sessions ?? createMemorySessionStore());
+  const sessions =
+    options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
   const token = options.token === undefined ? exportToken : options.token;
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
@@ -52,7 +56,7 @@ test("spend export: absent unless a token is configured", async () => {
 });
 
 test("spend export: missing, wrong, admin-identity and source-signed requests are refused before any spend read", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   let reads = 0;
   store.spendRollup = async () => {
     reads++;
@@ -189,7 +193,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
 });
 
 test("spend export: passes through the saved report's freshness", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const asOf = Date.UTC(2026, 0, 1);
   store.spendReport = async (range) => ({ rows: await store.spendRollup(range), asOf });
   const s = fixture({ sessions: store });
