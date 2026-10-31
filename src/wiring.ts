@@ -1764,7 +1764,7 @@ export function buildApp(
     },
   };
   pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/versions/0001",
+    id: "durable-map/0000-versions",
     statements: ["CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)"],
   });
   pgArtifactMap?.pool.registerMigration({
