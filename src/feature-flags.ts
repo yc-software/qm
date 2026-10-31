@@ -62,7 +62,7 @@ const FEATURE_FLAGS_MIGRATION = typedTableMigration({
   backfill: {
     feature_name: "id",
     enabled_scopes: "ARRAY(SELECT jsonb_array_elements_text(json->'enabledScopes'))",
-    updated_at: "(json->>'updatedAt')::bigint",
+    updated_at: "round((json->>'updatedAt')::numeric)::bigint",
     updated_by: "json->>'updatedBy'",
   },
   where:

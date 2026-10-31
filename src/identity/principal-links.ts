@@ -35,7 +35,7 @@ const PRINCIPAL_LINKS_MIGRATION = typedTableMigration({
     canonical_id: "json->>'canonicalId'",
     evidence: "json->>'evidence'",
     linked_by: "json->>'linkedBy'",
-    created_at: "(json->>'createdAt')::bigint",
+    created_at: "round((json->>'createdAt')::numeric)::bigint",
   },
   where: `json->>'canonicalId' IS NOT NULL AND json->>'evidence' IS NOT NULL
     AND json->>'linkedBy' IS NOT NULL AND json->>'createdAt' IS NOT NULL`,

@@ -63,7 +63,7 @@ export const SKILLS_MIGRATION = typedTableMigration({
     signature: "COALESCE(json->>'signature', '')",
     status: `CASE WHEN json->>'status' IN (${STATUSES}) THEN json->>'status' ELSE 'draft' END`,
     created_by: "COALESCE(json->>'createdBy', '')",
-    version: "COALESCE((json->>'version')::integer, 1)",
+    version: "COALESCE(round((json->>'version')::numeric)::integer, 1)",
     granted_capabilities: TEXT_ARRAY("json->'grantedCapabilities'"),
     approvals: TEXT_ARRAY("json->'approvals'"),
     created_at: MILLIS("createdAt"),

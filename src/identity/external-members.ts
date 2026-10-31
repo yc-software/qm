@@ -49,12 +49,12 @@ const EXTERNAL_MEMBERS_MIGRATION = typedTableMigration({
   backfill: {
     email: "id",
     role: "json->>'role'",
-    expires_at: "(json->>'expiresAt')::bigint",
+    expires_at: "round((json->>'expiresAt')::numeric)::bigint",
     kind: "json->>'kind'",
     invite_id: "json->>'inviteId'",
     invited_by: "json->>'invitedBy'",
-    created_at: "(json->>'createdAt')::bigint",
-    updated_at: "(json->>'updatedAt')::bigint",
+    created_at: "round((json->>'createdAt')::numeric)::bigint",
+    updated_at: "round((json->>'updatedAt')::numeric)::bigint",
   },
   where: `json->>'role' IN ('member', 'org_admin') AND (json->>'kind' IS NULL OR json->>'kind' = 'teammate')
     AND json->>'invitedBy' IS NOT NULL AND json->>'createdAt' IS NOT NULL AND json->>'updatedAt' IS NOT NULL`,

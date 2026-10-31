@@ -29,7 +29,7 @@ const IDEMPOTENCY_MIGRATION = typedTableMigration({
   table: "idempotency",
   columns: ["key TEXT NOT NULL", "committed_at BIGINT NOT NULL"],
   primaryKey: ["key"],
-  backfill: { key: "id", committed_at: "(json->>'at')::bigint" },
+  backfill: { key: "id", committed_at: "round((json->>'at')::numeric)::bigint" },
   where: "json->>'at' IS NOT NULL",
   indexes: ["CREATE INDEX idempotency_by_committed_at ON idempotency(tenant_id, committed_at)"],
 });

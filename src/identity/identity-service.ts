@@ -36,7 +36,7 @@ const DEACTIVATED_PRINCIPALS_MIGRATION = typedTableMigration({
   columns: ["principal_id TEXT NOT NULL", "source TEXT NOT NULL", "at BIGINT NOT NULL"],
   constraints: ["CHECK (source IN ('manual', 'directory-sync'))"],
   primaryKey: ["principal_id"],
-  backfill: { principal_id: "id", source: "json->>'source'", at: "(json->>'at')::bigint" },
+  backfill: { principal_id: "id", source: "json->>'source'", at: "round((json->>'at')::numeric)::bigint" },
   where: "json->>'source' IN ('manual', 'directory-sync') AND json->>'at' IS NOT NULL",
 });
 
