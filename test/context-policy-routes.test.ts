@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { getContextPolicy, setContextPolicy } from "../src/api/routes/context-policy.ts";
-import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
+import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -25,10 +26,14 @@ function makeCtx(over: {
   url?: string;
   body?: unknown;
   contexts?: string[];
-  store?: ReturnType<typeof createMemoryChannelPolicyStore>;
-}): { ctx: ApiCtx; out: { status: number; body: unknown }; store: ReturnType<typeof createMemoryChannelPolicyStore> } {
+  store?: ReturnType<typeof createPostgresChannelPolicyStore>;
+}): {
+  ctx: ApiCtx;
+  out: { status: number; body: unknown };
+  store: ReturnType<typeof createPostgresChannelPolicyStore>;
+} {
   const { res, out } = fakeRes();
-  const store = over.store ?? createMemoryChannelPolicyStore();
+  const store = over.store ?? createPostgresChannelPolicyStore(testDatabaseUrl());
   const audits: unknown[] = [];
   const ctx = {
     res,
@@ -106,7 +111,7 @@ test("context policy write validates the ledger, persists, and audits", async ()
 });
 
 test("ambientEnabled round-trips through the member route and rejects non-booleans", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   const off = makeCtx({
     contexts: ["channel:C5"],
     store,
@@ -146,7 +151,7 @@ test("ambientEnabled round-trips through the member route and rejects non-boolea
 });
 
 test("a stale baseUpdatedAt bounces instead of reverting a concurrent edit", async () => {
-  const store = createMemoryChannelPolicyStore();
+  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
   await store.set("C3", "v1", { setBy: "agent" });
   const current = await store.get("C3");
   const stale = makeCtx({

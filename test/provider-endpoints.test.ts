@@ -67,8 +67,9 @@ tenantTest("a cloned model follows its template's override", () => {
   assert.equal(clone?.id, "claude-opus-5");
 });
 
-tenantTest("tenant settings parse provider base URLs and feed the child harness env", async () => {
-  const settings = testTenantSettings({
+test("loadConfig parses provider base URLs", () => {
+  const config = loadConfig({
+    ...BASE_ENV,
     ANTHROPIC_BASE_URL: "https://a.example.com/",
     OPENAI_BASE_URL: "https://o.example.com/v1",
   });
@@ -76,19 +77,14 @@ tenantTest("tenant settings parse provider base URLs and feed the child harness 
     anthropic: "https://a.example.com",
     openai: "https://o.example.com/v1",
   });
-  const models = createTenantModels({ settings, keychain: () => undefined, anthropicKey: async () => null });
-  assert.equal((await models.claudeAuthEnv()).ANTHROPIC_BASE_URL, "https://a.example.com");
 });
 
 test("tenant settings reject an invalid provider base URL", () => {
   assert.throws(() => parseTenantSettings({ OPENAI_BASE_URL: "nope" }, "pi"));
 });
 
-tenantTest("tenant settings leave child envs untouched when no override is set", async () => {
-  const settings = testTenantSettings();
-  assert.deepEqual((await settings.get()).providerBaseUrls, {});
-  const models = createTenantModels({ settings, keychain: () => undefined, anthropicKey: async () => null });
-  assert.equal((await models.claudeAuthEnv()).ANTHROPIC_BASE_URL, undefined);
+test("loadConfig leaves provider base URLs empty when no override is set", () => {
+  assert.deepEqual(loadConfig(BASE_ENV).providerBaseUrls, {});
 });
 
 test("tenant settings accept a complete model gateway and reject partial or malformed routing", () => {

@@ -26,9 +26,9 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -195,7 +195,7 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
-test("the deployment turn wall-clock reaches the harness and a per-turn cap replaces it", async (t) => {
+test("the deployment turn wall-clock reaches the agent and a per-turn cap replaces it", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp({ turnWallClockMs: 120_000 });
   assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:120000");
@@ -913,7 +913,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     if (opts) captures.push(opts);
     return realProvision(layers, opts);
   };
-  const directory = createDirectoryStore();
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },
@@ -940,7 +940,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     const out = await runTrigger(
       {
         deliveries,
-        idempotency: createIdempotencyStore(createMemoryMap()),
+        idempotency: createIdempotencyStore(testMap()),
         identity,
         run: (req) => app.turn(req),
         directory,
@@ -2174,7 +2174,7 @@ test("an unprompted thread question gets a reply (turn detection chimes in)", as
   );
 });
 
-test("priorTurns are routed to the harness as structured roled turns (PR3)", async () => {
+test("priorTurns are routed to the agent as structured roled turns (PR3)", async () => {
   const { app } = freshApp();
   const res = await app.turn(
     channel("!priorturns", {
@@ -2192,7 +2192,7 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
   assert.match(res.reply ?? "", /assistant: let me check the dashboard/);
 });
 
-test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
+test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the agent", async () => {
   const { app, sessions } = freshApp();
   const entryBatches: number[] = [];
   const appendMany = sessions.appendMany.bind(sessions);
@@ -2784,6 +2784,25 @@ test("an admin-removed grant mode is refused, filters the offer, and leaves the 
   assert.equal(once.status, "ok", "the pending approval survives the refused mode and still resolves once");
 });
 
+test("a grant mode disabled after an approval was issued is filtered from the re-presented card", async () => {
+  const { app, config } = freshApp();
+  const org = scopeId("org", "default-org");
+
+  const first = await app.turn(dm("!run git push --force origin main"));
+  assert.equal(first.status, "pending_approval");
+  const pending = first.pendingApprovals![0]!;
+  assert.equal(pending.grantModes, undefined, "every mode is on, so the card offers every button");
+
+  await config.setApprovalGrantModes(org, { session: false, always: true });
+  const refused = await app.turn(
+    dm("!run git push --force origin main", {
+      approval: { requestId: pending.requestId, approved: true, scope: "session" },
+    }),
+  );
+  assert.equal(refused.status, "pending_approval");
+  assert.deepEqual(refused.pendingApprovals?.[0]?.grantModes, { session: false, always: true });
+});
+
 test("disabling a grant mode suspends existing grants until it is re-enabled", async () => {
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
@@ -2931,11 +2950,11 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   const flagged = (await risky.auditLog.events()).find((event) => event.action === "security_posture.flagged");
   assert.match(flagged?.detail ?? "", /"source"/);
   assert.equal(
-    risky.modelGateway.audit().some((call) => call.model === "mock"),
+    risky.modelCalls.some((call) => call.model === "mock"),
     false,
     "flagged input never reaches the main agent before approval",
   );
-  const screensBeforeApproval = risky.modelGateway.audit().filter((call) => call.model === "mock-security").length;
+  const screensBeforeApproval = risky.modelCalls.filter((call) => call.model === "mock-security").length;
   const approved = await risky.app.turn({
     ...request,
     approval: { requestId: blocked.pendingApprovals![0]!.requestId, approved: true },
@@ -2973,10 +2992,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     ],
     "each approved repeat of the same flagged message is its own visible turn",
   );
-  assert.equal(
-    risky.modelGateway.audit().filter((call) => call.model === "mock-security").length,
-    screensBeforeApproval,
-  );
+  assert.equal(risky.modelCalls.filter((call) => call.model === "mock-security").length, screensBeforeApproval);
 
   const deniedApp = freshApp();
   const deniedPending = await deniedApp.app.turn(request);
@@ -2993,7 +3009,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     "denied flagged input never enters the session log",
   );
   assert.equal(
-    deniedApp.modelGateway.audit().some((call) => call.model === "mock"),
+    deniedApp.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -3059,7 +3075,7 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   });
   assert.equal(crossedAgain.status, "pending_approval", "repeated cross-approval still refuses to release B");
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock"),
+    built.modelCalls.some((call) => call.model === "mock"),
     false,
     "neither flagged input reached the main agent",
   );
@@ -3099,7 +3115,7 @@ test("Auto screens only the external event envelope and records classifier usage
   assert.ok(classifier, "the security classifier request is persisted beside the turn");
   assert.match(JSON.stringify(classifier.promptEnvelope), /customer asked for a refund/);
   assert.doesNotMatch(JSON.stringify(classifier.promptEnvelope), /provenance-ok/);
-  assert.ok(built.modelGateway.audit().some((rec) => rec.model === "mock-security"));
+  assert.ok(built.modelCalls.some((rec) => rec.model === "mock-security"));
 });
 
 test("an enforced proxy outage fails open and audits the configured provider", async () => {
@@ -3124,7 +3140,7 @@ test("an enforced proxy outage fails open and audits the configured provider", a
     (entry) => entry.action === "security_screen.classify" && entry.status === "error",
   );
   assert.equal(event?.resource, "example-screen");
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Auto fails open on vision attachments it cannot screen, flagging them unscreened to the model", async () => {
@@ -3379,7 +3395,7 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   assert.match(result.reply ?? "", /ambient-ok/);
   assert.equal(provisioning.provisioned, 1);
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock-security"),
+    built.modelCalls.some((call) => call.model === "mock-security"),
     false,
   );
 });
@@ -3439,7 +3455,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
   );
   assert.equal(result.status, "pending_approval");
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock"),
+    built.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -3451,7 +3467,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
   );
   assert.equal(headerResult.status, "pending_approval");
   assert.equal(
-    header.modelGateway.audit().some((call) => call.model === "mock"),
+    header.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -4012,7 +4028,7 @@ test("a terminal turn failure is recorded durably and never replays to the model
   );
 });
 
-test("a failure before the harness records the user message back-fills it — no orphan error in the transcript", async () => {
+test("a failure before the agent records the user message back-fills it — no orphan error in the transcript", async () => {
   const { app } = freshApp();
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
@@ -4204,8 +4220,8 @@ test("denying a quarantine release upholds the block", async () => {
   assert.match(rerun.reply ?? "", /quarantined by the security screen/, "the payload stays out of context");
 });
 
-test("a turn carries its surface name to the harness, DM or not", async () => {
-  const built = await keyedApp();
+test("a turn carries its surface name to the agent, DM or not", async () => {
+  const built = freshApp();
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "web" }))).reply, "surface:web");
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "slack" }))).reply, "surface:slack");
 });
@@ -4264,7 +4280,7 @@ test("default screening does not invoke a model for inbound data or tool results
   assert.match(result.reply ?? "", /screening-default-ok/);
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.egress?.denyPrivateNetworks, true);
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 for (const combined of [true, false]) {
@@ -4411,7 +4427,7 @@ test("enforced screening flags strict-posture inbound data before model executio
   });
   const first = await built.app.turn(request);
   assert.equal(first.status, "pending_approval");
-  assert.equal(built.modelGateway.audit().length, 0);
+  assert.equal(built.modelCalls.length, 0);
   const approved = await built.app.turn({
     ...request,
     approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },

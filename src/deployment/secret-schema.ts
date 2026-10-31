@@ -3,7 +3,6 @@ import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 type SecretGate =
   | "production"
   | "background-work-control"
-  | "postgres"
   | "render"
   | "porter-deploy"
   | "e2b-deploy"
@@ -26,7 +25,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   {
     name: "DATABASE_URL",
-    requiredWhen: ["production", "postgres"],
+    requiredWhen: "production",
     reason:
       "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
   },
@@ -41,7 +40,6 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
-  postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   render: (env) => env.DEPLOY_PROVIDER === "render",
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "e2b-deploy": (env) => env.DEPLOY_PROVIDER === "e2b",

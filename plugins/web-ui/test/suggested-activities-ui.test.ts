@@ -37,8 +37,7 @@ test("activity selection fills and persists an editable draft without sending or
       assert.ok(String(input).startsWith("/api/runtime-config"), "activity selection must not submit a turn");
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: ["test-model"] },
+        models: ["test-model"],
         modelCatalog: {
           "test-model": {
             id: "test-model",
@@ -54,8 +53,8 @@ test("activity selection fills and persists an editable draft without sending or
             maxTokens: 1000,
           },
         },
-        effective: { harnessId: "pi", modelId: "test-model" },
-        orgDefault: { harnessId: "pi", modelId: "test-model", revision: 1 },
+        effective: { modelId: "test-model" },
+        orgDefault: { modelId: "test-model", revision: 1 },
         scopeOverride: null,
         upgradeAvailable: false,
         fastModeModelIds: [],

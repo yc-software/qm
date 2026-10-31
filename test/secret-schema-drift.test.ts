@@ -2,11 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
-import { MODEL_PROVIDERS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
 import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
-import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
-import { tenantImportKeys } from "../src/tenants/settings-import.ts";
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(
@@ -77,6 +74,29 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   );
 });
 
+test("a declared base model provider is enforced at boot, not just at deploy time", () => {
+  for (const [provider, key] of [
+    ["anthropic", "ANTHROPIC_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["openrouter", "OPENROUTER_API_KEY"],
+  ] as const) {
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider } as NodeJS.ProcessEnv), [key]);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "real-key" } as NodeJS.ProcessEnv), []);
+    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "replace-me" } as NodeJS.ProcessEnv), [
+      key,
+    ]);
+  }
+  assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
+});
+
+test("an OpenAI base model needs an API key unless a company ChatGPT login serves it", () => {
+  assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: "openai" } as NodeJS.ProcessEnv), ["OPENAI_API_KEY"]);
+  assert.deepEqual(
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
+    [],
+  );
+});
+
 test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {
   const names = CORE_SECRET_SPECS.map((spec) => spec.name);
   assert.deepEqual(
@@ -84,16 +104,6 @@ test("each core secret is named by exactly one spec, so boot failures never repe
     [],
     "give a secret answering to several rules one spec with a requiredWhen list",
   );
-});
-
-test("the CLI's provider/harness table matches what the core model registry can actually serve", () => {
-  for (const provider of MODEL_PROVIDERS) {
-    assert.deepEqual(
-      HARNESS_IDS.filter((harness) => defaultModelForProvider(harness, provider) !== undefined).sort(),
-      [...MODEL_PROVIDER_HARNESSES[provider]].sort(),
-      `MODEL_PROVIDER_HARNESSES.${provider} has drifted from the registry`,
-    );
-  }
 });
 
 test("production rejects weak encryption key material for managed credentials", () => {

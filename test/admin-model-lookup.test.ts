@@ -1,18 +1,16 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { serverDeps } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { buildApp, serverDeps } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
-  const config = testConfig();
-  const built = buildApp(config);
-  await built.modelCredentials.set("anthropic", "test-only", "admin");
+  const config = testConfig({ anthropicApiKey: "test-only" });
+  const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
@@ -32,10 +30,9 @@ test("admin lookup recognizes an existing model without asking for a clone templ
 
 import { lookupModel } from "../src/model/model-lookup.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { setModelOverlays } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { afterEach } from "node:test";
 
 enterTenant(TEST_TENANT);
@@ -43,12 +40,12 @@ afterEach(() => {
   setProviderBaseUrls(TEST_TENANT, {});
   setModelOverlays([]);
 });
-async function credentials() {
-  const store = createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: "test-key" });
-  await store.set("openai", "test-openai-key", "admin");
-  await store.set("anthropic", "test-anthropic-key", "admin");
-  return store;
-}
+const credentials = () =>
+  createModelCredentialStore({
+    backing: testMap(),
+    keyMaterial: "test-key",
+    fallback: { openai: "test-openai-key", anthropic: "test-anthropic-key" },
+  });
 
 test("exact catalog lookup returns documented values without network or other-model guesses", async () => {
   const result = await lookupModel({ provider: "anthropic", id: "claude-opus-4-6" }, await credentials(), async () => {
@@ -134,14 +131,17 @@ test("bad responses degrade to manual fields with no partial or mismatched metad
 
 test("live lookup is admin-only and builtin enable verifies without a duplicate or changed default", async () => {
   const upstream = await verificationUpstream();
-  const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, {
-    tenantSettings: testTenantSettings({ ANTHROPIC_BASE_URL: upstream.url }),
-    modelCredentialFetch: async () => {
-      throw Error("lookup must not fetch for builtin");
-    },
+  const config = testConfig({
+    anthropicApiKey: "lookup-key",
+    providerBaseUrls: { anthropic: upstream.url },
   });
-  await built.modelCredentials.set("anthropic", "lookup-key", "admin");
+  const built = stopAtEnd(
+    buildApp(config, {
+      modelCredentialFetch: async () => {
+        throw Error("lookup must not fetch for builtin");
+      },
+    }),
+  );
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -173,8 +173,8 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
       base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
       { headers },
     );
-    const body = (await runtime.json()) as { modelsByHarness: { pi: string[] } };
-    assert.ok(body.modelsByHarness.pi.includes("claude-opus-4-6"));
+    const body = (await runtime.json()) as { models: string[] };
+    assert.ok(body.models.includes("claude-opus-4-6"));
   } finally {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
@@ -182,11 +182,10 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
   }
 });
 
-test("enable rechecks serving credentials and harness policy before mutating the picker", async () => {
+test("enable rechecks serving credentials before mutating the picker", async () => {
   let onProbe: () => Promise<void> = async () => {};
-  const config = testConfig({ harness: "pi" });
-  const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
-  await built.modelCredentials.set("anthropic", "test-key", "admin");
+  const config = testConfig({ anthropicApiKey: "test-key" });
+  const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
@@ -199,15 +198,6 @@ test("enable rechecks serving credentials and harness policy before mutating the
     };
     assert.equal((await enable()).status, 422);
     assert.equal(await built.config.getWebuiModelsDurable(org), null);
-    onProbe = async () => {
-      await built.config.setApprovedHarnesses(["claude"]);
-    };
-    assert.equal((await enable()).status, 422);
-    assert.equal(await built.config.getWebuiModelsDurable(org), null);
-    onProbe = async () => {
-      throw Error("must not call");
-    };
-    assert.equal((await enable()).status, 400);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
@@ -226,6 +216,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
+import { testMap } from "./support/test-database.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

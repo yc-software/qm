@@ -28,7 +28,7 @@ const SCHEMA = [
 ];
 
 export function createPostgresBrokerSessions(connectionString: string): BrokerSessionStore {
-  const pg = createPgPool(connectionString, "auth/broker-sessions/0001", SCHEMA);
+  const pg = createPgPool(connectionString, [{ id: "auth/broker-sessions/0001", statements: SCHEMA }]);
   const session = (row: Record<string, unknown>): BrokerSession => ({
     email: String(row.email),
     authTime: Math.floor(new Date(String(row.authenticated_at)).getTime() / 1000),

@@ -27,7 +27,6 @@ export interface TenantSettings {
   readonly piDetectModel?: string;
   readonly piTitleModel?: string;
   readonly piJudgeModel?: string;
-  readonly claudeModel?: string;
   readonly providerBaseUrls: ProviderBaseUrls;
   readonly modelGateway?: ModelGatewayTransportConfig;
   readonly codexAuthCredential?: string;
@@ -106,7 +105,7 @@ export function parseModelGateway(values: TenantSettingValues): ModelGatewayTran
   };
 }
 
-function parseModelProvider(value: string | undefined, harness: string): ModelProvider | undefined {
+function parseModelProvider(value: string | undefined): ModelProvider | undefined {
   const declared = value?.trim();
   if (!declared) return undefined;
   if (!isModelProvider(declared)) {
@@ -114,9 +113,9 @@ function parseModelProvider(value: string | undefined, harness: string): ModelPr
       `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
     );
   }
-  if (!defaultModelForProvider(harness, declared)) {
+  if (!defaultModelForProvider(declared)) {
     throw new Error(
-      `MODEL_PROVIDER=${declared} cannot serve a base model on HARNESS=${harness} — that harness runs no ${declared} model, so every turn would be refused.`,
+      `MODEL_PROVIDER=${declared} cannot serve a base model — no ${declared} model is available, so every turn would be refused.`,
     );
   }
   return declared;
@@ -183,7 +182,7 @@ function optional<K extends string, V>(key: K, value: V | undefined): Partial<Re
   return value === undefined || value === "" ? {} : ({ [key]: value } as Record<K, V>);
 }
 
-export function parseTenantSettings(values: TenantSettingValues, harness: string): TenantSettings {
+export function parseTenantSettings(values: TenantSettingValues): TenantSettings {
   const securityScreenClassifier = parseChoice("SECURITY_SCREEN_CLASSIFIER", values.SECURITY_SCREEN_CLASSIFIER, [
     "model",
     "proxy",
@@ -191,12 +190,11 @@ export function parseTenantSettings(values: TenantSettingValues, harness: string
   const domain = values.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase();
   return {
     values: Object.freeze({ ...values }),
-    ...optional("modelProvider", parseModelProvider(values.MODEL_PROVIDER, harness)),
+    ...optional("modelProvider", parseModelProvider(values.MODEL_PROVIDER)),
     ...optional("piModel", values.PI_MODEL),
     ...optional("piDetectModel", values.PI_DETECT_MODEL),
     ...optional("piTitleModel", values.PI_TITLE_MODEL),
     ...optional("piJudgeModel", values.PI_JUDGE_MODEL),
-    ...optional("claudeModel", values.CLAUDE_MODEL),
     providerBaseUrls: parseProviderBaseUrls(values),
     ...optional("modelGateway", parseModelGateway(values)),
     ...optional("codexAuthCredential", values.CODEX_AUTH_CREDENTIAL?.trim()),

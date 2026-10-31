@@ -3,7 +3,6 @@ import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
@@ -19,9 +18,8 @@ import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { SessionShareStore } from "../sessions/session-share.ts";
 import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { ModelProvider } from "../model/pi-models.ts";
-import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
-import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
@@ -84,9 +82,11 @@ import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
+import { type ProviderKeys } from "../model/model-runtime.ts";
 
 export interface ServerDeps {
   tenantSettings?: TenantSettingsStore;
+  requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: () => Promise<ModelGatewayTransportConfig | undefined>;
@@ -144,8 +144,7 @@ export interface ServerDeps {
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
-  harnessId?: string;
-  harnessCarriedModelAuth?: () => Promise<ModelProvider | undefined>;
+  companySubscriptionAuth?: () => Promise<ModelProvider | undefined>;
   admin?: AdminService;
   inviteMailer?: Mailer;
   slackAllowFrom?: readonly string[];

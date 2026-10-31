@@ -20,8 +20,7 @@ import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeAgent37 } from "./support/fake-agent37.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -65,9 +64,9 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   const fake = installFakeSprites();
   try {
     const sandbox = createSpritesSandbox(workspace(), {
-      initializationStore: createMemoryMap(),
-      advisoryLock: createMemoryAdvisoryLock(),
-      token: async () => "test",
+      initializationStore: testMap(),
+      advisoryLock: testAdvisoryLock(),
+      token: "test",
       baseUrl: fake.baseUrl,
     });
     await sandbox.provision([{ scopeId: "scope", mountPath: "", mode: "rw" }]);
@@ -98,9 +97,8 @@ for (const [name, create, resource] of [
     let exists = true;
     const sandbox = create(workspace(), {
       ...singleProcessDeps(),
-      store: createMemoryMap(),
-      token: async () => "test",
-      apiKey: async () => "test",
+      store: testMap(),
+      token: "test",
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
         calls.push(`${init?.method} ${path}`);
@@ -152,10 +150,9 @@ for (const [name, create, install] of [
   test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
     const fake = install();
     try {
-      const credential = async () => "test-token";
-      const options = { ...singleProcessDeps(), token: credential, apiKey: credential, fetchImpl: fake.fetchImpl };
-      const a = create(workspace(), { ...options, store: createMemoryMap() });
-      const b = create(workspace(), { ...options, store: createMemoryMap() });
+      const options = { ...singleProcessDeps(), token: "test-token", fetchImpl: fake.fetchImpl };
+      const a = create(workspace(), { ...options, store: testMap() });
+      const b = create(workspace(), { ...options, store: testMap() });
       const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
       await a.provision(layers);
       await b.destroyScope!("replaced");

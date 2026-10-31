@@ -19,12 +19,6 @@ export interface ModelGatewayTransportConfig {
   refresh?: () => Promise<void>;
 }
 
-/**
- * Validate and normalize a provider base URL. Returns the normalized
- * origin+path with trailing slashes removed. Throws on anything that
- * would silently misroute requests: non-HTTP(S) schemes, embedded
- * credentials, query strings, and fragments.
- */
 export function parseProviderBaseUrl(envName: string, value: string): string {
   const trimmed = value.trim().replace(/\/+$/, "");
   let url: URL;

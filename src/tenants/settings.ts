@@ -4,7 +4,9 @@ import { createSweeper } from "../util/sweeper.ts";
 import { currentTenant, onFirstBind, withTenant } from "./context.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
-import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
+import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
+import { SESSION_SCHEMA } from "../sessions/session-schema.ts";
+import { TENANT, TENANT_MIGRATIONS, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
 
 export type { TenantSettings } from "./settings-parse.ts";
 
@@ -14,7 +16,6 @@ export const TENANT_SETTING_KEYS = [
   "PI_DETECT_MODEL",
   "PI_TITLE_MODEL",
   "PI_JUDGE_MODEL",
-  "CLAUDE_MODEL",
   "ANTHROPIC_BASE_URL",
   "OPENAI_BASE_URL",
   "OPENROUTER_BASE_URL",
@@ -157,14 +158,14 @@ interface TenantSettingsBacking {
 }
 
 function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
-  db.registerMigration(TENANCY_BASE);
-  db.registerMigration(TENANT_SETTINGS_MIGRATION);
+  for (const migration of [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, ...TENANT_MIGRATIONS, TENANT_SETTINGS_MIGRATION])
+    db.registerMigration(migration);
   const sealKey = tenantSettingsKey(keyMaterial);
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
     tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
     async read(tenant) {
-      const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = qm_tenant_id()`);
+      const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = ${TENANT}`);
       const values: TenantSettingValues = {};
       if (!row) return values;
       for (const key of TENANT_SETTING_KEYS) {
@@ -184,23 +185,10 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
       });
       const names = keys.map(tenantSettingColumn);
       await db.q(
-        `INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (qm_tenant_id(), ${names.map((_, i) => `$${i + 1}`).join(", ")})
+        `INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (${TENANT}, ${names.map((_, i) => `$${i + 1}`).join(", ")})
          ON CONFLICT (tenant_id) DO UPDATE SET ${names.map((name) => `${name} = EXCLUDED.${name}`).join(", ")}, updated_at = now()`,
         params,
       );
-    },
-  };
-}
-
-function memoryBacking(initial: Readonly<Record<string, TenantSettingValues>> = {}): TenantSettingsBacking {
-  const rows = new Map<string, TenantSettingValues>(
-    Object.entries(initial).map(([tenant, values]) => [tenant, { ...values }]),
-  );
-  return {
-    tenants: async () => [...rows.keys()],
-    read: async (tenant) => ({ ...rows.get(tenant) }),
-    async write(tenant, changes) {
-      rows.set(tenant, applyChanges(rows.get(tenant) ?? {}, changes));
     },
   };
 }
@@ -227,13 +215,11 @@ export interface TenantSettingsStore {
 }
 
 export interface TenantSettingsStoreOptions {
-  db?: PgPool;
-  keyMaterial?: string | Buffer;
-  harness: string;
+  db: PgPool;
+  keyMaterial: string | Buffer;
   cacheMs?: number;
   now?: () => number;
   onLoad?: (tenant: string, settings: TenantSettings) => void;
-  initial?: Readonly<Record<string, TenantSettingValues>>;
 }
 
 export class TenantSettingsNotLoadedError extends Error {
@@ -244,8 +230,7 @@ export class TenantSettingsNotLoadedError extends Error {
 }
 
 export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): TenantSettingsStore {
-  if (opts.db && !opts.keyMaterial) throw new Error("Tenant settings need CONNECTOR_SECRET_KEY to seal secrets");
-  const backing = opts.db ? postgresBacking(opts.db, opts.keyMaterial!) : memoryBacking(opts.initial);
+  const backing = postgresBacking(opts.db, opts.keyMaterial);
   const cacheMs = opts.cacheMs ?? 10_000;
   const now = opts.now ?? Date.now;
   const loading = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
@@ -255,7 +240,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
     const hit = loading.get(tenant);
     if (hit && now() - hit.at < cacheMs) return hit.settings;
     const settings = withTenant(tenant, () =>
-      backing.read(tenant).then((values) => parseTenantSettings(values, opts.harness)),
+      backing.read(tenant).then((values) => parseTenantSettings(values)),
     );
     const entry = { at: now(), settings };
     loading.set(tenant, entry);
@@ -316,7 +301,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
         if (change === undefined) continue;
         normalized[key] = change === null || change.trim() === "" ? null : change.trim();
       }
-      parseTenantSettings(applyChanges(await backing.read(tenant), normalized), opts.harness);
+      parseTenantSettings(applyChanges(await backing.read(tenant), normalized));
       await backing.write(tenant, normalized);
       loading.delete(tenant);
       return load(tenant, true);

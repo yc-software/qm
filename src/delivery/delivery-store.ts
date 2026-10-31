@@ -46,6 +46,7 @@ export interface DeliveryStore {
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
+  fail(id: string, reason: string, at: number): Promise<Delivery | null>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;
   get(id: string): Promise<Delivery | null>;
@@ -84,7 +85,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       const existingId = byKey.get(input.idempotencyKey);
       if (existingId) {
         const existing = deliveries.get(existingId)!;
-        if (existing.deliveredAt === null && existing.expiredAt !== undefined) {
+        if (existing.deliveredAt === null && existing.expiredAt !== undefined && !existing.failedReason) {
           existing.destination = input.destination;
           existing.text = input.text;
           if (input.attachments?.length) existing.attachments = input.attachments;
@@ -150,6 +151,14 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         d.deliverLatencyMs = Math.max(0, at - d.createdAt);
         if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
       }
+    },
+    async fail(id, reason, at) {
+      const d = deliveries.get(id);
+      if (!d || d.deliveredAt !== null || d.expiredAt !== undefined) return null;
+      d.expiredAt = at;
+      d.failedReason = reason;
+      claimedUntil.delete(id);
+      return d;
     },
     async ackByKey(idempotencyKey, at) {
       const existingId = byKey.get(idempotencyKey);

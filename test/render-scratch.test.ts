@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { createMemoryAdvisoryLock, createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import {
   createRenderSandbox,
   type StoredRenderSandbox,
@@ -15,6 +15,7 @@ import {
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
+import { testMap, testAdvisoryLock } from "./support/test-database.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "render-scratch-"));
@@ -29,10 +30,10 @@ function setup(t: TestContext) {
     }
   });
   const workspace = createLocalWorkspaceStore(dir);
-  const store = createMemoryMap<StoredRenderSandbox>();
-  const scratchStore = createMemoryMap<StoredRenderScratch>();
-  const cleanupStore = createMemoryMap<StoredRenderCleanup>();
-  const advisoryLock = createMemoryAdvisoryLock();
+  const store = testMap<StoredRenderSandbox>();
+  const scratchStore = testMap<StoredRenderScratch>();
+  const cleanupStore = testMap<StoredRenderCleanup>();
+  const advisoryLock = testAdvisoryLock();
   const errors: string[] = [];
   const make = (backing = scratchStore, lock = advisoryLock) =>
     createRenderSandbox(workspace, {
@@ -89,10 +90,11 @@ test("Another Render core can execute and destroy a saved disposable handle", as
 
 test("Another Render core cannot reuse an active disposable allocation", async (t) => {
   const { make, fake } = setup(t);
-  const [a, b] = await Promise.allSettled([make().provision([], options), make().provision([], options)]);
-  assert.equal(a.status, "fulfilled");
-  assert.equal(b.status, "rejected");
-  if (b.status === "rejected") assert.match(b.reason.message, /in use by another core/);
+  const results = await Promise.allSettled([make().provision([], options), make().provision([], options)]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0]!.reason.message, /in use by another core/);
   assert.equal(fake.sandboxes.size, 1);
   assert.deepEqual(fake.terminated, []);
 });

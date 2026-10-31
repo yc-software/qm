@@ -344,9 +344,11 @@ export async function runSessionSmoke(
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const loaded = loadConfig();
+  if (!loaded.databaseUrl || !loaded.connectorSecretKey)
+    throw new Error("postdeploy smoke needs DATABASE_URL and CONNECTOR_SECRET_KEY to read the tenant's settings");
   const settings = createTenantSettingsStore({
-    harness: loaded.harness,
-    ...(loaded.databaseUrl ? { db: createPgPool(loaded.databaseUrl), keyMaterial: loaded.connectorSecretKey } : {}),
+    db: createPgPool(loaded.databaseUrl),
+    keyMaterial: loaded.connectorSecretKey,
   });
   const tenant = await settings.onlyTenant();
   if (!tenant) throw new Error("postdeploy smoke needs exactly one tenant in this database");

@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import {
+  companySubscriptionAuth,
+  baseModelProviders,
+  loadConfig,
+  configuredModel,
+  providerKeysPresent,
+  CONFIG_DEFAULTS,
+} from "../src/config.ts";
+import { boolEnv, numEnv } from "../src/util/env.ts";
+import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -10,47 +19,15 @@ const productionEnv = {
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
+  SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
-  SESSION_STORE: "postgres",
 } as const;
-
-test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
-  assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
-  const config = loadConfig({
-    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
-    SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
-  });
-  assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
-  assert.deepEqual(config.spritesSandbox.egressProxyAdditionalUrls, [
-    "https://old.example.com",
-    "https://next.example.com",
-  ]);
-});
 
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenCompression, true);
   assert.throws(() => loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "invalid" }), /CAPABILITY_TOKEN_COMPRESSION/);
-});
-
-test("store kinds default to memory and accept postgres", () => {
-  const def = loadConfig({});
-  assert.equal(def.sessionStore, "memory");
-  assert.equal(def.runStore, "memory");
-
-  const pg = loadConfig({ SESSION_STORE: "postgres", DATABASE_URL: "postgres://test" });
-  assert.equal(pg.sessionStore, "postgres");
-  assert.equal(pg.runStore, "postgres", "runStore mirrors sessionStore when unset");
-
-  assert.equal(
-    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "memory", DATABASE_URL: "postgres://test" }).runStore,
-    "memory",
-  );
-  assert.throws(
-    () => loadConfig({ SESSION_STORE: "postgres" }),
-    /missing or insecure required core secrets: DATABASE_URL/,
-  );
 });
 
 test("deploy provider defaults to docker and rejects unknown values", () => {
@@ -67,21 +44,8 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
-test("the security screen timeout defaults to 15 seconds and accepts only positive integers", () => {
-  assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
-  assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
-  for (const timeout of ["0", "-1", "1.5", "2147483648"]) {
-    assert.throws(
-      () => loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: timeout }),
-      /SECURITY_SCREEN_TIMEOUT_MS must be a positive integer/,
-    );
-  }
-});
-
-test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
-  assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ ARTIFACT_STORE: "sqlite" }), /ARTIFACT_STORE=sqlite is no longer supported/);
+test("QM_CORE_CONTAINER reaches the local sandbox settings", () => {
+  assert.equal(loadConfig({ QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer, "qm-acme-core");
 });
 
 test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
@@ -102,7 +66,7 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   });
   assert.equal(off.seedSkills, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.piCaptureRequests, false);
+  assert.equal(off.captureLlmRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
@@ -112,7 +76,7 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(on.reachExecEnabled, true);
 
   const unset = loadConfig({});
-  assert.equal(unset.piCaptureRequests, true, "capture defaults on");
+  assert.equal(unset.captureLlmRequests, true, "capture defaults on");
 });
 
 test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
@@ -126,6 +90,7 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
   assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
@@ -139,29 +104,13 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
-test("legacy per-scope sandbox defaults are parsed with the shared backend parser", () => {
-  assert.deepEqual(loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":" superserve "}' }).legacySandboxScopeDefaults, {
-    channel: "superserve",
-  });
-  assert.throws(
-    () => loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":"bogus"}' }),
-    /SANDBOX_SCOPE_BACKENDS.channel="bogus" is not recognized/,
-  );
-});
-
-test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+test("production refuses to boot without Postgres", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
     () => loadConfig(noDatabase),
     /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
   );
-  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
-  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
-    /production requires SESSION_STORE=postgres/,
-  );
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(() => loadConfig(productionEnv));
   assert.doesNotThrow(
     () => loadConfig({ SANDBOX_BACKEND: "local" }),
     "a single-process dev instance needs no durable store",
@@ -251,24 +200,11 @@ test("plugin skill directories can be overridden or disabled", () => {
   assert.deepEqual(loadConfig({}).pluginSkillDirs, [resolve("plugins/onboarding/skills")]);
 });
 
-test("HARNESS=pi can boot before an admin configures a model provider", () => {
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "pi" }));
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
-  assert.doesNotThrow(() => loadConfig({ HARNESS: " pi " }));
-  assert.doesNotThrow(() => loadConfig({ HARNESS: " pi ", ANTHROPIC_API_KEY: "sk-ant" }));
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi" }));
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
-});
-
-test("HARNESS accepts only the remaining harnesses", () => {
-  for (const harness of ["codex", " opencode ", "mock"])
-    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use pi or claude/);
-  assert.equal(loadConfig({ HARNESS: "pi" }).harness, "pi");
-  assert.equal(loadConfig({}).harness, "pi");
-});
-
-test("HARNESS=claude uses native Claude authentication and does not require an Anthropic key", () => {
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "claude" }));
+test("the server can boot before an admin configures a model provider", () => {
+  assert.doesNotThrow(() => loadConfig({}));
+  assert.doesNotThrow(() => loadConfig({ ANTHROPIC_API_KEY: "sk-ant" }));
+  assert.doesNotThrow(() => loadConfig(productionEnv));
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
 test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
@@ -281,31 +217,6 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   for (const value of ["0", "7", " 42 ", String(Number.MAX_SAFE_INTEGER)]) {
     assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, Number(value));
   }
-});
-
-test("the sandbox backend and provider keys are not read from the environment", () => {
-  const env = {
-    SANDBOX_BACKEND: "sprites",
-    SANDBOX_SECONDARY_BACKEND: "smolmachines",
-    SPRITES_TOKEN: "sprites-env-token",
-    MODAL_TOKEN_ID: "modal-env-id",
-    MODAL_TOKEN_SECRET: "modal-env-secret",
-    SUPERSERVE_API_KEY: "ss_live_k",
-    E2B_API_KEY: "e2b-env-key",
-  };
-  const config = loadConfig(env);
-  assert.ok(!("sandboxBackend" in config));
-  assert.ok(!("sandboxSecondaryBackend" in config));
-  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k", "e2b-env-key"])
-    assert.ok(!JSON.stringify(config).includes(value), value);
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
-  assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
-  assert.equal(
-    loadConfig({ SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ", SUPERSERVE_CONFIG_GENERATION: "7" }).superserveSandbox
-      .template,
-    "qm-agent-1.0.0",
-  );
-  assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: "later" }), /SUPERSERVE_CONFIG_GENERATION/);
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -416,9 +327,13 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("a Porter token locates the API and shares the deploy provider's token", () => {
-  assert.throws(() => loadConfig({ PORTER_DEPLOY_API_TOKEN: "tok" }), /PORTER_DEPLOY_PROJECT_ID/);
+test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
+  assert.throws(
+    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
+    /PORTER_DEPLOY_PROJECT_ID/,
+  );
   const inCluster = loadConfig({
+    SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
@@ -545,28 +460,6 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("retired brain environment does not configure a runtime integration and warns once", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  let config;
-  try {
-    config = loadConfig({
-      BRAIN: "mcp",
-      BRAIN_MCP_URL: "https://unused.invalid",
-      BRAIN_RO_CLIENT_ID: "retired",
-      BRAIN_RO_CLIENT_SECRET: "retired",
-    });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual(config, loadConfig({}));
-  const retired = warnings.filter((w) => w.includes("retired and ignored"));
-  assert.equal(retired.length, 1);
-  assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
-  assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
-});
-
 test("Modal native retention and interval configuration are parsed into Config", () => {
   const config = loadConfig({
     MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
@@ -574,24 +467,6 @@ test("Modal native retention and interval configuration are parsed into Config",
   });
   assert.equal(config.modalSandbox.nativeSnapshotIntervalSec, 60);
   assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
-});
-
-test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
-  const config = loadConfig({
-    SMOLMACHINES_TOKEN: "smk_test",
-    SMOLMACHINES_AUTOSTOP_SEC: "900",
-    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
-    SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
-    SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
-  });
-  assert.equal(config.smolmachinesSandbox.autoStopSec, 900);
-  assert.equal(config.smolmachinesSandbox.egressProxyUrl, "https://proxy.example.com");
-  assert.equal(config.smolmachinesSandbox.snapshotS3Bucket, "qm-home-snapshots");
-  assert.equal(config.smolmachinesSandbox.snapshotIntervalSec, 300);
-  const bare = loadConfig({ SMOLMACHINES_TOKEN: "smk_test" });
-  assert.equal(bare.smolmachinesSandbox.autoStopSec, undefined);
-  assert.equal(bare.smolmachinesSandbox.snapshotS3Bucket, undefined);
-  assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
 });
 
 test("suggestion generation defaults on and can be explicitly disabled", () => {
@@ -719,4 +594,45 @@ test("Render app publishing needs a complete source, project, and environment", 
     /requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA/,
   );
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
+});
+
+test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
+  assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
+  const config = loadConfig({
+    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
+  });
+  assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
+  assert.deepEqual(config.spritesSandbox.egressProxyAdditionalUrls, [
+    "https://old.example.com",
+    "https://next.example.com",
+  ]);
+});
+
+test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
+  const config = loadConfig({
+    SMOLMACHINES_AUTOSTOP_SEC: "900",
+    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
+    SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
+    SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
+  });
+  assert.equal(config.smolmachinesSandbox.autoStopSec, 900);
+  assert.equal(config.smolmachinesSandbox.egressProxyUrl, "https://proxy.example.com");
+  assert.equal(config.smolmachinesSandbox.snapshotS3Bucket, "qm-home-snapshots");
+  assert.equal(config.smolmachinesSandbox.snapshotIntervalSec, 300);
+  const bare = loadConfig({});
+  assert.equal(bare.smolmachinesSandbox.autoStopSec, undefined);
+  assert.equal(bare.smolmachinesSandbox.snapshotS3Bucket, undefined);
+  assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
+});
+
+test("the security screen timeout defaults to 15 seconds and accepts only positive integers", () => {
+  assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
+  assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
+  for (const timeout of ["0", "-1", "1.5", "2147483648"]) {
+    assert.throws(
+      () => loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: timeout }),
+      /SECURITY_SCREEN_TIMEOUT_MS must be a positive integer/,
+    );
+  }
 });

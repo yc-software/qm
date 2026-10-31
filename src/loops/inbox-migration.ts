@@ -1,6 +1,6 @@
 import { adapterForItem } from "./sources/index.ts";
 import { DECISION_LEASE_MS } from "./item-ledger.ts";
-import type { Loop } from "../types.ts";
+import type { Loop } from "./types.ts";
 import type { LoopServiceDeps } from "../api/routes/loops.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import { uiStateId } from "../surfaces/ui-state.ts";
@@ -97,20 +97,15 @@ export async function migrateInbox(
   legacy: Loop,
   defaults: Loop[],
 ): Promise<boolean> {
-  let run = () => migrateInboxLocked(deps, preferences, legacy, defaults);
+  const run = () => migrateInboxLocked(deps, preferences, legacy, defaults);
   if (deps.lock) {
-    const lock = deps.lock;
     const loops = await Promise.all([legacy, ...defaults].map(async (loop) => (await deps.store.get(loop.id)) ?? loop));
     const keys = loops.flatMap((loop) => [
       `loop-lifecycle:${loop.id}`,
       `loop-intake:${loop.id}`,
       ...(loop.cronId ? [`cron-lifecycle:${loop.cronId}`] : []),
     ]);
-    if (lock.tryWithLocks) return (await lock.tryWithLocks(keys, run)) ?? false;
-    for (const key of keys.sort().reverse()) {
-      const next = run;
-      run = async () => (lock.tryWithLock ? ((await lock.tryWithLock(key, next)) ?? false) : lock.withLock(key, next));
-    }
+    return (await deps.lock.tryWithLocks(keys, run)) ?? false;
   }
   return run();
 }

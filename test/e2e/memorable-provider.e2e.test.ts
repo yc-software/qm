@@ -70,7 +70,6 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
     const built = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "memorable-e2e-")),
-        harness: "pi",
         memoryProviderConfig,
       }),
       { tenantSettings: testTenantSettings(process.env.PI_MODEL ? { PI_MODEL: process.env.PI_MODEL } : {}) },

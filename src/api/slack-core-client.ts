@@ -21,15 +21,8 @@ import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type {
-  Delivery,
-  PendingApproval,
-  ScopeId,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  TurnRequest,
-  TurnResult,
-} from "../types.ts";
+import type { Delivery, PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
@@ -43,8 +36,8 @@ import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
@@ -112,6 +105,7 @@ export interface SlackCoreClient {
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
+  failDelivery(id: string, reason: string): Promise<void>;
 
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
@@ -215,7 +209,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
+        resolveRuntimeChoice(deps.config, orgScope, scope, deps.runtimeFallback),
         resolveBranding(deps.config, orgScope),
       ]);
       return {
@@ -466,6 +460,19 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         category: "delivery",
         code: "delivery_undeliverable",
         message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
+        scopeLabel: "slack:deliveries" as ScopeId,
+      });
+    },
+
+    async failDelivery(id, reason) {
+      const failed = await deps.app.failDelivery(id, reason);
+      if (!failed) return;
+      deps.errors?.record({
+        category: "delivery",
+        code: "delivery_failed",
+        message:
+          `delivery ${id} to ${failed.destination.type} ${failed.destination.target} was refused permanently (${reason}) — ` +
+          `dropped, not retried${failed.destination.commandApprovalId ? `; approval ${failed.destination.commandApprovalId} never reached its requester` : ""}`,
         scopeLabel: "slack:deliveries" as ScopeId,
       });
     },

@@ -7,18 +7,20 @@ import { createToolContext, type ToolContextDeps } from "../src/tools/primitives
 import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
+import { type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type ConversationKind, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const orgScope = scopeId("org", ORG);
 const internal = (id: string): Principal => ({ id, type: "internal" });
 
 function svc() {
-  const deployStore: DeployStore = createDeployStore();
-  const acl: AclStore = createAclStore();
+  const deployStore: DeployStore = createDeployStore(testDeployBackings());
+  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy: DeployService = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -106,7 +108,7 @@ const channel = (
 
 test("D1: a channel publish is owned by personal:<initiator>, channel recorded as origin", async () => {
   const { deploy, deployStore, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   const r = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
@@ -119,7 +121,7 @@ test("D1: a channel publish is owned by personal:<initiator>, channel recorded a
 
 test("D1: owner always reaches their own app; canManage recognizes the owner acting from the channel", async () => {
   const { deploy, deployStore, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
@@ -136,7 +138,7 @@ test("D1: owner always reaches their own app; canManage recognizes the owner act
 
 test("D1: a member acting in the creation channel may manage the app (recover/re-share)", async () => {
   const { deploy, deployStore, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
@@ -157,7 +159,7 @@ test("D1: a member acting in the creation channel may manage the app (recover/re
 
 test("Defect-2: acting in a different channel than the one the app was created in does not confer manage", async () => {
   const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",
@@ -178,7 +180,7 @@ test("Defect-2: acting in a different channel than the one the app was created i
 
 test("first publish grants channel read access but keeps group DMs private", async () => {
   const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   const cases = [
     channel(deploy, acl, config, "U1", "C1", { isPrivate: false }),
     channel(deploy, acl, config, "U1", "C2", { isPrivate: true, members: [internal("U1"), internal("U2")] }),
@@ -203,7 +205,7 @@ test("first publish grants channel read access but keeps group DMs private", asy
 
 test("publish refuses visibility inputs and points to the share action", async () => {
   const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   const ctx = channel(deploy, acl, config, "U1", "C1", { isPrivate: false });
   for (const extra of [
     { public: true },
@@ -221,7 +223,7 @@ test("publish refuses visibility inputs and points to the share action", async (
 
 test("sharing after publish grants access separately", async () => {
   const { deploy, acl } = svc();
-  const config = createMemoryConfigStore(ORG);
+  const config = testConfigStore(ORG);
   await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
     entrypoint: "node server.js",
     name: "site",

@@ -9,7 +9,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
-import { numEnv } from "./config.ts";
+import { numEnv } from "./util/env.ts";
 import type { EgressPolicy, ScopeId } from "./types.ts";
 import { isPrivateNetworkIp } from "./util/network.ts";
 

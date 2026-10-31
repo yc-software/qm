@@ -59,15 +59,15 @@ const server = createServer(built.app, {
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
-await built.identity.hydrate();
+await built.identity.refresh();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
 

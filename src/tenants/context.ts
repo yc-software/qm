@@ -38,6 +38,10 @@ export function withTenant<T>(id: string, fn: () => T): T {
   return bound.run(firstBind(tenantId(id)), fn);
 }
 
+export function withoutTenant<T>(fn: () => T): T {
+  return bound.exit(fn);
+}
+
 export function enterTenant(id: string): void {
   bound.enterWith(firstBind(tenantId(id)));
 }

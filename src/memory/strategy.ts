@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryCaptureMetadata } from "./facts.ts";
 import { classifiedMemory } from "./classification.ts";
-import type { HarnessModelUtilities } from "../harness/harness.ts";
+import type { ModelUtilities } from "../agent/agent.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createPerTurnStrategy } from "./strategies/per-turn.ts";
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
@@ -31,7 +31,7 @@ export function parseMemoryStrategyKind(value: string | undefined): MemoryStrate
 }
 
 export interface MemoryStrategyDeps {
-  harness: HarnessModelUtilities;
+  agent: ModelUtilities;
   memory: MemoryService;
   captureQuietMs?: number;
   captureMaxTurns?: number;
@@ -42,11 +42,11 @@ export function createMemoryStrategy(
   kind: MemoryStrategyKind,
   deps: MemoryStrategyDeps,
 ): { strategy: MemoryStrategy; memory: MemoryService } {
-  const memory = classifiedMemory(deps.memory, deps.harness);
+  const memory = classifiedMemory(deps.memory, deps.agent);
   if (kind === "agent-only") return { strategy: createAgentOnlyStrategy(), memory };
   return {
     strategy: createPerTurnStrategy({
-      harness: deps.harness,
+      agent: deps.agent,
       memory,
       ...(deps.captureQuietMs !== undefined ? { captureQuietMs: deps.captureQuietMs } : {}),
       ...(deps.captureMaxTurns !== undefined ? { captureMaxTurns: deps.captureMaxTurns } : {}),

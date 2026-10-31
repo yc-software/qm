@@ -14,6 +14,8 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -259,7 +261,10 @@ test("managed deployments accept validated own apps and preserve credentials on 
 test("an agent capability token can read the connector catalog; an unauthenticated request cannot", async () => {
   const secret = "catalog-route-secret".repeat(3);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "catalog-")), signingSecret: secret }));
-  const server = createServer(built.app, { signingSecret: secret });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: secret,
+  });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -274,5 +279,28 @@ test("an agent capability token can read the connector catalog; an unauthenticat
     assert.equal((await fetch(`${base}/v1/connectors/catalog`)).status, 401);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("connector writes save without consulting another scope's client", async () => {
+  const srv = start();
+  try {
+    const disabled = await putConnector(srv.base, {
+      provider: "google",
+      clientId: "org-cid",
+      clientSecret: "org-secret",
+      enabled: false,
+    });
+    assert.equal(disabled.status, 200);
+    const team = await fetch(`${srv.base}/v1/admin/scopes/team:eng/connectors`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ provider: "google", clientId: "team-cid", clientSecret: "team-secret" }),
+    });
+    assert.equal(team.status, 200);
+    const saved = await srv.built.config.getConnectorClientSecret(scopeId("team", "eng"), "google");
+    assert.equal(saved?.clientId, "team-cid");
+  } finally {
+    await srv.close();
   }
 });

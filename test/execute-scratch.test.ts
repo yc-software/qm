@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -93,7 +93,6 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
 
@@ -113,28 +112,10 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
   await call(execute, {
     command: "echo hi",
     scope: "scoped",
-    durable: true,
     timeout_seconds: 9,
     purpose: "Run test command",
   });
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
-});
-
-test("unsupported scope/durable pairings return a crisp [error] without executing", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-
-  const e1 = textOf(
-    await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
-  );
-  assert.match(e1, /\[error\] a scratch box cannot be made durable yet/);
-
-  const e2 = textOf(
-    await call(execute, { command: "echo hi", scope: "scoped", durable: false, purpose: "Run test command" }),
-  );
-  assert.match(e2, /\[error\] the scoped computer is always durable today/);
-
-  assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
 });
 
 test("the tool_call/tool_result entries record which box ran the command", async () => {
@@ -304,25 +285,6 @@ test("execute refuses a credential that would override the computer's own enviro
   assert.equal(ran, 1);
 });
 
-test("execute schema lists exact command credential handles", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
-  assert.deepEqual(schemaProps(execute!), [
-    "command",
-    "background",
-    "sandbox_id",
-    "purpose",
-    "timeout_seconds",
-    "credentials",
-    "scope",
-    "durable",
-    "retrySafe",
-  ]);
-
-  await call(execute, { command: "gh api user", credentials: ["kc_github12345"], purpose: "Run test command" });
-  assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
-});
-
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
   const secret = "execution-secret-123456";
   const emitted: unknown[] = [];
@@ -335,20 +297,17 @@ test("execute masks credential output before model delivery, screening, and tran
     } as unknown as Sandbox,
     commandCredentials: [{ handle: "kc_test123456", env: [{ key: "TOKEN", value: secret }] }],
   });
-  const [execute] = createAgentTools(
-    {
-      current: ctx,
-      scopeLabel: scopeId("personal", "U1"),
-      emit: async (entry) => {
-        emitted.push(entry);
-      },
-      screenToolResult: async (input) => {
-        screened.push(input);
-        return { outcome: "allow" };
-      },
+  const [execute] = createAgentTools({
+    current: ctx,
+    scopeLabel: scopeId("personal", "U1"),
+    emit: async (entry) => {
+      emitted.push(entry);
     },
-    { commandCredentialHandles: ["kc_test123456"] },
-  );
+    screenToolResult: async (input) => {
+      screened.push(input);
+      return { outcome: "allow" };
+    },
+  });
   const result = await call(execute, {
     command: "diagnose",
     credentials: ["kc_test123456"],
@@ -580,7 +539,6 @@ test("reclaim waits for in-flight scratch creation before destroying its handle"
   ready.resolve(scratchHandle);
   await Promise.all([provision, reclaim]);
   assert.deepEqual(destroyed, [scratchHandle.id]);
-  assert.equal(boxes.scratchBox.handle, null);
 });
 
 test("scratch destruction failures keep their cause and retain the handle for retry", async () => {
@@ -606,7 +564,7 @@ test("scratch destruction failures keep their cause and retain the handle for re
     return true;
   });
   assert.equal(attempts, 3);
-  assert.equal(boxes.scratchBox.handle, scratchHandle);
+  assert.equal(await boxes.provisionScratch(), scratchHandle);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
   assert.equal(
@@ -616,7 +574,9 @@ test("scratch destruction failures keep their cause and retain the handle for re
   assert.equal(errors.length, 1);
   fail = false;
   await boxes.reclaimBox();
-  assert.equal(boxes.scratchBox.handle, null);
+  assert.equal(attempts, 4);
+  await boxes.reclaimBox();
+  assert.equal(attempts, 4);
 });
 
 test("failed scratch provisioning is audited with its error and can retry", async () => {
@@ -669,14 +629,12 @@ for (const recovers of [true, false]) {
       return true;
     });
     await assert.rejects(boxes.provisionScratch(), /cleanup is still pending/);
-    assert.equal(boxes.scratchBox.handle, null);
-    assert.equal(boxes.scratchBox.pending?.id, partial.id);
     if (recovers) await boxes.reclaimBox();
     else await assert.rejects(boxes.reclaimBox(), /Disposable sandbox destruction failed/);
     const failure = events.find((event) => event.action === "sandbox.scratch.provision_failed")!;
     assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
     assert.equal(JSON.parse(failure.detail!).backend, "local");
     assert.equal(events.at(-1)?.action, `sandbox.scratch.${recovers ? "released" : "release_failed"}`);
-    assert.equal(boxes.scratchBox.pending === null, recovers);
+    await assert.rejects(boxes.provisionScratch(), recovers ? /initialization failed/ : /cleanup is still pending/);
   });
 }

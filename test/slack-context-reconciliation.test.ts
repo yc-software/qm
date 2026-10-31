@@ -33,12 +33,13 @@ function reply(): Response {
 }
 
 for (const warm of [false, true]) {
-  test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after harness reset`, async () => {
-    enterTenant(TEST_TENANT);
-    const built = buildApp(testConfig({ harness: "pi" }), {
-      tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }, "pi"),
+  test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after agent reset`, async () => {
+    const config = testConfig({
+      anthropicApiKey: "sk-test",
+      securityScreen: "off",
+      memoryStrategy: "agent-only",
     });
-    await built.modelCredentials.set("anthropic", "sk-test", "test");
+    let built = buildApp(config);
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -81,7 +82,7 @@ for (const warm of [false, true]) {
       assert.match(requestText, /The worker needs restarting/);
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
-      built.runtime.start();
+      built = buildApp(config);
       const second = await built.app.turn({ ...input, text: "yes, go ahead" });
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);

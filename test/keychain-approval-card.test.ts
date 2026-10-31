@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
   keychainApprovalMessage,
   deliverKeychainCard,
@@ -15,23 +13,24 @@ import {
 import type { App } from "../src/api/app.ts";
 import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 async function fixture() {
   let now = Date.now();
   let member = true;
-  const grants = createMemoryMap<KeychainGrant>();
-  const asks = createMemoryMap<KeychainAsk>();
+  const grants = testMap<KeychainGrant>();
+  const asks = testMap<KeychainAsk>();
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
     grants,
     asks,
     key: deriveConnectorKey("native-approval-test"),
     now: () => now,
   });
   const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
   await sessions.addParticipant(session.id, "alice@example.com");
   const { ask } = await keychain.createAsk({
@@ -48,7 +47,7 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     deliveries: {
@@ -86,11 +85,10 @@ async function fixture() {
 
 test("native approval persists the explicit duration, resumes once, and replays without minting another grant", async () => {
   const f = await fixture();
-  const outcomes = await Promise.all(
-    ["standing", "standing", "deny"].map((decision) =>
-      f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, decision as "standing" | "deny"),
-    ),
-  );
+  const decide = (decision: "standing" | "deny") =>
+    f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, decision);
+  const outcomes = await Promise.all([decide("standing"), decide("standing")]);
+  outcomes.push(await decide("deny"));
   assert.ok(outcomes.every((view) => view.ask.status === "approved"));
   assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "approved");
   const grants = await f.grants.all();

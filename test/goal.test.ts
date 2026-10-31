@@ -25,8 +25,10 @@ import {
   GovernorUndecided,
   supersedeGoal,
   type GoalInbox,
-} from "../src/harness/goal.ts";
-import { createGrindMeter, grindState, meterGrindCall } from "../src/harness/grind.ts";
+  createGrindMeter,
+  grindState,
+  meterGrindCall,
+} from "../src/agent/goal.ts";
 
 test("createGoalRecord validates and normalizes", () => {
   const goal = createGoalRecord({ objective: "  get the tests green  " });
@@ -85,40 +87,32 @@ test("enforceGoal keeps prompting while the goal is active and stops the moment 
   const goal = createGoalRecord({ objective: "do it" });
   const meter = createGrindMeter();
   let prompts = 0;
-  const result = await enforceGoal({
+  await enforceGoal({
     goal,
     meter,
-    outcome: "ok",
-    ok: "ok",
     blocked: () => false,
-    beforePrompt: () => {},
     prompt: async () => {
       prompts++;
       if (prompts === 3) goal.status = "complete";
-      return "ok";
+      return true;
     },
   });
   assert.equal(prompts, 3);
-  assert.equal(result, "ok");
 });
 
 test("enforceGoal never waives an active goal, even when the agent does nothing", async () => {
   const goal = createGoalRecord({ objective: "impossible" });
   let prompts = 0;
-  const result = await enforceGoal({
+  await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => prompts >= 50,
-    beforePrompt: () => {},
     prompt: async () => {
       prompts++;
-      return "ok";
+      return true;
     },
   });
   assert.equal(prompts, 50, "only an external blocker (user stop, approval, wall clock) ends the loop");
-  assert.equal(result, "ok");
   assert.equal(goal.status, "active");
 });
 
@@ -130,13 +124,11 @@ test("enforceGoal sends exactly one wind-down prompt when the token cap is spent
   await enforceGoal({
     goal,
     meter,
-    outcome: "ok",
-    ok: "ok",
     blocked: () => false,
-    beforePrompt: (note) => {
+    prompt: async (note) => {
       notes.push(note);
+      return true;
     },
-    prompt: async () => "ok",
   });
   assert.equal(notes.length, 1);
   assert.match(notes[0]!, /token cap is exhausted/);
@@ -149,13 +141,10 @@ test("enforceGoal never waives a floor for idle rounds: an idle agent keeps bein
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => prompts >= 40,
-    beforePrompt: () => {},
     prompt: async () => {
       prompts++;
-      return "ok";
+      return true;
     },
   });
   assert.equal(prompts, 40);
@@ -167,13 +156,10 @@ test("enforceGoal leaves a paused goal alone, even with an unmet floor", async (
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => false,
-    beforePrompt: () => {},
     prompt: async () => {
       prompts++;
-      return "ok";
+      return true;
     },
   });
   assert.equal(prompts, 0);
@@ -185,13 +171,10 @@ test("enforceGoal respects external blockers (approval pause, abort)", async () 
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => true,
-    beforePrompt: () => {},
     prompt: async () => {
       prompts++;
-      return "ok";
+      return true;
     },
   });
   assert.equal(prompts, 0);
@@ -276,13 +259,11 @@ test("enforceGoal enforces the token cap even while the floor is unmet", async (
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => false,
-    beforePrompt: (note) => {
+    prompt: async (note) => {
       notes.push(note);
+      return true;
     },
-    prompt: async () => "ok",
   });
   assert.equal(notes.length, 1);
   assert.match(notes[0]!, /token cap is exhausted/);
@@ -434,11 +415,8 @@ test("enforceGoal checks in with the governor every few rounds, steps back, then
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => notes.length > 20,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     govern: async (previous) => (seenPrevious.push(previous), verdicts.shift()!),
   });
   const n = GOAL_GOVERNOR_ROUNDS;
@@ -465,11 +443,8 @@ test("enforceGoal also checks in after 30 minutes of work, and a failing governo
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => rounds >= 2,
-    beforePrompt: () => {},
-    prompt: async () => ((clock += 31 * 60_000), rounds++, "ok"),
+    prompt: async () => ((clock += 31 * 60_000), rounds++, true),
     govern: async () => {
       checks++;
       throw new Error("judge down");
@@ -513,11 +488,8 @@ test("a goal message that arrives mid-turn replaces the running goal at the next
   await enforceGoal({
     goal,
     meter: createGrindMeter(1_000),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => goal.status !== "active" || notes.length >= GOAL_GOVERNOR_ROUNDS + 2,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     govern: async () => (governed.push(goal.objective), { verdict: "continue", reasons: "keep going" }),
     inbox: inboxOf(
       () => inbox.shift(),
@@ -540,11 +512,8 @@ test("messages waiting when a goal turn would end are handed over instead of lef
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => false,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     inbox: inboxOf(() => inbox.shift()),
   });
   assert.deepEqual(notes, ["Swarm message m3: thanks, also check the index"]);
@@ -570,11 +539,8 @@ test("a replacement goal starts its turn and spend floors from zero", async () =
   await enforceGoal({
     goal,
     meter,
-    outcome: "ok",
-    ok: "ok",
     blocked: () => notes.length >= 1,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     inbox: inboxOf(
       () => "Swarm message m4: lane B",
       (current) => supersedeGoal(current, { objective: "lane B", floor: { minTurns: 10, minUsd: 1 }, assignedAt: 1 }),
@@ -602,17 +568,14 @@ test("a goal replaced mid-prompt gets its own wind-down when its cap runs out", 
   await enforceGoal({
     goal,
     meter: createGrindMeter(0),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => notes.length >= 3,
-    beforePrompt: () => {},
     prompt: async (note) => {
       notes.push(note);
       if (notes.length === 1) {
         supersedeGoal(goal, { objective: "lane B", token_cap: 10, assignedAt: 1 });
         goal.tokensUsed = 10;
       }
-      return "ok";
+      return true;
     },
   });
   assert.match(notes[0]!, /token cap is exhausted[\s\S]*lane A/);
@@ -628,11 +591,8 @@ test("messages received while the turn is being stopped are not acknowledged", a
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => stopped,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     inbox: {
       async receive() {
         stopped = true;
@@ -653,11 +613,8 @@ test("a goal turn keeps going when its inbox cannot be read", async () => {
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => notes.length >= 2,
-    beforePrompt: () => {},
-    prompt: async (note) => (notes.push(note), "ok"),
+    prompt: async (note) => (notes.push(note), true),
     inbox: {
       receive: async () => {
         throw new Error("swarm store unavailable");
@@ -676,14 +633,11 @@ test("a swarm-paused worker's goal turn ends instead of drawing keep-going promp
   await enforceGoal({
     goal,
     meter: createGrindMeter(),
-    outcome: "ok",
-    ok: "ok",
     blocked: () => notes.length >= 5,
-    beforePrompt: () => {},
     prompt: async (note) => {
       notes.push(note);
       paused = true;
-      return "ok";
+      return true;
     },
     inbox: { receive: async () => [], acknowledge: async () => {}, held: async () => paused },
   });

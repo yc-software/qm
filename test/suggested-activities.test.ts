@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -10,6 +8,9 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -21,9 +22,9 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 function fixture() {
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = createMemoryMap<SuggestedActivityProfile>();
-  const sessions = createMemorySessionStore();
-  const crons = createCronStore();
+  const store = testMap<SuggestedActivityProfile>();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
@@ -32,8 +33,8 @@ function fixture() {
     now: () => time,
     crons,
     deliveries,
-    identity: createIdentityService(),
-    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: createIdempotencyStore(testMap()),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);

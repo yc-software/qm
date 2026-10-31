@@ -4,9 +4,7 @@ import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -58,7 +56,6 @@ export interface PersistedBaseModel {
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
   fallbackRuntime?: RuntimeSelection;
-  harnessId?: string;
   orgRevision?: number;
   revision?: number;
   effortLevel?: string;
@@ -67,7 +64,6 @@ export interface PersistedBaseModel {
 export type RuntimePurpose = "cron" | "subagent" | "fallback";
 
 interface RuntimeSelection {
-  harnessId: string;
   modelId: string;
   effortLevel?: string;
   fastMode?: boolean;
@@ -76,7 +72,6 @@ interface ScopedRuntimeSelection extends RuntimeSelection {
   orgRevision: number;
   revision?: number;
 }
-export type PersistedApprovedHarnesses = ScopedRow<"ids", string[]>;
 interface PersistedSlackEmojiCatalog {
   scopeId: ScopeId;
   emoji: Record<string, string>;
@@ -91,25 +86,11 @@ export interface OrgBranding {
   orgName?: string;
 }
 interface AutoFlaggerConfig {
-  harnessId: string;
   modelId: string;
   rubric: string;
 }
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
-}
-interface ScopeConfigPresence {
-  soul: boolean;
-  commandPolicy: boolean;
-  securityPosture: boolean;
-  sharingPosture: boolean;
-  approvalGrantModes: boolean;
-  egress: boolean;
-  unfulfilledInsights: boolean;
-  externalSlackParticipants: boolean;
-  runtime: boolean;
-  approvedHarnesses: boolean;
-  branding: boolean;
 }
 
 export interface PersistedDeploymentIdentity {
@@ -123,21 +104,17 @@ export interface ScopedConfigStore {
   soulVersion(id: ScopeId): number;
   soulHistory(id: ScopeId): PersistedSoulRevision[];
   captureSoulSnapshot(id: ScopeId): Promise<SoulSnapshot>;
-  restoreSoulSnapshot(id: ScopeId, snapshot: SoulSnapshot): Promise<boolean>;
   restoreSoulCacheSnapshot(id: ScopeId, snapshot: SoulSnapshot): void;
   getCommandPolicy(id: ScopeId): CommandPolicy | null;
   setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
-  getSecurityPosture(id: ScopeId): SecurityPosture;
   getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
   getSecurityPostureOwnDurable(id: ScopeId): Promise<SecurityPosture | null>;
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
-  getSharingPosture(id: ScopeId): SharingPosture;
   getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
   getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
   resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture>;
   setSharingPosture(id: ScopeId, posture: SharingPosture): Promise<void>;
   clearSharingPosture(id: ScopeId): Promise<void>;
-  getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   getEgress(id: ScopeId): EgressPolicy | null;
@@ -164,9 +141,6 @@ export interface ScopedConfigStore {
   acknowledgeRuntimeSelection(id: ScopeId): Promise<void>;
   getRuntimeSelectionDurable(id: ScopeId): Promise<ScopedRuntimeSelection | null>;
   onRuntimeSelectionChanged(listener: (id: ScopeId) => void): void;
-  getApprovedHarnesses(): string[] | null;
-  setApprovedHarnesses(ids: string[] | null): Promise<void>;
-  getApprovedHarnessesDurable(): Promise<string[] | null>;
   getOrgAmbient(): boolean;
   setOrgAmbient(on: boolean): Promise<void>;
   getOrgAmbientDurable(): Promise<boolean>;
@@ -203,7 +177,6 @@ export interface ScopedConfigStore {
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
-  scopeConfigPresence(id: ScopeId): Promise<ScopeConfigPresence>;
   refreshScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
 }
@@ -221,7 +194,6 @@ export interface ConfigStoreMaps {
   externalSlackParticipants?: DurableMap<PersistedScopedFlag>;
   channelHeaderPin?: DurableMap<PersistedScopedFlag>;
   baseModels?: DurableMap<PersistedBaseModel>;
-  approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
   orgAmbient?: DurableMap<PersistedScopedFlag>;
   interactiveFastMode?: DurableMap<PersistedScopedFlag>;
   individualModelAuth?: DurableMap<PersistedModelAccount>;
@@ -248,7 +220,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   externalSlackParticipants: "external_slack_participants_flag",
   channelHeaderPin: "channel_header_pin_flag",
   baseModels: "base_model_configs",
-  approvedHarnesses: "approved_harness_configs",
   orgAmbient: "org_ambient_flag",
   interactiveFastMode: "interactive_fast_mode_flag",
   individualModelAuth: "individual_model_auth_flag",
@@ -267,23 +238,23 @@ export const configStoreMaps = (map: (table: string) => DurableMap<never>): Requ
     Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
   ) as unknown as Required<ConfigStoreMaps>;
 
-export function createMemoryConfigStore(
+export function createConfigStore(
   orgId: string,
-  opts: ConfigStoreMaps & {
+  opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
     defaultSharingPosture?: SharingPosture;
-  } = {},
+  },
 ): ScopedConfigStore {
   const souls = new Map<ScopeId, { content: string; version: number }>();
   const soulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const legacySoulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
-  const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
-  const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
-  const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
-  const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
-  const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
+  const soulStore = opts.souls;
+  const soulHistoryStore = opts.soulHistory;
+  const baseModelStore = opts.baseModels;
+  const slackEmojiCatalogStore = opts.slackEmojiCatalog;
+  const deploymentIdentity = opts.deploymentIdentity;
   const writeQueue = createKeyedQueue();
   const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
     writeQueue(key, async () => {
@@ -298,7 +269,7 @@ export function createMemoryConfigStore(
     toRow: (id: ScopeId, value: T) => Row<M>,
     orgOnly = false,
   ) => {
-    const store = (opts[name] ?? createMemoryMap()) as DurableMap<Row<M>>;
+    const store = opts[name] as DurableMap<Row<M>>;
     const cache = new Map<ScopeId, T>();
     const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
     const refresh = async (id: ScopeId) => {
@@ -343,7 +314,6 @@ export function createMemoryConfigStore(
     unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
-    approvedHarnesses: field("approvedHarnesses", "ids", true),
     orgAmbient: field("orgAmbient", "on", true),
     interactiveFastMode: field("interactiveFastMode", "on", true),
     individualModelAuth: field("individualModelAuth", "on", true),
@@ -354,7 +324,7 @@ export function createMemoryConfigStore(
     browseModels: field("browseModels", "modelId"),
     autoFlaggerConfigs: setting(
       "autoFlaggerConfigs",
-      ({ harnessId, modelId, rubric }): AutoFlaggerConfig => ({ harnessId, modelId, rubric }),
+      ({ modelId, rubric }): AutoFlaggerConfig => ({ modelId, rubric }),
       (id, config) => ({ scopeId: id, ...config }),
       true,
     ),
@@ -380,7 +350,7 @@ export function createMemoryConfigStore(
       }
     }
   };
-  const connectorClients = opts.connectorClients ?? createMemoryMap<StoredConnectorClient>();
+  const connectorClients = opts.connectorClients;
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
@@ -402,8 +372,6 @@ export function createMemoryConfigStore(
     id: ScopeId,
     fn: (row: PersistedBaseModel | null) => PersistedBaseModel,
   ): Promise<PersistedBaseModel | null> => {
-    if (!baseModelStore.update || !baseModelStore.insertIfAbsent || !baseModelStore.deleteIf)
-      throw new Error("base model store does not support atomic updates");
     for (;;) {
       let saved = await baseModelStore.update(id, fn);
       if (!saved) {
@@ -418,9 +386,8 @@ export function createMemoryConfigStore(
     }
   };
   const runtimeSelection = (row: PersistedBaseModel | null | undefined): ScopedRuntimeSelection | null => {
-    if (!row?.harnessId || !row.modelId) return null;
+    if (row?.orgRevision === undefined || !row.modelId) return null;
     return {
-      harnessId: row.harnessId,
       modelId: row.modelId,
       orgRevision: row.orgRevision ?? 0,
       ...(row.revision !== undefined ? { revision: row.revision } : {}),
@@ -469,7 +436,6 @@ export function createMemoryConfigStore(
     else soulHistory.delete(id);
   };
   const cloneSoul = (soul: PersistedSoul | null): SoulSnapshot => (soul ? structuredClone(soul) : null);
-  const sameSoul = (left: SoulSnapshot, right: SoulSnapshot): boolean => isDeepStrictEqual(left, right);
   const mergeSoulHistory = (
     embedded: readonly PersistedSoulRevision[] | undefined,
     legacy: readonly PersistedSoulRevision[],
@@ -508,7 +474,6 @@ export function createMemoryConfigStore(
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
-          settings.sharingPostures.reload(id),
         ]),
       );
     },
@@ -540,7 +505,6 @@ export function createMemoryConfigStore(
     getSoul: (id) => souls.get(id)?.content ?? null,
     setSoul(id, content, updatedBy) {
       return writeQueue(`soul:${id}`, async () => {
-        if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
           const revision: PersistedSoulRevision = {
@@ -598,7 +562,6 @@ export function createMemoryConfigStore(
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
         } else {
-          if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
           let accepted = false;
           const updated = await soulStore.update(id, (current) => {
             if (current.version !== expectedVersion) return current;
@@ -625,29 +588,11 @@ export function createMemoryConfigStore(
     captureSoulSnapshot(id) {
       return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
     },
-    restoreSoulSnapshot(id, snapshot) {
-      return writeQueue(`soul:${id}`, async () => {
-        try {
-          if (snapshot) await soulStore.put(id, cloneSoul(snapshot)!);
-          else await soulStore.delete(id);
-          const restored = await soulStore.get(id);
-          loadSoulCache(id, restored);
-          return sameSoul(restored, snapshot);
-        } catch (error) {
-          loadSoulCache(id, await soulStore.get(id));
-          throw error;
-        }
-      });
-    },
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
     getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
-    getSecurityPosture(id) {
-      const orgPosture = settings.securityPostures.get(org) ?? defaultSecurityPosture;
-      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPostures.get(id));
-    },
     async getSecurityPostureDurable(id) {
       const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
       if (id === org) return orgPosture;
@@ -659,10 +604,6 @@ export function createMemoryConfigStore(
           ? posture
           : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
       await settings.securityPostures.set(id, effective);
-    },
-    getSharingPosture(id) {
-      const orgPosture = settings.sharingPostures.get(org) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPostures.get(id)]);
     },
     async getSharingPostureDurable(id) {
       const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
@@ -681,11 +622,6 @@ export function createMemoryConfigStore(
     },
     setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
     clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
-    getApprovalGrantModes(id) {
-      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
-    },
     async getApprovalGrantModesDurable(id) {
       const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -732,8 +668,6 @@ export function createMemoryConfigStore(
       await writeQueue(`model:${id}`, async () => {
         const saved = await updateBaseModelRow(id, (current) => {
           if (modelId === null) return withoutRuntime(id, current);
-          const harnessId = current?.harnessId;
-          if (harnessId && isHarnessId(harnessId) && !modelSupportedByHarness(modelId, harnessId)) return current!;
           return { ...current, scopeId: id, modelId };
         });
         cacheBaseModel(id, saved);
@@ -769,12 +703,6 @@ export function createMemoryConfigStore(
       runtimeSelectionListeners.add(listener);
     },
     getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
-    getApprovedHarnesses: () => {
-      const ids = settings.approvedHarnesses.get(org);
-      return ids ? [...ids] : null;
-    },
-    setApprovedHarnesses: (ids) => settings.approvedHarnesses.set(org, ids ? [...ids] : null),
-    getApprovedHarnessesDurable: async () => (await settings.approvedHarnesses.durable(org)) ?? null,
     getOrgAmbient: () => settings.orgAmbient.get(org) ?? true,
     setOrgAmbient: (on) => settings.orgAmbient.set(org, on),
     getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(org)) ?? true,
@@ -867,25 +795,6 @@ export function createMemoryConfigStore(
         ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
         enabled: rec.enabled,
       };
-    },
-    async scopeConfigPresence(id) {
-      const stores = {
-        soul: soulStore,
-        commandPolicy: settings.commandPolicies.store,
-        securityPosture: settings.securityPostures.store,
-        sharingPosture: settings.sharingPostures.store,
-        approvalGrantModes: settings.approvalGrantModes.store,
-        egress: settings.egressPolicies.store,
-        unfulfilledInsights: settings.unfulfilledInsights.store,
-        externalSlackParticipants: settings.externalSlackParticipants.store,
-        runtime: baseModelStore,
-        approvedHarnesses: settings.approvedHarnesses.store,
-        branding: settings.branding.store,
-      };
-      const present = await Promise.all(
-        Object.entries(stores).map(async ([key, store]) => [key, !!(await store.get(id))] as const),
-      );
-      return Object.fromEntries(present) as Record<keyof typeof stores, boolean>;
     },
     async refreshScope(id) {
       const [soul, baseModel] = await Promise.all([

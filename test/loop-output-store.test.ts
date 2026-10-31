@@ -5,6 +5,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { collectVitals, evaluateGovernor } from "../src/loops/governor.ts";
 import { scopeId } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const captured = {
   loopId: "L1",
@@ -23,7 +24,7 @@ async function captureReady(outputs: ReturnType<typeof createLoopOutputStore>, i
 }
 
 test("a captured output stays staged until its attempt succeeds", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await outputs.capture(captured);
   assert.equal(output.state, "staged");
   assert.deepEqual(await outputs.awaitingReview("L1"), []);
@@ -36,7 +37,7 @@ test("a captured output stays staged until its attempt succeeds", async () => {
 });
 
 test("capturing the same artifact twice in one attempt is idempotent", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const first = await outputs.capture(captured);
   const second = await outputs.capture({ ...captured, title: "Fix TypeError in checkout (updated)" });
   assert.equal(second.id, first.id);
@@ -44,7 +45,7 @@ test("capturing the same artifact twice in one attempt is idempotent", async () 
 });
 
 test("same-action artifacts in one attempt use their response ordinal", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const artifact = { ...captured, externalRef: undefined };
   const first = await outputs.capture({ ...artifact, ordinal: 0, title: "first" });
   const second = await outputs.capture({ ...artifact, ordinal: 1, title: "second" });
@@ -55,7 +56,7 @@ test("same-action artifacts in one attempt use their response ordinal", async ()
 });
 
 test("a retry gets a new output and supersession links", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const first = await outputs.capture(captured);
   const second = await outputs.capture({ ...captured, attemptId: "A2" });
   assert.notEqual(second.id, first.id);
@@ -64,7 +65,7 @@ test("a retry gets a new output and supersession links", async () => {
 });
 
 test("the classifier relabels an output without disturbing the human decision", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const classified = await outputs.classify(output.id, { label: "lint-fix", summary: "one-line null guard" });
   assert.equal(classified?.label, "lint-fix");
@@ -72,7 +73,7 @@ test("the classifier relabels an output without disturbing the human decision", 
 });
 
 test("shipping records who decided it and closes the output", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const claimed = await outputs.claimShipping(output.id);
   const shipped = await outputs.completeShipping(output.id, claimed!.claimToken!, { actorId: "U1" }, { reply: "done" });
@@ -82,7 +83,7 @@ test("shipping records who decided it and closes the output", async () => {
 });
 
 test("an output is decided once — a second decision cannot flip it", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const claimed = await outputs.claimShipping(output.id);
   await outputs.completeShipping(output.id, claimed!.claimToken!, { actorId: "U1" }, { reply: "done" });
@@ -90,7 +91,7 @@ test("an output is decided once — a second decision cannot flip it", async () 
 });
 
 test("returning an output carries the reviewer's note back to the loop", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const returned = await outputs.returnToLoop(output.id, { actorId: "U1", note: "touches the wrong module" });
   assert.equal(returned?.state, "returned");
@@ -98,7 +99,7 @@ test("returning an output carries the reviewer's note back to the loop", async (
 });
 
 test("stale held work expires instead of sitting on the dock forever", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   assert.deepEqual(await outputs.expireOlderThan("L1", output.createdAt), []);
   const expired = await outputs.expireOlderThan("L1", output.createdAt + 1);
@@ -109,7 +110,7 @@ test("stale held work expires instead of sitting on the dock forever", async () 
 });
 
 test("vitals assembled from the stores drive the governor to quarantine on an undeclared action", async () => {
-  const { loop } = await createLoopStore().create({
+  const { loop } = await createLoopStore(testMap()).create({
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -118,8 +119,8 @@ test("vitals assembled from the stores drive the governor to quarantine on an un
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
   const { item } = await items.enqueue({ loopId: loop.id, sourceKey: "SENTRY-1" });
   await captureReady(outputs, { ...captured, loopId: loop.id, itemId: item.id });
   await captureReady(outputs, {
@@ -137,7 +138,7 @@ test("vitals assembled from the stores drive the governor to quarantine on an un
 });
 
 test("undeclared ship actions affect vitals only while their outputs are active", async () => {
-  const { loop } = await createLoopStore().create({
+  const { loop } = await createLoopStore(testMap()).create({
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -146,8 +147,8 @@ test("undeclared ship actions affect vitals only while their outputs are active"
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
   const shipped = await captureReady(outputs, { ...captured, loopId: loop.id, shipAction: "send_email" });
   const claim = await outputs.claimShipping(shipped.id);
   await outputs.completeShipping(shipped.id, claim!.claimToken!, { actorId: "U1" }, { status: "ok" });
@@ -157,7 +158,7 @@ test("undeclared ship actions affect vitals only while their outputs are active"
 });
 
 test("vitals count the return rate only from outputs a person actually decided", async () => {
-  const { loop } = await createLoopStore().create({
+  const { loop } = await createLoopStore(testMap()).create({
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -166,8 +167,8 @@ test("vitals count the return rate only from outputs a person actually decided",
     successCondition: "the reply answers the question",
     shipActions: [{ action: "front_reply", gate: "hold" }],
   });
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
   for (const ref of ["a", "b", "c"]) {
     const out = await outputs.capture({
       loopId: loop.id,
@@ -188,7 +189,7 @@ test("vitals count the return rate only from outputs a person actually decided",
 });
 
 test("unconfirmed undeclared outputs remain open and trigger quarantine", async () => {
-  const { loop } = await createLoopStore().create({
+  const { loop } = await createLoopStore(testMap()).create({
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -197,8 +198,8 @@ test("unconfirmed undeclared outputs remain open and trigger quarantine", async 
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs, { ...captured, loopId: loop.id, shipAction: "send_email" });
   const claimed = await outputs.claimShipping(output.id);
   await outputs.markUnconfirmed(output.id, claimed!.claimToken!);
@@ -208,7 +209,7 @@ test("unconfirmed undeclared outputs remain open and trigger quarantine", async 
 });
 
 test("superseding active siblings includes unconfirmed outputs", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const first = await captureReady(outputs, captured);
   const second = await captureReady(outputs, { ...captured, externalRef: "second" });
   const claimed = await outputs.claimShipping(second.id);
@@ -218,7 +219,7 @@ test("superseding active siblings includes unconfirmed outputs", async () => {
 });
 
 test("two racing ship claims on one output yield exactly one winner", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const [first, second] = await Promise.all([outputs.claimShipping(output.id), outputs.claimShipping(output.id)]);
   assert.equal([first, second].filter(Boolean).length, 1);
@@ -226,7 +227,7 @@ test("two racing ship claims on one output yield exactly one winner", async () =
 });
 
 test("a dead ship claim is recoverable after its lease expires", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const claimed = await outputs.claimShipping(output.id);
   assert.ok(claimed);
@@ -236,7 +237,7 @@ test("a dead ship claim is recoverable after its lease expires", async () => {
 });
 
 test("a stale shipping claim cannot complete after the lease is reclaimed", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const stale = await outputs.claimShipping(output.id, 1_000);
   const current = await outputs.claimShipping(output.id, 601_000);
@@ -251,7 +252,7 @@ test("a stale shipping claim cannot complete after the lease is reclaimed", asyn
 });
 
 test("a failed ship attempt returns the output to the review dock", async () => {
-  const outputs = createLoopOutputStore();
+  const outputs = createLoopOutputStore(testMap());
   const output = await captureReady(outputs);
   const claimed = await outputs.claimShipping(output.id);
   const back = await outputs.failShipping(output.id, claimed!.claimToken!);

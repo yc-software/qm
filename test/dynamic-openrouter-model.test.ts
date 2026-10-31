@@ -32,7 +32,6 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
   );
   await built.modelCredentials.set("openrouter", "deployment-openrouter-key", "admin");
   await built.config.setRuntimeSelection("org:default-org", {
-    harnessId: "pi",
     modelId: "stealth/ox-alpha",
   });
 

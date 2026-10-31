@@ -1,34 +1,31 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import * as piHarness from "../src/harness/pi-harness.ts";
-import * as mockHarness from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import * as agentRun from "../src/agent/agent-run.ts";
+import * as mockAgent from "./support/mock-agent.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
-import type { Config } from "../src/config.ts";
-import type { ModelProvider } from "../src/model/model-credential-store.ts";
-import { enterTenant } from "../src/tenants/context.ts";
-import type { TenantSettingValues } from "../src/tenants/settings.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 
-const turns: HarnessTurnInput[] = [];
-let piOptions: Parameters<typeof piHarness.createPiHarness>[0];
-function observedPiHarness(opts: Parameters<typeof piHarness.createPiHarness>[0]) {
+const turns: AgentTurnInput[] = [];
+let piOptions: Parameters<typeof agentRun.createAgent>[0];
+function observedCreateAgent(opts: Parameters<typeof agentRun.createAgent>[0]) {
   piOptions = opts;
-  return observedHarness();
+  return observedAgent();
 }
-function observedHarness() {
-  const harness = mockHarness.createMockHarness();
-  const runTurn = harness.turns.runTurn;
-  harness.turns.runTurn = async (turn) => {
+function observedAgent() {
+  const agent = mockAgent.createMockAgent();
+  const runTurn = agent.runTurn;
+  agent.runTurn = async (turn) => {
     turns.push(turn);
     return runTurn(turn);
   };
-  return harness;
+  return agent;
 }
 
-mock.module("../src/harness/pi-harness.ts", {
-  namedExports: { ...piHarness, createPiHarness: observedPiHarness },
+mock.module("../src/agent/agent-run.ts", {
+  namedExports: { ...agentRun, createAgent: observedCreateAgent },
 });
 const { buildApp } = await import("../src/wiring.ts");
 const { TEST_TENANT, testTenantSettings } = await import("./support/build-app.ts");
@@ -69,14 +66,13 @@ for (const provider of ["anthropic", "openai"] as const) {
       assert.equal(turns.length, 1);
       assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
       assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
-      assert.equal(turns[0]!.runtime!.harnessId, "pi");
     } finally {
       await built.runtime.stop();
     }
   });
 }
 
-test("disconnecting a queued personal account fails without invoking any main harness or another connected provider", async () => {
+test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", async () => {
   turns.length = 0;
   const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
@@ -108,8 +104,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
     turns.length = 0;
     const provider = account === "anthropic" ? "anthropic" : "openai";
     const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
-    const built = await build({ openai: "company-openai" });
-    await built.config.setApprovedHarnesses(["pi"]);
+    const built = buildApp(testConfig({ openaiApiKey: "company-openai" }));
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account);
     const submitted = await built.app.turn({
@@ -120,14 +115,12 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
       liveActor: true,
       async: true,
       model,
-      harness: "pi",
       thinkingLevel: "high",
       fastMode: true,
     });
     assert.ok(submitted.runId, JSON.stringify(submitted));
     const queued = await built.runs.get(submitted.runId!);
     assert.equal(queued?.request.model, model);
-    assert.equal(queued?.request.harness, "pi");
     built.runtime.start();
     try {
       const finished = await built.runs.waitFor(submitted.runId!, 5_000);
@@ -135,7 +128,6 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
       assert.equal(turns.length, 1);
       assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
       assert.deepEqual(turns[0]!.runtime, {
-        harnessId: "pi",
         modelId: model,
         effortLevel: "high",
         fastMode: true,
@@ -146,12 +138,12 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
   });
 }
 
-test("personal web selections reject wrong providers, harnesses, policy exclusions and disconnected keys", async () => {
-  const built = await build({ openai: "company-openai", anthropic: "company-anthropic" });
-  await built.config.setApprovedHarnesses(["pi", "claude"]);
+test("personal web selections reject wrong providers, policy exclusions and disconnected keys", async (t) => {
+  const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
+  t.after(() => built.runtime.stop());
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
-  const submit = (model: string, harness = "pi") =>
+  const submit = (model: string) =>
     built.app.turn({
       surface: "web",
       actor: { externalId: "U1" },
@@ -160,14 +152,8 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
       liveActor: true,
       async: true,
       model,
-      harness,
     });
-  for (const [model, harness] of [
-    ["claude-sonnet-5", "pi"],
-    ["gpt-5.6-terra", "claude"],
-    ["unknown", "pi"],
-  ])
-    assert.equal((await submit(model!, harness!)).status, "refused");
+  for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
   await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
@@ -176,8 +162,7 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
 
 test("a queued web selection cannot fall back to another personal provider after disconnect", async () => {
   turns.length = 0;
-  const built = await build();
-  await built.config.setApprovedHarnesses(["pi"]);
+  const built = buildApp(testConfig());
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true);
@@ -189,7 +174,6 @@ test("a queued web selection cannot fall back to another personal provider after
     liveActor: true,
     async: true,
     model: "gpt-5.6-terra",
-    harness: "pi",
   });
   assert.ok(submitted.runId, JSON.stringify(submitted));
   await built.userModelCredentials.delete("U1", "openai");
@@ -206,8 +190,7 @@ test("a queued web selection cannot fall back to another personal provider after
 
 test("web subscription selections use the namespaced model and personal OAuth on Pi", async () => {
   turns.length = 0;
-  const built = await build();
-  await built.config.setApprovedHarnesses(["pi"]);
+  const built = buildApp(testConfig());
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,
@@ -221,7 +204,6 @@ test("web subscription selections use the namespaced model and personal OAuth on
     liveActor: true,
     async: true,
     model: "codex/gpt-5.6-terra",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: false,
   });
@@ -233,7 +215,6 @@ test("web subscription selections use the namespaced model and personal OAuth on
     assert.equal(turns.length, 1);
     assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
     assert.deepEqual(turns[0]!.runtime, {
-      harnessId: "pi",
       modelId: "codex/gpt-5.6-terra",
       effortLevel: "high",
       fastMode: false,
@@ -243,58 +224,19 @@ test("web subscription selections use the namespaced model and personal OAuth on
   }
 });
 
-test("partial personal web choices queue the complete validated scoped runtime", async () => {
-  const built = await build();
-  await built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "gpt-5.6-sol" });
-  await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
-  await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  const submit = (choice: { harness?: string; model?: string }) =>
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `web:U1:partial-${crypto.randomUUID()}` },
-      text: "hello",
-      liveActor: true,
-      async: true,
-      ...choice,
-    });
-  const first = await submit({ harness: "pi" });
-  assert.ok(first.runId, JSON.stringify(first));
-  const queued = await built.runs.get(first.runId!);
-  assert.equal(queued?.request.harness, "pi");
-  assert.equal(queued?.request.model, "gpt-5.6-terra");
-  await built.userModelCredentials.delete("U1", "openai");
-  await built.userModelCredentials.setOAuth("U1", "openai", {
-    accessToken: "personal-oauth",
-    expiresAt: Date.now() + 3_600_000,
-  });
-  await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "codex/gpt-5.6-sol" });
-  const second = await submit({ model: "codex/gpt-5.6-terra" });
-  assert.ok(second.runId, JSON.stringify(second));
-  const oauth = await built.runs.get(second.runId!);
-  assert.equal(oauth?.request.harness, "pi");
-  assert.equal(oauth?.request.model, "codex/gpt-5.6-terra");
-});
-
 test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async () => {
   const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
   const companyToken = `e30.${claims.toString("base64url")}.sig`;
-  const auth = JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: companyToken, refresh_token: "r" } });
   turns.length = 0;
-  const built = await build({}, {}, { harness: "pi" });
-  const credential = await built.keychain!.save({
-    ownerId: "company-admin",
-    service: "codex",
-    files: [{ path: ".codex/auth.json", contentBase64: Buffer.from(auth).toString("base64") }],
+  const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: companyToken, refresh_token: "r" },
   });
-  await built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: credential.id });
   assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
   assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
   assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
   assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,
@@ -314,25 +256,8 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     const finished = await built.runs.waitFor(submitted.runId!, 5_000);
     assert.equal(finished.status, "done", JSON.stringify(finished.result));
     assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
-    assert.equal(turns[0]!.runtime!.harnessId, "pi");
     assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
   } finally {
     await built.runtime.stop();
-  }
-});
-
-test("a configured company subscription whose keychain credential is unavailable cannot fall back to the metered key", async (t) => {
-  await build({ openai: "metered" }, { CODEX_AUTH_CREDENTIAL: "unavailable", PI_MODEL: "gpt-5.6-sol" });
-  const urls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
-    urls.push(String(input));
-    return new Response("unexpected provider request", { status: 400 });
-  });
-  const harness = piHarness.createPiHarness({ ...piOptions, captureRequests: false });
-  try {
-    assert.equal(await harness.models.oneShot?.("system", "hello"), undefined);
-    assert.deepEqual(urls, []);
-  } finally {
-    await harness.turns.close?.();
   }
 });

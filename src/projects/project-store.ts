@@ -131,7 +131,6 @@ export function createProjectStore(
   ): Promise<ProjectMutation> {
     return withLock(id, async () => {
       if (!memberId) return { status: "invalid_member" };
-      if (!backing.update) throw new Error("project store requires DurableMap.update");
       const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
       let changed = false;
       const updated = await backing.update(id, (project) => {
@@ -205,7 +204,6 @@ export function createProjectStore(
     removeMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, false, effect),
     async rename(id, ownerId, name, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const clean = cleanName(name);
         if (!clean) return { status: "invalid_name" };
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
@@ -229,7 +227,6 @@ export function createProjectStore(
     },
     async setSlackChannel(id, actorId, link, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
         const updated = await backing.update(id, (project) => {
@@ -268,7 +265,6 @@ export function createProjectStore(
     },
     async syncChannelMembers(id, memberIds, channelName, effect) {
       return withLock(id, async () => {
-        if (!backing.update) throw new Error("project store requires DurableMap.update");
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
         const next = [...new Set(memberIds)].sort();

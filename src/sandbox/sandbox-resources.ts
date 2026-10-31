@@ -6,7 +6,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
+import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 
 export interface SandboxResource {
@@ -44,6 +44,7 @@ export interface SandboxDefault {
 interface SandboxProviderProfile {
   name: SandboxBackendName;
   spec?: AgentComputerSpec;
+  egressEnforcement?: EgressEnforcement;
   actions: string[];
   unavailable?: string;
 }
@@ -169,7 +170,7 @@ export function createSandboxResources(opts: {
     }
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    const lock = exclusive || !opts.lock.withSharedLock ? opts.lock.withLock : opts.lock.withSharedLock;
+    const lock = exclusive ? opts.lock.withLock : opts.lock.withSharedLock;
     return lock(`sandbox-resource:${id}`, async () => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
@@ -185,6 +186,7 @@ export function createSandboxResources(opts: {
       .map(([name, backend]) => ({
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
+        ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         actions: actionsFor(backend),
       }))
       .concat(
@@ -206,13 +208,13 @@ export function createSandboxResources(opts: {
     get,
     use,
     async hold(id, runId) {
-      await opts.records.update!(id, (current) =>
+      await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
       );
     },
     async release(id, runId, isLive) {
       const record = runId
-        ? await opts.records.update!(id, (current) => ({
+        ? await opts.records.update(id, (current) => ({
             ...current,
             holders: (current.holders ?? []).filter((holder) => holder !== runId),
           }))
@@ -221,7 +223,7 @@ export function createSandboxResources(opts: {
       const live = await Promise.all(others.map(isLive));
       const ended = others.filter((_, index) => !live[index]);
       if (ended.length)
-        await opts.records.update!(id, (current) => ({
+        await opts.records.update(id, (current) => ({
           ...current,
           holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
         }));

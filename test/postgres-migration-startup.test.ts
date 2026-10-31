@@ -28,8 +28,8 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
 
 test("slow lazy migrations queue with dynamic and bulk migrations before pool acquisition", { skip }, async () => {
   await withDatabase(async (url, admin) => {
-    const slow = createPgPool(url, "startup/0001", ["SELECT pg_sleep(11)"]);
-    const next = createPgPool(url, "startup/0002", ["CREATE TABLE startup_result(value INT)"]);
+    const slow = createPgPool(url, [{ id: "startup/0001", statements: ["SELECT pg_sleep(11)"] }]);
+    const next = createPgPool(url, [{ id: "startup/0002", statements: ["CREATE TABLE startup_result(value INT)"] }]);
     try {
       const first = slow.q("SELECT 1");
       const second = next.q("SELECT 2");
@@ -60,7 +60,6 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
           NODE_ENV: "test",
           DATABASE_URL: url,
           SANDBOX_BACKEND: "local",
-          SESSION_STORE: "postgres",
           ORG_ID: "migration-test",
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
         },

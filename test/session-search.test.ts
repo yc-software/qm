@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function seed(sessions: SessionStore, threadRef: string, principal: string, texts: string[]): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", scopeId("personal", principal));
@@ -26,8 +27,8 @@ async function seed(sessions: SessionStore, threadRef: string, principal: string
   return s.id;
 }
 
-test("memory store: searchEntries matches user and assistant text, newest first", async () => {
-  const store = createMemorySessionStore();
+test("session store: searchEntries matches user and assistant text, newest first", async () => {
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const id = await seed(store, "web:U1:a", "U1", [
     "can you refresh the memo board?",
     "Done — the memo board refresh is pushed.",
@@ -46,8 +47,8 @@ test("memory store: searchEntries matches user and assistant text, newest first"
   assert.equal((await store.searchEntries("U1", "memo"))[0]!.text.includes("memo"), true);
 });
 
-test("memory store: search respects participant visibility windows and identity", async () => {
-  const store = createMemorySessionStore();
+test("session store: search respects participant visibility windows and identity", async () => {
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:w", "dm", scopeId("personal", "U1"));
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
   const { lease } = await store.acquireLease(s.id);
@@ -73,8 +74,8 @@ test("memory store: search respects participant visibility windows and identity"
   assert.equal((await store.searchEntries("U1", "secret")).length, 2, "a full-history participant sees both");
 });
 
-test("memory store: search ignores non-conversational entry types", async () => {
-  const store = createMemorySessionStore();
+test("session store: search ignores non-conversational entry types", async () => {
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:t", "dm", scopeId("personal", "U1"));
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
   const { lease } = await store.acquireLease(s.id);

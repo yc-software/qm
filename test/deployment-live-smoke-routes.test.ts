@@ -8,20 +8,20 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
-import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/deployment/live-session";
 
 async function fixture(run: () => Promise<void> = async () => {}) {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = true;
-  const dedupe = createMemoryReplayDedupe();
+  const dedupe = createPostgresReplayDedupe(testDatabaseUrl());
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
@@ -31,7 +31,7 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     backgroundOwnership: { store, instanceId: "instance-a", deploymentId: "cohort-a", active: () => active },
     deploymentControlSecret: controlSecret,
     deploymentLiveSmoke: run,
-    replayDedupe: { durable: true, claim: (...args) => dedupe.claim(...args) },
+    replayDedupe: { claim: (...args) => dedupe.claim(...args) },
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;

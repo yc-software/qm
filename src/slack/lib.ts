@@ -142,7 +142,6 @@ export {
 export {
   DEFAULT_ACK_REACTIONS,
   CURATED_ACK_EMOJI,
-  stripAckPrefix,
   createAckPresenter,
   renderGoalNotice,
   type GoalNoticeView,

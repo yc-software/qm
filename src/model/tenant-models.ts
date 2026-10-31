@@ -1,56 +1,58 @@
 import type { Keychain } from "../credentials/keychain.ts";
-import { keychainHarnessAuthEnv } from "../credentials/harness-auth-env.ts";
+import { keychainEnvCredential } from "../credentials/keychain-env-credential.ts";
 import { currentTenant } from "../tenants/context.ts";
 import type { TenantSettings, TenantSettingsStore } from "../tenants/settings.ts";
 import { errMessage } from "../util/errors.ts";
+import { isClaudeSubscriptionToken } from "./claude-subscription.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./company-chatgpt-auth.ts";
 import { createGatewayCatalog } from "./gateway-catalog.ts";
 import { setGatewayModels } from "./gateway-models.ts";
+import type { ProviderKeys } from "./model-runtime.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
   DEFAULT_CODEX_MODEL_ID,
-  defaultModelForHarness,
+  defaultModel,
   onlyProvider,
   type ModelProvider,
   type ModelProviderAvailability,
 } from "./pi-models.ts";
-import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
 const NO_DIRECT_KEYS: ModelProviderAvailability = { anthropic: false, openai: false, openrouter: false };
 
+export function companySubscriptionAuthFor(
+  settings: TenantSettings,
+  anthropicKey?: string | null,
+): ModelProvider | undefined {
+  if (anthropicKey ? isClaudeSubscriptionToken(anthropicKey) : settings.claudeAuthCredential) return "anthropic";
+  return settings.codexAuthCredential ? "openai" : undefined;
+}
+
 export function configuredModelFor(
   settings: TenantSettings,
-  harness: string,
   direct: ModelProviderAvailability = NO_DIRECT_KEYS,
 ): string | undefined {
-  if (harness === "claude") return settings.claudeModel;
   if (
-    harness === "pi" &&
     !settings.piModel &&
     !settings.modelProvider &&
     !direct.anthropic &&
+    !settings.claudeAuthCredential &&
     settings.codexAuthCredential
   )
     return DEFAULT_CODEX_MODEL_ID;
   return settings.piModel;
 }
 
-export function harnessCarriedModelAuthFor(settings: TenantSettings, harness: string): ModelProvider | undefined {
-  if (harness === "claude" && settings.claudeAuthCredential) return "anthropic";
-  return settings.codexAuthCredential ? "openai" : undefined;
-}
-
 export function defaultModelFor(
   settings: TenantSettings,
-  harness: string,
   gateway?: ModelGatewayTransportConfig,
   direct: ModelProviderAvailability = NO_DIRECT_KEYS,
 ): string {
-  const configured = configuredModelFor(settings, harness, direct);
-  if (settings.modelProvider) return defaultModelForHarness(harness, configured, onlyProvider(settings.modelProvider));
-  const providers: ModelProviderAvailability | undefined =
-    harness === "pi" && gateway
+  const configured = configuredModelFor(settings, direct);
+  if (settings.modelProvider) return defaultModel(configured, onlyProvider(settings.modelProvider));
+  return defaultModel(
+    configured,
+    gateway
       ? {
           anthropic: direct.anthropic,
           openai: direct.openai,
@@ -58,16 +60,16 @@ export function defaultModelFor(
           ...(settings.codexAuthCredential ? { codexOAuth: true } : {}),
           modelIds: new Set(Object.keys(gateway.models)),
         }
-      : undefined;
-  return defaultModelForHarness(harness, configured, providers);
+      : undefined,
+  );
 }
 
 export interface TenantModels {
   gateway(): Promise<ModelGatewayTransportConfig | undefined>;
-  defaultModel(harness: string): string;
+  defaultModel(): string;
   noteDirectKeys(tenant: string, direct: ModelProviderAvailability): void;
+  subscriptionAuth(): Promise<ModelProvider | undefined>;
   subscriptionKeys(): Promise<ProviderKeys>;
-  claudeAuthEnv(): Promise<NodeJS.ProcessEnv>;
 }
 
 export function createTenantModels(deps: {
@@ -105,45 +107,52 @@ export function createTenantModels(deps: {
     return auth;
   }
 
+  async function chatgptKeys(settings: TenantSettings): Promise<ProviderKeys> {
+    const auth = companyAuth(currentTenant(), settings.codexAuthCredential);
+    if (!auth) return {};
+    try {
+      const token = await auth.accessToken();
+      return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
+    } catch (e) {
+      console.error(`[model] company ChatGPT auth (${auth.description}) unreadable: ${errMessage(e)}`);
+      return {};
+    }
+  }
+
+  async function claudeKeys(settings: TenantSettings): Promise<ProviderKeys> {
+    const keychain = deps.keychain();
+    if (!settings.claudeAuthCredential || !keychain) return {};
+    const env = await keychainEnvCredential(keychain, settings.claudeAuthCredential, [
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_AUTH_TOKEN",
+    ])();
+    const token = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
+    if (!token)
+      console.error(
+        `[model] company Claude subscription credential ${settings.claudeAuthCredential} yielded no token (missing, expired, or not an env credential)`,
+      );
+    return token ? { anthropic: token } : {};
+  }
+
   return {
     async gateway() {
       return gatewayFor(currentTenant(), await deps.settings.get());
     },
-    defaultModel(harness) {
+    defaultModel() {
       const settings = deps.settings.peek();
       const tenant = currentTenant();
-      return defaultModelFor(settings, harness, gatewayFor(tenant, settings), directKeys.get(tenant));
+      return defaultModelFor(settings, gatewayFor(tenant, settings), directKeys.get(tenant));
     },
     noteDirectKeys(tenant, direct) {
       directKeys.set(tenant, { anthropic: direct.anthropic, openai: direct.openai, openrouter: direct.openrouter });
     },
-    async subscriptionKeys() {
-      const auth = companyAuth(currentTenant(), (await deps.settings.get()).codexAuthCredential);
-      if (!auth) return {};
-      try {
-        const token = await auth.accessToken();
-        return token ? { [CODEX_SUBSCRIPTION_PROVIDER]: token } : {};
-      } catch (e) {
-        console.error(`[model] company ChatGPT auth (${auth.description}) unreadable: ${errMessage(e)}`);
-        return {};
-      }
+    async subscriptionAuth() {
+      return companySubscriptionAuthFor(await deps.settings.get(), await deps.anthropicKey());
     },
-    async claudeAuthEnv() {
+    async subscriptionKeys() {
       const settings = await deps.settings.get();
-      const apiKey = await deps.anthropicKey();
-      const keychain = deps.keychain();
-      const subscription =
-        settings.claudeAuthCredential && keychain
-          ? await keychainHarnessAuthEnv(keychain, settings.claudeAuthCredential, [
-              "CLAUDE_CODE_OAUTH_TOKEN",
-              "ANTHROPIC_AUTH_TOKEN",
-            ])()
-          : {};
-      return {
-        ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
-        ...(settings.providerBaseUrls.anthropic ? { ANTHROPIC_BASE_URL: settings.providerBaseUrls.anthropic } : {}),
-        ...subscription,
-      };
+      const [claude, codex] = await Promise.all([claudeKeys(settings), chatgptKeys(settings)]);
+      return { ...claude, ...codex };
     },
   };
 }

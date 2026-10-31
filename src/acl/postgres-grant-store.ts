@@ -1,6 +1,6 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
-import type { GrantPersistence } from "./acl-store.ts";
+import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 
 function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -125,18 +125,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
           [ownerScopeId, ref],
         );
         const current = selected.rows.map(rowToGrant);
-        const sameTuple = (a: Grant, b: Grant) =>
-          a.ownerScopeId === b.ownerScopeId &&
-          a.ref === b.ref &&
-          a.granteeScopeId === b.granteeScopeId &&
-          a.permission === b.permission &&
-          a.grantedBy === b.grantedBy;
-        if (
-          current.length !== expected.length ||
-          current.some((grant) => !expected.some((candidate) => sameTuple(grant, candidate)))
-        ) {
-          return false;
-        }
+        if (!sameGrantSet(current, expected)) return false;
         await client.query("DELETE FROM acl_grants WHERE owner_scope_id = $1 AND path = $2", [ownerScopeId, ref]);
         for (const grant of replacement) {
           await client.query(
