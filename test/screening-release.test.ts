@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 let executions = 0;
 let observedRelease = "";
@@ -77,7 +78,8 @@ function request(threadRef = "fixture-thread"): TurnRequest {
 for (const securityPosture of ["auto", "strict"] as const) {
   test(`${securityPosture}: real wrapper releases exact saved output without rerunning or widening permissions`, async () => {
     executions = 0;
-    const built = buildApp(testConfig({ securityPosture }), {
+    const config = testConfig();
+    const built = buildApp(config, {
       securityScreener: {
         provider: "fixture-screen",
         async classify() {
@@ -85,6 +87,7 @@ for (const securityPosture of ["auto", "strict"] as const) {
         },
       },
     });
+    await built.config.setSecurityPosture(TEST_ROOT_SCOPE, securityPosture);
     const req = request();
     let blocked = await built.app.turn(req);
     if (securityPosture === "strict") {
@@ -126,7 +129,8 @@ for (const securityPosture of ["auto", "strict"] as const) {
 
 for (const failure of ["error", "timeout"] as const) {
   test(`real tool output is marked and audited when the proxy ${failure}s`, async () => {
-    const built = buildApp(testConfig({ securityPosture: "auto", securityScreenTimeoutMs: 10 }), {
+    const config = testConfig({ securityScreenTimeoutMs: 10 });
+    const built = buildApp(config, {
       securityScreener: {
         provider: "fixture-screen",
         async classify() {
@@ -135,6 +139,7 @@ for (const failure of ["error", "timeout"] as const) {
         },
       },
     });
+    await built.config.setSecurityPosture(TEST_ROOT_SCOPE, "auto");
     const result = await built.app.turn(request());
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /NOT security-screened/);

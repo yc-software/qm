@@ -1218,10 +1218,11 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     deps.config.getWebuiModelsDurable(tenantRootScope()),
     deps.config.getBaseModelDurable(tenantRootScope()),
     deps.config.getExternalSlackParticipantsDurable(tenantRootScope()),
-    resolveBranding(deps.config, tenantRootScope(), deps.brandingDefault),
+    resolveBranding(deps.config, tenantRootScope()),
   ]);
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const providerStatus = managedKeys ?? deps.providerKeys;
+  const providerStatus = managedKeys;
+  const subscriptionAuth = await deps.companySubscriptionAuth?.();
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
@@ -1229,7 +1230,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     .filter((model) => modelOfferedInWebui(model.id))
     .map((model) => model.id);
   const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
-  const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
+  const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault?.());
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
     ...(branding.accent ? { accent: branding.accent } : {}),
@@ -1246,7 +1247,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
         providerStatus.openai ||
         providerStatus.openrouter ||
         providerStatus.modelIds?.size ||
-        deps.companySubscriptionAuth,
+        subscriptionAuth,
       ),
     }),
     externalSlackParticipants,

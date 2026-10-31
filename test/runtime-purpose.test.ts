@@ -137,7 +137,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: () => fallback.modelId },
     {
       authorizesCapabilityScope: async () => true,
     },
@@ -192,7 +192,7 @@ test("scope inheritance in a human child continuation retains its configured pur
   const config = await setup();
   await config.setPurposeRuntime("subagent", category);
   const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: () => fallback.modelId },
     { authorizesCapabilityScope: async () => true },
   );
   const result = await service(
@@ -215,7 +215,7 @@ test("configured categories remain selectable outside the conversation picker wi
   await config.setPurposeRuntime("cron", category);
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: () => fallback.modelId },
     { authorizesCapabilityScope: async () => true },
   );
   const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, triggered: true } as const;
@@ -241,7 +241,7 @@ test("personal-account human child inheritance recognizes a configured purpose o
   await config.setPurposeRuntime("subagent", category);
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
+    { config, baseModelDefault: () => fallback.modelId },
     { authorizesCapabilityScope: async () => true },
   );
   const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, liveActor: true } as const;

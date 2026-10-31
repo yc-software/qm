@@ -8,10 +8,24 @@ import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
+import { testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+
+function gatewaySettings(config: { url: string; apiKey: string; apiKeyHeader: string }): TenantSettingValues {
+  return {
+    MODEL_GATEWAY_URL: config.url,
+    MODEL_GATEWAY_API_KEY: config.apiKey,
+    MODEL_GATEWAY_API_KEY_HEADER: config.apiKeyHeader,
+  };
+}
+
+enterTenant(TEST_TENANT);
 
 const metadata = {
   model_group: "acme/future",
@@ -221,19 +235,17 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       models: {},
     };
     const built = stopAtEnd(
-      buildApp(
-        testConfig({
-          modelGateway: config,
-          modelId: "gateway/acme/future",
-        }),
-      ),
+      buildApp(testConfig(), {
+        tenantSettings: testTenantSettings({ ...gatewaySettings(config), PI_MODEL: "gateway/acme/future" }),
+      }),
     );
+    await built.tenantSettings.get();
     await built.refreshModels();
     const runtime = await runtimeConfigBody(
       {
         deps: {
           config: built.config,
-          baseModelDefault: "gateway/acme/future",
+          baseModelDefault: () => "gateway/acme/future",
           modelCredentials: built.modelCredentials,
           refreshModels: built.refreshModels,
         },
@@ -284,19 +296,14 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
 
 test("gateway outage leaves direct providers available", async () => {
   const built = stopAtEnd(
-    buildApp(
-      testConfig({
-        anthropicApiKey: "independent-key",
-        modelGateway: {
-          url: "https://gateway.invalid",
-          apiKey: "company-key",
-          apiKeyHeader: "x-api-key",
-          models: {},
-        },
-      }),
-      { modelCredentialFetch: async () => new Response(null, { status: 503 }) },
-    ),
+    buildApp(testConfig(), {
+      modelCredentialFetch: async () => new Response(null, { status: 503 }),
+      tenantSettings: testTenantSettings(
+        gatewaySettings({ url: "https://gateway.invalid", apiKey: "company-key", apiKeyHeader: "x-api-key" }),
+      ),
+    }),
   );
+  await built.modelCredentials.set("anthropic", "independent-key", "admin");
   const providers = await built.modelCredentials.availability();
   assert.equal(providers.anthropic, true);
   assert.deepEqual([...providers.modelIds!], []);

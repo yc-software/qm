@@ -46,6 +46,12 @@ const upstream = createServer((req, res) => {
     }
     if (url.pathname === "/userinfo")
       return res.end(JSON.stringify({ sub: "person-7", name: "Test Founder", email: "admin@example.test" }));
+    if (url.pathname === "/v1/plugin-settings")
+      return res.end(
+        JSON.stringify({
+          values: { OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize", OIDC_CLIENT_ID: "primary-client" },
+        }),
+      );
     if (url.pathname === "/v1/auth/trusted/admin") {
       adminRequests++;
       let body = "";
@@ -90,8 +96,6 @@ Object.assign(process.env, {
   PORTAL_TRUSTED_OIDC_LABEL: preferenceEnabled ? "Company SSO" : "",
   WEB_UI_UPSTREAM: issuer,
   ADMIN_UPSTREAM: issuer,
-  OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
-  OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_TRUSTED_OIDC: JSON.stringify({
     issuer,

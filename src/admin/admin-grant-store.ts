@@ -30,7 +30,7 @@ export interface AdminGrantStore {
 }
 
 export interface AdminGrantStoreOptions {
-  seed?: () => AdminGrant[];
+  seed?: () => AdminGrant[] | Promise<AdminGrant[]>;
 }
 
 export function createAdminGrantStore(
@@ -43,7 +43,7 @@ export function createAdminGrantStore(
     let pending = seeded.get(tenant);
     if (!pending) {
       pending = (async () => {
-        const seeds = opts.seed?.() ?? [];
+        const seeds = (await opts.seed?.()) ?? [];
         if (!seeds.length) return;
         if ((await persist.all()).length > 0) return;
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });

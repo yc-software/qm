@@ -70,6 +70,7 @@ describe("ui canvas and ui observe", () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
     const deps = {
       sessions: built.sessions,
       uiState: built.uiState,

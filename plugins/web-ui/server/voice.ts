@@ -3,7 +3,6 @@ import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { sameOriginRequest } from "../../chassis/src/http.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 export const LIVE_MODEL = "gpt-live-1";
 const TRANSCRIBE_MODEL = "gpt-transcribe";
@@ -53,10 +52,8 @@ export function openaiKey(env: NodeJS.ProcessEnv = process.env): string | undefi
   return env.OPENAI_API_KEY?.trim() || undefined;
 }
 
-export function voiceEnabled(user: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(
-    openaiKey(env) && env.CORE_SIGNING_SECRET?.trim() && principalInAllowlist(user, env.WEB_UI_VOICE_USERS),
-  );
+export function voiceEnabled(allowed: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(allowed && openaiKey(env) && env.CORE_SIGNING_SECRET?.trim());
 }
 
 export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, portalVerified: boolean): boolean {

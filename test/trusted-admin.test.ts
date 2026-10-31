@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -22,8 +22,8 @@ function start(enabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
-      ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
     }),
+    { tenantSettings: testTenantSettings(enabled ? { TRUSTED_OIDC_ADMIN_ISSUER: issuer } : {}) },
   );
   const server = createServer(built.app, {
     signingSecret,

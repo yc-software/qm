@@ -50,8 +50,7 @@ async function resumeOAuthFlow(deps: ServerDeps, secret: string | undefined, par
 
 export function resolverFor(deps: ServerDeps): OAuthClientResolver {
   return (
-    deps.resolveClient ??
-    withPublicOAuthClients(createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined))
+    deps.resolveClient ?? withPublicOAuthClients(createSecretClientResolver(createEnvSecretSource(deps.oauthEnv ?? {})))
   );
 }
 

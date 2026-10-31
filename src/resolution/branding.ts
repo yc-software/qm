@@ -44,18 +44,9 @@ export function sanitizeBranding(raw: {
 export async function resolveBranding(
   config: Pick<ScopedConfigStore, "getBrandingDurable"> | undefined,
   orgScope: ScopeId,
-  dflt?: OrgBranding,
 ): Promise<OrgBranding> {
   const stored = config
     ? await config.getBrandingDurable(orgScope).catch(swallowAs<OrgBranding | null>("branding: durable read", null))
     : null;
-  return (
-    sanitizeBranding({
-      accent: stored?.accent ?? dflt?.accent,
-      mark: stored?.mark ?? dflt?.mark,
-      markUrl: stored?.markUrl ?? dflt?.markUrl,
-      selfLabel: stored?.selfLabel ?? dflt?.selfLabel,
-      orgName: stored?.orgName ?? dflt?.orgName,
-    }) ?? {}
-  );
+  return (stored && sanitizeBranding(stored)) ?? {};
 }

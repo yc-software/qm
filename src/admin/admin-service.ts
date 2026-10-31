@@ -57,7 +57,7 @@ export function parseAdminGrants(raw: string | undefined, orgScope: ScopeId): Ad
 
 export interface AdminServiceOptions {
   now?: () => number;
-  trustedOidcAdminIssuer?: string;
+  trustedOidcAdminIssuer?: () => Promise<string | undefined>;
 }
 
 export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
@@ -78,7 +78,8 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       return adminStatusFromGrants(await grants.list(), principal.id);
     },
     async provisionTrustedEntry(issuer, subject) {
-      if (!opts.trustedOidcAdminIssuer || issuer !== opts.trustedOidcAdminIssuer)
+      const trustedIssuer = await opts.trustedOidcAdminIssuer?.();
+      if (!trustedIssuer || issuer !== trustedIssuer)
         throw new AdminError(403, "trusted administrator provisioning is not enabled for this issuer");
       if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
         throw new AdminError(400, "invalid trusted subject");

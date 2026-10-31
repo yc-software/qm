@@ -1,5 +1,5 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
-import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
+import type { SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
@@ -571,7 +571,7 @@ export interface ResolvedClient {
 
 export type OAuthClientResolver = (provider: string, ctx: { accountType?: AccountType }) => Promise<ResolvedClient>;
 
-export function createSecretClientResolver(secrets: SecretSource = createEnvSecretSource()): OAuthClientResolver {
+export function createSecretClientResolver(secrets: SecretSource): OAuthClientResolver {
   return async (providerName) => {
     const p = PROVIDERS[providerName];
     if (!p) throw new Error(`unknown OAuth provider: ${providerName}`);

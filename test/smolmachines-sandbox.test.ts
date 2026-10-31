@@ -41,7 +41,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
     store: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: FAKE_SMOLMACHINES_TOKEN,
+    token: async () => FAKE_SMOLMACHINES_TOKEN,
     namePrefix: "qmt",
     fetchImpl: fake.fetchImpl,
     ...extra,

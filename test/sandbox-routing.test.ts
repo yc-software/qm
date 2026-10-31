@@ -115,7 +115,7 @@ function build(defaults: Record<string, SandboxResource | null>, extra: SandboxR
   const errors: Array<{ code: string; message: string; scopeLabel?: string }> = [];
   const router = createSandboxRouter({
     backends: { aws, sprites },
-    defaultBackend: "aws",
+    defaultBackend: async () => "aws",
     resources,
     onError: (e) => errors.push(e),
   });
@@ -269,7 +269,7 @@ test("reapDeepIdle is exposed when a backend implements it, and sums across back
   (aws as unknown as { reapDeepIdle: unknown }).reapDeepIdle = async () => ({ reaped: 3 });
   const router = createSandboxRouter({
     backends: { aws, sprites: fakeBackend("sprites") },
-    defaultBackend: "aws",
+    defaultBackend: async () => "aws",
     resources: stubResources({}),
   });
   assert.deepEqual(await router.reapDeepIdle!(1000), { reaped: 3 });
@@ -282,7 +282,7 @@ function capabilitySplit(onError?: (e: { code: string; message: string; scopeLab
   delete (sprites as Partial<Sandbox>).exportFiles;
   const router = createSandboxRouter({
     backends: { aws, sprites },
-    defaultBackend: "aws",
+    defaultBackend: async () => "aws",
     resources: stubResources({
       "personal:f": resource("f", "aws"),
       "personal:s": resource("s", "sprites", "personal:s"),
@@ -354,7 +354,7 @@ test("parking backends lock the computer exclusively only to park it, not to kee
 test("computer status/restart target the resource's backing scope under its lock", async () => {
   const { aws, sprites } = computerBackends();
   const resources = stubResources({ "personal:s": resource("s", "sprites") });
-  const router = createSandboxRouter({ backends: { aws, sprites }, defaultBackend: "aws", resources });
+  const router = createSandboxRouter({ backends: { aws, sprites }, defaultBackend: async () => "aws", resources });
   assert.deepEqual(await router.computerStatus!("personal:s"), { machine: "started", guestResponsive: true });
   await router.restartComputer!("personal:s");
   assert.deepEqual(
@@ -371,7 +371,7 @@ test("computer status/restart with no default resource refuse with NoDefaultSand
   const { aws, sprites } = computerBackends();
   const router = createSandboxRouter({
     backends: { aws, sprites },
-    defaultBackend: "aws",
+    defaultBackend: async () => "aws",
     resources: stubResources({}),
   });
   await assert.rejects(async () => router.computerStatus!("personal:none"), NoDefaultSandboxError);
@@ -383,7 +383,7 @@ test("computer status/restart on a backend without them is a typed refusal", asy
   const { aws, sprites } = computerBackends();
   const router = createSandboxRouter({
     backends: { aws, sprites },
-    defaultBackend: "sprites",
+    defaultBackend: async () => "sprites",
     resources: stubResources({ "personal:a": resource("a", "aws") }),
   });
   await assert.rejects(async () => router.computerStatus!("personal:a"), CapabilityUnsupportedError);
@@ -410,7 +410,11 @@ for (const combined of [true, false]) {
         calls.push(`combined:${remove}:${list}`);
         return ["keep/file"];
       };
-    const router = createSandboxRouter({ backends: { sprites: backend }, defaultBackend: "sprites", resources });
+    const router = createSandboxRouter({
+      backends: { sprites: backend },
+      defaultBackend: async () => "sprites",
+      resources,
+    });
     assert.deepEqual(
       await router.removeDirAndList!(
         { id: "box", rootDir: "/workspace", backend: "sprites", resourceId: "resource" },

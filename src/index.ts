@@ -14,11 +14,23 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { instanceTenant } from "./tenants/instance.ts";
 import { enterTenant } from "./tenants/context.ts";
+import { retiredEnvPresent, tenantEnvPresent } from "./tenants/settings-import.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await built.tenantSettings.refreshAll();
+const tenantEnv = tenantEnvPresent(process.env);
+if (tenantEnv.length)
+  console.warn(
+    `[qm] ${tenantEnv.join(", ")} ${tenantEnv.length === 1 ? "is a tenant setting" : "are tenant settings"} and not read from the environment; copy them into the tenant with PUT /v1/tenant-settings, then remove them.`,
+  );
+const retiredEnv = retiredEnvPresent(process.env);
+if (retiredEnv.length)
+  console.warn(
+    `[qm] ${retiredEnv.join(", ")} ${retiredEnv.length === 1 ? "is" : "are"} no longer read; add broker credentials and connector tokens in admin settings, and save ChatGPT or Claude logins as keychain credentials named by CODEX_AUTH_CREDENTIAL or CLAUDE_AUTH_CREDENTIAL.`,
+  );
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
@@ -69,12 +81,6 @@ if (config.deployAppsDomain) {
         `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
     );
   });
-}
-
-if (!config.adminGrants) {
-  console.warn(
-    "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
-  );
 }
 
 if (config.deployProvider === "docker") {

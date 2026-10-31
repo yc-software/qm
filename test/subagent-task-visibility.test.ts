@@ -3,11 +3,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { scopeId } from "../src/types.ts";
 import { settle } from "./support/settle.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -74,7 +76,8 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
 
 test("human-origin delegated input is screened before model execution", async (t) => {
   const screened: string[] = [];
-  const built = buildApp(testConfig({ memoryCapture: "off", securityPosture: "strict" }), {
+  const config = testConfig({ memoryCapture: "off" });
+  const built = buildApp(config, {
     securityScreener: {
       provider: "test-screen",
       async classify(input) {
@@ -89,6 +92,7 @@ test("human-origin delegated input is screened before model execution", async (t
       },
     },
   });
+  await built.config.setSecurityPosture(TEST_ROOT_SCOPE, "strict");
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();
@@ -127,6 +131,7 @@ for (const fork of [false, true]) {
   test(`a human-initiated ${fork ? "fork" : "new session"} shows its seed without claiming human authorship`, async (t) => {
     const { startSession } = await import("../src/api/start-session.ts");
     const built = buildApp(testConfig({ memoryCapture: "off" }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
     t.after(async () => {
       built.scheduler.stop();
       built.deploymentLayerRefresh.stop();

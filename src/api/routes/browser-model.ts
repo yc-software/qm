@@ -26,7 +26,7 @@ const REQUEST_FIELDS = new Set([
 
 async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
-  const gateway = deps.modelGatewayTransport;
+  const gateway = await deps.modelGatewayTransport?.();
   if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
   if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
     return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
@@ -74,7 +74,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
           credentials: deps.userModelCredentials,
           companyProviderKeys:
             selected.account === "company" ? await deps.resolveBrowserCompanyKeys?.(useCompanySubscription) : undefined,
-          companySubscriptionProvider: useCompanySubscription ? deps.companySubscriptionAuth : undefined,
+          companySubscriptionProvider: useCompanySubscription ? await deps.companySubscriptionAuth?.() : undefined,
           actorId: capability.actorId,
           body: input,
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),

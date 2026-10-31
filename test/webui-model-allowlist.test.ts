@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
@@ -24,15 +24,14 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "webui-model-allowlist-")),
-      openrouterApiKey: "deployment-openrouter-key",
     }),
     { modelCredentialFetch },
   );
+  await built.modelCredentials.set("openrouter", "deployment-openrouter-key", "admin");
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
-    providerKeys: { anthropic: false, openai: false, openrouter: true },
     admin: built.admin,
     auditLog: built.auditLog,
   });

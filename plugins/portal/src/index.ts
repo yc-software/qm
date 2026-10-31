@@ -33,17 +33,9 @@ import {
   type ImpersonationClaims,
   type TmpClaims,
 } from "./session.ts";
-import {
-  pkcePair,
-  buildAuthorizeUrl,
-  exchangeCode,
-  fetchUserinfo,
-  resolvePrincipal,
-  verifyIdToken,
-  type OidcConfig,
-  type PrincipalRule,
-  hostedDomainHint,
-} from "./oidc.ts";
+import { pkcePair, buildAuthorizeUrl, exchangeCode, fetchUserinfo, resolvePrincipal, verifyIdToken } from "./oidc.ts";
+import { isPrivateNetworkUrl, tenantOidc, type TenantOidc } from "./tenant-oidc.ts";
+import { corePluginSettings } from "../../chassis/src/plugin-settings.ts";
 import {
   proxyToSurface,
   proxyToDeployment,
@@ -151,33 +143,9 @@ const UPSTREAMS: Record<string, string> = {
 };
 const COOKIE_FOR: Record<string, string> = { "web-ui": "webuiuser", admin: "admin" };
 
-function isSlackIssuer(issuer: string): boolean {
-  try {
-    const host = new URL(issuer).hostname;
-    return host === "slack.com" || host.endsWith(".slack.com");
-  } catch {
-    return false;
-  }
-}
-
-const OIDC: OidcConfig = {
-  authEndpoint: process.env.OIDC_AUTH_ENDPOINT ?? "https://slack.com/openid/connect/authorize",
-  tokenEndpoint: process.env.OIDC_TOKEN_ENDPOINT ?? "https://slack.com/api/openid.connect.token",
-  userinfoEndpoint: process.env.OIDC_USERINFO_ENDPOINT ?? "https://slack.com/api/openid.connect.userInfo",
-  clientId: process.env.OIDC_CLIENT_ID ?? "",
-  clientSecret: process.env.OIDC_CLIENT_SECRET ?? "",
-  scopes: process.env.OIDC_SCOPES ?? "openid profile email",
-  redirectUri: `${PUBLIC_URL}/auth/callback`,
-  issuer: process.env.OIDC_ISSUER ?? "https://slack.com",
-  jwksUri: process.env.OIDC_JWKS_URI ?? "https://slack.com/openid/connect/keys",
-  expectedTeamId: process.env.PORTAL_EXPECTED_TEAM_ID || undefined,
-  prompt: process.env.OIDC_PROMPT || undefined,
-  hostedDomain: hostedDomainHint(process.env.OIDC_ISSUER ?? "https://slack.com", process.env.OIDC_ALLOWED_EMAIL_DOMAIN),
-};
-const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
-
 const AUTH_BROKER_UPSTREAM = (process.env.AUTH_BROKER_UPSTREAM ?? "").replace(/\/$/, "");
 const AUTH_BROKER_PREFIX = (process.env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
+const pluginSettings = corePluginSettings(CORE, CORE_SIGNING_SECRET);
 const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/authorize" },
   { method: "POST", path: "/authorize" },
@@ -208,15 +176,6 @@ export function clientIpOf(req: IncomingMessage): string {
     .filter(Boolean);
   return hops[hops.length - XFF_TRUSTED_HOPS] ?? socket;
 }
-
-const PRINCIPAL_RULE: PrincipalRule = {
-  requireCoreAdmission: Boolean(AUTH_BROKER_UPSTREAM),
-  claim: (process.env.OIDC_PRINCIPAL_CLAIM ?? "email") as PrincipalRule["claim"],
-  allowedEmailDomain: process.env.OIDC_ALLOWED_EMAIL_DOMAIN || undefined,
-  allowedEmails: process.env.OIDC_ALLOWED_EMAILS?.split(",")
-    .map((email) => email.trim())
-    .filter(Boolean),
-};
 
 const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
@@ -402,33 +361,6 @@ function isLocalPortalUrl(raw: string): boolean {
   } catch {
     return false;
   }
-}
-
-function originOf(raw: string): string {
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "";
-  }
-}
-
-export function isPrivateNetworkUrl(raw: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (host.endsWith(".internal") || host.endsWith(".flycast") || host.endsWith(".local")) return true;
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
-  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
-  return false;
 }
 
 export function isLoopbackAddress(address: string | null | undefined): boolean {
@@ -1650,7 +1582,20 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   ]);
 }
 
-function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
+async function signInOidc(res: ServerResponse): Promise<TenantOidc | null> {
+  const context = { publicUrl: PUBLIC_URL, brokerUpstream: AUTH_BROKER_UPSTREAM, brokerPrefix: AUTH_BROKER_PREFIX };
+  const resolved = await pluginSettings().then(
+    (values) => tenantOidc(values, { ...context, isProd: IS_PROD }),
+    (error: unknown) => errMessage(error),
+  );
+  if (typeof resolved !== "string" && !resolved.problems.length) return resolved;
+  const problems = typeof resolved === "string" ? [resolved] : resolved.problems;
+  for (const p of problems) console.error(`[portal] sign-in unavailable: ${p}`);
+  sendHtml(res, 503, signInErrorHtml("sign-in is not configured for this workspace"));
+  return null;
+}
+
+async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (
     trustedOidc &&
     trustedSignInLabel &&
@@ -1677,6 +1622,8 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
     return void res.end();
   }
+  const resolved = await signInOidc(res);
+  if (!resolved) return;
   const state = randomToken();
   const nonce = randomToken();
   const { verifier, challenge } = pkcePair();
@@ -1685,7 +1632,10 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  res.writeHead(302, { location: buildAuthorizeUrl(OIDC, { state, nonce, challenge }), "cache-control": "no-store" });
+  res.writeHead(302, {
+    location: buildAuthorizeUrl(resolved.oidc, { state, nonce, challenge }),
+    "cache-control": "no-store",
+  });
   res.end();
 }
 
@@ -1703,21 +1653,24 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   if (!tmp) return fail("login session expired, please try again");
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
+  const resolved = await signInOidc(res);
+  if (!resolved) return;
+  const { oidc, rule } = resolved;
 
   let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
-    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
-    const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
-    if (OIDC.expectedTeamId) {
+    const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
+    const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
+    if (oidc.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== oidc.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(OIDC, accessToken);
+    const info = await fetchUserinfo(oidc, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
-    principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
+    principal = await resolvePrincipal(rule, { sub: infoSub, claims, userinfo: info }, (email) =>
       coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
     );
     const rawName = info.name ?? claims.name;
@@ -1747,11 +1700,6 @@ export function bootChecks(): void {
       );
     }
     if (origin === ORIGIN) problems.push(`PORTAL_API_ALLOWED_ORIGINS must not list the portal's own origin`);
-  }
-  if (!AUTH_BROKER_UPSTREAM && originOf(OIDC.authEndpoint) && originOf(OIDC.authEndpoint) === originOf(PUBLIC_URL)) {
-    problems.push(
-      "OIDC_AUTH_ENDPOINT is on the portal's own origin but AUTH_BROKER_UPSTREAM is unset — every sign-in would redirect from /auth/login back into the portal forever; wire AUTH_BROKER_UPSTREAM to the auth service or point OIDC_AUTH_ENDPOINT at a real identity provider",
-    );
   }
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
@@ -1796,9 +1744,6 @@ export function bootChecks(): void {
   if (APPS_DOMAIN && COOKIE_DOMAIN && !hostIsWithinDomain(APPS_DOMAIN, COOKIE_DOMAIN)) {
     problems.push(`PORTAL_COOKIE_DOMAIN (${COOKIE_DOMAIN}) must cover PORTAL_APPS_DOMAIN (${APPS_DOMAIN})`);
   }
-  if (PRINCIPAL_RULE.claim !== "sub" && PRINCIPAL_RULE.claim !== "email") {
-    problems.push(`OIDC_PRINCIPAL_CLAIM must be "sub" or "email" (got "${PRINCIPAL_RULE.claim}")`);
-  }
   if (
     !Number.isFinite(SESSION_TTL_S) ||
     SESSION_TTL_S <= 0 ||
@@ -1807,90 +1752,25 @@ export function bootChecks(): void {
   ) {
     problems.push("PORTAL_SESSION_MAX_TTL_S must be a finite number at least as large as PORTAL_SESSION_TTL_S");
   }
-  if ((PRINCIPAL_RULE.allowedEmailDomain || PRINCIPAL_RULE.allowedEmails?.length) && PRINCIPAL_RULE.claim !== "email") {
-    problems.push("OIDC_ALLOWED_EMAIL_DOMAIN and OIDC_ALLOWED_EMAILS require OIDC_PRINCIPAL_CLAIM=email");
-  }
   if (IS_PROD) {
     if (isMissingOrPlaceholder(SESSION_SECRET))
       problems.push("PORTAL_SESSION_SECRET is required and may not be a placeholder in production");
     if (isMissingOrPlaceholder(CORE_SIGNING_SECRET))
       problems.push("CORE_SIGNING_SECRET is required and may not be a placeholder in production");
-    if (isMissingOrPlaceholder(OIDC.clientId))
-      problems.push("OIDC_CLIENT_ID is required and may not be a placeholder in production");
-    if (isMissingOrPlaceholder(OIDC.clientSecret))
-      problems.push("OIDC_CLIENT_SECRET is required and may not be a placeholder in production");
-    if (
-      PRINCIPAL_RULE.allowedEmailDomain &&
-      (isMissingOrPlaceholder(PRINCIPAL_RULE.allowedEmailDomain) ||
-        !validEmailDomain(PRINCIPAL_RULE.allowedEmailDomain))
-    ) {
-      problems.push("OIDC_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
-    }
-    if (
-      PRINCIPAL_RULE.allowedEmails?.some(
-        (email) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || isMissingOrPlaceholder(email),
-      )
-    ) {
-      problems.push("OIDC_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
-    }
-    if (
-      !PRINCIPAL_RULE.allowedEmailDomain &&
-      !PRINCIPAL_RULE.allowedEmails?.length &&
-      isMissingOrPlaceholder(OIDC.expectedTeamId)
-    ) {
-      problems.push(
-        "production requires OIDC_ALLOWED_EMAILS, OIDC_ALLOWED_EMAIL_DOMAIN, or PORTAL_EXPECTED_TEAM_ID as an identity-provider trust boundary",
-      );
-    }
-    if (OIDC.expectedTeamId !== undefined && isMissingOrPlaceholder(OIDC.expectedTeamId)) {
-      problems.push("PORTAL_EXPECTED_TEAM_ID is optional, but may not be a placeholder when configured");
-    }
-    if (!isSlackIssuer(OIDC.issuer) && !OIDC_JWKS_CONFIGURED) {
-      problems.push("OIDC_JWKS_URI is required for a non-Slack issuer");
-    }
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
     if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");
-    if (!OIDC.authEndpoint.startsWith("https://")) {
-      problems.push(`OIDC_AUTH_ENDPOINT must be https, since the browser is sent there: ${OIDC.authEndpoint}`);
-    }
-    const brokerOrigin =
-      AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM) ? originOf(AUTH_BROKER_UPSTREAM) : "";
-    for (const ep of [OIDC.tokenEndpoint, OIDC.userinfoEndpoint, OIDC.jwksUri]) {
-      if (!ep.startsWith("https://") && !(brokerOrigin && originOf(ep) === brokerOrigin)) {
-        problems.push(`OIDC endpoint must be https unless it is the built-in broker on the private network: ${ep}`);
-      }
-    }
-    if (AUTH_BROKER_UPSTREAM) {
-      if (!isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM)) {
-        problems.push(
-          "AUTH_BROKER_UPSTREAM must address a private-network host, since the broker is never exposed directly",
-        );
-      }
-      if (OIDC.issuer !== `${PUBLIC_URL}${AUTH_BROKER_PREFIX}`) {
-        problems.push(`OIDC_ISSUER must be ${PUBLIC_URL}${AUTH_BROKER_PREFIX} when the built-in broker is wired`);
-      }
-      if (OIDC.authEndpoint !== `${PUBLIC_URL}${AUTH_BROKER_PREFIX}/authorize`) {
-        problems.push(
-          `OIDC_AUTH_ENDPOINT must be ${PUBLIC_URL}${AUTH_BROKER_PREFIX}/authorize when the built-in broker is wired`,
-        );
-      }
+    if (AUTH_BROKER_UPSTREAM && !isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM)) {
+      problems.push(
+        "AUTH_BROKER_UPSTREAM must address a private-network host, since the broker is never exposed directly",
+      );
     }
   }
   if (problems.length) {
     for (const p of problems) console.error(`[portal] FATAL: ${p}`);
     throw new Error(`portal refusing to start: ${problems.length} misconfiguration(s)`);
   }
-}
-
-function validEmailDomain(value: string): boolean {
-  if (value.length > 253 || !value.includes(".")) return false;
-  return value
-    .split(".")
-    .every(
-      (label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
-    );
 }
 
 export async function startServer(): Promise<void> {

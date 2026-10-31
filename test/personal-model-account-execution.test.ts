@@ -8,6 +8,8 @@ import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import type { ModelProvider } from "../src/model/model-credential-store.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 
 const turns: AgentTurnInput[] = [];
 let piOptions: Parameters<typeof agentRun.createAgent>[0];
@@ -29,11 +31,20 @@ mock.module("../src/agent/agent-run.ts", {
   namedExports: { ...agentRun, createAgent: observedCreateAgent },
 });
 const { buildApp } = await import("../src/wiring.ts");
+const { stopAtEnd, testTenantSettings } = await import("./support/build-app.ts");
+
+async function build(keys: Partial<Record<ModelProvider, string>> = {}, settings: TenantSettingValues = {}) {
+  const built = stopAtEnd(buildApp(testConfig(), { tenantSettings: testTenantSettings(settings) }));
+  for (const [provider, key] of Object.entries(keys))
+    await built.modelCredentials.set(provider as ModelProvider, key, "admin");
+  await built.tenantSettings.get();
+  return built;
+}
 
 for (const provider of ["anthropic", "openai"] as const) {
   test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {
     turns.length = 0;
-    const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
+    const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
     await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
     await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
     await built.config.setPersonalModelAuth("U1", true, provider);
@@ -61,7 +72,7 @@ for (const provider of ["anthropic", "openai"] as const) {
 
 test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", async () => {
   turns.length = 0;
-  const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
+  const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
@@ -91,7 +102,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
     turns.length = 0;
     const provider = account === "anthropic" ? "anthropic" : "openai";
     const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
-    const built = buildApp(testConfig({ openaiApiKey: "company-openai" }));
+    const built = await build({ openai: "company-openai" });
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account);
     const submitted = await built.app.turn({
@@ -126,7 +137,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
 }
 
 test("personal web selections reject wrong providers, policy exclusions and disconnected keys", async (t) => {
-  const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
+  const built = await build({ openai: "company-openai", anthropic: "company-anthropic" });
   t.after(() => built.runtime.stop());
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
@@ -149,7 +160,7 @@ test("personal web selections reject wrong providers, policy exclusions and disc
 
 test("a queued web selection cannot fall back to another personal provider after disconnect", async () => {
   turns.length = 0;
-  const built = buildApp(testConfig());
+  const built = await build();
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true);
@@ -177,7 +188,7 @@ test("a queued web selection cannot fall back to another personal provider after
 
 test("web subscription selections use the namespaced model and personal OAuth on Pi", async () => {
   turns.length = 0;
-  const built = buildApp(testConfig());
+  const built = await build();
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,
@@ -215,7 +226,7 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
   const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
   const companyToken = `e30.${claims.toString("base64url")}.sig`;
   turns.length = 0;
-  const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
+  const built = await build({}, { CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL });
   await saveCompanyChatGPTLogin(built.keychain, {
     auth_mode: "chatgpt",
     tokens: { access_token: companyToken, refresh_token: "r" },
@@ -246,5 +257,21 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
   } finally {
     await built.runtime.stop();
+  }
+});
+
+test("a configured company subscription whose keychain credential is unavailable cannot fall back to the metered key", async (t) => {
+  await build({ openai: "metered" }, { CODEX_AUTH_CREDENTIAL: "unavailable", PI_MODEL: "gpt-5.6-sol" });
+  const urls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    urls.push(String(input));
+    return new Response("unexpected provider request", { status: 400 });
+  });
+  const agent = agentRun.createAgent({ ...piOptions, captureRequests: false });
+  try {
+    assert.equal(await agent.oneShot?.("system", "hello"), undefined);
+    assert.deepEqual(urls, []);
+  } finally {
+    await agent.close?.();
   }
 });

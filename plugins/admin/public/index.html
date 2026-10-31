@@ -6600,7 +6600,6 @@
       ];
 
       const VIEWS = [...SECTIONS.flatMap((s) => s.views), "onboarding", "user", "ackemoji", "keychain"];
-      let permissions = [];
       function prepareParityCards() {
         const content = document.querySelector("#view-governance .governance-content");
         const anchor = $("governance-credentials");
@@ -7118,7 +7117,6 @@
         $("who-name").title = "Signed in as " + me.data.principal;
         orgId = me.data.org;
         $("who-name").textContent = me.data.principal;
-        permissions = Array.isArray(me.data.permissions) ? me.data.permissions : [];
         if (me.data.isAdmin === false) {
           $("who").classList.remove("hidden");
           $("na-sub").textContent = me.data.principal;
@@ -7179,7 +7177,6 @@
             nav.appendChild(h);
           }
           s.views.forEach((v) => {
-            if (v === "design-system" && !permissions.includes("inbox")) return;
             const b = document.createElement("button");
             b.className = "tab" + (s.label ? "" : " tab-top") + (v === view ? " active" : "");
             if (v === "design-system") b.classList.add("tab-footer");
@@ -7278,7 +7275,7 @@
 
         const turnRaw = p.get("turn");
         let resolvedView = DEFAULT_VIEW;
-        if (VIEWS.includes(v) && (v !== "design-system" || permissions.includes("inbox"))) resolvedView = v;
+        if (VIEWS.includes(v)) resolvedView = v;
         else if (session) resolvedView = "history";
         return {
           view: resolvedView,
@@ -7436,7 +7433,6 @@
         });
       }
       function setView(v) {
-        if (v === "design-system" && !permissions.includes("inbox")) return;
         go({
           view: v,
           scope: v === "history" || v === "errors" ? "org:" + orgId : scope,

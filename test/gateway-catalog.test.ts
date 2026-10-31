@@ -1,5 +1,4 @@
 import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
-import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
@@ -17,9 +16,11 @@ import {
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
-import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
+import { parseModelGateway, parseTenantSettings } from "../src/tenants/settings-parse.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -67,15 +68,16 @@ function fixture(models = [group()], aliases = {}) {
     },
   };
 }
+enterTenant(TEST_TENANT);
 afterEach(() => setGatewayModels([]));
 
 test("gateway configuration no longer requires a model list", () => {
-  const parsed = loadConfig({
+  const parsed = parseModelGateway({
     MODEL_GATEWAY_URL: config.url,
     MODEL_GATEWAY_API_KEY: config.apiKey,
     MODEL_GATEWAY_API_KEY_HEADER: config.apiKeyHeader,
   });
-  assert.deepEqual(parsed.modelGateway?.models, {});
+  assert.deepEqual(parsed?.models, {});
 });
 
 test("discovers unknown tool models through the company key without leaking transport metadata", async () => {
@@ -299,12 +301,10 @@ test("gateway-only fallback retains models hidden by picker aliases", async () =
   const f = fixture([group(target)], { "gpt-5.6-sol": target });
   await f.catalog.refresh();
   assert.ok(!builtInModelCatalog().some((model) => model.id === `gateway/${target}`));
-  const fallback = runtimeFallback({
-    deps: { providerKeys: { anthropic: false, openai: false, openrouter: false } },
-  });
-  assert.equal(fallback.modelId, `gateway/${target}`);
+  const fallback = defaultModelFor(parseTenantSettings({}), f.catalog.transport);
+  assert.equal(fallback, `gateway/${target}`);
   assert.ok(
-    modelServiceable(fallback.modelId, {
+    modelServiceable(fallback, {
       anthropic: false,
       openai: false,
       openrouter: false,

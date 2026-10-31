@@ -35,6 +35,7 @@ const { buildApp } = await import("./support/build-app.ts");
 
 test("a run reports the runtime its turn runs on while working and after it finishes", async () => {
   const built = buildApp(testConfig({ workers: 1 }));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
   built.runtime.start();
   try {
     for (const model of [undefined, "claude-haiku-5-5"]) {
@@ -67,6 +68,7 @@ test("a run reports the runtime its turn runs on while working and after it fini
 
 test("a runtime the agent switches to mid-turn is reported as its switch", async () => {
   const built = buildApp(testConfig({ workers: 1 }));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
   built.runtime.start();
   try {
     const ready = new Promise<void>((resolve) => {

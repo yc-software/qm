@@ -66,11 +66,12 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     ctx.deps.modelCredentials.statuses(),
     cached?.models ?? selectableModelCatalog(ctx.deps.modelCredentialFetch),
   ]);
+  const subscriptionAuth = await ctx.deps.companySubscriptionAuth?.();
   return sendJson(ctx.res, 200, {
     providers,
     models,
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    ...(ctx.deps.companySubscriptionAuth ? { subscriptionAuth: { provider: ctx.deps.companySubscriptionAuth } } : {}),
+    ...(subscriptionAuth ? { subscriptionAuth: { provider: subscriptionAuth } } : {}),
   });
 }
 

@@ -39,19 +39,13 @@ export class NoDefaultSandboxError extends Error {
 
 export interface RoutingSandboxOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
-  defaultBackend: SandboxBackendName;
+  defaultBackend: () => Promise<SandboxBackendName>;
   resources: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
 export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const { backends, resources, defaultBackend } = opts;
-  const fallback = ((): Sandbox => {
-    const s = backends[defaultBackend];
-    if (!s) throw new Error(`sandbox router: default backend ${defaultBackend} is not constructed`);
-    return s;
-  })();
-
   const backendFor = (name: SandboxBackendName): Sandbox => {
     const sandbox = backends[name];
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${name}; refusing to use a substitute computer`);
@@ -59,9 +53,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
-    if (!handle.backend) return fallback;
-    const sandbox = backends[handle.backend as SandboxBackendName];
-    if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend}`);
+    const sandbox = handle.backend ? backends[handle.backend as SandboxBackendName] : undefined;
+    if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend ?? "none"}`);
     return sandbox;
   };
 
@@ -103,18 +96,23 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   const some = (pred: (s: Sandbox) => boolean): boolean => constructed(backends).some(pred);
 
   const router: Sandbox = {
-    profile: fallback.profile,
+    profile: {
+      backend: "router",
+      writablePersistence: "snapshot_to_workspace",
+      processSessions: some((s) => s.profile.processSessions),
+    },
 
     async profileFor(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile> {
       const resource = sandboxId !== undefined ? await resources.get(sandboxId) : await resources.resolve(scopeId);
-      return resource ? backendFor(resource.backend).profile : fallback.profile;
+      return backendFor(resource?.backend ?? (await defaultBackend())).profile;
     },
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scope = provOpts?.routeScopeId ?? writableScope(layers);
       const resource =
         provOpts?.sandboxId !== undefined ? await resources.get(provOpts.sandboxId) : await resources.resolve(scope);
-      const backend = resource?.backend ?? defaultBackend;
+      if (!resource && !provOpts?.scratch) throw new NoDefaultSandboxError();
+      const backend = resource?.backend ?? (await defaultBackend());
       const sandbox = backendFor(backend);
       const provision = async (targetLayers: WorkspaceLayer[]) => {
         try {

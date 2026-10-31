@@ -131,7 +131,11 @@ test("deployment screening mode is capped only by dangerous posture", async () =
     enforce: { dangerous: "observe", auto: "enforce", strict: "enforce" },
   } as const;
   for (const mode of ["off", "observe", "enforce"] as const) {
-    const res = createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())), mode);
+    const res = createResolutionService(
+      config,
+      createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      async () => mode,
+    );
     for (const posture of ["dangerous", "auto", "strict"] as const) {
       await config.setSecurityPosture(scopeId("personal", "U1"), posture);
       const policy = (await res.resolve(conv, actor)).securityPolicy;

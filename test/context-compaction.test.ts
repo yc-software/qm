@@ -142,7 +142,7 @@ function buildOrchestrator(
     maxContextTokens,
     defaultTurnWallClockMs,
     runtime: createRuntimeService(
-      { config, baseModelDefault: "claude-sonnet-5" },
+      { config, baseModelDefault: () => "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
     ),
   });

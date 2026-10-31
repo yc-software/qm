@@ -31,6 +31,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
     server = createInsecureTestServer(built.app, {
       capabilitySecret: CAP,
       portalIdentitySecret: PID,

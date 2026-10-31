@@ -4,12 +4,21 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import type { Config } from "../src/config.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
-const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
+const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
+  stopAtEnd(
+    buildProductionApp(config, {
+      ...overrides,
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+    }),
+  );
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 const MODEL_ID = "overlay-future-model";
@@ -196,11 +205,12 @@ test("OpenRouter failure rebuilds local choices", async () => {
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ openaiApiKey: "local-test-key" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
+  await built.modelCredentials.set("openai", "local-test-key", "admin-alice");
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -342,7 +352,8 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     });
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
+  enterTenant(TEST_TENANT);
+  setProviderBaseUrls(TEST_TENANT, { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
   try {
     setModelOverlays([
       validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 10_000 }),
@@ -355,7 +366,10 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(received?.model, MODEL_ID);
     assert.equal(received?.max_tokens, 10_000);
     assert.equal(authorized, true);
-    const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
+    const agent = createAgent({
+      resolveProviderKeys: async () => ({ anthropic: "local-test-key" }),
+      captureRequests: false,
+    });
     const turn = {
       session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
       input: "Hello",
@@ -398,7 +412,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.ok(Math.abs(usage.cost.cacheRead - 0.00012) < 1e-12);
     assert.equal(usage.cost.cacheWrite, 0.0016);
   } finally {
-    setProviderBaseUrls({});
+    setProviderBaseUrls(TEST_TENANT, {});
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 });
@@ -479,7 +493,8 @@ test("model refresh is limited to dependent routes and admin repair survives sta
 test("overlay resolution preserves canonical personal endpoints and upstream builtin metadata", () => {
   setModelOverlays([validateModelOverlay(spec)]);
   const canonical = getRequiredModel(MODEL_ID, false).baseUrl;
-  setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
+  enterTenant(TEST_TENANT);
+  setProviderBaseUrls(TEST_TENANT, { openai: "http://127.0.0.1:19999/v1" });
   try {
     assert.equal(getRequiredModel(MODEL_ID).baseUrl, "http://127.0.0.1:19999/v1");
     assert.equal(getRequiredModel(MODEL_ID, false).baseUrl, canonical);
@@ -487,7 +502,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
     assert.equal(safeModelMetadata("gpt-5.6-sol")?.cost.input, 4);
     assert.equal(safeModelMetadata("gpt-5.6-sol")?.fastMode, true);
   } finally {
-    setProviderBaseUrls({});
+    setProviderBaseUrls(TEST_TENANT, {});
   }
 });
 

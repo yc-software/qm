@@ -73,7 +73,6 @@ async function buildOrchestrator(
     featureFlags?: OrchestratorDeps["featureFlags"];
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
-    brandingDefault?: OrgBranding;
   } = {},
 ) {
   const config = testConfigStore();
@@ -116,7 +115,6 @@ async function buildOrchestrator(
     deploy,
     acl,
     config,
-    ...(opts.brandingDefault ? { brandingDefault: opts.brandingDefault } : {}),
     skills,
     connectorTokens,
     signingSecret: "test-signing-secret",
@@ -411,16 +409,12 @@ test("template tokens in a stored branding value are stripped, never rendered or
   assert.doesNotMatch(prompt, /\{\{/);
 });
 
-test("env brandingDefault names the assistant when the store has no branding, and the store wins over it", async () => {
-  const brandingDefault: OrgBranding = { selfLabel: "envbot", orgName: "Env Org" };
-  const fromEnv = await sysprompt(await buildOrchestrator({ brandingDefault }), slackDm(""));
-  assert.match(fromEnv, /You are envbot, a helpful org-wide assistant for Env Org\./);
-
+test("store branding names the assistant", async () => {
   const fromStore = await sysprompt(
-    await buildOrchestrator({ brandingDefault, branding: { selfLabel: "storebot" } }),
+    await buildOrchestrator({ branding: { selfLabel: "storebot", orgName: "Store Org" } }),
     slackDm(""),
   );
-  assert.match(fromStore, /You are storebot, a helpful org-wide assistant for Env Org\./);
+  assert.match(fromStore, /You are storebot, a helpful org-wide assistant for Store Org\./);
 });
 
 test("Mode 2 (spine channel): static prose stays within the word-count ceiling (excl. live tail + soul)", async () => {

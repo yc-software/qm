@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -178,7 +178,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
 });
 
 test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {
-  const built = buildApp(testConfig({ securityScreen: "off" }));
+  const built = buildApp(testConfig(), { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
   await built.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
   await publishPersonalSkill(built.skills);
   const result = await built.app.turn({

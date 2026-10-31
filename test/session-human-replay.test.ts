@@ -6,10 +6,16 @@ import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testTenantSettings } from "./support/build-app.ts";
+
+function tenantApp() {
+  return buildApp(testConfig(), { tenantSettings: testTenantSettings() });
+}
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
-  const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
+  const built = tenantApp();
   t.after(() => built.runtime.stop());
+  await built.modelCredentials.set("openai", "test-openai-key", "test");
   await built.app.upsertDirectory(
     ["owner", "sender", "new-member"].map((principalId) => ({
       principalId,
@@ -103,7 +109,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
 });
 
 test("late child signals remain pending behind approval and requestless steers replay once", async (t) => {
-  const built = buildApp(testConfig());
+  const built = tenantApp();
   t.after(() => built.runtime.stop());
   const actor: Principal = { id: "sender", type: "internal" };
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-review", "dm", "personal:sender");

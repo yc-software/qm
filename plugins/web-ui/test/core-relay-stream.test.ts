@@ -4,12 +4,14 @@ import { createServer, request, type IncomingMessage } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const secret = "relay-stream-test";
 let releaseTail: (() => void) | undefined;
 let heldClosed: (() => void) | undefined;
 const seen: { method?: string; acceptEncoding?: string; body: string }[] = [];
 const core = createServer((req, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let body = "";
   req.on("data", (c: Buffer) => (body += c));
   req.on("end", () => {
@@ -24,7 +26,6 @@ const core = createServer((req, res) => {
 await once(core, "listening");
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = secret;
-process.env.WEB_UI_PRINCIPALS = "alice";
 const { handler } = await import("../server/index.ts");
 const web = createServer((req, res) => void handler(req, res)).listen(0, "127.0.0.1");
 await once(web, "listening");

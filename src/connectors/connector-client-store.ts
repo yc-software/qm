@@ -1,7 +1,6 @@
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
-import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
-import type { SecretSource } from "../credentials/secret-source.ts";
+import { PROVIDERS } from "./oauth.ts";
 import { tenantRootScope } from "../tenants/context.ts";
 
 export interface StoredConnectorClient {
@@ -121,12 +120,8 @@ export interface ConnectorClientReader {
   getConnectorClientSecret(orgScopeId: string, provider: string): Promise<DecryptedConnectorClient | null>;
 }
 
-export function createConnectorClientResolver(opts: {
-  reader: ConnectorClientReader;
-  secrets?: SecretSource;
-}): OAuthClientResolver {
-  const envResolver = createSecretClientResolver(opts.secrets);
-  return async (providerName, ctx): Promise<ResolvedClient> => {
+export function createConnectorClientResolver(opts: { reader: ConnectorClientReader }): OAuthClientResolver {
+  return async (providerName): Promise<ResolvedClient> => {
     if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
     const orgScopeId = tenantRootScope();
     const rec = await opts.reader.getConnectorClientSecret(orgScopeId, providerName);
@@ -141,6 +136,6 @@ export function createConnectorClientResolver(opts: {
         ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
       };
     }
-    return envResolver(providerName, ctx);
+    throw new Error(`provider not configured — an admin must add the ${providerName} OAuth client`);
   };
 }

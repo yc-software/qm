@@ -10,9 +10,11 @@ import { projectGroupRef, projectScopeId } from "../src/projects/project-store.t
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function freshApp() {
+async function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
-  return buildApp(testConfig({ dataDir }));
+  const built = buildApp(testConfig({ dataDir }));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
+  return built;
 }
 
 function dm(text: string, thread: string, externalId: string): TurnRequest {
@@ -20,7 +22,7 @@ function dm(text: string, thread: string, externalId: string): TurnRequest {
 }
 
 test("getSessionForViewer withholds metadata from a non-participant (no session-metadata IDOR)", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
 
   const outcome = await app.turn(dm("my private question", "web:alice:private", "alice"));
   const sessionId = outcome.sessionId!;
@@ -36,7 +38,7 @@ test("getSessionForViewer withholds metadata from a non-participant (no session-
 });
 
 test("the single-session read applies the managed-project check the session list applies", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -88,7 +90,7 @@ test("the single-session read applies the managed-project check the session list
 });
 
 test("a dropped project member cannot discard or retitle a session they can no longer read", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },

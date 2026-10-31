@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const seenSignatures = new Set<string>();
 let sessionCapMints = 0;
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {
@@ -47,7 +49,6 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "session-cap-replay-test-secret";
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");

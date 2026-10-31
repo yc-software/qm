@@ -185,8 +185,7 @@ export class Onboarding {
     if (baseModel) {
       summary = baseModel + " cannot run until its " + this.label(provider) + " key is configured.";
       if (subscriptionReady) summary = baseModel + " · authenticated by subscription — no API key needed.";
-      if (status?.configured)
-        summary = baseModel + " · " + (status.source === "admin" ? "admin-managed key" : "deployment key");
+      if (status?.configured) summary = baseModel + " · admin-managed key";
     }
     this.steps.model = { text: ready ? "Ready" : "Needs a key", tone: ready ? "ok" : "warn", summary };
     if (selection.provider === this.provider && selection.model === this.model && selection.apiKey === this.apiKey) {

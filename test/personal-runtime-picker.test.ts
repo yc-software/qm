@@ -19,7 +19,7 @@ async function setup() {
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
-    providerKeys: { anthropic: false, openai: false, openrouter: false },
+    modelCredentials: built.modelCredentials,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

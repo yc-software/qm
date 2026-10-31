@@ -478,7 +478,7 @@ describe("link mutation serialization", () => {
         const identity = createIdentityService(store, {
           externalMembers: testMap(),
           principalLinks: links,
-          directorySyncProtected: ["B"],
+          directorySyncProtected: async () => ["B"],
         });
         await identity.refresh();
         assert.equal(identity.classify("B").type, "guest");

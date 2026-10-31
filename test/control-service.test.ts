@@ -1026,6 +1026,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const runtime = { modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
@@ -1036,11 +1037,8 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
   const other = await control.patchCron(created.cron.id, { runtime: null }, claims("U9"));
   assert.equal(other.ok, false);
   assert.deepEqual((await built.app.getCron(created.cron.id))?.runtime, runtime);
-  const bad = await control.patchCron(
-    created.cron.id,
-    { runtime: { ...runtime, modelId: "does-not-exist" } },
-    claims("U1"),
-  );
+  const badRuntime = { ...runtime, modelId: "does-not-exist" };
+  const bad = await control.patchCron(created.cron.id, { runtime: badRuntime }, claims("U1"));
   assert.equal(bad.ok, false);
   const cleared = await control.patchCron(created.cron.id, { runtime: null }, claims("U1"));
   assert.ok(cleared.ok, JSON.stringify(cleared));
@@ -1067,6 +1065,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);

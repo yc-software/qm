@@ -3,7 +3,6 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
-import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
 import type { ScopeId } from "../types.ts";
 import { tenantRootScope } from "../tenants/context.ts";
@@ -29,19 +28,11 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import type { RuntimeChoice } from "../agent/agent.ts";
 
 export type RuntimeDeps = Partial<
-  Pick<
-    AppDeps,
-    "config" | "providerKeys" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
-  >
-> & { baseModelDefault?: string };
+  Pick<AppDeps, "config" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials">
+> & { baseModelDefault?: () => string | undefined };
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {
-  const gatewayIds = gatewayModelCatalog(true).map((model) => model.id);
-  const providers =
-    gatewayIds.length && ctx.deps.providerKeys
-      ? { ...ctx.deps.providerKeys, modelIds: new Set(gatewayIds) }
-      : undefined;
-  return { modelId: ctx.deps.baseModelDefault ?? defaultModel(undefined, providers) };
+  return { modelId: ctx.deps.baseModelDefault?.() ?? defaultModel() };
 }
 
 export async function userRuntimeConfigBody(ctx: { deps: RuntimeDeps }, scope: ScopeId, actorId: string) {
@@ -87,10 +78,9 @@ export async function runtimeConfigBody(
   purpose?: RuntimePurpose,
   requested?: Partial<RuntimeChoice>,
 ) {
-  if (authorizeChoice)
-    ctx = { deps: { ...ctx.deps, providerKeys: ALL_PROVIDERS_AVAILABLE, modelCredentials: undefined } };
+  if (authorizeChoice) ctx = { deps: { ...ctx.deps, modelCredentials: undefined } };
   const config = ctx.deps.config!;
-  const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
+  const configuredKeys = ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
   const org = tenantRootScope();

@@ -22,6 +22,7 @@ const upstream = createServer((req, res) => {
     const path = new URL(req.url!, origin).pathname;
     res.setHeader("content-type", "application/json");
     if (path === "/keys") return void res.end(JSON.stringify({ keys: [jwk] }));
+    if (path === "/v1/plugin-settings") return void res.end(JSON.stringify({ values: oidcSettings }));
     if (path === "/token") {
       const idToken = await new SignJWT({ nonce })
         .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
@@ -47,6 +48,16 @@ const upstream = createServer((req, res) => {
 });
 await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+const oidcSettings = {
+  OIDC_ISSUER: upstreamUrl,
+  OIDC_AUTH_ENDPOINT: `${upstreamUrl}/authorize`,
+  OIDC_TOKEN_ENDPOINT: `${upstreamUrl}/token`,
+  OIDC_USERINFO_ENDPOINT: `${upstreamUrl}/userinfo`,
+  OIDC_JWKS_URI: `${upstreamUrl}/keys`,
+  OIDC_CLIENT_ID: "portal-client",
+  OIDC_CLIENT_SECRET: "client-secret",
+  OIDC_PRINCIPAL_CLAIM: "email",
+};
 Object.assign(process.env, {
   NODE_ENV: "test",
   PORTAL_PUBLIC_URL: origin,
@@ -57,16 +68,6 @@ Object.assign(process.env, {
   ADMIN_UPSTREAM: upstreamUrl,
   AUTH_BROKER_UPSTREAM: upstreamUrl,
   PORTAL_APPS_DOMAIN: "apps.example.test",
-  OIDC_ISSUER: upstreamUrl,
-  OIDC_AUTH_ENDPOINT: `${upstreamUrl}/authorize`,
-  OIDC_TOKEN_ENDPOINT: `${upstreamUrl}/token`,
-  OIDC_USERINFO_ENDPOINT: `${upstreamUrl}/userinfo`,
-  OIDC_JWKS_URI: `${upstreamUrl}/keys`,
-  OIDC_CLIENT_ID: "portal-client",
-  OIDC_CLIENT_SECRET: "client-secret",
-  OIDC_ALLOWED_EMAILS: "",
-  OIDC_ALLOWED_EMAIL_DOMAIN: "",
-  OIDC_PRINCIPAL_CLAIM: "email",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
   PORTAL_SESSION_RENEW_AFTER_S: "1",
