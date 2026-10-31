@@ -27,6 +27,7 @@ import {
   createMembershipControlsScope,
 } from "../resolution/scope-membership.ts";
 import { samePerson } from "../directory/person.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
@@ -368,18 +369,21 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if (scope.lastActivityAt !== null) ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, scope.lastActivityAt);
       byScope.set(scope.scopeId, ctx);
     }
-    await Promise.all(
-      [...byScope.values()].map(async (ctx) => {
-        if (ctx.kind !== "group" || ctx.project) return;
-        const members = await deps.directory
-          .conversationMembers("group", parseScopeId(ctx.scopeId).ref)
-          .catch(swallowAs("contexts: group DM members", undefined));
-        if (!members) return;
-        ctx.groupMembers = members
-          .filter((m) => !samePerson(m.principalId, principalId))
-          .map((m) => ({ principalId: m.principalId, displayName: m.displayName }));
-      }),
-    );
+    const slackGroups = [...byScope.values()].filter((ctx) => ctx.kind === "group" && !ctx.project);
+    const rosters = await deps.directory
+      .groupRosters(slackGroups.map((ctx) => parseScopeId(ctx.scopeId).ref))
+      .catch(swallowAs("contexts: group DM rosters", new Map<string, DirectoryMember[]>()));
+    for (const ctx of slackGroups) {
+      const roster = rosters.get(parseScopeId(ctx.scopeId).ref);
+      if (!roster) continue;
+      ctx.groupMembers = roster
+        .filter((member) => !samePerson(member.principalId, principalId))
+        .map((member) => ({
+          principalId: member.principalId,
+          displayName: member.displayName,
+          ...(member.avatarUrl?.startsWith("https://") ? { avatarUrl: member.avatarUrl } : {}),
+        }));
+    }
     return [...byScope.values()].sort((a, b) => {
       if (a.kind === "personal") return -1;
       if (b.kind === "personal") return 1;

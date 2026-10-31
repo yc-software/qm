@@ -634,6 +634,31 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map(memberRow);
     },
 
+    async groupRosters(groupIds) {
+      const rosters = new Map<string, DirectoryMember[]>();
+      if (!groupIds.length) return rosters;
+      const rows = await q(
+        `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
+                member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
+         FROM directory_groups group_row
+         JOIN directory_group_members roster
+           ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
+         LEFT JOIN directory_members member
+           ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
+         WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
+         ORDER BY group_row.group_id, roster.principal_id`,
+        [orgId, [...groupIds]],
+      );
+      const incomplete = new Set<string>();
+      for (const row of rows) {
+        const groupId = row.group_id as string;
+        if (!row.principal_id) incomplete.add(groupId);
+        else rosters.set(groupId, [...(rosters.get(groupId) ?? []), memberRow(row)]);
+      }
+      for (const groupId of incomplete) rosters.delete(groupId);
+      return rosters;
+    },
+
     async listChannelsFor(principalId) {
       const rows = await q(
         `SELECT channel_id, name, is_private, is_external FROM directory_channels c

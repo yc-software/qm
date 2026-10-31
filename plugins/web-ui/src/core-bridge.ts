@@ -295,7 +295,7 @@ export interface CoreContext {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: CoreProject;
-  groupMembers?: Array<{ principalId: string; displayName: string }>;
+  groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
 
 export interface CoreProject {
