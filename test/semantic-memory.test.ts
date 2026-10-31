@@ -37,7 +37,7 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
   );
 
   assert.equal(
-    await recall(memory, "personal:a", { query: "verify", maxChars: 60 }),
+    await recall(memory, "personal:a", { query: "verify", maxChars: 82 }),
     "- (2026-10-01) browser preference",
   );
   assert.equal(await recall(memory, "personal:a", { query: "verify", maxChars: 0 }), "");
@@ -74,9 +74,9 @@ test("embedding outage falls back to whole bullets, without disabling grep or wr
     { onError: () => errors++ },
   );
   await memory.capture("personal:a", ["browser preference", "short"], Date.now());
-  const fallback = await recall(memory, "personal:a", { query: "verify", maxChars: 50 });
+  const fallback = await recall(memory, "personal:a", { query: "verify", maxChars: 72 });
   assert.match(fallback, /short$/);
-  assert.ok(fallback.length <= 50);
+  assert.ok(fallback.length <= 72);
   assert.equal(errors, 1);
   assert.equal((await memory.query("personal:a", "browser")).length, 1);
 });
@@ -141,7 +141,7 @@ test("weak matches are omitted; an oversized fact doesn't displace smaller match
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "");
   await base.delete!("personal:a", ["1"]);
   await base.capture("personal:a", [`browser ${"x".repeat(100)}`, "browser short", "browser second"], AT);
-  const result = await recall(memory, "personal:a", { query: "verify", maxChars: 90 });
+  const result = await recall(memory, "personal:a", { query: "verify", maxChars: 112 });
   assert.equal(result, "- (2026-10-01) browser short\n- (2026-10-01) browser second");
 });
 
@@ -163,7 +163,7 @@ test("without an embedding model, prompt recall takes the newest facts across no
   );
   assert.ok(out.length <= 6000);
   assert.match(out, /NEWEST_LOCAL/);
-  assert.match(out, /### channel:b\n- \(2026-09-01\) NEW_ROOM/);
+  assert.match(out, /### channel:b\n```untrusted-data\n- \(2026-09-01\) NEW_ROOM/);
   assert.doesNotMatch(out, /old 0 /);
 });
 

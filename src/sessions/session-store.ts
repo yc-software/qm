@@ -374,7 +374,7 @@ export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall"]),
+  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall", "memoryRecallOutcomes"]),
   thinking: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
