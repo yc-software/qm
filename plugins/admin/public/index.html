@@ -5884,24 +5884,8 @@
         grid-row: 1 / 3;
         align-self: start;
       }
-      #view-data .users-layout .users-roster > .head .users-head-actions {
-        grid-column: 2;
-        grid-row: 1 / 3;
-        align-self: start;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-      }
       #view-data .users-layout .users-roster td .badge {
         margin-left: 6px;
-      }
-      #view-data .users-layout .users-offboarded-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 13px;
-        white-space: nowrap;
       }
       #view-data .users-layout .status:empty {
         display: none;
@@ -9785,6 +9769,7 @@
           labelRole,
           confirm: (message) => window.confirm(message),
           openWebUiAs,
+          twoWayToggle,
           orgScope: "org:" + orgId,
           clearCache: () => dataCache.clear(),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),

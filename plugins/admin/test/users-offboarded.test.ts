@@ -16,11 +16,16 @@ test("the users list hides offboarded people until asked, and badges deactivated
     },
   ];
   const opened: string[] = [];
+  let toggle: any = null;
   f.ui.users.users(
     f.root,
     { users, grants: [] },
     {
       defaultShell() {},
+      twoWayToggle: (config: any) => {
+        toggle = config;
+        return f.document.createElement("fieldset");
+      },
       orgScope: "org:test",
       labelRole: () => "member",
       relTime: () => "-",
@@ -43,10 +48,12 @@ test("the users list hides offboarded people until asked, and badges deactivated
       .includes("Deactivated"),
   );
 
-  const toggle = f.root.querySelector<HTMLInputElement>(".users-offboarded-toggle input")!;
-  assert.match(f.root.querySelector(".users-offboarded-toggle")!.textContent!, /Show offboarded \(2\)/);
-  toggle.checked = true;
-  toggle.dispatchEvent(new f.window.Event("change"));
+  assert.deepEqual(JSON.parse(JSON.stringify(toggle.options.map((o: any) => o.label))), [
+    "Current",
+    "Show offboarded (2)",
+  ]);
+  assert.equal(toggle.value, "hide");
+  toggle.onChange("show");
   const gone = rows().find((r) => r.includes("gone@example.com"));
   assert.ok(gone?.includes("Offboarded"), "the toggle shows them with a badge");
   [...f.root.querySelectorAll<HTMLElement>(".users-roster tbody tr")]

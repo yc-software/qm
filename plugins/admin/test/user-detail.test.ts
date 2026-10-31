@@ -137,6 +137,13 @@ test("offboarding previews, applies only after confirmation, and reports each re
   assert.match(f.root.textContent!, /1 changes failed/);
   assert.ok(button("Reactivate sign-in"), "sign-in shows as deactivated");
   assert.match(f.root.textContent!, /Offboarded\s+Offboarded 1700000000000 by admin-alice/);
+  button("Preview offboarding").click();
+  await settle();
+  assert.match(
+    f.root.textContent!,
+    /Offboarded\s+Offboarded 1700000000000 by admin-alice/,
+    "previewing again keeps the record on the card",
+  );
   button("Reactivate sign-in").click();
   await settle();
   assert.match(

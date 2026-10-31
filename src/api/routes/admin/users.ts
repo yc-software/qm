@@ -10,6 +10,7 @@ import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../admin/i
 import { externalMemberActive, validEmail, type ExternalMember } from "../../../identity/external-members.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import { errMessage } from "../../../util/errors.ts";
+import { grantLive } from "../../../credentials/keychain.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
@@ -323,10 +324,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
     return sendJson(res, 200, {
       users: new Set(credentials.map((credential) => credential.ownerId)).size,
-      standing: grants.filter(
-        (grant) =>
-          grant.mode === "standing" && grant.status === "active" && (!grant.expiresAt || grant.expiresAt > Date.now()),
-      ).length,
+      standing: grants.filter((grant) => grant.mode === "standing" && grantLive(grant, Date.now())).length,
     });
   }
 
@@ -359,12 +357,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     principalId,
     displayName: namesByKey.get(personKey(principalId)) ?? null,
     credentialCount: credentials.filter((c) => samePerson(c.ownerId, principalId)).length,
-    activeGrantCount: grants.filter(
-      (g) =>
-        samePerson(g.ownerId, principalId) &&
-        g.status === "active" &&
-        (g.expiresAt === undefined || g.expiresAt > Date.now()),
-    ).length,
+    activeGrantCount: grants.filter((g) => samePerson(g.ownerId, principalId) && grantLive(g, Date.now())).length,
     pendingAskCount: asks.filter((a) => samePerson(a.ownerId, principalId) && a.status === "pending").length,
   }));
 

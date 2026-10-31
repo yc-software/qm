@@ -45,7 +45,6 @@ export function offboardingCard(
         const failed = plan.changes.filter((c: any) => c.result === "failed").length;
         if (plan.changes.some((c: any) => c.kind === "principal" && c.result === "done")) deactivated = true;
         if (data.principal) record = data.principal;
-        record = { ...data.principal, offboardChanges: [...(record?.offboardChanges || []), ...data.changes] };
         hint = "";
         if (apply) hint = failed ? s.plural(failed, "change") + " failed. Preview again to retry." : "Done.";
       },

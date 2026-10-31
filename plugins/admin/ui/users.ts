@@ -47,11 +47,28 @@ export class UsersView {
     if (previous && !previous.isConnected) return;
     const active = document.activeElement as HTMLElement | null;
     const focused = !!active && !!previous?.contains(active);
+    const offboarded = (this.data.users || []).filter((u: any) => u.offboarded).length;
     this.services.defaultShell({
       stats: [
         [(this.data.users || []).length, "Users"],
         [(this.data.grants || []).length, "Admins"],
       ],
+      actions: offboarded
+        ? [
+            this.services.twoWayToggle({
+              label: "Offboarded people",
+              options: [
+                { value: "hide", label: "Current" },
+                { value: "show", label: "Show offboarded (" + offboarded + ")" },
+              ],
+              value: this.showOffboarded ? "show" : "hide",
+              onChange: (value: string) => {
+                this.showOffboarded = value === "show";
+                this.draw();
+              },
+            }),
+          ]
+        : [],
       search: {
         value: this.filter,
         placeholder: "principal, role, or scope",
@@ -200,7 +217,6 @@ export class UsersView {
   draw() {
     const s = this.services;
     const matches = (parts: unknown[]) => parts.join(" ").toLowerCase().includes(this.filter.trim().toLowerCase());
-    const offboarded = (this.data.users || []).filter((u: any) => u.offboarded).length;
     const users = (this.data.users || []).filter(
       (u: any) =>
         (this.showOffboarded || !u.offboarded || u.admin?.isAdmin) &&
@@ -318,37 +334,20 @@ export class UsersView {
           <section class="card users-roster">
             <div class="head">
               <h2>Users</h2>
-              <div class="users-head-actions">
-                ${
-                  offboarded
-                    ? html`<label class="users-offboarded-toggle">
-                        <input
-                          type="checkbox"
-                          .checked=${this.showOffboarded}
-                          @change=${(e: Event) => {
-                            this.showOffboarded = (e.target as HTMLInputElement).checked;
-                            this.draw();
-                          }}
-                        />
-                        Show offboarded (${offboarded})
-                      </label>`
-                    : ""
-                }
-                <button
-                  type="button"
-                  class="primary"
-                  title="Invite teammate"
-                  aria-label="Invite teammate"
-                  aria-expanded=${String(this.inviteOpen)}
-                  @click=${() => {
-                    this.inviteOpen = !this.inviteOpen;
-                    this.draw();
-                    if (this.inviteOpen) this.root.querySelector<HTMLInputElement>("#users-email")?.focus();
-                  }}
-                >
-                  Invite teammate
-                </button>
-              </div>
+              <button
+                type="button"
+                class="primary"
+                title="Invite teammate"
+                aria-label="Invite teammate"
+                aria-expanded=${String(this.inviteOpen)}
+                @click=${() => {
+                  this.inviteOpen = !this.inviteOpen;
+                  this.draw();
+                  if (this.inviteOpen) this.root.querySelector<HTMLInputElement>("#users-email")?.focus();
+                }}
+              >
+                Invite teammate
+              </button>
             </div>
             <div class="body">
               ${invite}${roster}
