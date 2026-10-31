@@ -392,7 +392,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   async function loop(): Promise<void> {
     let failures = 0;
     let idle = 0;
-    let claimedAny = false;
     while (!stopped) {
       const observed = generation;
       if (deps.canClaim && !deps.canClaim()) {
@@ -400,7 +399,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         continue;
       }
       try {
-        claimedAny = false;
+        let claimedAny = false;
         for (const queue of deps.queues) {
           while (mayClaim()) {
             const people = queue === "turns_people";
