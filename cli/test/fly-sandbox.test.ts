@@ -23,29 +23,6 @@ test("Fly runs the live session smoke inside the private core machine", () => {
   assert.equal(flyLiveSessionCommand(), "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080");
 });
 
-test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image, env literals)", () => {
-  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
-  const cfg = {
-    ...config,
-    sandbox: {
-      app: "acme-sb",
-      env: { TZ: "UTC" },
-      secretEnv: ["COMPANY_API_TOKEN"],
-    },
-  };
-
-  const core = derivedTomlFor(cfg, "core", repoRoot);
-  assert.match(core, /FLY_RESIDENT_ENV_TZ = "UTC"/, "sandbox.env literal forwarded as FLY_RESIDENT_ENV_*");
-  assert.doesNotMatch(
-    core,
-    /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/,
-    "secretEnv value/name must not be written to the toml",
-  );
-
-  const admin = derivedTomlFor(cfg, "admin", repoRoot);
-  assert.doesNotMatch(admin, /FLY_RESIDENT_ENV_TZ/);
-});
-
 test("the fly target routes security screen proxy configuration only to core", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
   const screened: QmConfig = {
@@ -254,7 +231,7 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
   }
 });
 
-test("fly secrets push stages a dual-role secret under BOTH names on the core app", async () => {
+test("fly secrets push stages core, virtual-service and plugin secrets and no sandbox-wide copies", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-"));
   const config: QmConfig = {
     contract: 1,
@@ -268,7 +245,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     skills: [],
     env: {},
     imageOverrides: {},
-    sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY", "COMPANY_TOKEN"] },
+    sandbox: { app: "acme-sb" },
   };
   mkdirSync(join(dir, "plugins", "srcplug"), { recursive: true });
   writeFileSync(join(dir, "plugins", "srcplug", "Dockerfile"), "FROM scratch\n");
@@ -302,12 +279,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
       calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"),
       "plain name for the core process",
     );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_ANTHROPIC_API_KEY=-"),
-      "renamed variant forwarded into sandboxes",
-    );
-    assert.ok(calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
-    assert.ok(!calls.includes("-a acme-core COMPANY_TOKEN=-"), "a sandbox-only secret is not staged plain");
+    assert.ok(!calls.includes("FLY_RESIDENT_ENV_"), "no deployment-wide sandbox secret is staged");
     assert.ok(
       calls.includes("secrets set --stage -a acme-core SLACK_BOT_TOKEN=-"),
       "virtual-service secrets stage plain on core",

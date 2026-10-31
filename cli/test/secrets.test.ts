@@ -60,31 +60,6 @@ test("required secret validation uses the selected values without ambient creden
   }
 });
 
-test("a dual-role secret (sandbox.secretEnv + virtual service) needs BOTH names on core", () => {
-  const config = makeConfig({
-    services: ["core", "slack"],
-    sandbox: { app: "acme-sb", secretEnv: ["SLACK_BOT_TOKEN"] },
-  });
-  const names = runtimeSecretNames("core", secretByName(config, "SLACK_BOT_TOKEN"));
-  assert.deepEqual(names.sort(), ["FLY_RESIDENT_ENV_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"]);
-});
-
-test("a sandbox-only secret lands on core ONLY as FLY_RESIDENT_ENV_<NAME>", () => {
-  const config = makeConfig({ sandbox: { app: "acme-sb", secretEnv: ["COMPANY_TOKEN"] } });
-  const secret = secretByName(config, "COMPANY_TOKEN");
-  assert.deepEqual(runtimeSecretNames("core", secret), ["FLY_RESIDENT_ENV_COMPANY_TOKEN"]);
-  assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
-});
-
-test("a core + sandbox secret needs both the plain and renamed forms on core", () => {
-  const config = makeConfig({
-    env: {},
-    sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY"] },
-  });
-  const names = runtimeSecretNames("core", secretByName(config, "ANTHROPIC_API_KEY"));
-  assert.deepEqual(names.sort(), ["ANTHROPIC_API_KEY", "FLY_RESIDENT_ENV_ANTHROPIC_API_KEY"]);
-});
-
 test("a virtual-only secret keeps its plain name on core (the virtual service runs in-process)", () => {
   const config = makeConfig({ services: ["core", "slack"] });
   const secret = secretByName(config, "SLACK_APP_TOKEN");
@@ -413,7 +388,7 @@ test("shared Fly publishing requires private peers only when selected", () => {
   }
 });
 
-test("deployment control credentials are conditional and cannot be delivered to plugins or sandboxes", () => {
+test("deployment control credentials are conditional and cannot be delivered to plugins", () => {
   assert.equal(
     computedSecrets(makeConfig()).some((secret) => secret.name === "DEPLOYMENT_CONTROL_SECRET"),
     false,
@@ -429,10 +404,6 @@ test("deployment control credentials are conditional and cannot be delivered to 
         ...config,
         plugins: [{ name: "external", secrets: [{ name: "DEPLOYMENT_CONTROL_SECRET" }] }],
       }),
-    /only to core/,
-  );
-  assert.throws(
-    () => computedSecrets({ ...config, sandbox: { app: "sandbox", secretEnv: ["DEPLOYMENT_CONTROL_SECRET"] } }),
     /only to core/,
   );
   assert.throws(

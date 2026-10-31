@@ -10,6 +10,9 @@ import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
 import { scopeId, type ScopeId, type SessionEntry } from "../../src/types.ts";
 import { recallText } from "../support/recall-text.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 /**
  * Extended live suite against the real Memorable extraction service. Deliberately not run in CI:

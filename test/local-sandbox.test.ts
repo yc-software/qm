@@ -18,6 +18,8 @@ import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
+const oneTenant = { q: async () => [{ n: 1 }] };
+
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
 let daemon: ChildProcess;
@@ -58,6 +60,7 @@ after(() => {
 function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
+    tenants: oneTenant,
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,
@@ -65,6 +68,13 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   });
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
+
+test("the local Docker sandbox refuses to provision for a database with more than one tenant", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake, { tenants: { q: async () => [{ n: 2 }] } });
+  await assert.rejects(sb.provision(rw(scopeId("personal", "U1"))), /single-tenant installs only; this database has 2/);
+  assert.equal(fake.runCount, 0);
+});
 
 test("profile declares the local Docker substrate honestly", () => {
   const sb = makeSandbox(installFakeDocker(daemonPort));
@@ -237,7 +247,12 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const workspace = createLocalWorkspaceStore(dir);
   const shared = TEST_ROOT_SCOPE;
   await workspace.write(shared, "guide.md", "shared doc");
-  const sb = createLocalSandbox(workspace, { dockerExec: fake.dockerExec, homeDir: guestHome, repoRoot: tmp });
+  const sb = createLocalSandbox(workspace, {
+    tenants: oneTenant,
+    dockerExec: fake.dockerExec,
+    homeDir: guestHome,
+    repoRoot: tmp,
+  });
   const h = await sb.provision([
     { scopeId: scopeId("personal", "U10"), mountPath: "", mode: "rw" as const },
     { scopeId: shared, mountPath: "shared", mode: "ro" as const },

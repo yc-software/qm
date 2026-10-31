@@ -23,6 +23,8 @@ import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { inTenantOf } from "../tenants/claim.ts";
 import { withoutTenant } from "../tenants/context.ts";
+import { durableObjectKey, FILES_AREA } from "./durable-byte-store.ts";
+import { isTenantId, withTenant } from "../tenants/context.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
@@ -74,10 +76,17 @@ export function createDirectFileUploads(options: {
       }));
   const now = options.now ?? Date.now;
   const { store, files } = options;
+  const prefix = options.prefix ?? "";
   const target = (row: FileUpload) => ({
     Bucket: options.bucket,
-    Key: `${options.prefix ?? ""}files/uploads/${row.id}`,
+    Key: durableObjectKey(prefix, FILES_AREA, `files/uploads/${row.id}`),
   });
+  const areaPrefix = `${prefix}${FILES_AREA}/`;
+  const uploadKey = (key: string): { tenant: string; id: string } | null => {
+    const [tenant, files, uploads, id, ...rest] = key.slice(areaPrefix.length).split("/");
+    if (!tenant || !id || rest.length || files !== "files" || uploads !== "uploads") return null;
+    return isTenantId(tenant) && /^[0-9a-f]{32}$/.test(id) ? { tenant, id } : null;
+  };
   async function requireRow(id: string): Promise<FileUpload> {
     const row = await store.get(id);
     if (!row) throw new FileUploadError("upload not found", 404);
@@ -347,7 +356,7 @@ export function createDirectFileUploads(options: {
         const page = (await client.send(
           new ListMultipartUploadsCommand({
             Bucket: options.bucket,
-            Prefix: `${options.prefix ?? ""}files/uploads/`,
+            Prefix: areaPrefix,
             MaxUploads: 100,
             ...(keyMarker ? { KeyMarker: keyMarker } : {}),
             ...(uploadMarker ? { UploadIdMarker: uploadMarker } : {}),
@@ -366,9 +375,9 @@ export function createDirectFileUploads(options: {
             upload.Initiated.getTime() > now() - UPLOAD_TTL_MS
           )
             continue;
-          const id = upload.Key.slice(`${options.prefix ?? ""}files/uploads/`.length);
-          if (!/^[0-9a-f]{32}$/.test(id)) continue;
-          if ((await store.completingUploadId(id)) === upload.UploadId) continue;
+          const owner = uploadKey(upload.Key);
+          if (!owner) continue;
+          if ((await withTenant(owner.tenant, () => store.completingUploadId(owner.id))) === upload.UploadId) continue;
           await client.send(
             new AbortMultipartUploadCommand({ Bucket: options.bucket, Key: upload.Key, UploadId: upload.UploadId }),
           );

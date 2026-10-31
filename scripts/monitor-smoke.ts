@@ -21,7 +21,9 @@ import { enterTenant } from "../src/tenants/context.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMonitorRows } from "../src/monitors/monitor-table.ts";
+import { randomUUID } from "node:crypto";
 
+enterTenant(randomUUID());
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const tenantDb = createPgPool(databaseUrl);

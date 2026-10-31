@@ -726,7 +726,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const { lease } = await store.acquireLease(session.id);
   assert.ok(lease);
   const bytes = createMemoryDurableByteStore();
-  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+  const outputs = createPostgresToolOutputStore({ pool, bytes });
   const appends: Promise<unknown>[] = [];
   const full = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {

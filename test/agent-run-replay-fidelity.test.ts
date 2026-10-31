@@ -587,7 +587,7 @@ async function withPgSession(
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
-        bytesFor: () => createMemoryDurableByteStore(),
+        bytes: createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
       history: async () => forModelContext(await store.getEntries(session.id)),

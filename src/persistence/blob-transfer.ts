@@ -20,6 +20,8 @@ import {
 import { swallow, swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
+import { currentTenant, isTenantId } from "../tenants/context.ts";
+import { tenantDir } from "../tenants/storage.ts";
 
 export const MAX_BLOB_BYTES = 1_000_000_000;
 export const MAX_STAGE_BLOB_BYTES = 12_000_000_000;
@@ -79,15 +81,13 @@ export async function collectBlob(stream: Readable): Promise<Buffer> {
 }
 
 export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
-  let ensured: Promise<unknown> | null = null;
-  const ensureDir = (): Promise<unknown> => (ensured ??= mkdir(dir, { recursive: true }));
-
   return {
     async put(source, opts) {
-      await ensureDir();
+      const root = tenantDir(dir);
+      await mkdir(root, { recursive: true });
       const blobId = newBlobId();
-      const partPath = join(dir, `${blobId}.part`);
-      const finalPath = join(dir, blobId);
+      const partPath = join(root, `${blobId}.part`);
+      const finalPath = join(root, blobId);
       const hash = createHash("sha256");
       const out = createWriteStream(partPath);
       let size = 0;
@@ -117,7 +117,7 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
 
     async open(blobId) {
       if (!BLOB_ID.test(blobId)) return null;
-      const path = join(dir, blobId);
+      const path = join(tenantDir(dir), blobId);
       let st;
       try {
         st = await stat(path);
@@ -131,28 +131,25 @@ export function createLocalBlobTransferStore(dir: string): BlobTransferStore {
 
     async delete(blobId) {
       if (!BLOB_ID.test(blobId)) return;
-      await rm(join(dir, blobId), { force: true }).catch(swallowAs("blob-transfer: delete", undefined));
+      await rm(join(tenantDir(dir), blobId), { force: true }).catch(swallowAs("blob-transfer: delete", undefined));
     },
 
     async sweep(maxAgeMs) {
       const cutoff = Date.now() - maxAgeMs;
       let removed = 0;
-      let names: string[];
-      try {
-        names = await readdir(dir);
-      } catch {
-        return 0;
-      }
-      for (const name of names) {
-        const path = join(dir, name);
-        try {
-          const st = await stat(path);
-          if (st.mtimeMs <= cutoff) {
-            await rm(path, { force: true });
-            removed++;
+      for (const tenant of (await readdir(dir).catch(() => [])).filter(isTenantId)) {
+        const root = join(dir, tenant);
+        for (const name of await readdir(root).catch(() => [])) {
+          const path = join(root, name);
+          try {
+            const st = await stat(path);
+            if (st.mtimeMs <= cutoff) {
+              await rm(path, { force: true });
+              removed++;
+            }
+          } catch (err) {
+            swallow("blob-transfer: sweep entry", err);
           }
-        } catch (err) {
-          swallow("blob-transfer: sweep entry", err);
         }
       }
       return removed;
@@ -170,7 +167,7 @@ export interface S3BlobTransferOptions {
 export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobTransferStore {
   const bucket = options.bucket;
   const prefix = (options.prefix ?? "") + "transfer/";
-  const keyFor = (blobId: string): string => prefix + blobId;
+  const keyFor = (blobId: string): string => `${prefix}${currentTenant()}/${blobId}`;
   const client = options._client ?? s3Client(options.region);
 
   return {
@@ -352,6 +349,7 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
 
 export function createMemoryBlobTransferStore(): BlobTransferStore {
   const blobs = new Map<string, { data: Buffer; at: number }>();
+  const keyFor = (blobId: string): string => `${currentTenant()}/${blobId}`;
   return {
     async put(source, opts) {
       const { data, sizeBytes, sha256 } = await collectBytes(source, {
@@ -360,16 +358,16 @@ export function createMemoryBlobTransferStore(): BlobTransferStore {
       });
       if (opts?.expectedSha256 && opts.expectedSha256 !== sha256) throw new BlobHashMismatchError();
       const blobId = newBlobId();
-      blobs.set(blobId, { data, at: Date.now() });
+      blobs.set(keyFor(blobId), { data, at: Date.now() });
       return { blobId, sizeBytes, sha256 };
     },
     async open(blobId) {
-      const hit = blobs.get(blobId);
+      const hit = blobs.get(keyFor(blobId));
       if (!hit) return null;
       return { sizeBytes: hit.data.length, stream: Readable.from(hit.data) };
     },
     async delete(blobId) {
-      blobs.delete(blobId);
+      blobs.delete(keyFor(blobId));
     },
     async sweep(maxAgeMs) {
       const cutoff = Date.now() - maxAgeMs;

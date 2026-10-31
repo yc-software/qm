@@ -147,10 +147,11 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     revision: { before: number; after: number; changed: number },
     update: () => Promise<void>,
   ): Promise<void> {
-    const current = synced.get(scope) === revision.before && revision.after === revision.before + revision.changed;
-    synced.delete(scope);
+    const current =
+      synced.get(local.scopeDir(scope)) === revision.before && revision.after === revision.before + revision.changed;
+    synced.delete(local.scopeDir(scope));
     await update();
-    if (current) synced.set(scope, revision.after);
+    if (current) synced.set(local.scopeDir(scope), revision.after);
   }
   async function readBytes(scope: ScopeId, relPath: string): Promise<Uint8Array | null> {
     const path = pathFor(scope, relPath);
@@ -171,7 +172,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
       if (limit !== null && !Number.isFinite(limit)) throw new Error("workspace list limit must be finite");
       const revision = await revisionOf(await db.pool(), scope);
       await local.ensureScope(scope);
-      if (synced.get(scope) === revision) {
+      if (synced.get(local.scopeDir(scope)) === revision) {
         const rows = await db.q("SELECT path FROM render_workspace_files WHERE scope_id=$1 ORDER BY path LIMIT $2", [
           scope,
           limit,
@@ -179,7 +180,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
         const present = new Set(await local.list(scope));
         const paths = rows.map((row) => join(local.scopeDir(scope), pathFor(scope, row.path as string)));
         if (paths.every((path) => present.has(path))) return paths;
-        synced.delete(scope);
+        synced.delete(local.scopeDir(scope));
       }
       const rows = await db.q(
         "SELECT path, data FROM render_workspace_files WHERE scope_id=$1 ORDER BY path LIMIT $2",
@@ -196,7 +197,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
         for (const abs of await local.list(scope)) {
           if (!retained.has(abs)) await uncache(scope, relative(local.scopeDir(scope), abs));
         }
-        synced.set(scope, revision);
+        synced.set(local.scopeDir(scope), revision);
       }
       return paths;
     });

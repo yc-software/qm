@@ -10,6 +10,7 @@ test("S3 fallback streams large parts and aborts on transfer failure", async () 
   const received: Buffer[] = [];
   const bytes = createS3DurableByteStore({
     bucket: "test",
+    area: "docstore",
     _client: {
       async send(command: any) {
         const name = command.constructor.name;

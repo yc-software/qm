@@ -4,10 +4,12 @@ import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { migrateTenantStorageOnce } from "../tenants/storage-migration.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await migrateTenantStorageOnce(config);
 await built.tenantSettings.refreshAll();
 await built.boot();
 const { runtime } = built;
