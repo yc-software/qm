@@ -95,6 +95,12 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   };
 }
 
+export class MemoryRecallWithheld extends Error {
+  constructor(scope: ScopeId) {
+    super(`memory for ${scope} is withheld from this conversation`);
+  }
+}
+
 export class MemoryDisclosureDenied extends Error {
   constructor() {
     super("This notebook isn't editable from this conversation. Edit it from an authorized conversation.");
@@ -109,11 +115,19 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   const listed = memory.facts?.bind(memory);
   if (!listed) {
     const narrow = (scope: ScopeId) => memoryDisclosurePolicy(access).narrow(scope);
+    const withheld = async (scope: ScopeId) => {
+      if (!(await narrow(scope))) throw new MemoryRecallWithheld(scope);
+    };
     return {
       ...memory,
-      recall: async (scope, context) => ((await narrow(scope)) ? memory.recall(scope, context) : []),
-      query: async (scope, query, limit, context) =>
-        (await narrow(scope)) ? memory.query(scope, query, limit, context) : [],
+      recall: async (scope, context) => {
+        await withheld(scope);
+        return memory.recall(scope, context);
+      },
+      query: async (scope, query, limit, context) => {
+        await withheld(scope);
+        return memory.query(scope, query, limit, context);
+      },
       read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
     };
   }

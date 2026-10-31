@@ -48,7 +48,7 @@ When the chatting user is an org admin, the self-API additionally accepts the or
 notebook as a target:
 
 ```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/memory/facts" \
+curl -sS --fail-with-body -X POST "$AGENT_API_URL/v1/memory/facts" \
   -H "x-agent-capability: $AGENT_API_TOKEN" \
   -H "content-type: application/json" \
   -d '{"scope":"org","facts":["..."]}'
@@ -69,3 +69,7 @@ retrying (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively).
   written — save the fact on a normal turn instead.
 - `401 unauthorized` from the self-API — your token expired mid-turn; this resolves on
   the next turn.
+- `502` with an `application/problem+json` body from `/v1/memory/facts` or
+  `/v1/memory/search` — a memory provider failed. `added` (or `results`) is what still
+  worked, and each entry in `problems` names the provider, what happened and a `fix`.
+  Don't send the same facts again; tell the user which provider failed and its fix.

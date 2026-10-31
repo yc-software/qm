@@ -2,6 +2,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 import { testTenantsSeeded } from "./support/tenant.ts";
 
@@ -29,6 +30,7 @@ test(
       startedAt: 1000,
       livenessMs: 200,
     });
+    await migrateRegisteredPgSchemas(URL!);
     assert.equal(await old.beat(), false, "alone: not superseded");
 
     const peer = createPostgresInstanceRegistry(pool, {
@@ -69,6 +71,7 @@ test(
       const built = buildApp(
         testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),
       );
+      await migrateRegisteredPgSchemas(URL!);
       built.runtime.start();
       const count = async (): Promise<number> => {
         const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
@@ -86,3 +89,19 @@ test(
     assert.equal(await boot(true, "sha-active"), 1, "a claiming instance still announces itself");
   },
 );
+
+test("an instance beats through the app login, which cannot create tables", { skip }, async () => {
+  const owner = createPostgresMapFactory(URL!).pool;
+  createPostgresInstanceRegistry(owner, { instanceId: "i-owner", buildSha: "sha-owner", startedAt: 1 });
+  await migrateRegisteredPgSchemas(URL!);
+  const app = new globalThis.URL(URL!);
+  app.searchParams.set("options", "-c role=qm_app");
+  const registry = createPostgresInstanceRegistry(createPgPool(app.toString()), {
+    instanceId: "i-app",
+    buildSha: "sha-app",
+    startedAt: 2,
+  });
+  await registry.beat();
+  const { rows } = await owner.query("SELECT build_sha FROM instance_heartbeats WHERE instance_id = 'i-app'");
+  assert.deepEqual(rows, [{ build_sha: "sha-app" }]);
+});

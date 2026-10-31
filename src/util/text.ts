@@ -37,3 +37,19 @@ export function outermostJsonObject(text: string): string | undefined {
 export function promptText(value: string): string {
   return value.replaceAll("```", "ʼʼʼ");
 }
+
+export function untrustedText(value: string): string {
+  return promptText(value)
+    .replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n")
+    .replaceAll("</", "<\\/");
+}
+
+export function quotedData(value: string): string {
+  const lines = untrustedText(value)
+    .split("\n")
+    .map((line) => {
+      const text = line.trimStart();
+      return text.startsWith("#") && "# \t".includes(text[1] ?? " ") ? `\\${line}` : line;
+    });
+  return ["```untrusted-data", ...lines, "```"].join("\n");
+}
