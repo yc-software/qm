@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { tenantTableStatements } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -286,5 +287,19 @@ BEGIN
   CREATE TRIGGER blobs_no_truncate BEFORE TRUNCATE ON blobs FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
 END $base_schema$`,
     `DROP FUNCTION IF EXISTS safe_json(text)`,
+  ],
+};
+
+export const SESSION_TENANCY: PgMigrationDefinition = {
+  id: "sessions/store/0048-tenant-rls",
+  statements: [
+    `INSERT INTO tenants(id, slug, name)
+     SELECT id, id::text, id::text FROM qm_tenant
+      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
+     ON CONFLICT (id) DO NOTHING`,
+    ...tenantTableStatements("blobs"),
+    ...tenantTableStatements("items"),
+    `DROP FUNCTION qm_tenant_id()`,
+    `DROP TABLE qm_tenant`,
   ],
 };

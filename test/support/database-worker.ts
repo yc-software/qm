@@ -40,7 +40,7 @@ async function take(template: string): Promise<string> {
 
 parentPort!.on("message", async (request: { template?: string }) => {
   try {
-    const name = await take(request.template ?? "");
+    const name = await take(request.template ?? process.env.QM_TEST_TENANTS_DATABASE ?? "");
     port.postMessage({ ok: true, name });
   } catch (error) {
     port.postMessage({ ok: false, message: error instanceof Error ? error.message : String(error) });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
+import { boundTenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
@@ -120,21 +121,29 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
-async function withStatementTimeout<T>(
+export async function bindTenant(client: Pick<PoolClient, "query">, tenant = boundTenant()): Promise<void> {
+  if (tenant !== undefined) await client.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
+}
+
+async function withQueryTransaction<T>(
   client: PoolClient,
+  tenant: string | undefined,
   timeoutMs: number | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (timeoutMs === undefined) return run();
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
+  if (timeoutMs === undefined && tenant === undefined) return run();
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
+    throw new Error("Query timeout must be a positive finite number");
+  }
   await client.query("BEGIN");
   try {
-    await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
+    await bindTenant(client, tenant);
+    if (timeoutMs !== undefined) await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
     const result = await run();
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query timeout", undefined));
+    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query transaction", undefined));
     throw error;
   }
 }
@@ -154,6 +163,7 @@ export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) 
   let rollbackError: Error | undefined;
   try {
     await client.query("BEGIN");
+    await bindTenant(client);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -456,8 +466,9 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
+    const tenant = boundTenant();
     const p = await pool();
-    if (!signal && timeoutMs === undefined) {
+    if (!signal && timeoutMs === undefined && tenant === undefined) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
@@ -477,7 +488,7 @@ export function createPgPool(
     try {
       return await withAbort(
         () =>
-          withStatementTimeout(client, timeoutMs, async () => {
+          withQueryTransaction(client, tenant, timeoutMs, async () => {
             const res = await client.query({ text, values: params });
             return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
           }),

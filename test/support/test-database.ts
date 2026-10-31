@@ -48,6 +48,10 @@ export function testDatabaseUrl(): string {
   return databaseUrl(createDatabaseSync({}));
 }
 
+export function testBareDatabaseUrl(): string {
+  return databaseUrl(createDatabaseSync({ template: "" }));
+}
+
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
