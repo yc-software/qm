@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
-import type { ActorAssertion, ConversationKind, OutgoingAttachment } from "../types.ts";
-import type { SlackNative } from "./slack/adapter.ts";
+import type { SlackIdentityMode, SlackUser } from "../slack/identity.ts";
+import type { ActorAssertion, ConversationKind, DeliveryProvenance, OutgoingAttachment } from "../types.ts";
 
 export interface SurfaceRef {
   surface: string;
@@ -10,7 +10,7 @@ export interface SurfaceRef {
   thread?: string;
 }
 
-export interface SurfaceUser {
+interface SurfaceUser {
   surface: string;
   account: string;
   id: string;
@@ -58,11 +58,17 @@ type InboundOutcome =
 interface OutboundMessage {
   text: string;
   attachments?: OutgoingAttachment[];
+  provenance?: DeliveryProvenance;
 }
 
 interface MessageRef {
   ref: SurfaceRef;
   messageId: string;
+}
+
+export interface SlackNative {
+  accounts: Map<string, { ownTeamId: string; identityMode: SlackIdentityMode }>;
+  userFrom(user: SlackUser | undefined, account: string): SurfaceUser;
 }
 
 interface SurfaceNatives {

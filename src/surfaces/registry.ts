@@ -2,7 +2,7 @@ import type { Surface } from "./contract.ts";
 
 export interface SurfaceRegistry {
   get(kind: string): Surface | undefined;
-  label(kind: string | undefined): string | undefined;
+  label(kind: string): string | undefined;
   list(): readonly Surface[];
 }
 
@@ -15,7 +15,7 @@ export function createSurfaceRegistry(deps: { surfaces: readonly Surface[] }): S
   const surfaces = [...byKind.values()];
   return {
     get: (kind) => byKind.get(kind),
-    label: (kind) => (kind === undefined ? undefined : byKind.get(kind)?.label),
+    label: (kind) => byKind.get(kind)?.label,
     list: () => surfaces,
   };
 }
