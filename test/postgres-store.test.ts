@@ -18,7 +18,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { bindTestTenant, boundUrl, seedTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, seedTenant, TEST_TENANT, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -31,9 +31,10 @@ before(async () => {
   const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, items, participants, session_leases, session_llm_requests, session_pins, runs, tool_calls CASCADE",
+    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, items, participants, session_leases, session_llm_requests, session_pins, runs, tool_calls, tenants CASCADE",
   );
   await p.end();
+  await provisionTestTenants(URL);
 });
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -2482,9 +2483,9 @@ test(
       await raw.query("DROP INDEX IF EXISTS idx_runs_one_running_per_session");
       const req = JSON.stringify(turn("dup"));
       await raw.query(
-        `INSERT INTO runs(id, session_id, status, request, created_at, started_at)
-       VALUES ('dup-keep', 'sDup', 'running', $1, 1, 1), ('dup-demote', 'sDup', 'running', $1, 2, 2)`,
-        [req],
+        `INSERT INTO runs(tenant_id, id, session_id, status, request, created_at, started_at)
+       VALUES ($2, 'dup-keep', 'sDup', 'running', $1, 1, 1), ($2, 'dup-demote', 'sDup', 'running', $1, 2, 2)`,
+        [req, TEST_TENANT],
       );
       await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'runs/store/0001'");
 

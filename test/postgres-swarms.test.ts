@@ -9,7 +9,7 @@ import { createSwarmStore, SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { createPostgresSwarmRows, type SwarmRows } from "../src/swarms/swarm-table.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -37,7 +37,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
-  await seedTenant(databaseUrl!);
+  await provisionTestTenants(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;

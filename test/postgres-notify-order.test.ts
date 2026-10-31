@@ -25,7 +25,7 @@ test("notification publication preserves order without concurrent pool queries a
   bus.emit(1);
   bus.emit(2);
   await tick();
-  assert.deepEqual(started, [["1", "2"]]);
+  assert.deepEqual(started, [["\n1", "\n2"]]);
   bus.emit(3);
   bus.emit(4);
   const closing = bus.close!();
@@ -33,8 +33,8 @@ test("notification publication preserves order without concurrent pool queries a
   pending.shift()!();
   await tick();
   assert.deepEqual(started, [
-    ["1", "2"],
-    ["3", "4"],
+    ["\n1", "\n2"],
+    ["\n3", "\n4"],
   ]);
   assert.equal(closed, false);
   pending.shift()!();

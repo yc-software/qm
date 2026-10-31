@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before } from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -8,9 +8,10 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
+before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;

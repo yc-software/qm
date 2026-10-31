@@ -880,7 +880,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
-  const enqueued: Array<{ cronId: string; scheduledAt: number }> = [];
+  const enqueued: CronFireJob[] = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
@@ -914,7 +914,8 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   assert.ok(onFire, "queue mode registers the fire handler");
   scheduler.notifyChanged(cron.id);
   for (let i = 0; i < 20 && !enqueued.length; i++) await new Promise((r) => setImmediate(r));
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1 }, "notifyChanged prompt-schedules the slot");
+  const { tenantId: _tenantId, ...scheduled } = enqueued.pop()!;
+  assert.deepEqual(scheduled, { cronId: cron.id, scheduledAt: 1 }, "notifyChanged prompt-schedules the slot");
 
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "the job for the due slot fires");

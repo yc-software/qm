@@ -23,7 +23,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}, settings: T
   });
   await built.config.hydrate?.();
   await built.identity.hydrate();
-  await built.deploymentLayerReady();
+  await built.skillsReady();
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();

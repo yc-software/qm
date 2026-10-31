@@ -14,7 +14,7 @@ mock.module("../src/persistence/pg-pool.ts", {
       const state = { closed: false };
       pools.push(state);
       return {
-        pool: async () => {
+        ownerPool: async () => {
           if (state.closed) throw new Error("Postgres store is closed");
           return { query: async () => ({ rows: [] }) };
         },

@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -20,6 +20,7 @@ for (const backend of ["memory", "postgres"] as const) {
     `${backend}: a synchronous turn waiting on a run another worker holds does not poll claims`,
     { skip: backend === "postgres" && !databaseUrl, timeout: 30_000 },
     async () => {
+      if (backend === "postgres") await provisionTestTenants(databaseUrl!);
       const built = buildApp(
         testConfig({
           runWaitMs: 5_000,

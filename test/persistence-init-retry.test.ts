@@ -26,6 +26,7 @@ function flakyPgPool(failures: number): PgPool {
   return {
     sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
     pool: () => Promise.reject(new Error("not backed by a real pool")),
+    ownerPool: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
     registerMigration: () => {},

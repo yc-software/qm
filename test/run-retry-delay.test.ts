@@ -5,7 +5,7 @@ import type { Pool } from "pg";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -34,6 +34,7 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         await seedTenant(url.toString());
         connectionString = url.toString();
+        await provisionTestTenants(connectionString);
       }
       const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
       let { runs } = runtime;
@@ -98,6 +99,7 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         await seedTenant(url.toString());
         connectionString = url.toString();
+        await provisionTestTenants(connectionString);
       }
       let { runs } = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
       try {
@@ -166,7 +168,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    await seedTenant(url.toString());
+    await provisionTestTenants(url.toString());
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {
@@ -233,6 +235,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
     url.searchParams.set("options", `-c search_path=${schema} -c statement_timeout=5000`);
+    await provisionTestTenants(url.toString());
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     const holder = await pool.connect();

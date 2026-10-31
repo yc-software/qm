@@ -19,6 +19,10 @@ export function enterTenant(id: string): void {
   bound.enterWith(tenantId(id));
 }
 
+export function withoutTenant<T>(fn: () => T): T {
+  return bound.exit(fn);
+}
+
 export function boundTenant(): string | undefined {
   return bound.getStore();
 }
@@ -50,4 +54,9 @@ export function tenantMap<V>(): () => Map<string, V> {
     if (!rows) tenants.set(tenant, (rows = new Map()));
     return rows;
   };
+}
+
+export function tenantKey(key: string): string {
+  const tenant = boundTenant();
+  return tenant ? `${tenant}:${key}` : key;
 }

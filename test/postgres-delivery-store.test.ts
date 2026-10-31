@@ -6,7 +6,7 @@ import {
   exerciseDeliveryExpiryRevive,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -20,6 +20,7 @@ before(async () => {
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
   await p.end();
+  await provisionTestTenants(URL);
 });
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {

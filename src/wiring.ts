@@ -112,6 +112,9 @@ import { createSkillStores } from "./skills/postgres-skill-store.ts";
 import type { SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills, lazySkillBoot } from "./skills/seed.ts";
+import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
+import { boundTenant, currentTenant, tenantKey, tenantRootScope, withoutTenant } from "./tenants/context.ts";
+import { memoryTenants, pgTenants } from "./tenants/resolver.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import { createPostgresModelTables, memoryModelTables } from "./model/model-tables.ts";
 import { createPostgresLinkTables, memoryLinkTables, type ComposioReturnRows } from "./connectors/link-tables.ts";
@@ -403,7 +406,6 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
-import { currentTenant, tenantRootScope } from "./tenants/context.ts";
 
 export interface Runtime {
   start(): void;
@@ -460,6 +462,8 @@ export interface BuiltApp {
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: () => Promise<unknown>;
+  eachTenant: EachTenant;
+  boot(): Promise<void>;
   skillsReady: () => Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
@@ -573,6 +577,7 @@ export function buildApp(
   configurePgPooling({
     ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
@@ -667,11 +672,21 @@ export function buildApp(
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
+  const tenants = eachTenant(pgArtifactMap ? pgTenants(pgArtifactMap.pool) : memoryTenants);
+  const tenantLease: LeaderLease = {
+    async hold(key, fn) {
+      await leaderLease.hold(key, (lost) => {
+        let held = true;
+        void lost.then(() => (held = false));
+        return tenants(async () => held && fn(lost));
+      });
+      return null;
+    },
+  };
   const configStore = createMemoryConfigStore({
     ...(config.databaseUrl ? { tables: createPostgresConfigTables(config.databaseUrl) } : {}),
     connectorSecretKey,
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const { skills, skillPacks, skillBundles } = createSkillStores(databaseUrl, {
     advisoryLock,
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
@@ -713,7 +728,7 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+  const deploymentLayerRefresh = createUntrackedSweeper(() => tenants(() => deploymentLayerStore.hydrate()), 30_000, {
     label: "deployment layer refresh",
   });
   const installCatalogs = async (): Promise<void> => {
@@ -801,7 +816,7 @@ export function buildApp(
     databaseUrl: config.databaseUrl,
     embeddingModel: () => configStore.getEmbeddingModelDurable(),
     resolveEmbedder: (id) => resolveMemoryEmbedder(id),
-    leaderLease,
+    leaderLease: tenantLease,
     createSweeper,
   });
   // Session storage is built further down; trace-derived providers only read it after the first turn.
@@ -1130,6 +1145,7 @@ export function buildApp(
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    tenants,
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -1399,7 +1415,7 @@ export function buildApp(
           });
         return result;
       };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return advisoryLock.withLock(tenantKey("session-run-admission"), enqueue);
     },
   };
   const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
@@ -1417,6 +1433,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
+          tenants,
           enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
             if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
@@ -2031,8 +2048,7 @@ export function buildApp(
   const pokeReaper = (): void => {
     if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+    void withoutTenant(() => leaderLease.hold(REAPER_LEASE_KEY, () => reaper.sweep()))
       .catch(swallowAs("wake: reaper poke", null))
       .finally(() => {
         reapInFlight = false;
@@ -2245,7 +2261,7 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock
-      .withLock("session-tree-admission", async () => {
+      .withLock(tenantKey("session-tree-admission"), async () => {
         const settled = await deliverSubagentMail(
           {
             sessions,
@@ -2274,12 +2290,15 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      for (const run of batch)
+        await inTenantOf(run.tenantId, () => returnSessionRun(run)).catch(
+          swallowAs("sessions: recover return", undefined),
+        );
       afterId = batch.at(-1)!.id;
     }
   };
   const approvalDeliverySweeper = createSweeper(
-    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
+    () => tenants(() => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending())),
     30_000,
     {
       label: "approval-deliveries",
@@ -2304,10 +2323,12 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      for (const { runId, tenantId } of await runSignals.pendingRuns()) {
+        await inTenantOf(tenantId, async () => {
+          const run = await runs.get(runId);
+          if (!run || isTerminal(run.status))
+            await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+        });
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
@@ -2427,7 +2448,7 @@ export function buildApp(
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
+  const ingressMaintenance = new Map<string, Promise<void>>();
   const suggestedActivityProfiles = config.databaseUrl
     ? createPostgresSuggestedActivityProfiles(config.databaseUrl)
     : createMemorySuggestedActivityProfiles();
@@ -2458,14 +2479,17 @@ export function buildApp(
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),
+    tenants,
     sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
+      const tenant = currentTenant();
+      if (!ingressMaintenance.has(tenant))
+        ingressMaintenance.set(
+          tenant,
+          admittedWork
+            .run(() => loopIngress.maintain())
+            .catch(swallowAs("Loop ingress maintenance", undefined))
+            .finally(() => ingressMaintenance.delete(tenant)),
+        );
       await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
     },
   });
@@ -2523,7 +2547,7 @@ export function buildApp(
           currentScopeMembers,
           sessions,
           resolveRecipient,
-          leaderLease,
+          leaderLease: tenantLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
@@ -2532,7 +2556,7 @@ export function buildApp(
     packs: skillPacks,
     fetcher: skillFetcher,
     reconcile: (id) => app.syncSkillPack(id),
-    leaderLease,
+    leaderLease: tenantLease,
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
@@ -2600,14 +2624,14 @@ export function buildApp(
               }),
             }
           : {}),
-        leaderLease,
+        leaderLease: tenantLease,
       })
     : null;
   const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
   const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
   const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
   const spendSweeper = sessions.refreshSpendRollup
-    ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
+    ? createSweeper(() => tenantLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
         label: "spend-refresh",
         immediate: true,
       })
@@ -2615,7 +2639,7 @@ export function buildApp(
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? createSweeper(
         () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
+          tenantLease.hold("llm-capture:retention", async (lost) => {
             let leaseLost = false;
             void lost.then(() => (leaseLost = true));
             const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
@@ -2629,17 +2653,21 @@ export function buildApp(
       )
     : null;
   const monitorRetentionSweeper = createSweeper(
-    () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
+    () => tenantLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
     { label: "monitor-retention", immediate: true },
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = linkTables.composioReturns;
-  const composioReturnSweeper = createSweeper(() => composioReturns.deleteExpired(Date.now()), 30 * 60_000, {
-    label: "Composio consent returns",
-    immediate: true,
-  });
+  const composioReturnSweeper = createSweeper(
+    () => tenants(() => composioReturns.deleteExpired(Date.now())),
+    30 * 60_000,
+    {
+      label: "Composio consent returns",
+      immediate: true,
+    },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -2649,10 +2677,16 @@ export function buildApp(
     );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
+      ? createSweeper(
+          () => tenants(() => app.reapIdleDeployments(deployIdleTtlMs)),
+          Math.max(5_000, Math.floor(deployIdleTtlMs / 4)),
+        )
       : null;
   const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
+  const deployMaintenanceSweeper = createSweeper(
+    () => tenants(() => app.maintainDeployments()),
+    DEPLOY_MAINTENANCE_INTERVAL_MS,
+  );
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2831,6 +2865,15 @@ export function buildApp(
     deploymentLayerStore,
     brokeredTools,
     deploymentLayerReady,
+    eachTenant: tenants,
+    boot: () =>
+      tenants(async () => {
+        await configStore.hydrate?.();
+        await identity.hydrate();
+        await refreshCustomProviders();
+        await mcpToolService.refresh();
+        await skillsReady();
+      }),
     skillsReady,
     deploymentLayerRefresh,
     sessions,

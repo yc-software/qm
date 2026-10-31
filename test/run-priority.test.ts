@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -6,9 +6,10 @@ import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
+before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 const URL = process.env.DATABASE_URL;
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -33,7 +34,9 @@ const backends: Array<{ name: string; skip: string | false; make: () => Promise<
     make: async () => {
       const pool = new (await import("pg")).default.Pool({ connectionString: URL });
       await pool.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
-      await pool.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/%'").catch(() => {});
+      await pool
+        .query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/%' OR id = 'tenants/columns/runs'")
+        .catch(() => {});
       await pool.end();
       return createPostgresRunStore(URL!).runs;
     },

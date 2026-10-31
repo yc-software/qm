@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
@@ -6,6 +6,10 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryRunSignalStore, type RunSignal } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
+
+bindTestTenant();
+before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 for (const backend of ["memory", "postgres"] as const) {
   test(

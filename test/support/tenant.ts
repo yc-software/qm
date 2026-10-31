@@ -33,3 +33,8 @@ export function boundUrl(url: string, id = TEST_TENANT): string {
 export const TEST_ROOT_SCOPE = `org:${TEST_TENANT}`;
 
 export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
+
+export async function provisionTestTenants(url: string): Promise<void> {
+  await seedTenant(url, TEST_TENANT);
+  await seedTenant(url, OTHER_TENANT);
+}

@@ -14,6 +14,8 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import { eachTenant, type EachTenant } from "../tenants/claim.ts";
+import { memoryTenants } from "../tenants/resolver.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -87,7 +89,6 @@ export interface McpToolService {
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
-  start(): void;
   close(): void;
 }
 
@@ -173,6 +174,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  tenants?: EachTenant;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
@@ -367,7 +369,11 @@ export function createMcpToolService(opts: {
     if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  let timer: NodeJS.Timeout | undefined;
+  const refreshEachTenant = opts.tenants ?? eachTenant(memoryTenants);
+  const timer = setInterval(() => {
+    if (!closed) void refreshEachTenant(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
+  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  timer.unref?.();
 
   return {
     toolDefs: () => snapshot,
@@ -421,12 +427,7 @@ export function createMcpToolService(opts: {
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
     },
-    start() {
-      if (timer || closed) return;
-      timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
-      timer.unref?.();
-      refreshInBackground();
-    },
+
     close() {
       closed = true;
       clearInterval(timer);
