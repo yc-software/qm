@@ -867,7 +867,7 @@ const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability,
     {
       mode: "explicit",
       actorId: capability.actorId,
-      conversationScopeId: capability.scopeId,
+      conversationScopeId: requestedScope === "org" ? write : capability.scopeId,
       ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
     },
     capability.runId,
