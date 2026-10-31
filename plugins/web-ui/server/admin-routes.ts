@@ -1,12 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
-import {
-  fetchCoreText,
-  relayCoreStream,
-  signedHeaders,
-  withSourceAuthNonce,
-  type HttpMethod,
-} from "../../chassis/src/core-client.ts";
+import { fetchCoreText, relayCoreDownload, relayCoreStream, type HttpMethod } from "../../chassis/src/core-client.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 
 interface AdminCtx {
@@ -23,7 +16,13 @@ interface AdminRouteDeps {
   portalHeaders: () => Record<string, string>;
   impersonated: (req: IncomingMessage) => boolean;
   readBody: (req: IncomingMessage) => Promise<string>;
-  stageUpload: (req: IncomingMessage, sha256: string) => Promise<Response>;
+  uploadFile: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    sha256: string,
+    name: string,
+    register: { path: string; fields: Record<string, string>; headers: Record<string, string> },
+  ) => Promise<void>;
   refreshBranding: () => Promise<void>;
   json: (res: ServerResponse, status: number, body: unknown) => void;
 }
@@ -77,55 +76,39 @@ export function adminRoutes(d: AdminRouteDeps) {
       headers: actorHeaders(c.user),
     });
 
-  const download = async (c: AdminCtx, corePath: string) => {
-    const path = withSourceAuthNonce(corePath, d.secret);
-    const upstream = await fetch(`${d.origin}${path}`, {
-      headers: { ...signedHeaders(d.secret, "GET", path, ""), ...actorHeaders(c.user) },
-      redirect: "manual",
+  const download = (c: AdminCtx, corePath: string) =>
+    relayCoreDownload(c.res, {
+      origin: d.origin,
+      secret: d.secret,
+      path: corePath,
+      headers: actorHeaders(c.user),
+      copyHeaders: [
+        "content-type",
+        "content-length",
+        "content-disposition",
+        "x-content-type-options",
+        "content-security-policy",
+        "cache-control",
+      ],
     });
-    const headers: Record<string, string> = {};
-    for (const name of [
-      "content-type",
-      "content-length",
-      "content-disposition",
-      "x-content-type-options",
-      "content-security-policy",
-      "cache-control",
-    ]) {
-      const value = upstream.headers.get(name);
-      if (value) headers[name] = value;
-    }
-    c.res.writeHead(upstream.status, headers);
-    if (!upstream.body) return c.res.end();
-    const stream = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
-    stream.on("error", () => c.res.destroy());
-    c.res.on("close", () => stream.destroy());
-    stream.pipe(c.res);
-  };
 
-  const upload = async (c: AdminCtx) => {
+  const upload = (c: AdminCtx) => {
     const scope = c.url.searchParams.get("scope") ?? "";
-    const sha256 = c.url.searchParams.get("sha") ?? "";
-    if (!scope || !/^[0-9a-f]{64}$/.test(sha256)) {
+    if (!scope) {
       c.req.resume();
-      return d.json(c.res, 400, {
-        error: "bad_request",
-        message: scope ? "sha (hex sha-256) required" : "scope required",
-      });
+      return d.json(c.res, 400, { error: "bad_request", message: "scope required" });
     }
-    const staged = await d.stageUpload(c.req, sha256);
-    const stagedText = await staged.text();
-    if (!staged.ok) {
-      c.res.writeHead(staged.status, { "content-type": staged.headers.get("content-type") ?? "application/json" });
-      return c.res.end(stagedText);
-    }
-    const body = JSON.stringify({
-      name: c.url.searchParams.get("name")?.trim() || "file",
-      mimetype:
-        typeof c.req.headers["content-type"] === "string" ? c.req.headers["content-type"] : "application/octet-stream",
-      blobId: (JSON.parse(stagedText) as { blobId: string }).blobId,
-    });
-    return relay(c, "POST", `/v1/admin/files/upload?scope=${encodeURIComponent(scope)}`, body);
+    return d.uploadFile(
+      c.req,
+      c.res,
+      c.url.searchParams.get("sha") ?? "",
+      c.url.searchParams.get("name")?.trim() || "file",
+      {
+        path: `/v1/admin/files/upload?scope=${encodeURIComponent(scope)}`,
+        fields: {},
+        headers: actorHeaders(c.user),
+      },
+    );
   };
 
   const handle = async (c: AdminCtx): Promise<unknown> => {

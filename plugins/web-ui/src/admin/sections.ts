@@ -1,3 +1,6 @@
+import { errMessage } from "../../../chassis/src/errors.ts";
+import { webFetch } from "../core-bridge.ts";
+
 export const ADMIN_SECTIONS = [
   {
     label: "Organization",
@@ -116,23 +119,26 @@ export const loadAdminPage = (view: string) =>
   Promise.all([import("./entry.ts"), pages[view]!()]).then(([, module]) => module);
 
 export async function adminApi(base: string, method: string, path: string, body?: unknown): Promise<AdminResponse> {
+  let res: Response;
+  let text: string;
   try {
-    const res = await fetch(base + path.replace(/^\/api(?=\/)/, ""), {
+    res = await webFetch(base + (path.startsWith("/api/") ? path.slice("/api".length) : path), {
       method,
       headers: body === undefined ? {} : { "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const text = await res.text();
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = null;
-    }
-    return { ok: res.ok, status: res.status, data };
-  } catch {
+    text = await res.text();
+  } catch (error) {
+    console.warn("[swallowed] admin api: request failed", method, path, errMessage(error));
     return { ok: false, status: 0, data: { message: "Network request failed." } };
   }
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (error) {
+    console.warn("[swallowed] admin api: non-JSON response", method, path, res.status, errMessage(error));
+  }
+  return { ok: res.ok, status: res.status, data };
 }
 
 export function settingsHref(

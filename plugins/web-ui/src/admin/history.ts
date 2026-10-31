@@ -57,7 +57,7 @@ function background(row: Row) {
   const kind = String(row.kind || row.type);
   if (row.origin?.label) return row.origin.label;
   if (kind === "dm") return "DM";
-  if (/^cron(_monologue|_wake)?$/.test(kind)) return "Cron";
+  if (["cron_monologue", "cron_wake", "cron"].includes(kind)) return "Cron";
   return kind.replaceAll("_", " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 

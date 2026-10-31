@@ -62,6 +62,7 @@ export async function mountPage(
   });
   const window = dom.window as any;
   window.structuredClone = structuredClone;
+  window.Request = Request;
   window.HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
     this.setAttribute("open", "");
   };
