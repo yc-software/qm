@@ -2680,16 +2680,10 @@ export function buildApp(
     errors,
     ...(Number.isFinite(config.maxClaims) ? { maxClaims: config.maxClaims } : {}),
   });
-  const turnRepairSweeper = createSweeper(
-    () => leaderLease.hold("turns:pointer-repair", () => sweepTurns({ ledger: turnLedger, sessions, errors })),
-    60_000,
-    { label: "turn-pointer-repair", immediate: true },
-  );
-  const turnCleanupSweeper = createSweeper(
-    () => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()),
-    60 * 60_000,
-    { label: "turn-cleanup" },
-  );
+  jobs.every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
+    immediate: true,
+  });
+  jobs.every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
@@ -2802,8 +2796,6 @@ export function buildApp(
       .catch(swallowAs("wiring: turn runner resume failed", undefined));
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      turnRepairSweeper.start();
-      turnCleanupSweeper.start();
       processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
@@ -2840,8 +2832,6 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      turnRepairSweeper.stop(),
-      turnCleanupSweeper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
