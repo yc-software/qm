@@ -619,7 +619,7 @@ async function identity(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { userId: userIds[0], userIds });
 }
 
-export interface SlackAccountLink {
+interface SlackAccountLink {
   principalId: string;
   accountId: string;
   memberId: string;
