@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -51,30 +50,33 @@ export interface SkillPackStore {
 }
 
 export function createSkillPackStore(opts: { now?: () => number } = {}): SkillPackStore {
-  const tenants = new Map<string, DurableMap<SkillPack>>();
-  const packs = (): DurableMap<SkillPack> => {
-    const tenant = currentTenant();
-    const map = tenants.get(tenant) ?? createMemoryMap<SkillPack>();
-    tenants.set(tenant, map);
-    return map;
-  };
+  const packs = tenantRows<SkillPack>();
   const now = opts.now ?? (() => Date.now());
+  const merge = (id: string, patch: Partial<SkillPack>) => {
+    const pack = packs().get(id);
+    if (!pack) return null;
+    const merged = Object.fromEntries(
+      Object.entries({ ...pack, ...patch, id }).filter(([, value]) => value !== undefined),
+    ) as unknown as SkillPack;
+    packs().set(id, merged);
+    return merged;
+  };
   return {
     async create(input) {
       const pack: SkillPack = { ...input, id: randomUUID(), createdAt: now() };
-      await packs().put(pack.id, pack);
+      packs().set(pack.id, pack);
       return pack;
     },
-    get: (id) => packs().get(id),
-    list: () => packs().all(),
+    get: async (id) => packs().get(id) ?? null,
+    list: async () => sortedRows(packs()),
     async update(id, patch) {
-      const merged = await packs().merge(id, patch);
+      const merged = merge(id, patch);
       if (!merged) throw new Error(`unknown skill pack: ${id}`);
       return merged;
     },
-    remove: (id) => packs().delete(id),
+    remove: async (id) => void packs().delete(id),
     async recordImport(id, result) {
-      await packs().merge(id, { lastImport: result });
+      merge(id, { lastImport: result });
     },
   };
 }

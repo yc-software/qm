@@ -1,5 +1,5 @@
 import type { CommandApprovalGrant } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -38,11 +38,7 @@ const APPROVAL_GRANTS_MIGRATION = typedTableMigration({
 });
 
 export function createApprovalGrantStore(): ApprovalGrantStore {
-  const byTenant = new Map<string, Map<string, CommandApprovalGrant>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<CommandApprovalGrant>();
   return {
     async forActors(actorIds) {
       const wanted = new Set(actorIds.map((id) => id.toLowerCase()));

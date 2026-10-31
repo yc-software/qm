@@ -1,5 +1,5 @@
 import type { ActorAssertion, Principal } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -41,11 +41,7 @@ const DEACTIVATED_PRINCIPALS_MIGRATION = typedTableMigration({
 });
 
 export function createDeactivationStore(): DeactivationStore {
-  const tenants = new Map<string, Map<string, DeactivationRecord>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<DeactivationRecord>();
   return {
     list: async () => [...rows().values()],
     put: async (record) =>

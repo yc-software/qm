@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { createMemoryMap, jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { SkillFile } from "./skill-store.ts";
 
 export interface SkillBundle {
@@ -32,22 +31,12 @@ export interface SkillBundleStore {
 }
 
 export function createSkillBundleStore(): SkillBundleStore {
-  const tenants = new Map<string, DurableMap<SkillBundle>>();
-  const bundles = (): DurableMap<SkillBundle> => {
-    const tenant = currentTenant();
-    const map = tenants.get(tenant) ?? createMemoryMap<SkillBundle>();
-    tenants.set(tenant, map);
-    return map;
-  };
+  const bundles = tenantRows<SkillBundle>();
   return {
-    get: (packId) => bundles().get(packId),
-    async forPacks(packIds) {
-      return (await bundles().all()).filter((bundle) => packIds.includes(bundle.packId));
-    },
-    async put(bundle) {
-      await bundles().put(bundle.packId, bundle);
-    },
-    delete: (packId) => bundles().delete(packId),
+    get: async (packId) => bundles().get(packId) ?? null,
+    forPacks: async (packIds) => sortedRows(bundles()).filter((bundle) => packIds.includes(bundle.packId)),
+    put: async (bundle) => void bundles().set(bundle.packId, bundle),
+    delete: async (packId) => void bundles().delete(packId),
   };
 }
 
@@ -86,7 +75,7 @@ export function createPostgresSkillBundleStore(connectionString: string): SkillB
       await q(
         `INSERT INTO skill_bundles(pack_id, commit, files, hash) VALUES ($1, $2, $3, $4)
           ON CONFLICT (tenant_id, pack_id) DO UPDATE SET commit = EXCLUDED.commit, files = EXCLUDED.files, hash = EXCLUDED.hash`,
-        [pgTextSafe(bundle.packId), pgTextSafe(bundle.commit), jsonbStringify(bundle.files), pgTextSafe(bundle.hash)],
+        [pgTextSafe(bundle.packId), pgTextSafe(bundle.commit), pgJsonText(bundle.files), pgTextSafe(bundle.hash)],
       );
     },
     async delete(packId) {

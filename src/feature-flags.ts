@@ -1,4 +1,4 @@
-import { currentTenant } from "./tenants/context.ts";
+import { tenantRows } from "./tenants/memory-rows.ts";
 import { createPgPool } from "./persistence/pg-pool.ts";
 import { typedTableMigration } from "./persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "./tenants/migrations.ts";
@@ -85,11 +85,7 @@ function flagRecord(row: Record<string, unknown>): FeatureFlagRecord {
 export function createFeatureFlagStore(opts: { now?: () => number } = {}): FeatureFlagStore {
   const orgScope = scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
-  const tenants = new Map<string, Map<string, FeatureFlagRecord>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<FeatureFlagRecord>();
   const current = () => [...rows().values()].filter((row) => FEATURE_NAMES.includes(row.featureName));
   const enabledFor = (scope: ScopeId): ReadonlySet<FeatureName> =>
     new Set(

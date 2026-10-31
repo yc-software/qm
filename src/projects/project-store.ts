@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
@@ -364,19 +364,20 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
 }
 
 function memoryProjectRows(): ProjectRows {
-  const tenants = new Map<string, DurableMap<Project>>();
-  const projects = (): DurableMap<Project> => {
-    const tenant = currentTenant();
-    const map = tenants.get(tenant) ?? createMemoryMap<Project>();
-    tenants.set(tenant, map);
-    return map;
-  };
+  const projects = tenantRows<Project>();
   const where = async (keep: (project: Project) => boolean) =>
-    (await projects().all()).filter(keep).sort((a, b) => b.updatedAt - a.updatedAt);
+    sortedRows(projects())
+      .filter(keep)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   return {
-    get: (id) => projects().get(id),
-    insert: (project) => projects().putIfAbsent(project.id, project),
-    save: (project) => projects().put(project.id, project),
+    get: async (id) => projects().get(id) ?? null,
+    async insert(project) {
+      const existing = projects().get(project.id);
+      if (existing) return existing;
+      projects().set(project.id, project);
+      return project;
+    },
+    save: async (project) => void projects().set(project.id, project),
     forMember: (orgId, principalId) =>
       where(
         (p) => p.orgId === orgId && (p.memberIds.includes(principalId) || !!p.channelMemberIds?.includes(principalId)),

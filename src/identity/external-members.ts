@@ -1,4 +1,4 @@
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -74,11 +74,7 @@ function externalMember(row: Record<string, unknown>): ExternalMember {
 }
 
 export function createExternalMemberStore(): ExternalMemberStore {
-  const tenants = new Map<string, Map<string, ExternalMember>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<ExternalMember>();
   return {
     list: async () => [...rows().values()],
     put: async (member) =>

@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
@@ -359,20 +359,15 @@ export function skillStore(skills: SkillRows, opts: SkillStoreOptions = {}): Ski
 }
 
 function memorySkillRows(): SkillRows {
-  const tenants = new Map<string, DurableMap<Skill>>();
-  const skills = (): DurableMap<Skill> => {
-    const tenant = currentTenant();
-    const map = tenants.get(tenant) ?? createMemoryMap<Skill>();
-    tenants.set(tenant, map);
-    return map;
-  };
-  const where = async (keep: (skill: Skill) => boolean) => (await skills().all()).filter(keep);
+  const skills = tenantRows<Skill>();
+  const where = async (keep: (skill: Skill) => boolean) => sortedRows(skills()).filter(keep);
   return {
-    get: (id) => skills().get(id),
-    save: (skill) => skills().put(skill.id, skill),
-    delete: (id) => skills().delete(id),
+    get: async (id) => skills().get(id) ?? null,
+    save: async (skill) => void skills().set(skill.id, skill),
+    delete: async (id) => void skills().delete(id),
     async touch(id, at) {
-      await skills().merge(id, { lastUsedAt: at });
+      const skill = skills().get(id);
+      if (skill) skills().set(id, { ...skill, lastUsedAt: at });
     },
     inScopes: (scopes, name) =>
       where((s) => scopes.includes(s.scopeId) && (name === undefined || s.manifest.name === name)),
@@ -398,7 +393,7 @@ function memorySkillRows(): SkillRows {
         limit,
       );
     },
-    listAll: () => skills().all(),
+    listAll: async () => sortedRows(skills()),
   };
 }
 

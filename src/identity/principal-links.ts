@@ -1,5 +1,5 @@
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -54,11 +54,7 @@ function principalLink(row: Record<string, unknown>): PrincipalLink {
 }
 
 export function createPrincipalLinkStore(): PrincipalLinkStore {
-  const tenants = new Map<string, Map<string, PrincipalLink>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<PrincipalLink>();
   return {
     list: async () => [...rows().values()],
     async insertIfAbsent(link) {

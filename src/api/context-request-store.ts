@@ -1,5 +1,5 @@
 import type { SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -54,11 +54,7 @@ const CONTEXT_REQUESTS_MIGRATION = typedTableMigration({
 });
 
 export function createContextRequestStore(): ContextRequestStore {
-  const byTenant = new Map<string, Map<string, SurfaceContextRequest>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<SurfaceContextRequest>();
   const pendingRows = () => [...rows().values()].filter((r) => r.status === "pending");
   return {
     create: async (request) => void rows().set(request.id, request),

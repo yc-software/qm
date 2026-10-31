@@ -1,5 +1,5 @@
 import type { SessionEntry } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -73,11 +73,7 @@ const SESSION_SHARES_MIGRATION = typedTableMigration({
 });
 
 export function createSessionShareStore(): SessionShareStore {
-  const tenants = new Map<string, Map<string, SessionShare>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<SessionShare>();
   return {
     async create(share) {
       if (rows().has(share.token)) throw new Error(`session share ${share.token} already exists`);

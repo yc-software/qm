@@ -1,4 +1,4 @@
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -55,11 +55,7 @@ function uiState(rows: Rows): PersistedUiState | null {
 }
 
 export function createUiStateStore(): UiStateStore {
-  const tenants = new Map<string, Map<string, PersistedUiState>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<PersistedUiState>();
   const id = (principalId: string, key: string) => `${principalId}#${key}`;
   const take = (principalId: string, key: string) => {
     const state = rows().get(id(principalId, key)) ?? null;

@@ -1,7 +1,7 @@
 import { swallowAs } from "../util/errors.ts";
 import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { PendingApprovalRecord } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -107,11 +107,7 @@ function withDelivery(rows: ApprovalRows, deliveries: Pick<DeliveryStore, "enque
 }
 
 export function createApprovalStore(deliveries: Pick<DeliveryStore, "enqueue">): ApprovalStore {
-  const byTenant = new Map<string, Map<string, PendingApprovalRecord>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<PendingApprovalRecord>();
   const matching = (keep: (r: PendingApprovalRecord) => boolean) =>
     [...rows()].filter(([, r]) => keep(r)).sort(([a], [b]) => a.localeCompare(b));
   return withDelivery(

@@ -1,4 +1,4 @@
-import { currentTenant } from "../tenants/context.ts";
+import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -42,11 +42,7 @@ const AMBIENT_CURSORS_MIGRATION = typedTableMigration({
 });
 
 export function createAmbientCursorStore(): AmbientCursorStore {
-  const byTenant = new Map<string, Map<string, AmbientCursor>>();
-  const rows = () => {
-    const tenant = currentTenant();
-    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
-  };
+  const rows = tenantRows<AmbientCursor>();
   const key = (surface: string, container: string) => JSON.stringify([surface, container]);
   return {
     get: async (surface, container) => rows().get(key(surface, container)) ?? null,
