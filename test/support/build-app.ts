@@ -6,14 +6,15 @@ import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { withTenant } from "../../src/tenants/context.ts";
 import {
   createTenantSettingsStore,
+  TenantSettingsNotLoadedError,
   type TenantSettingsStore,
   type TenantSettingValues,
 } from "../../src/tenants/settings.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 import { TEST_TENANT } from "./tenant.ts";
-import { seedSettingsTenants } from "./tenant-settings.ts";
-import { TEST_ADMIN_GRANTS, testMigratedDatabaseUrl } from "./test-database.ts";
+import { seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
+import { TEST_ADMIN_GRANTS } from "./test-database.ts";
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
   SECURITY_SCREEN: "enforce",
@@ -22,23 +23,47 @@ export const TEST_TENANT_SETTINGS: TenantSettingValues = {
   ADMIN_GRANTS: TEST_ADMIN_GRANTS,
 };
 
-export function testTenantSettings(
-  values: TenantSettingValues = {},
-  databaseUrl: string = testMigratedDatabaseUrl(),
-): TenantSettingsStore {
+export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl?: string): TenantSettingsStore {
+  const target = databaseUrl ? { url: databaseUrl, ready: seedSettingsTenants(databaseUrl) } : settingsDatabase();
   const store = createTenantSettingsStore({
-    db: createPgPool(databaseUrl),
+    db: createPgPool(target.url),
     keyMaterial: "test-connector-key-distinct-from-ingress-auth",
     onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
   });
-  const seeded = seedSettingsTenants(databaseUrl).then(() =>
-    withTenant(TEST_TENANT, () => store.update({ ...TEST_TENANT_SETTINGS, ...values })),
-  );
+  let seededOk = false;
+  let stopped = false;
+  const seeded = target.ready
+    .then(() => withTenant(TEST_TENANT, () => store.update({ ...TEST_TENANT_SETTINGS, ...values })))
+    .then(() => {
+      seededOk = true;
+    });
   return {
     ...store,
     get: async () => {
       await seeded;
       return store.get();
+    },
+    peek: () => {
+      if (!seededOk) throw new TenantSettingsNotLoadedError();
+      return store.peek();
+    },
+    refreshAll: async () => {
+      await seeded;
+      return store.refreshAll();
+    },
+    start: () => {
+      void seeded.then(
+        () => stopped || store.start(),
+        () => undefined,
+      );
+    },
+    stop: () => {
+      stopped = true;
+      return store.stop();
+    },
+    tenantForSlug: async (slug) => {
+      await seeded;
+      return store.tenantForSlug(slug);
     },
     update: async (changes) => {
       await seeded;
@@ -86,7 +111,7 @@ export function buildApp(
     buildProductionApp(config, {
       agent: recordingModelCalls(createMockAgent(), modelCalls),
       ...overrides,
-      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings(),
     }),
   );
   return Object.assign(app, { modelCalls });
