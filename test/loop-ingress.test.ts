@@ -1,3 +1,4 @@
+import { createInlineJobs } from "./support/inline-jobs.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
@@ -32,6 +33,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(testMap()),
     lock: testAdvisoryLock(),
+    jobs: createInlineJobs(),
     fire: {
       fire: async (
         loopId: string,

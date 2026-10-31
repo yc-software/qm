@@ -1,8 +1,9 @@
 import type { Scheduler } from "../../src/cron/scheduler.ts";
+import { inlineJobsSettled } from "./inline-jobs.ts";
 
 export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
   const r = await scheduler.runNow(cronId);
-  if (r.started) await r.settled;
+  if (r.started) await inlineJobsSettled();
 }
 
 export const settle = async (check: () => Promise<boolean>): Promise<void> => {

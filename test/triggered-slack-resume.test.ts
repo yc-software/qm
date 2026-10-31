@@ -22,7 +22,7 @@ async function setup(t: TestContext) {
     }),
   );
   t.after(async () => {
-    b.scheduler.stop();
+    b.jobs.stop();
     await b.runtime.stop();
   });
   await b.app.upsertDirectory([

@@ -57,51 +57,6 @@ test(
 );
 
 test(
-  "Postgres queue resumes polling without terminating a prior generation callback",
-  { skip: !databaseUrl, timeout: 20_000 },
-  async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
-    const schema = `handover_${randomUUID().replaceAll("-", "")}`;
-    const queue = createPgBossCronQueue(databaseUrl!, schema);
-    const oldEntered = Promise.withResolvers<void>();
-    const oldFinish = Promise.withResolvers<void>();
-    const newEntered = Promise.withResolvers<void>();
-    let oldFinished = false;
-    try {
-      await queue.start({
-        onFire: async () => {
-          oldEntered.resolve();
-          await oldFinish.promise;
-          oldFinished = true;
-        },
-      });
-      await queue.enqueueFire({ cronId: "old", scheduledAt: Date.now() });
-      await oldEntered.promise;
-      await queue.stopClaims!();
-      assert.equal(oldFinished, false);
-      await queue.start({
-        onFire: async () => {
-          newEntered.resolve();
-        },
-      });
-      await queue.enqueueFire({ cronId: "new", scheduledAt: Date.now() });
-      await newEntered.promise;
-      assert.equal(oldFinished, false);
-      oldFinish.resolve();
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(oldFinished, true);
-    } finally {
-      oldFinish.resolve();
-      await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
-    }
-  },
-);
-
-test(
   "a delayed owner change committed after the client gave up is confirmed by the readback",
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {

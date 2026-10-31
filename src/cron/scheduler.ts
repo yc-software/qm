@@ -12,28 +12,25 @@ import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
-import type { LeaderLease } from "../persistence/leader-lease.ts";
-import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
+import type { JobDisposition, JobWorker } from "../jobs/job-worker.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
-import { sleep } from "../util/async.ts";
 
-const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
 const STRANDED_SWEEP_INTERVAL_MS = 10 * 60_000;
 const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
-const MAINTENANCE_INTERVAL_MS = 5000;
+const ADMISSION_CLOSED_RETRY_MS = 5000;
+const MANUAL_FIRE_MAX_ATTEMPTS = 3;
 const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean; deferred?: boolean };
 
 type RunNowResult =
-  | { started: true; fireKey: string; settled: Promise<void> }
+  | { started: true; fireKey: string }
   | { started: false; reason: "unavailable" }
   | { started: false; reason: "already_running"; running: CronFireLogEntry };
 
@@ -53,15 +50,25 @@ export function describeRunNowRefusal(
   return { error: "bad_request", message: `cron ${id} can't be fired on demand right now` };
 }
 
+interface CronFireJob {
+  cronId: string;
+  scheduledAt: number;
+}
+
+interface CronManualFireJob {
+  cronId: string;
+  fireKey: string;
+  firedAt: number;
+}
+
+export const CRON_FIRE_JOB = "cron-fire";
+export const CRON_MANUAL_FIRE_JOB = "cron-fire-manual";
+
 export interface Scheduler {
   tick(now?: number): Promise<void>;
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
-  start(intervalMs: number): void;
-  ready(): Promise<void>;
-  stopClaims(): Promise<void>;
-  drained(): Promise<void>;
-  stop(): Promise<void>;
+  repair(): Promise<void>;
 }
 
 export interface SchedulerDeps {
@@ -74,15 +81,12 @@ export interface SchedulerDeps {
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
   now?: () => number;
-  maxFiresPerTick?: number;
-  leaderLease: LeaderLease;
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     list(): Promise<DirectoryMember[]>;
   };
-  sweepAsks?: (now: number) => Promise<void>;
-  jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
+  jobs: Pick<JobWorker, "handle" | "spawn" | "every">;
+  fireConcurrency?: number;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
@@ -196,8 +200,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
-  const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
-  const leaderLease = deps.leaderLease;
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
     if (scheduled) {
@@ -358,85 +360,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return { authzFailed: false };
   }
 
-  let lastStrandedSweep = 0;
-  const sweepStranded = async (t: number): Promise<void> => {
-    if (t - lastStrandedSweep < STRANDED_SWEEP_INTERVAL_MS) return;
-    lastStrandedSweep = t;
-    try {
-      const swept = await deps.crons.sweepStrandedFires(t);
-      if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
-    } catch (e) {
-      reportFailure("scheduler: stranded-fire sweep", e);
-    }
+  const sweepStranded = async (): Promise<void> => {
+    const swept = await deps.crons.sweepStrandedFires(now());
+    if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
   };
 
-  let lastFireGc = 0;
-  const gcFires = async (t: number): Promise<void> => {
-    if (t - lastFireGc < FIRE_GC_INTERVAL_MS) return;
-    lastFireGc = t;
-    try {
-      const pruned = await deps.crons.pruneFires(t);
-      if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
-    } catch (e) {
-      reportFailure("scheduler: cron fire gc", e);
-    }
+  const gcFires = async (): Promise<void> => {
+    const pruned = await deps.crons.pruneFires(now());
+    if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
   };
-
-  const fireDue = async (t: number, observed: number): Promise<void> => {
-    const due = await deps.crons.due(t);
-    let batch = due;
-    if (due.length > maxFiresPerTick) {
-      const ordered = [...due].sort((a, b) => (a.lastAttemptAt ?? 0) - (b.lastAttemptAt ?? 0));
-      batch = [];
-      for (const cron of ordered) {
-        if (batch.length >= maxFiresPerTick) break;
-        try {
-          await deps.crons.markAttempted(cron.id, t);
-          batch.push(cron);
-        } catch (e) {
-          reportFailure("scheduler: attempt mark (holding this cron back)", e);
-        }
-      }
-      console.warn(`[scheduler] fan-out capped: firing ${batch.length}/${due.length} due crons this tick`);
-    }
-    for (const cron of batch) {
-      if (stopped || observed !== epoch) break;
-      try {
-        await withCronLifecycle(cron.id, true, async () => {
-          if (stopped || observed !== epoch) return;
-          const { authzFailed, deferred } = await fire(
-            cron,
-            t,
-            `cron:${cron.id}:${cron.scheduledAt}`,
-            cron.scheduledAt,
-          );
-          if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
-        });
-      } catch (e) {
-        reportFailure("scheduler: fire", e);
-      }
-    }
-  };
-
-  const tick = async (nowArg?: number): Promise<void> => {
-    const t = nowArg ?? now();
-    const observed = epoch;
-    await withWork(() =>
-      leaderLease.hold(TICK_LEASE_KEY, async () => {
-        await fireDue(t, observed);
-        await sweepStranded(t);
-        await gcFires(t);
-        await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
-      }),
-    );
-  };
-
-  const makeSweeper = () =>
-    createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {
-      label: "scheduler",
-    });
-
-  let sweeper = makeSweeper();
 
   function nextSlot(cron: Cron): number | undefined {
     return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt);
@@ -445,48 +377,37 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   function nextJob(cron: Cron): CronFireJob | undefined {
     const slot = nextSlot(cron);
     if (slot === undefined) return undefined;
-    return {
-      cronId: cron.id,
-      scheduledAt: slot,
-      ...(cron.deferUntil !== undefined ? { notBefore: cron.deferUntil } : {}),
-    };
+    return { cronId: cron.id, scheduledAt: slot };
   }
+
+  const enqueue = (job: CronFireJob) => deps.jobs.spawn(CRON_FIRE_JOB, job, `cron:${job.cronId}:${job.scheduledAt}`);
 
   async function enqueueNext(cronId: string): Promise<void> {
     const cron = await deps.crons.get(cronId);
     if (!cron || cron.archived || !cron.enabled) return;
     const job = nextJob(cron);
-    if (job) await deps.jobQueue!.enqueueFire(job);
+    if (job) await enqueue(job);
   }
 
-  async function fireJob(job: CronFireJob): Promise<void> {
-    const observed = epoch;
+  async function fireJob(job: CronFireJob, at?: number): Promise<JobDisposition> {
     const cron = await deps.crons.get(job.cronId);
-    if (!cron || cron.archived || !cron.enabled) return;
+    if (!cron || cron.archived || !cron.enabled) return "release";
     const slot = nextSlot(cron);
-    if (slot !== job.scheduledAt) return;
-    const t = now();
-    if (t < slot) {
-      await deps.jobQueue!.enqueueFire(job);
-      return;
-    }
-    if (isDeferred(cron, t)) {
-      await deps.jobQueue!.enqueueFire({ ...job, notBefore: cron.deferUntil! });
-      return;
-    }
-    if (stopped || observed !== epoch) return;
+    if (slot !== job.scheduledAt) return "done";
+    const t = at ?? now();
+    if (t < slot) return slot;
+    if (isDeferred(cron, t)) return cron.deferUntil!;
+    let disposition: JobDisposition = "release";
     const result = await withCronLifecycle(job.cronId, true, async () => {
-      if (stopped || observed !== epoch) return;
-      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
-      if (stopped || observed !== epoch) {
-        await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) {
+        disposition = "done";
         return;
       }
       try {
         const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
         if (authzFailed || deferred) {
           await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-          if (deferred) await enqueueNext(job.cronId);
+          if (deferred) disposition = (await deps.crons.get(job.cronId))?.deferUntil ?? now() + BUSY_DEFER_MS;
           return;
         }
       } catch (e) {
@@ -494,198 +415,90 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
         return;
       }
+      disposition = "done";
       await enqueueNext(job.cronId);
     });
-    if (result === null) await enqueueNext(job.cronId);
+    if (result === null) return now() + BUSY_DEFER_MS;
+    return disposition;
   }
 
-  async function reconcile(): Promise<void> {
-    try {
-      for (const cron of await deps.crons.list()) {
-        if (stopped) break;
-        if (cron.archived || !cron.enabled) continue;
-        const job = nextJob(cron);
-        if (job) await deps.jobQueue!.enqueueFire(job);
-      }
-    } catch (e) {
-      reportFailure("scheduler: reconcile", e);
-    }
+  async function fireManualJob(job: CronManualFireJob): Promise<JobDisposition> {
+    const cron = await deps.crons.get(job.cronId);
+    if (!cron) return "done";
+    await withCronLifecycle(cron.id, false, () => fire(cron, job.firedAt, job.fireKey)).catch(
+      reportFailureAs("scheduler: manual fire", undefined, `cron=${job.cronId}`),
+    );
+    return "done";
   }
 
-  async function maintain(): Promise<void> {
-    await sweepStranded(now());
-    await gcFires(now());
-    await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));
-  }
-
-  let stopSignal = Promise.withResolvers<void>();
-  const leaseGuard = createSweeper(
-    () =>
-      deps.jobQueue!.healthy()
-        ? leaderLease.hold(TICK_LEASE_KEY, async (lost) => {
-            let lockLost = false;
-            void lost.then(() => (lockLost = true));
-            let repairAt = 0;
-            while (!stopped && !lockLost && deps.jobQueue!.healthy()) {
-              if (Date.now() >= repairAt) {
-                repairAt = Date.now() + REPAIR_INTERVAL_MS;
-                await runQueueTask(reconcile);
-              }
-              await runQueueTask(maintain);
-              await Promise.race([sleep(MAINTENANCE_INTERVAL_MS, { unref: true }), lost, stopSignal.promise]);
-            }
-          })
-        : undefined,
-    1000,
-    { label: "scheduler lease guard", immediate: true },
+  const retryWhenClosed = (e: unknown): JobDisposition => {
+    if (e instanceof WorkAdmissionClosed) return now() + ADMISSION_CLOSED_RETRY_MS;
+    throw e;
+  };
+  const concurrency = deps.fireConcurrency ? { concurrency: deps.fireConcurrency } : {};
+  deps.jobs.handle(
+    CRON_FIRE_JOB,
+    (params) => withWork(() => fireJob(params as CronFireJob)).catch(retryWhenClosed),
+    concurrency,
+  );
+  deps.jobs.handle(
+    CRON_MANUAL_FIRE_JOB,
+    (params) => withWork(() => fireManualJob(params as CronManualFireJob)).catch(retryWhenClosed),
+    { ...concurrency, maxAttempts: MANUAL_FIRE_MAX_ATTEMPTS },
   );
 
-  let stopped = false;
-  let epoch = 0;
-  let started = false;
-  let stopFailed = false;
-  let starting: Promise<void> | null = null;
-  let stopping: Promise<void> | null = null;
-  let pausing: Promise<void> | null = null;
-  const oldSweeps = new Set<Promise<void>>();
-  const retireSweep = (work: Promise<void>) => {
-    oldSweeps.add(work);
-    void work.finally(() => oldSweeps.delete(work));
-  };
-  const pending = new Set<Promise<unknown>>();
-  async function runQueueTask(work: () => Promise<void>): Promise<void> {
-    if (stopped) return;
-    const task = withWork(work);
-    pending.add(task);
-    try {
-      await task;
-    } finally {
-      pending.delete(task);
+  async function repair(): Promise<void> {
+    for (const cron of await deps.crons.list()) {
+      if (cron.archived || !cron.enabled) continue;
+      const job = nextJob(cron);
+      if (job) await enqueue(job).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cron.id}`));
     }
   }
-  return {
-    tick,
-    async runNow(cronId) {
-      try {
-        const preparing = withWork(async (): Promise<RunNowResult> => {
-          const cron = await deps.crons.get(cronId);
-          if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
-          const t = now();
-          const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
-          const begin = await deps.crons.beginFire(
-            cronId,
-            { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
-            { exclusive: true },
-          );
-          if (!begin.begun) {
-            return begin.running
-              ? { started: false, reason: "already_running", running: begin.running }
-              : { started: false, reason: "unavailable" };
-          }
-          const settled = withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, t, fireKey))).then(
-            () => undefined,
-            reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`),
-          );
-          pending.add(settled);
-          void settled.finally(() => pending.delete(settled));
-          return { started: true, fireKey, settled };
-        });
-        pending.add(preparing);
-        try {
-          return await preparing;
-        } finally {
-          pending.delete(preparing);
-        }
-      } catch (error) {
-        if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
-        throw error;
-      }
-    },
-    notifyChanged(cronId) {
-      if (!deps.jobQueue) return;
-      void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
-    },
-    start(intervalMs) {
-      if (started || stopping || pausing || stopFailed) return;
-      started = true;
-      stopped = false;
-      stopSignal = Promise.withResolvers<void>();
-      if (!deps.jobQueue) {
-        sweeper.start(intervalMs);
-        return;
-      }
-      const observed = epoch;
-      starting = deps.jobQueue
-        .start({
-          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
-        })
-        .then(
-          () => {
-            if (!stopped) leaseGuard.start();
-          },
-          (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
-            if (!stopped) sweeper.start(intervalMs);
-          },
+
+  deps.jobs.every("cron:repair", REPAIR_INTERVAL_MS, repair, { immediate: true });
+  deps.jobs.every("cron:stranded-fires", STRANDED_SWEEP_INTERVAL_MS, sweepStranded);
+  deps.jobs.every("cron:fire-gc", FIRE_GC_INTERVAL_MS, gcFires);
+
+  async function runNow(cronId: string): Promise<RunNowResult> {
+    try {
+      return await withWork(async (): Promise<RunNowResult> => {
+        const cron = await deps.crons.get(cronId);
+        if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
+        const t = now();
+        const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
+        const job: CronManualFireJob = { cronId: cron.id, fireKey, firedAt: t };
+        const begun = await deps.crons.beginFire(
+          cronId,
+          { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
+          { exclusive: true, enqueue: (db) => deps.jobs.spawn(CRON_MANUAL_FIRE_JOB, job, fireKey, db) },
         );
+        if (!begun.begun) {
+          return begun.running
+            ? { started: false, reason: "already_running", running: begun.running }
+            : { started: false, reason: "unavailable" };
+        }
+        return { started: true, fireKey };
+      });
+    } catch (error) {
+      if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
+      throw error;
+    }
+  }
+
+  return {
+    async tick(nowArg) {
+      const t = nowArg ?? now();
+      await withWork(async () => {
+        for (const cron of await deps.crons.list()) {
+          const job = cron.enabled && !cron.archived ? nextJob(cron) : undefined;
+          if (job && job.scheduledAt <= t) await fireJob(job, t).catch(reportFailureAs("scheduler: fire", undefined));
+        }
+      });
     },
-    async ready() {
-      await starting;
-    },
-    stopClaims() {
-      if (pausing) return pausing;
-      stopped = true;
-      started = false;
-      epoch++;
-      stopSignal.resolve();
-      retireSweep(sweeper.stop());
-      sweeper = makeSweeper();
-      const guard = leaseGuard.stop();
-      pausing = (async () => {
-        await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
-        else await deps.jobQueue?.stop();
-        await guard;
-        stopFailed = false;
-      })()
-        .catch((error) => {
-          stopFailed = true;
-          throw error;
-        })
-        .finally(() => {
-          pausing = null;
-        });
-      return pausing;
-    },
-    async drained() {
-      while (oldSweeps.size || pending.size) await Promise.all([...oldSweeps, ...pending]);
-    },
-    stop() {
-      if (stopping) return stopping;
-      stopped = true;
-      epoch++;
-      stopSignal.resolve();
-      started = false;
-      const sweeps = [sweeper.stop(), leaseGuard.stop()];
-      stopping = (async () => {
-        await starting?.catch(() => {});
-        if (deps.jobQueue?.stopClaims) await deps.jobQueue.stopClaims();
-        await pausing;
-        await Promise.all(sweeps);
-        await Promise.all(oldSweeps);
-        while (pending.size) await Promise.allSettled(pending);
-        await deps.jobQueue?.stop();
-        stopFailed = false;
-      })()
-        .catch((error: unknown) => {
-          stopFailed = true;
-          throw error;
-        })
-        .finally(() => {
-          stopping = null;
-        });
-      return stopping;
+    runNow,
+    repair,
+    notifyChanged(cronId) {
+      void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
     },
   };
 }
