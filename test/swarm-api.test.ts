@@ -7,6 +7,7 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn } from "./support/turns.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -60,7 +61,10 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
     assert.equal((await post({ action: "spawn", requestId: "valid", text: "Work", context })).status, 202);
     assert.deepEqual((await fixture.service.inspect(fixture.caller)).peers[1]!.context, context);
     const run = (await fixture.runs.get(fixture.caller.claims.runId!))!;
-    assert.equal(await fixture.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" }), true);
+    assert.equal(
+      await fixture.ledger.finish(run, run.leaseToken!, { status: "done", result: { status: "ok", reply: "Done" } }),
+      true,
+    );
     for (const body of [
       { action: "spawn", requestId: "completed", text: "Work" },
       { action: "send", requestId: "completed", text: "Work", audience: "all" },
@@ -196,8 +200,8 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
     });
   try {
     assert.equal((await post(token, "initial")).status, 202);
-    await fixture.runs.releaseLease(first.id, first.leaseToken!);
-    const next = (await fixture.runs.claimById(first.id, "replacement", 60_000))!;
+    await fixture.ledger.handBack(first, first.leaseToken!, {});
+    const next = (await claimTurn(fixture.ledger, first.id))!.run;
     assert.ok(next);
     assert.equal((await post(token, "stale")).status, 400);
     const current = await mintCapabilityToken(
