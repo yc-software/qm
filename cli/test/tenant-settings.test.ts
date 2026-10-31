@@ -197,6 +197,22 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
       });
       assert.match(lines.join("\n"), /run `qm settings push` once core is reachable/);
     });
+    const dropped = async (): Promise<CoreLink> => ({
+      request: async () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+        });
+      },
+      close: () => {},
+    });
+    await quietly(async (lines) => {
+      await seedTenantSettings({ config: config(), configDir: dir }, dropped, undefined, "up");
+      assert.match(
+        lines.join("\n"),
+        /core did not answer \/v1\/install\/tenant: .*run `qm settings push` once core is reachable/,
+      );
+    });
+    await assert.rejects(seedTenantSettings({ config: config(), configDir: dir }, dropped), CoreUnreachableError);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

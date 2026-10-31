@@ -168,7 +168,7 @@ export const CONNECTIVITY_CODES = new Set([
 export const DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS = 5;
 const DEPLOYMENT_LAYER_UNAVAILABLE_BACKOFF_MS = 2_000;
 
-function isCoreUnreachable(error: unknown): boolean {
+export function isCoreUnreachable(error: unknown): boolean {
   if (error instanceof CoreUnreachableError) return true;
   if (error instanceof CliError) return false;
   for (let e: unknown = error; e instanceof Error; e = e.cause) {

@@ -1,5 +1,5 @@
 import { sandboxCoreEnv, securityScreenEnv, tenantOf, type QmConfig } from "./config.ts";
-import { CoreUnreachableError } from "./deployment-layer.ts";
+import { CoreUnreachableError, isCoreUnreachable } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
 import { computedSecrets } from "./secrets.ts";
@@ -137,10 +137,17 @@ export async function seedTenantSettings(
       ["/v1/tenant-settings", { tenant: tenantOf(opts.config), env: settings }],
     ] as const) {
       const text = JSON.stringify(body);
-      const response = await core.request(path, operatorInit(credentials, "PUT", path, text));
+      const response = await core.request(path, operatorInit(credentials, "PUT", path, text)).catch((error) => {
+        if (!isCoreUnreachable(error)) throw error;
+        throw new CoreUnreachableError(`core did not answer ${path}: ${errMessage(error)}`);
+      });
       if (response.status < 200 || response.status >= 300)
         throw new CliError(`${path} failed (${response.status}): ${response.body.slice(0, 300)}`);
     }
+  } catch (error) {
+    if (mode === "push" || !(error instanceof CoreUnreachableError)) throw error;
+    warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
+    return;
   } finally {
     core.close();
   }
