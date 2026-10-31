@@ -1,10 +1,10 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, vmFetch } from "../src/sandbox/aws-microvm-api.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { swallow } from "../src/util/errors.ts";
 import { scopeId } from "../src/types.ts";
@@ -17,7 +17,7 @@ const agentPort = awsDeploy.agentPort ?? 8080;
 const appPort = awsDeploy.appPort ?? 8081;
 
 const api = createMicrovmApi({ region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
-const store = createMemoryMap<StoredDeployBody>();
+const store = memoryRows<StoredDeployBody>(true);
 const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store });
 
 function makeVersion(v: number): DeploymentVersion {

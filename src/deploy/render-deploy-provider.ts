@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
@@ -64,6 +64,24 @@ export interface StoredRenderDeploy {
   pending?: RenderPending;
 }
 
+export const RENDER_DEPLOY_BODIES: TableSpec<StoredRenderDeploy, "deploymentId"> = {
+  table: "render_deploy_bodies",
+  fieldKey: "deploymentId",
+  required: ["appRegion", "token", "suspended"],
+  columns: {
+    appRegion: "text",
+    serviceId: "text",
+    environmentId: "text",
+    host: "text",
+    token: "text",
+    liveVersion: "bigint",
+    suspended: "boolean",
+    pending: "jsonb",
+  },
+};
+
+export type RenderDeployBodies = Pick<KeyedRows<StoredRenderDeploy>, "get" | "put" | "putIfAbsent" | "merge">;
+
 export interface RenderDeployProviderOptions {
   apiKey: string;
   workspaceId: string;
@@ -72,7 +90,7 @@ export interface RenderDeployProviderOptions {
   source: { repo: string; branch: string; commit: string };
   region?: string;
   appRegion?: string;
-  store: DurableMap<StoredRenderDeploy>;
+  store: RenderDeployBodies;
   artifacts: RenderDeployArtifacts;
   resources: { ensure(deploymentId: string, repair?: boolean): Promise<Record<string, string>> };
   deployTimeoutMs?: number;

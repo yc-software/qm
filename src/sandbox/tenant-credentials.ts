@@ -5,20 +5,16 @@ import {
   type TenantSettings,
 } from "../tenants/settings.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import { legacySandboxBackendForScope, type LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { E2bClient } from "./e2b-client.ts";
 import type { ManagedAgentsClient } from "./managed-agents-client.ts";
 import { modalSandboxLifetimeMs, type ModalClient } from "./modal-client.ts";
 import type { RenderClient } from "./render-client.ts";
-import type { SuperserveClient } from "./superserve-client.ts";
 
 const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>> = {
   sprites: ["SPRITES_TOKEN"],
   smolmachines: ["SMOLMACHINES_TOKEN"],
   e2b: ["E2B_API_KEY"],
   modal: ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"],
-  agent37: ["AGENT37_API_KEY"],
-  superserve: ["SUPERSERVE_API_KEY"],
   "do-managed-agents": ["DO_AGENTS_API_TOKEN"],
   render: ["RENDER_SANDBOX_API_KEY", "RENDER_SANDBOX_WORKSPACE_ID"],
 };
@@ -44,20 +40,11 @@ export function tenantDefaultSandboxBackend(
 export function tenantSandboxRouting(
   settings: () => Promise<TenantSettings>,
   backends: Partial<Record<SandboxBackendName, unknown>>,
-  legacyScopeDefaults?: LegacySandboxScopeDefaults,
 ) {
   const constructed = Object.keys(backends) as SandboxBackendName[];
   return {
     usable: async () => tenantSandboxBackends(await settings(), constructed),
     defaultBackend: async () => tenantDefaultSandboxBackend(await settings(), constructed),
-    legacy: async () => {
-      const current = await settings();
-      const fallback = () => tenantDefaultSandboxBackend(current, constructed);
-      return {
-        available: tenantSandboxBackends(current, constructed),
-        legacyBackend: (scope: string) => legacySandboxBackendForScope(scope, fallback, legacyScopeDefaults),
-      };
-    },
   };
 }
 
@@ -124,7 +111,6 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
   return {
     sprites: tenantCredential(settings, "SPRITES_TOKEN"),
     smolmachines: tenantCredential(settings, "SMOLMACHINES_TOKEN"),
-    agent37: tenantCredential(settings, "AGENT37_API_KEY"),
     e2b: (make: (apiKey: string) => E2bClient) =>
       tenantSdkClient({
         settings,
@@ -149,13 +135,6 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
         methods: { create: true, fromId: true, fromName: true, terminate: true },
         streams: { listRunning: true },
         fixed: { lifetimeMs: modalSandboxLifetimeMs(sandboxTimeoutSec ? sandboxTimeoutSec * 1000 : undefined) },
-      }),
-    superserve: (make: (apiKey: string) => SuperserveClient) =>
-      tenantSdkClient({
-        settings,
-        keys: ["SUPERSERVE_API_KEY"],
-        make,
-        methods: { create: true, connect: true, update: true, info: true, list: true, kill: true },
       }),
     render: (make: (apiKey: string, workspaceId: string) => RenderClient) =>
       tenantSdkClient({

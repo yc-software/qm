@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { chmod, chown, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -8,14 +9,13 @@ import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { memoryArchives } from "./support/deploy-archives.ts";
+import { createDeployStore, createMemoryDeploymentRows } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {
   createRenderDeployArtifacts,
   type StoredRenderDeployCredential,
 } from "../src/deploy/render-deploy-artifacts.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
@@ -27,6 +27,9 @@ import { createServer as createHttpServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { Duplex } from "node:stream";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -42,9 +45,9 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
-  const credentials = createMemoryMap<StoredRenderDeployCredential>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
+  const credentials = memoryRows<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });
   const d = await deployStore.create({

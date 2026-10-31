@@ -1,6 +1,6 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -54,11 +54,42 @@ export interface StoredRenderCleanup {
   error?: string;
 }
 
+export const RENDER_SANDBOX_BODIES: TableSpec<StoredRenderSandbox> = {
+  table: "render_sandbox_bodies",
+  key: "scopeId",
+  required: ["sandboxId", "expiresAtMs", "lastActivityMs"],
+  columns: {
+    sandboxId: "text",
+    checkpoint: "jsonb",
+    expiresAtMs: "bigint",
+    lastActivityMs: "bigint",
+    homeDirty: "boolean",
+    savedAtMs: "bigint",
+    retiredResources: "jsonb",
+    retirementError: "text",
+    recoveryError: "text",
+  },
+};
+
+export const RENDER_SCRATCH_BODIES: TableSpec<StoredRenderScratch> = {
+  table: "render_scratch_bodies",
+  key: "name",
+  required: ["id", "status", "expiresAtMs"],
+  columns: { id: "text", status: "text", expiresAtMs: "bigint", cleanupPending: "boolean" },
+};
+
+export const RENDER_SANDBOX_CLEANUP: TableSpec<StoredRenderCleanup> = {
+  table: "render_sandbox_cleanup",
+  key: "scopeId",
+  required: ["resources"],
+  columns: { resources: "jsonb", error: "text" },
+};
+
 export interface RenderSandboxOptions extends BlobStagingOptions {
   client: RenderClient;
-  store: DurableMap<StoredRenderSandbox>;
-  scratchStore: DurableMap<StoredRenderScratch>;
-  cleanupStore: DurableMap<StoredRenderCleanup>;
+  store: Pick<KeyedRows<StoredRenderSandbox>, "get" | "entries" | "put" | "merge" | "delete">;
+  scratchStore: Pick<KeyedRows<StoredRenderScratch>, "get" | "entries" | "put" | "delete">;
+  cleanupStore: Pick<KeyedRows<StoredRenderCleanup>, "get" | "entries" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
   homeDir?: string;

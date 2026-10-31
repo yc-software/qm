@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -55,10 +55,31 @@ export interface DeployGitArchive {
   updatedAt: number;
 }
 
+export interface DeployGitArchives {
+  get(deploymentId: string): Promise<DeployGitArchive | null>;
+  put(deploymentId: string, archive: DeployGitArchive): Promise<void>;
+  update(deploymentId: string, fn: (current: DeployGitArchive) => DeployGitArchive): Promise<unknown>;
+  delete(deploymentId: string): Promise<void>;
+}
+
+const ARCHIVES: TableSpec<DeployGitArchive, "deploymentId"> = {
+  table: "deploy_git_repos",
+  fieldKey: "deploymentId",
+  required: ["etag", "updatedAt"],
+  columns: { bundleB64: "text", blobKey: "text", etag: "text", updatedAt: "bigint" },
+};
+
+const DEPLOY_GIT_ARCHIVE_MIGRATION = tableConversion(ARCHIVES);
+
+export function createPostgresDeployGitArchives(databaseUrl: string): DeployGitArchives {
+  const { get, put, update, delete: remove } = typedTable(databaseUrl, ARCHIVES, DEPLOY_GIT_ARCHIVE_MIGRATION);
+  return { get, put, update, delete: remove };
+}
+
 export interface DeployGitStoreOptions {
   repoRoot?: string;
   gitBin?: string;
-  archiveStore?: DurableMap<DeployGitArchive>;
+  archiveStore?: DeployGitArchives;
   archiveBytes?: DurableByteStore;
 }
 
@@ -171,7 +192,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   }
 
   async function migrateArchive(archive: DeployGitArchive): Promise<void> {
-    if (!archiveStore?.update || !archiveBytes || archive.bundleB64 == null) return;
+    if (!archiveStore || !archiveBytes || archive.bundleB64 == null) return;
     const { blobKey } = await archiveBytes.put(Buffer.from(archive.bundleB64, "base64"));
     const slim: DeployGitArchive = {
       deploymentId: archive.deploymentId,

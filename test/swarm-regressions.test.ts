@@ -80,53 +80,51 @@ test("eligible and forged recipients reject atomically rather than partially sen
 });
 
 test("provider default is pinned before retries and child provisioning, with no Modal fallback", async () => {
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
   const { createSandboxResources } = await import("../src/sandbox/sandbox-resources.ts");
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const options: Parameters<typeof createSandboxResources>[0] = {
     records: f.records,
-    defaults: createMemoryMap(),
-    backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
-    defaultBackend: async () => "aws",
+    defaults: f.defaults,
+    backends: { e2b: { ...f.backend, profile: { ...f.backend.profile, backend: "e2b" } } },
+    defaultBackend: async () => "e2b",
     lock: f.serviceOptions.lock,
     canUseScope: async () => true,
   };
   const sandboxes = createSandboxResources(options);
   const service = createSwarmService({ ...f.serviceOptions, sandboxes });
   const [peer] = await service.spawn(f.caller, { requestId: "initial", text: "work" });
-  assert.equal((await f.store.get(f.root.id))!.backend, "aws");
+  assert.equal((await f.store.get(f.root.id))!.backend, "e2b");
   options.defaultBackend = async () => "modal";
   await service.sweep();
-  assert.equal((await f.records.get(peer!.id))!.backend, "aws");
+  assert.equal((await f.records.get(peer!.id))!.backend, "e2b");
   const worker = await f.workerCaller(peer!.id);
   const restarted = createSwarmService({ ...f.serviceOptions, sandboxes });
   const [child] = await restarted.spawn(worker, { requestId: "child", text: "work" });
   await restarted.sweep();
-  assert.equal((await f.records.get(child!.id))!.backend, "aws");
-  assert.equal((await f.store.get(f.root.id))!.backend, "aws");
+  assert.equal((await f.records.get(child!.id))!.backend, "e2b");
+  assert.equal((await f.store.get(f.root.id))!.backend, "e2b");
 });
 
 test("selected scope computer determines new worker provider, but its private disk is not reused", async () => {
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
   const { createSandboxResources } = await import("../src/sandbox/sandbox-resources.ts");
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const sandboxes = createSandboxResources({
     records: f.records,
-    defaults: createMemoryMap(),
-    backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
+    defaults: f.defaults,
+    backends: { modal: f.backend, e2b: { ...f.backend, profile: { ...f.backend.profile, backend: "e2b" } } },
     defaultBackend: async () => "modal",
     lock: f.serviceOptions.lock,
     canUseScope: async () => true,
   });
-  const selected = await sandboxes.create("alice", "personal:alice", "aws", "selected");
+  const selected = await sandboxes.create("alice", "personal:alice", "e2b", "selected");
   await sandboxes.setDefault("alice", "personal:alice", selected.id);
   const service = createSwarmService({ ...f.serviceOptions, sandboxes });
   const [peer] = await service.spawn(f.caller, { requestId: "initial", text: "work" });
   await service.sweep();
   const record = (await f.records.get(peer!.id))!;
-  assert.equal(record.backend, "aws");
+  assert.equal(record.backend, "e2b");
   assert.notEqual(record.backingScopeId, selected.backingScopeId);
   assert.equal((await sandboxes.resolve("personal:alice"))!.id, selected.id);
 });

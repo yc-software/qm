@@ -10,6 +10,9 @@ import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sa
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let ff: FakeSprites;
 before(() => {

@@ -139,16 +139,6 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
-test("legacy per-scope sandbox defaults are parsed with the shared backend parser", () => {
-  assert.deepEqual(loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":" superserve "}' }).legacySandboxScopeDefaults, {
-    channel: "superserve",
-  });
-  assert.throws(
-    () => loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":"bogus"}' }),
-    /SANDBOX_SCOPE_BACKENDS.channel="bogus" is not recognized/,
-  );
-});
-
 test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
@@ -271,18 +261,6 @@ test("HARNESS=claude uses native Claude authentication and does not require an A
   assert.doesNotThrow(() => loadConfig({ HARNESS: "claude" }));
 });
 
-test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
-  for (const value of ["9007199254740993", "-1", "0.5", "NaN", "Infinity"]) {
-    assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }), /SUPERSERVE_CONFIG_GENERATION/, value);
-  }
-  for (const value of [undefined, "", "  "]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, undefined);
-  }
-  for (const value of ["0", "7", " 42 ", String(Number.MAX_SAFE_INTEGER)]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, Number(value));
-  }
-});
-
 test("the sandbox backend and provider keys are not read from the environment", () => {
   const env = {
     SANDBOX_BACKEND: "sprites",
@@ -290,22 +268,15 @@ test("the sandbox backend and provider keys are not read from the environment", 
     SPRITES_TOKEN: "sprites-env-token",
     MODAL_TOKEN_ID: "modal-env-id",
     MODAL_TOKEN_SECRET: "modal-env-secret",
-    SUPERSERVE_API_KEY: "ss_live_k",
     E2B_API_KEY: "e2b-env-key",
   };
   const config = loadConfig(env);
   assert.ok(!("sandboxBackend" in config));
   assert.ok(!("sandboxSecondaryBackend" in config));
-  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k", "e2b-env-key"])
+  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "e2b-env-key"])
     assert.ok(!JSON.stringify(config).includes(value), value);
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
   assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
-  assert.equal(
-    loadConfig({ SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ", SUPERSERVE_CONFIG_GENERATION: "7" }).superserveSandbox
-      .template,
-    "qm-agent-1.0.0",
-  );
-  assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: "later" }), /SUPERSERVE_CONFIG_GENERATION/);
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -422,10 +393,7 @@ test("a Porter token locates the API and shares the deploy provider's token", ()
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
-    PORTER_SANDBOX_TTL_SEC: "120",
   });
-  assert.equal(inCluster.porterSandbox.token, "tok");
-  assert.equal(inCluster.porterSandbox.ttlSec, 120);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 
@@ -599,28 +567,6 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
-});
-
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
-  const credentials = {
-    SPRITES_TOKEN: "unit-test-sprites",
-    MODAL_TOKEN_ID: "unit-test-modal-id",
-    MODAL_TOKEN_SECRET: "unit-test-modal-secret",
-  };
-  assert.deepEqual(
-    loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
-    { personal: "modal", channel: "sprites" },
-  );
-  for (const value of [
-    "[]",
-    "null",
-    '{"personal:someone":"modal"}',
-    '{"personal":"missing"}',
-    '{"unknown":"sprites"}',
-    '{"personal":""}',
-  ])
-    assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
 
 test("Fly shared application name is passed to the deployment provider", () => {

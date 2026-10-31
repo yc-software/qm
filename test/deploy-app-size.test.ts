@@ -9,6 +9,9 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function service(maxAppBytes?: number) {
   const dir = mkdtempSync(join(tmpdir(), "deploy-app-size-"));

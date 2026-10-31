@@ -4,6 +4,9 @@ import { createDockerDeployProvider, dockerDaemonFailure } from "../src/deploy/d
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];

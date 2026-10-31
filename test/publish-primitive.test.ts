@@ -12,6 +12,9 @@ import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
 import type { AgentComputerExportEntry, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function svc() {
   const deployStore: DeployStore = createDeployStore();

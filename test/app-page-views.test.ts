@@ -18,6 +18,9 @@ import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";

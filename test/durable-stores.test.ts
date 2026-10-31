@@ -4,7 +4,7 @@ import { createMemoryMap, createPostgresMap } from "../src/persistence/durable-m
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryCronRows } from "../src/cron/cron-table.ts";
 import { bindTestTenant } from "./support/tenant.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, createMemoryDeploymentRows } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 
 bindTestTenant();
@@ -29,8 +29,8 @@ test("crons persist to the backing map (a second store instance reads them back)
 });
 
 test("deployments persist with immutable versions across store instances", async () => {
-  const map = createMemoryMap<Deployment>();
-  const s1 = createDeployStore(map);
+  const deployments = createMemoryDeploymentRows();
+  const s1 = createDeployStore({ deployments });
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),
     createdBy: "U1",
@@ -39,7 +39,7 @@ test("deployments persist with immutable versions across store instances", async
   });
   await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
 
-  const s2 = createDeployStore(map);
+  const s2 = createDeployStore({ deployments });
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);

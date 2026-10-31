@@ -43,16 +43,12 @@ export interface TenantSettings {
 }
 
 export const SANDBOX_BACKEND_NAMES = [
-  "aws",
   "local",
   "sprites",
   "smolmachines",
   "e2b",
   "modal",
-  "agent37",
-  "superserve",
   "do-managed-agents",
-  "porter",
   "render",
 ] as const satisfies readonly SandboxBackendName[];
 

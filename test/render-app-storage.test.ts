@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -14,13 +15,15 @@ import {
   renderAppStoragePolicy,
   type StoredRenderAppStorage,
 } from "../src/deploy/render-app-storage.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type StorageOptions = Parameters<typeof createRenderAppStorage>[0];
 
 function fixture(handle: (call: FakeRenderApiCall) => unknown, extra: Partial<StorageOptions> = {}) {
-  const store = createMemoryMap<StoredRenderAppStorage>();
+  const store = memoryRows<StoredRenderAppStorage>();
   const api = createFakeRenderApi((call) => {
     if (call.path === "/services/srv-minio" && call.method === "GET")
       return { ownerId: "tea-test", environmentId: "env-test", type: "web_service" };

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createDeploymentLayerStore } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer } from "../src/deployment/load-layer.ts";
 import type { StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
@@ -269,7 +270,7 @@ test(
       await withTenant(tenant, async () => {
         const layer = createDeploymentLayerStore({
           ...singleProcessDeps(),
-          backing: createMemoryMap<StoredDeploymentLayer>(),
+          backing: memoryRows<StoredDeploymentLayer>(),
           runtime: emptyDeploymentLayer(),
           skills: store,
         });

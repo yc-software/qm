@@ -1,20 +1,29 @@
 import { ECSClient, DescribeTasksCommand, type DescribeTasksCommandOutput } from "@aws-sdk/client-ecs";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 
 export interface FlyPeerClaim {
   taskArn: string;
   stoppedConfirmedAt?: string;
 }
 
+export const FLY_PEER_CLAIMS: TableSpec<FlyPeerClaim> = {
+  table: "fly_peer_claims",
+  key: "peerId",
+  global: true,
+  required: ["taskArn"],
+  columns: { taskArn: "text", stoppedConfirmedAt: "text" },
+};
+
+export type FlyPeerClaims = Pick<KeyedRows<FlyPeerClaim>, "get" | "putIfAbsent" | "update">;
+
 export async function claimFlyPeer(opts: {
   peerIds: readonly string[];
   taskArn: string;
-  claims: DurableMap<FlyPeerClaim>;
+  claims: FlyPeerClaims;
   taskStopped: (taskArn: string) => Promise<boolean>;
 }): Promise<string> {
   if (!opts.taskArn || !opts.peerIds.length || new Set(opts.peerIds).size !== opts.peerIds.length)
     throw new Error("Fly peer claims require a task identity and distinct peer IDs");
-  if (!opts.claims.update) throw new Error("Fly peer claims require atomic ownership updates");
   const desired = { taskArn: opts.taskArn };
   for (const id of opts.peerIds) {
     if ((await opts.claims.get(id))?.taskArn === opts.taskArn) return id;
@@ -50,10 +59,9 @@ export function createEcsTaskStopped(opts: {
 
 export async function recordStoppedFlyPeers(opts: {
   peerIds: readonly string[];
-  claims: DurableMap<FlyPeerClaim>;
+  claims: FlyPeerClaims;
   taskStopped: (taskArn: string) => Promise<boolean>;
 }): Promise<void> {
-  if (!opts.claims.update) throw new Error("Fly peer claims require atomic ownership updates");
   for (const id of opts.peerIds) {
     const previous = await opts.claims.get(id);
     if (!previous || previous.stoppedConfirmedAt || !(await opts.taskStopped(previous.taskArn))) continue;

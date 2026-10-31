@@ -1,6 +1,7 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
 import type { Cron, ScopeId } from "../types.ts";
+import { TENANT } from "../tenants/migrations.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
 export type IndexedResourceKind = Exclude<ResourceKind, "skills">;
@@ -26,26 +27,38 @@ export interface ResourceSearchStore {
   search(kind: IndexedResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
-const sources = {
+const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
+        json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
+        json->>'owner' AS owner, json->>'status' AS status,
+        json->'members' AS members, json->'destination' AS destination`;
+
+const jsonSources = {
   crons: {
     table: "crons",
     title: "coalesce(json->>'title', '')",
     description: "coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')",
-  },
-  deploys: {
-    table: "deployments",
-    title: "coalesce(json->>'displayName', json->>'name', '')",
-    description: "coalesce(json->>'name', '')",
   },
   webhooks: {
     table: "webhooks",
     title: "coalesce(json->>'action', '')",
     description: "coalesce(json->'verification'->>'scheme', '')",
   },
-} satisfies Record<IndexedResourceKind, { table: string; title: string; description: string }>;
+} satisfies Record<Exclude<IndexedResourceKind, "deploys">, { table: string; title: string; description: string }>;
+
+const sources = {
+  ...jsonSources,
+  deploys: {
+    table: "deployments",
+    title: "coalesce(display_name, name, '')",
+    description: "coalesce(name, '')",
+    fields: `owner_scope_id AS "ownerScopeId", created_in_scope AS "createdInScope",
+        created_by AS "createdBy", status`,
+    where: `tenant_id = ${TENANT}`,
+  },
+};
 
 export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
-  const migrations = Object.entries(sources).map(([kind, source]) => ({
+  const migrations = Object.entries(jsonSources).map(([kind, source]) => ({
     id: `resource-search/${kind}/0001`,
     statements: [
       "SET LOCAL lock_timeout = '2s'",
@@ -59,7 +72,9 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
   const ensure = (kind: IndexedResourceKind): Promise<void> => {
     let pending = ready.get(kind);
     if (!pending) {
-      pending = pg.migrate(migrations[Object.keys(sources).indexOf(kind)]!).catch((error) => {
+      const migration = migrations[Object.keys(jsonSources).indexOf(kind)];
+      if (!migration) return Promise.resolve();
+      pending = pg.migrate(migration).catch((error) => {
         ready.delete(kind);
         throw error;
       });
@@ -71,16 +86,13 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
     async search(kind, query, limit) {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];
-      const source = sources[kind];
+      const source: { table: string; title: string; description: string; fields?: string; where?: string } =
+        sources[kind];
       await ensure(kind);
       const vector = `to_tsvector('simple', ${source.title} || ' ' || ${source.description})`;
       const rows = await pg.q(
-        `SELECT id, ${source.title} AS title, ${source.description} AS description,
-        json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
-        json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
-        json->>'owner' AS owner, json->>'status' AS status,
-        json->'members' AS members, json->'destination' AS destination
-        FROM ${source.table} WHERE ${vector} @@ to_tsquery('simple', $1)
+        `SELECT id, ${source.title} AS title, ${source.description} AS description, ${source.fields ?? JSON_FIELDS}
+        FROM ${source.table} WHERE ${source.where ? `${source.where} AND ` : ""}${vector} @@ to_tsquery('simple', $1)
         ORDER BY ts_rank(${vector}, to_tsquery('simple', $1)) DESC, id
         LIMIT $2`,
         [terms, limit],

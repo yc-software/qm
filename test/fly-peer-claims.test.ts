@@ -6,10 +6,13 @@ import {
   recordStoppedFlyPeers,
   type FlyPeerClaim,
 } from "../src/deploy/fly-peer-claims.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("overlapping tasks get distinct peers and reconnect to their existing claim", async () => {
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = memoryRows<FlyPeerClaim>(true);
   const shared = { claims, peerIds: ["a", "b"], taskStopped: async () => false };
   const peers = await Promise.all(["old", "new"].map((taskArn) => claimFlyPeer({ ...shared, taskArn })));
   assert.notEqual(peers[0], peers[1]);
@@ -18,7 +21,7 @@ test("overlapping tasks get distinct peers and reconnect to their existing claim
 });
 
 test("only confirmed stopped tasks relinquish a peer", async () => {
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = memoryRows<FlyPeerClaim>(true);
   await claims.put("a", { taskArn: "old" });
   const opts = { claims, peerIds: ["a"], taskArn: "new" };
   await assert.rejects(claimFlyPeer({ ...opts, taskStopped: async () => false }), /confirmed stopped/);
@@ -37,7 +40,7 @@ test("only confirmed stopped tasks relinquish a peer", async () => {
 });
 
 test("a stale stopped-task observation cannot replace a newly assigned owner", async () => {
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = memoryRows<FlyPeerClaim>(true);
   await claims.put("a", { taskArn: "old" });
   await assert.rejects(
     claimFlyPeer({
@@ -77,7 +80,7 @@ test("ECS termination requires the exact task and STOPPED status without failure
 });
 
 test("persisted termination evidence permits reuse after ECS history disappears", async () => {
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = memoryRows<FlyPeerClaim>(true);
   await claims.put("a", { taskArn: "old" });
   await recordStoppedFlyPeers({ claims, peerIds: ["a"], taskStopped: async () => true });
   assert.ok((await claims.get("a"))?.stoppedConfirmedAt);
@@ -94,7 +97,7 @@ test("persisted termination evidence permits reuse after ECS history disappears"
 });
 
 test("termination evidence is never copied to a replacement task", async () => {
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = memoryRows<FlyPeerClaim>(true);
   await claims.put("a", { taskArn: "old" });
   await recordStoppedFlyPeers({
     claims,

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { test } from "node:test";
 import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";
 import type { StoredRenderDeploy } from "../src/deploy/render-deploy-provider.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi, fakeDeployment, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 interface Environment {
   id: string;
@@ -15,7 +18,7 @@ interface Environment {
 
 function fixture(handle: (call: FakeRenderApiCall, environment: Environment) => unknown) {
   const deployment = fakeDeployment();
-  const store = createMemoryMap<StoredRenderDeploy>();
+  const store = memoryRows<StoredRenderDeploy>();
   const initial: StoredRenderDeploy = {
     deploymentId: deployment.id,
     appRegion: "oregon",

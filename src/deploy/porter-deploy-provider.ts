@@ -27,8 +27,8 @@ import {
   waitPorterRunning,
   type PorterClientLike,
   type PorterSandboxLike,
-} from "../sandbox/porter-client.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+} from "./porter-client.ts";
+import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -59,6 +59,13 @@ export interface StoredPorterDeployBody {
   createdAtMs: number;
 }
 
+export const PORTER_DEPLOY_BODIES: TableSpec<StoredPorterDeployBody, "deploymentId"> = {
+  table: "porter_deploy_bodies",
+  fieldKey: "deploymentId",
+  required: ["sandboxId", "name", "host", "createdAtMs"],
+  columns: { sandboxId: "text", name: "text", host: "text", port: "bigint", createdAtMs: "bigint" },
+};
+
 export interface PorterDeployProviderOptions {
   appsDomain?: string;
   token?: string;
@@ -71,7 +78,7 @@ export interface PorterDeployProviderOptions {
   readyWindowSec?: number;
   resolveCacheMs?: number;
   client?: PorterClientLike;
-  store?: DurableMap<StoredPorterDeployBody>;
+  store?: Pick<KeyedRows<StoredPorterDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }
@@ -84,7 +91,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const appPort = opts.appPort ?? APP_PORT_DEFAULT;
   const readyWindowSec = opts.readyWindowSec ?? APP_READY_WINDOW_SEC_DEFAULT;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
-  const store = opts.store ?? createMemoryMap<StoredPorterDeployBody>();
+  const store = opts.store ?? memoryRows<StoredPorterDeployBody>();
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const client: PorterClientLike =

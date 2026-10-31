@@ -2,7 +2,7 @@ import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -75,6 +75,23 @@ export interface StoredE2bSandbox {
   homeDirty?: boolean;
 }
 
+export const E2B_SANDBOX_BODIES: TableSpec<StoredE2bSandbox> = {
+  table: "e2b_sandbox_bodies",
+  key: "scopeId",
+  required: ["sandboxId", "createdAtMs"],
+  columns: {
+    sandboxId: "text",
+    nativePause: "boolean",
+    preservationState: "text",
+    preservationError: "text",
+    recoverySnapshotId: "text",
+    recoveryError: "text",
+    createdAtMs: "bigint",
+    lastSnapshotMs: "bigint",
+    homeDirty: "boolean",
+  },
+};
+
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
 export interface E2bSandboxOptions extends BlobStagingOptions {
@@ -90,7 +107,7 @@ export interface E2bSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store: DurableMap<StoredE2bSandbox>;
+  store: Pick<KeyedRows<StoredE2bSandbox>, "get" | "put" | "merge" | "delete">;
   snapshots?: HomeSnapshotStore;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }

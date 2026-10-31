@@ -4,7 +4,7 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -66,6 +66,21 @@ export interface StoredDeployBody {
   replacementMicrovmId?: string;
 }
 
+export const AWS_DEPLOY_BODIES: TableSpec<StoredDeployBody, "deploymentId"> = {
+  table: "aws_deploy_bodies",
+  fieldKey: "deploymentId",
+  required: ["microvmId", "endpoint", "createdAtMs"],
+  columns: {
+    microvmId: "text",
+    endpoint: "text",
+    createdAtMs: "bigint",
+    lastSnapshotMs: "bigint",
+    dataCredsAtMs: "bigint",
+    rotateNotBeforeMs: "bigint",
+    replacementMicrovmId: "text",
+  },
+};
+
 export interface AwsDeployProviderOptions {
   region: string;
   profile?: string;
@@ -86,7 +101,7 @@ export interface AwsDeployProviderOptions {
   dataPrefix?: string;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
-  store?: DurableMap<StoredDeployBody>;
+  store?: Pick<KeyedRows<StoredDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;
@@ -104,7 +119,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       ...(opts.profile ? { profile: opts.profile } : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
-  const store = opts.store ?? createMemoryMap<StoredDeployBody>();
+  const store = opts.store ?? memoryRows<StoredDeployBody>();
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock;
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();

@@ -4222,12 +4222,11 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
   assert.ok(screens.length >= 3, `the whole payload is classified across chunks (saw ${screens.length})`);
 });
 
-test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
+test("unsetting the default computer stops eager provisioning", async () => {
   const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
-  await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok", warm.reason);

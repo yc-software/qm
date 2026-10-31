@@ -2,7 +2,7 @@ import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -83,6 +83,25 @@ export interface StoredManagedAgentsSandbox {
   pendingCheckpointDeletes?: string[];
 }
 
+export const MANAGED_AGENTS_SANDBOX_BODIES: TableSpec<StoredManagedAgentsSandbox> = {
+  table: "do_managed_agents_sandbox_bodies",
+  key: "scopeId",
+  required: ["sessionId", "sandboxId", "createdAtMs"],
+  columns: {
+    sessionId: "text",
+    sandboxId: "text",
+    preservationState: "text",
+    preservationError: "text",
+    createdAtMs: "bigint",
+    lastSnapshotMs: "bigint",
+    homeDirty: "boolean",
+    checkpointId: "text",
+    checkpointAtMs: "bigint",
+    checkpointError: "text",
+    pendingCheckpointDeletes: "text[]",
+  },
+};
+
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
   client: ManagedAgentsClient;
   namePrefix?: string;
@@ -92,7 +111,7 @@ export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store: DurableMap<StoredManagedAgentsSandbox>;
+  store: Pick<KeyedRows<StoredManagedAgentsSandbox>, "get" | "put" | "merge" | "delete">;
   snapshots?: HomeSnapshotStore;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }

@@ -8,7 +8,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -21,7 +21,7 @@ const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/deployment/live-session";
 
 async function fixture(run: () => Promise<void> = async () => {}) {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = true;
   const dedupe = createMemoryReplayDedupe();

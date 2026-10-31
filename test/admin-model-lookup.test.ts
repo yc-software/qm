@@ -14,6 +14,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig();

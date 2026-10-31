@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const nonLeaderLease: LeaderLease = {
   async hold() {
@@ -144,23 +146,13 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
 
-function copyingDeployStore(): DeployStore {
-  const map = createMemoryMap<Deployment>();
-  return createDeployStore({
-    ...map,
-    get: async (id) => structuredClone(await map.get(id)),
-    all: async () => structuredClone(await map.all()),
-    put: (id, value) => map.put(id, structuredClone(value)),
-  });
-}
-
 for (const [visit, stop, status] of [
   ["reach", "archive", "archived"],
   ["reach", "idle reap", "stopped"],
   ["keep-warm", "archive", "archived"],
 ] as const) {
   test(`withDeployLock: a ${visit} waiting on the ${stop} leaves the app ${status} and never re-applies it`, async () => {
-    const deployStore = copyingDeployStore();
+    const deployStore = createDeployStore();
     let applies = 0;
     const destroying = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();

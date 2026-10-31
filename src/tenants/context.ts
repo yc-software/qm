@@ -41,3 +41,13 @@ export function perTenant<V>(create: () => V): () => V {
     return values.get(id)!;
   };
 }
+
+export function tenantMap<V>(): () => Map<string, V> {
+  const tenants = new Map<string, Map<string, V>>();
+  return () => {
+    const tenant = currentTenant();
+    let rows = tenants.get(tenant);
+    if (!rows) tenants.set(tenant, (rows = new Map()));
+    return rows;
+  };
+}

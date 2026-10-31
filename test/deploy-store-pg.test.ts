@@ -1,61 +1,14 @@
-import { test, before, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
-import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, createPostgresDeploymentRows, type Deployment } from "../src/deploy/deploy-store.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
-
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
-
-async function raw(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  try {
-    const res = await p.query(sql, params);
-    return res.rows as Record<string, unknown>[];
-  } finally {
-    await p.end();
-  }
-}
-
-before(async () => {
-  if (!URL) return;
-  await raw("DROP TABLE IF EXISTS deployment_access CASCADE");
-  await raw("DROP TABLE IF EXISTS deployments CASCADE");
-  await raw(
-    "DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/access/%' OR id LIKE 'durable-map/deployments/%'",
-  ).catch(() => {});
-  await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
-});
-
-const factories: PostgresArtifactMaps[] = [];
-
-after(async () => {
-  await Promise.all(factories.map((factory) => factory.pool.close()));
-});
-
-function makeFactory(): PostgresArtifactMaps {
-  const factory = createPostgresMapFactory(URL!);
-  factories.push(factory);
-  return factory;
-}
-
-function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStore; factory: PostgresArtifactMaps } {
-  const factory = makeFactory();
-  const store = createDeployStore({
-    deployments: factory.map<Deployment>("deployments"),
-    pg: factory.pool,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
-    ...opts,
-  });
-  return { store, factory };
-}
+import { seedKeyValueTable, skipWithoutPg as skip, withTypedTableDb } from "./support/typed-table.ts";
 
 const createInput = (name?: string) => ({
   ownerScopeId: scopeId("personal", "U1"),
@@ -65,105 +18,148 @@ const createInput = (name?: string) => ({
   ...(name ? { name } : {}),
 });
 
-test("touch upserts deployment_access without rewriting the blob or bumping the map version", { skip }, async () => {
-  const { store } = makeStore({ touchDebounceMs: 0 });
-  const d = await store.create(createInput());
-  const versionBefore = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
+const stores = (url: string) => {
+  const rows = [createPostgresDeploymentRows(url), createPostgresDeploymentRows(url)];
+  const make = (i: number, touchDebounceMs?: number) =>
+    createDeployStore({
+      deployments: rows[i]!,
+      git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
+      ...(touchDebounceMs === undefined ? {} : { touchDebounceMs }),
+    });
+  return { rows, make, close: async () => undefined };
+};
 
-  await store.touch(d.id, 111);
-  assert.equal((await store.get(d.id))!.lastAccessAt, 111);
-  assert.equal((await store.list()).find((x) => x.id === d.id)!.lastAccessAt, 111);
-
-  const blob = (await raw("SELECT json FROM deployments WHERE id = $1", [d.id]))[0]!.json as Deployment;
-  assert.equal("lastAccessAt" in blob, false, "touch stays out of the jsonb blob");
-  const versionAfter = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
-  assert.equal(String(versionAfter), String(versionBefore), "touch does not invalidate the table snapshot cache");
-
-  await store.touch("missing-id", 5);
-  assert.equal((await raw("SELECT count(*) c FROM deployment_access WHERE id = 'missing-id'"))[0]!.c, "0");
-
-  await raw("DELETE FROM deployments WHERE id = $1", [d.id]);
-  assert.equal(
-    (await raw("SELECT count(*) c FROM deployment_access WHERE id = $1", [d.id]))[0]!.c,
-    "0",
-    "access rows cascade with their deployment",
-  );
+const legacy = (id: string, extra: Partial<Deployment> = {}): Deployment => ({
+  id,
+  ownerScopeId: scopeId("personal", "U1"),
+  createdBy: "U1",
+  currentVersion: 1,
+  status: "running",
+  endpoint: { host: "10.0.0.1", port: 8080, publicUrl: "https://app.example.test/d/x/" },
+  versions: [{ version: 1, createdAt: 1, entrypoint: "node s.js", snapshotDir: "/snap" }],
+  ...extra,
 });
 
-test("touch keeps the max across instances (GREATEST) and debounces per instance", { skip }, async () => {
-  const a = makeStore({ touchDebounceMs: 0 }).store;
-  const b = makeStore({ touchDebounceMs: 0 }).store;
-  const d = await a.create(createInput());
-
-  await a.touch(d.id, 2_000);
-  await b.touch(d.id, 500);
-  assert.equal((await b.get(d.id))!.lastAccessAt, 2_000, "a late lower write never regresses last-access");
-  await b.touch(d.id, 3_000);
-  assert.equal((await a.get(d.id))!.lastAccessAt, 3_000);
-
-  const debounced = makeStore().store;
-  await debounced.touch(d.id, 10_000);
-  await debounced.touch(d.id, 50_000);
-  assert.equal(
-    Number((await raw("SELECT last_access_at FROM deployment_access WHERE id = $1", [d.id]))[0]!.last_access_at),
-    10_000,
-    "a touch inside the 60s window is skipped",
-  );
-  await debounced.touch(d.id, 70_001);
-  assert.equal((await debounced.get(d.id))!.lastAccessAt, 70_001);
-});
-
-test("getByName resolves by indexed SQL lookup and hydrates last-access", { skip }, async () => {
-  const { store } = makeStore({ touchDebounceMs: 0 });
-  const d = await store.create(createInput("slug-app"));
-  assert.equal((await store.getByName("slug-app"))!.id, d.id);
-  assert.equal(await store.getByName("no-such-app"), null);
-  await store.touch(d.id, 4_242);
-  assert.equal((await store.getByName("slug-app"))!.lastAccessAt, 4_242);
-});
-
-test("a racing create with a taken name fails on the unique index, not just the pre-check", { skip }, async () => {
-  const a = makeStore().store;
-  const b = makeStore().store;
-  await a.create(createInput("contested"));
-  await assert.rejects(b.create(createInput("contested")), /deployment name taken: contested/);
-});
-
-test("renaming onto a taken name is rejected by the unique index", { skip }, async () => {
-  const { store } = makeStore();
-  await store.create(createInput("held"));
-  const other = await store.create(createInput("free"));
-  await assert.rejects(store.setName(other.id, "held"), /deployment name taken: held/);
-  assert.equal((await store.get(other.id))!.name, "free");
-});
-
-test("rows never touched since the split fall back to the blob's legacy lastAccessAt", { skip }, async () => {
-  const { store, factory } = makeStore({ touchDebounceMs: 0 });
-  const d = await store.create(createInput());
-  await factory.map<Deployment>("deployments").merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
-  assert.equal((await store.get(d.id))!.lastAccessAt, 777);
-  await store.touch(d.id, 9_999);
-  assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
-});
-
-test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", { skip }, async () => {
-  await raw("DROP INDEX IF EXISTS deployments_name_unique");
-  const seed = makeFactory().map<Deployment>("deployments");
-  const dup = (id: string): Deployment => ({
-    id,
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    name: "doubled",
-    currentVersion: 1,
-    status: "stopped",
-    endpoint: null,
-    versions: [],
+test("touch keeps the max across instances and a full rewrite never regresses it", { skip }, async () => {
+  await withTypedTableDb(stores, async ({ store, tenant }) => {
+    await withTenant(tenant, async () => {
+      const a = store.make(0, 0);
+      const b = store.make(1, 0);
+      const d = await a.create(createInput());
+      await a.touch(d.id, 2_000);
+      await b.touch(d.id, 500);
+      assert.equal((await b.get(d.id))!.lastAccessAt, 2_000);
+      await b.setStatus(d.id, "running");
+      assert.equal((await a.get(d.id))!.lastAccessAt, 2_000);
+      const stale = (await store.rows[1]!.get(d.id))!;
+      await a.touch(d.id, 2_500);
+      await store.rows[1]!.put(d.id, { ...stale, status: "stopped" });
+      assert.equal((await a.get(d.id))!.lastAccessAt, 2_500);
+      await b.touch(d.id, 3_000);
+      assert.equal((await a.get(d.id))!.lastAccessAt, 3_000);
+      assert.equal(await store.rows[0]!.touch("missing-id", 5), false);
+      const debounced = store.make(0);
+      await debounced.touch(d.id, 10_000);
+      await debounced.touch(d.id, 50_000);
+      assert.equal((await a.get(d.id))!.lastAccessAt, 10_000);
+    });
   });
-  await seed.put("dup-a", dup("dup-a"));
-  await seed.put("dup-b", dup("dup-b"));
+});
 
-  const { store } = makeStore();
-  assert.equal((await store.getByName("doubled"))!.id, "dup-a", "lowest id wins, matching the old all().find order");
-  const created = await store.create(createInput("fresh-name"));
-  assert.equal((await store.getByName("fresh-name"))!.id, created.id);
+test("deployment names are unique across every tenant", { skip }, async () => {
+  await withTypedTableDb(stores, async ({ store, tenant, otherTenant }) => {
+    await withTenant(tenant, async () => {
+      const s = store.make(0);
+      await s.create(createInput("held"));
+      const other = await s.create(createInput("free"));
+      await assert.rejects(store.make(1).create(createInput("held")), /deployment name taken: held/);
+      await assert.rejects(s.setName(other.id, "held"), /deployment name taken: held/);
+      assert.equal((await s.get(other.id))!.name, "free");
+      assert.equal((await s.getByName("held"))!.ownerScopeId, "personal:U1");
+    });
+    await withTenant(otherTenant, async () => {
+      const s = store.make(0);
+      assert.equal(await s.getByName("held"), null);
+      assert.deepEqual(await s.list(), []);
+      await assert.rejects(s.create(createInput("held")), /deployment name taken: held/);
+      const mine = await s.create(createInput("mine"));
+      assert.deepEqual(
+        (await s.list()).map((d) => d.id),
+        [mine.id],
+      );
+    });
+  });
+});
+
+test("deployments backfill with their access times and keep the lowest id on a duplicate name", { skip }, async () => {
+  await withTypedTableDb(
+    stores,
+    async ({ store, tenant, admin }) => {
+      await withTenant(tenant, async () => {
+        const s = store.make(0);
+        assert.deepEqual(await s.get("dep-a"), { ...legacy("dep-a", { name: "doubled" }), lastAccessAt: 4_242 });
+        assert.deepEqual(await s.get("dep-b"), legacy("dep-b", { endpoint: null, alwaysOn: true, public: true }));
+        assert.equal((await s.getByName("doubled"))!.id, "dep-a");
+      });
+      const { rows } = await admin.query(
+        `SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv,
+                (SELECT count(*)::int FROM app_page_views) AS views`,
+      );
+      assert.deepEqual(rows[0], { access: null, kv: null, views: 1 });
+    },
+    async (admin) => {
+      await seedKeyValueTable(admin, "deployments", {
+        "dep-a": legacy("dep-a", { name: "doubled" }),
+        "dep-b": legacy("dep-b", { name: "doubled", endpoint: null, alwaysOn: true, public: true }),
+      });
+      await admin.query(
+        `CREATE TABLE deployment_access (id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+           last_access_at BIGINT NOT NULL)`,
+      );
+      await admin.query("INSERT INTO deployment_access VALUES ('dep-a', 4242)");
+      await admin.query(
+        `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id))`,
+      );
+      await admin.query("INSERT INTO app_page_views(deployment_id) VALUES ('dep-a')");
+    },
+  );
+});
+
+test("deploy search reads typed columns through its GIN index inside one tenant", { skip }, async () => {
+  const search = (url: string) => ({ ...stores(url), search: createPostgresResourceSearch(createPgPool(url)) });
+  await withTypedTableDb(search, async ({ store, tenant, otherTenant, admin }) => {
+    await withTenant(tenant, () =>
+      store.rows[0]!.put("hit", legacy("hit", { name: "zanzibar", displayName: "Release checklist" })),
+    );
+    await withTenant(otherTenant, async () => {
+      assert.deepEqual(await store.search.search("deploys", "zanz release", 50), []);
+    });
+    await withTenant(tenant, async () => {
+      const rows = await store.search.search("deploys", "zanz release", 50);
+      assert.deepEqual(rows, [
+        {
+          id: "hit",
+          title: "Release checklist",
+          description: "zanzibar",
+          ownerScopeId: "personal:U1",
+          createdInScope: null,
+          createdBy: "U1",
+          status: "running",
+        },
+      ]);
+      const client = await admin.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL enable_seqscan=off");
+        const vector = "to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, ''))";
+        const plan = await client.query(
+          `EXPLAIN (FORMAT JSON) SELECT id FROM deployments WHERE ${vector} @@ to_tsquery('simple', 'zanz:*')`,
+        );
+        assert.match(JSON.stringify(plan.rows), /deployments_resource_search_gin/);
+        await client.query("ROLLBACK");
+      } finally {
+        client.release();
+      }
+    });
+  });
 });

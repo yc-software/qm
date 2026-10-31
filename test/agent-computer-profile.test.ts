@@ -6,12 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { effectiveEgressEnforcement } from "../src/sandbox/sandbox.ts";
-import { installFakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "agent-computer-profile-"));
@@ -22,17 +23,11 @@ async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T>
   }
 }
 
-function awsSandbox(extraTools: string[]) {
-  const fake = installFakeMicrovm();
-  return createAwsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "aws-profile-"))), {
-    store: createMemoryMap(),
+function spritesSandbox(extraTools: string[]) {
+  return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-profile-"))), {
+    initializationStore: memoryRows(),
     ...singleProcessDeps(),
-    region: "us-west-2",
-    imageIdentifier: "img",
-    s3Bucket: "bucket",
-    api: fake.api,
-    s3: fake.s3,
-    fetchImpl: fake.fetchImpl,
+    token: async () => "test-token",
     extraTools,
   });
 }
@@ -41,7 +36,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
   await withWorkspace(async (dir) => {
     const workspace = createLocalWorkspaceStore(dir);
     const sprites = createSpritesSandbox(workspace, {
-      initializationStore: createMemoryMap(),
+      initializationStore: memoryRows(),
       advisoryLock: createMemoryAdvisoryLock(),
       token: async () => "test-token",
     });
@@ -64,13 +59,13 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
 });
 
 test("a layer re-describing a hardcoded tool never advertises the binary twice (first occurrence wins)", () => {
-  const sb = awsSandbox(["git (deployment Git CLI)"]);
+  const sb = spritesSandbox(["git (deployment Git CLI)"]);
   const gitLines = (sb.profile.spec?.tools ?? []).filter((line) => line.split(/\s+/)[0] === "git");
   assert.deepEqual(gitLines, ["git"], "one advertise line per binary; the hardcoded entry wins");
 });
 
 test("a layer that advertises a tool removes it from notInstalled (no install/not-installed contradiction)", () => {
-  const sb = awsSandbox(["gcloud (deployment Google Cloud CLI)"]);
+  const sb = spritesSandbox(["gcloud (deployment Google Cloud CLI)"]);
   const { spec } = sb.profile;
   assert.ok(spec?.tools?.includes("gcloud (deployment Google Cloud CLI)"), "advertise line joins the tools list");
   assert.ok(!spec?.notInstalled?.includes("gcloud"), "advertised tool is dropped from notInstalled");
@@ -80,7 +75,7 @@ test("a layer that advertises a tool removes it from notInstalled (no install/no
 test("egress enforcement is effective only when core can mint a reachable proxy token", async () => {
   await withWorkspace((dir) => {
     const sprites = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-      initializationStore: createMemoryMap(),
+      initializationStore: memoryRows(),
       advisoryLock: createMemoryAdvisoryLock(),
       token: async () => "test-token",
       egressProxyUrl: "https://egress-proxy.example.com",

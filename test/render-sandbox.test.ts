@@ -1,4 +1,5 @@
 import { test, type TestContext } from "node:test";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,6 @@ import {
   type StoredRenderCleanup,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
@@ -19,8 +19,12 @@ import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
 import { AWS_CLI_ENSURE } from "../src/sandbox/aws-cli.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
+import { createMemorySandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function setup(
   t: TestContext,
@@ -32,9 +36,9 @@ function setup(
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
   const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
-  const store = createMemoryMap<StoredRenderSandbox>();
-  const scratchStore = createMemoryMap<StoredRenderScratch>();
-  const cleanupStore = createMemoryMap<StoredRenderCleanup>();
+  const store = memoryRows<StoredRenderSandbox>();
+  const scratchStore = memoryRows<StoredRenderScratch>();
+  const cleanupStore = memoryRows<StoredRenderCleanup>();
   const advisoryLock = createMemoryAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
   const make = (checkpointIntervalMs = -1) =>
@@ -342,8 +346,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const { make, fake, layers, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
-    records: createMemoryMap(),
-    defaults: createMemoryMap(),
+    ...createMemorySandboxResourceStores(),
     backends: { render },
     defaultBackend: async () => "render",
     lock: advisoryLock,

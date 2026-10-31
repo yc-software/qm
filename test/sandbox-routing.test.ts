@@ -109,54 +109,54 @@ const layersFor = (scopeId: string): WorkspaceLayer[] => [
 ];
 
 function build(defaults: Record<string, SandboxResource | null>, extra: SandboxResource[] = []) {
-  const aws = fakeBackend("aws");
+  const e2b = fakeBackend("e2b");
   const sprites = fakeBackend("sprites");
   const resources = stubResources(defaults, extra);
   const errors: Array<{ code: string; message: string; scopeLabel?: string }> = [];
   const router = createSandboxRouter({
-    backends: { aws, sprites },
-    defaultBackend: async () => "aws",
+    backends: { e2b, sprites },
+    defaultBackend: async () => "e2b",
     resources,
     onError: (e) => errors.push(e),
   });
-  return { router, aws, sprites, resources, errors };
+  return { router, e2b, sprites, resources, errors };
 }
 
 test("provision uses the scope's default resource: backend, backing scope, lock, and handle tags", async () => {
   const r = resource("r1", "sprites");
-  const { router, aws, sprites, resources } = build({ "personal:a": r });
+  const { router, e2b, sprites, resources } = build({ "personal:a": r });
   const h = await router.provision(layersFor("personal:a"));
   assert.equal(h.backend, "sprites");
   assert.equal(h.resourceId, "r1");
   assert.equal(h.scopeId, "personal:a");
   assert.equal(sprites.provisioned[0]!.layers[0]!.scopeId, "sandbox:r1", "rw layer remapped to the backing scope");
   assert.deepEqual(resources.locks, [{ id: "r1", exclusive: false }]);
-  assert.deepEqual(aws.calls, []);
+  assert.deepEqual(e2b.calls, []);
 });
 
 test("an explicit sandboxId wins over the scope default", async () => {
-  const def = resource("def", "aws");
+  const def = resource("def", "e2b");
   const pick = resource("pick", "sprites");
-  const { router, aws } = build({ "personal:a": def }, [pick]);
+  const { router, e2b } = build({ "personal:a": def }, [pick]);
   const h = await router.provision(layersFor("personal:a"), { sandboxId: "pick" });
   assert.equal(h.backend, "sprites");
   assert.equal(h.resourceId, "pick");
-  assert.deepEqual(aws.calls, []);
+  assert.deepEqual(e2b.calls, []);
 });
 
 test("no default resource refuses provision with NoDefaultSandboxError and touches no backend", async () => {
-  const { router, aws, sprites } = build({});
+  const { router, e2b, sprites } = build({});
   await assert.rejects(router.provision(layersFor("personal:none")), NoDefaultSandboxError);
-  assert.deepEqual([...aws.calls, ...sprites.calls], []);
+  assert.deepEqual([...e2b.calls, ...sprites.calls], []);
 });
 
 test("an inventory read failure propagates instead of falling back to the default backend", async () => {
-  const { router, aws, resources } = build({});
+  const { router, e2b, resources } = build({});
   resources.resolve = async () => {
     throw new Error("db down");
   };
   await assert.rejects(router.provision(layersFor("personal:x")), /db down/);
-  assert.deepEqual(aws.calls, []);
+  assert.deepEqual(e2b.calls, []);
 });
 
 test("provision resolves by routeScopeId when the layers don't name the acting scope", async () => {
@@ -168,9 +168,9 @@ test("provision resolves by routeScopeId when the layers don't name the acting s
 });
 
 test("a resource on an unconstructed backend refuses to substitute", async () => {
-  const { router, aws } = build({ "personal:x": resource("x", "local") });
+  const { router, e2b } = build({ "personal:x": resource("x", "local") });
   await assert.rejects(router.provision(layersFor("personal:x")), /unavailable: local/);
-  assert.deepEqual(aws.calls, []);
+  assert.deepEqual(e2b.calls, []);
 });
 
 test("scratch picks the default resource's backend but stays isolated from the persistent box", async () => {
@@ -187,7 +187,7 @@ test("scratch picks the default resource's backend but stays isolated from the p
 });
 
 test("scratch honours an explicit sandboxId for backend choice only", async () => {
-  const { router, aws, sprites, resources } = build({ "personal:a": resource("def", "aws") }, [
+  const { router, e2b, sprites, resources } = build({ "personal:a": resource("def", "e2b") }, [
     resource("pick", "sprites"),
   ]);
   const h = await router.provision(layersFor("personal:a"), { scratch: { key: "t" }, sandboxId: "pick" });
@@ -195,15 +195,15 @@ test("scratch honours an explicit sandboxId for backend choice only", async () =
   assert.equal(h.resourceId, undefined);
   assert.deepEqual(resources.locks, []);
   assert.equal(sprites.provisioned[0]!.layers[0]!.scopeId, "personal:a");
-  assert.deepEqual(aws.calls, []);
+  assert.deepEqual(e2b.calls, []);
 });
 
 test("scratch with no selected computer uses the installation provider without creating a default", async () => {
-  const { router, aws, sprites, resources } = build({});
+  const { router, e2b, sprites, resources } = build({});
   const handle = await router.provision([], { scratch: { key: "t" }, routeScopeId: "personal:none" });
-  assert.equal(handle.backend, "aws");
+  assert.equal(handle.backend, "e2b");
   assert.equal(handle.resourceId, undefined);
-  assert.equal(aws.provisioned.length, 1);
+  assert.equal(e2b.provisioned.length, 1);
   assert.deepEqual(sprites.calls, []);
   assert.deepEqual(resources.locks, []);
   assert.equal(await resources.resolve("personal:none"), null);
@@ -230,13 +230,13 @@ test("failed scratch initialization keeps its selected backend for cleanup", asy
 });
 
 test("a handle's later calls follow its backend under the resource lock", async () => {
-  const { router, aws, sprites, resources } = build({ "personal:m": resource("m", "sprites") });
+  const { router, e2b, sprites, resources } = build({ "personal:m": resource("m", "sprites") });
   const h = await router.provision(layersFor("personal:m"));
   resources.locks.length = 0;
   assert.equal((await router.run(h, "whoami")).stdout, "sprites");
   await router.teardown(h);
   assert.ok(sprites.calls.includes("run:whoami") && sprites.calls.includes("teardown"));
-  assert.ok(!aws.calls.some((c) => c.startsWith("run")));
+  assert.ok(!e2b.calls.some((c) => c.startsWith("run")));
   assert.deepEqual(
     resources.locks.map((l) => l.id),
     ["m", "m"],
@@ -244,17 +244,17 @@ test("a handle's later calls follow its backend under the resource lock", async 
 });
 
 test("profileFor reports the resolved resource's provider, explicit id first", async () => {
-  const { router } = build({ "personal:m": resource("m", "sprites") }, [resource("x", "aws")]);
+  const { router } = build({ "personal:m": resource("m", "sprites") }, [resource("x", "e2b")]);
   assert.ok(supportsScopeProfile(router));
   if (!supportsScopeProfile(router)) return;
   assert.equal((await router.profileFor("personal:m")).backend, "sprites");
-  assert.equal((await router.profileFor("personal:m", "x")).backend, "aws");
+  assert.equal((await router.profileFor("personal:m", "x")).backend, "e2b");
 });
 
 test("profileFor with no default resource advertises the default backend for bootstrap", async () => {
   const { router } = build({});
   if (!supportsScopeProfile(router)) return assert.fail("router must expose profileFor");
-  assert.equal((await router.profileFor("personal:none")).backend, "aws");
+  assert.equal((await router.profileFor("personal:none")).backend, "e2b");
 });
 
 test("fleet sweeps are absent when no backend implements them", async () => {
@@ -265,26 +265,26 @@ test("fleet sweeps are absent when no backend implements them", async () => {
 });
 
 test("reapDeepIdle is exposed when a backend implements it, and sums across backends", async () => {
-  const aws = fakeBackend("aws");
-  (aws as unknown as { reapDeepIdle: unknown }).reapDeepIdle = async () => ({ reaped: 3 });
+  const e2b = fakeBackend("e2b");
+  (e2b as unknown as { reapDeepIdle: unknown }).reapDeepIdle = async () => ({ reaped: 3 });
   const router = createSandboxRouter({
-    backends: { aws, sprites: fakeBackend("sprites") },
-    defaultBackend: async () => "aws",
+    backends: { e2b, sprites: fakeBackend("sprites") },
+    defaultBackend: async () => "e2b",
     resources: stubResources({}),
   });
   assert.deepEqual(await router.reapDeepIdle!(1000), { reaped: 3 });
 });
 
 function capabilitySplit(onError?: (e: { code: string; message: string; scopeLabel?: string }) => void) {
-  const aws = fakeBackend("aws");
-  (aws as unknown as { exportFiles: unknown }).exportFiles = async () => [];
+  const e2b = fakeBackend("e2b");
+  (e2b as unknown as { exportFiles: unknown }).exportFiles = async () => [];
   const sprites = fakeBackend("sprites");
   delete (sprites as Partial<Sandbox>).exportFiles;
   const router = createSandboxRouter({
-    backends: { aws, sprites },
-    defaultBackend: async () => "aws",
+    backends: { e2b, sprites },
+    defaultBackend: async () => "e2b",
     resources: stubResources({
-      "personal:f": resource("f", "aws"),
+      "personal:f": resource("f", "e2b"),
       "personal:s": resource("s", "sprites", "personal:s"),
     }),
     ...(onError ? { onError } : {}),
@@ -327,7 +327,7 @@ test("a throwing error sink cannot replace the typed refusal callers catch", asy
 });
 
 function computerBackends() {
-  const aws = fakeBackend("aws");
+  const e2b = fakeBackend("e2b");
   const sprites = fakeBackend("sprites");
   (sprites as unknown as { computerStatus: unknown }).computerStatus = async (scopeId: string) => {
     sprites.calls.push(`computerStatus:${scopeId}`);
@@ -336,7 +336,7 @@ function computerBackends() {
   (sprites as unknown as { restartComputer: unknown }).restartComputer = async (scopeId: string) => {
     sprites.calls.push(`restartComputer:${scopeId}`);
   };
-  return { aws, sprites };
+  return { e2b, sprites };
 }
 
 test("parking backends lock the computer exclusively only to park it, not to keep it warm", async () => {
@@ -352,9 +352,9 @@ test("parking backends lock the computer exclusively only to park it, not to kee
 });
 
 test("computer status/restart target the resource's backing scope under its lock", async () => {
-  const { aws, sprites } = computerBackends();
+  const { e2b, sprites } = computerBackends();
   const resources = stubResources({ "personal:s": resource("s", "sprites") });
-  const router = createSandboxRouter({ backends: { aws, sprites }, defaultBackend: async () => "aws", resources });
+  const router = createSandboxRouter({ backends: { e2b, sprites }, defaultBackend: async () => "e2b", resources });
   assert.deepEqual(await router.computerStatus!("personal:s"), { machine: "started", guestResponsive: true });
   await router.restartComputer!("personal:s");
   assert.deepEqual(
@@ -368,10 +368,10 @@ test("computer status/restart target the resource's backing scope under its lock
 });
 
 test("computer status/restart with no default resource refuse with NoDefaultSandboxError", async () => {
-  const { aws, sprites } = computerBackends();
+  const { e2b, sprites } = computerBackends();
   const router = createSandboxRouter({
-    backends: { aws, sprites },
-    defaultBackend: async () => "aws",
+    backends: { e2b, sprites },
+    defaultBackend: async () => "e2b",
     resources: stubResources({}),
   });
   await assert.rejects(async () => router.computerStatus!("personal:none"), NoDefaultSandboxError);
@@ -380,11 +380,11 @@ test("computer status/restart with no default resource refuse with NoDefaultSand
 });
 
 test("computer status/restart on a backend without them is a typed refusal", async () => {
-  const { aws, sprites } = computerBackends();
+  const { e2b, sprites } = computerBackends();
   const router = createSandboxRouter({
-    backends: { aws, sprites },
+    backends: { e2b, sprites },
     defaultBackend: async () => "sprites",
-    resources: stubResources({ "personal:a": resource("a", "aws") }),
+    resources: stubResources({ "personal:a": resource("a", "e2b") }),
   });
   await assert.rejects(async () => router.computerStatus!("personal:a"), CapabilityUnsupportedError);
   await assert.rejects(async () => router.restartComputer!("personal:a"), CapabilityUnsupportedError);

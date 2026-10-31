@@ -6,18 +6,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createDeployStore,
+  createMemoryDeploymentRows,
   deployCurrentGitRef,
   deployTouchDebounceMs,
   publicUrlOf,
-  type Deployment,
 } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { memoryArchives } from "./support/deploy-archives.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore();
@@ -211,26 +213,24 @@ test("touch is debounced per id within the window", async () => {
   assert.equal((await s.get(d.id))!.lastAccessAt, 11_001, "a touch past the window writes");
 });
 
-test("touch does not rewrite the deployment blob and falls back to the blob's legacy value", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const s1 = createDeployStore({ deployments });
-  const d = await s1.create({
+test("touch only moves the last access time forward and survives a full rewrite", async () => {
+  const deployments = createMemoryDeploymentRows();
+  const s = createDeployStore({ deployments, touchDebounceMs: 0 });
+  const d = await s.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node s.js",
     snapshotDir: "/snap",
   });
-  await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
-
-  const s2 = createDeployStore({ deployments, touchDebounceMs: 0 });
-  assert.equal((await s2.get(d.id))!.lastAccessAt, 777, "a never-touched row reads the blob's value");
-  await s2.touch(d.id, 9_999);
-  assert.equal((await s2.get(d.id))!.lastAccessAt, 9_999);
-  assert.equal((await deployments.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
+  await s.touch(d.id, 9_999);
+  await s.touch(d.id, 5_000);
+  await s.setStatus(d.id, "running");
+  assert.equal((await s.get(d.id))!.lastAccessAt, 9_999);
+  assert.equal(await deployments.touch("missing", 1), false);
 });
 
 test("deploy versions carry git commits for app files and rollback moves the current ref", async () => {
-  const deployments = createMemoryMap<Deployment>();
+  const deployments = createMemoryDeploymentRows();
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-"));
   const s1 = createDeployStore({ deployments, git: { repoRoot } });
   const d = await s1.create({
@@ -378,7 +378,7 @@ test("an upload cannot smuggle files into the deployment repo's own git director
 });
 
 test("uploaded files a .gitignore would exclude still reach the deployment's git history", async () => {
-  const deployments = createMemoryMap<Deployment>();
+  const deployments = createMemoryDeploymentRows();
   const repoRoot = mkdtempSync(join(tmpdir(), "deploy-git-ignored-"));
   const s = createDeployStore({ deployments, git: { repoRoot } });
   const d = await s.create({
@@ -422,8 +422,8 @@ test("uploaded files a .gitignore would exclude still reach the deployment's git
 });
 
 test("deploy git repos restore from the durable archive into a fresh repo root", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
   const s1 = createDeployStore({
     deployments,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-a-")), archiveStore },
@@ -469,8 +469,8 @@ test("deploy git repos restore from the durable archive into a fresh repo root",
 });
 
 test("deploy git archives keep bundle bytes in the byte store, not the row", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
   const archiveBytes = createMemoryDurableByteStore();
   const s1 = createDeployStore({
     deployments,
@@ -512,8 +512,8 @@ test("deploy git archives keep bundle bytes in the byte store, not the row", asy
 });
 
 test("legacy inline-bundle rows still restore and migrate to blob refs on read", async () => {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
   const s1 = createDeployStore({
     deployments,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-legacy-a-")), archiveStore },

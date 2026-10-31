@@ -1,6 +1,5 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Deployment } from "./deploy-store.ts";
-import type { StoredRenderDeploy } from "./render-deploy-provider.ts";
+import type { RenderDeployBodies, StoredRenderDeploy } from "./render-deploy-provider.ts";
 import { list, RenderApiError, type RenderApi } from "./render-api.ts";
 
 interface Environment {
@@ -14,7 +13,7 @@ export function createRenderAppNetwork(opts: {
   api: RenderApi;
   workspaceId: string;
   projectId: string;
-  store: DurableMap<StoredRenderDeploy>;
+  store: Pick<RenderDeployBodies, "put">;
   name(deployment: Deployment): string;
 }) {
   const { api } = opts;

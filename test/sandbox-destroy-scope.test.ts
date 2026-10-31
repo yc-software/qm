@@ -12,16 +12,17 @@ import {
 } from "../src/sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
-import { installFakeAgent37 } from "./support/fake-agent37.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -65,7 +66,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   const fake = installFakeSprites();
   try {
     const sandbox = createSpritesSandbox(workspace(), {
-      initializationStore: createMemoryMap(),
+      initializationStore: memoryRows(),
       advisoryLock: createMemoryAdvisoryLock(),
       token: async () => "test",
       baseUrl: fake.baseUrl,
@@ -88,25 +89,21 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   }
 });
 
-for (const [name, create, resource] of [
-  ["Smolmachines", createSmolmachinesSandbox, "machines"],
-  ["Agent37", createAgent37Sandbox, "instances"],
-] as const) {
+for (const [name, create, resource] of [["Smolmachines", createSmolmachinesSandbox, "machines"]] as const) {
   test(`${name} scope deletion finds existing bodies without booting and propagates transient deletion errors`, async () => {
     const calls: string[] = [];
     let status = 503;
     let exists = true;
     const sandbox = create(workspace(), {
       ...singleProcessDeps(),
-      store: createMemoryMap(),
+      store: memoryRows(),
       token: async () => "test",
-      apiKey: async () => "test",
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
         calls.push(`${init?.method} ${path}`);
         if (init?.method === "GET") {
           const rows = exists ? [{ id: "existing", name: sandboxScopeName("qm", "scope"), status: "stopped" }] : [];
-          return Response.json(resource === "instances" ? { data: rows } : rows);
+          return Response.json(rows);
         }
         return new Response(null, { status, headers: { "retry-after": "0" } });
       },
@@ -145,17 +142,14 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   assert.equal(calls.at(-1)?.at(-1), localVolumeName("scope"));
 });
 
-for (const [name, create, install] of [
-  ["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines],
-  ["Agent37", createAgent37Sandbox, installFakeAgent37],
-] as const) {
+for (const [name, create, install] of [["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines]] as const) {
   test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
     const fake = install();
     try {
       const credential = async () => "test-token";
       const options = { ...singleProcessDeps(), token: credential, apiKey: credential, fetchImpl: fake.fetchImpl };
-      const a = create(workspace(), { ...options, store: createMemoryMap() });
-      const b = create(workspace(), { ...options, store: createMemoryMap() });
+      const a = create(workspace(), { ...options, store: memoryRows() });
+      const b = create(workspace(), { ...options, store: memoryRows() });
       const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];
       await a.provision(layers);
       await b.destroyScope!("replaced");

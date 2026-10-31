@@ -345,7 +345,7 @@ test("a fresh reconciler retires stale provisioning after the creating process i
   const { service, serviceOptions, caller, root, store, records, sandboxes, disks } = await swarmFixture();
   const [member] = await service.spawn(caller, { requestId: "pool", text: "Work" });
   const resource = await sandboxes.create("alice", root.scopeId, "modal", "Worker", member!.id);
-  await records.merge(resource.id, { state: "provisioning" });
+  await records.update(resource.id, (current) => ({ ...current, state: "provisioning" }));
   await store.update(root.id, (swarm) => {
     Object.assign(swarm.members[1]!, { state: "failed", cleanupPending: true });
   });

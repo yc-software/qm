@@ -28,7 +28,7 @@ export class AwsApiError extends Error {
   }
 }
 
-export interface MicrovmImageSummary {
+interface MicrovmImageSummary {
   name: string;
   imageArn: string;
   state: string;
