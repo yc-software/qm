@@ -41,7 +41,7 @@ test("sandbox resources and defaults backfill from key-value rows onto the exist
       await withTenant(tenant, async () => {
         assert.deepEqual(await store.records.get("legacy-abc"), legacy);
         assert.deepEqual(await store.defaults.get("personal:alice"), { sandboxId: "legacy-abc" });
-        assert.deepEqual(await store.defaults.get("personal:cleared"), {});
+        assert.deepEqual(await store.defaults.get("personal:cleared"), { sandboxId: null });
       });
       const { rows } = await admin.query(
         `SELECT to_regclass('sandbox_resources_kv') AS kv, (SELECT count(*)::int FROM durable_map_versions) AS versions,
