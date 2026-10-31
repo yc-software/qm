@@ -1,7 +1,7 @@
 import { buildApp } from "../../src/wiring.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { testConfig } from "./test-config.ts";
-import { seedTestTenants } from "./test-tenants.ts";
+import { seedTestTenants } from "./tenant-seed.ts";
 
 if (import.meta.main) {
   const [mode, databaseUrl] = process.argv.slice(2) as [string, string];

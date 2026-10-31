@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { definePgMigration, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { SESSION_MIGRATIONS, SESSION_SCHEMA } from "../src/sessions/session-schema.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
@@ -55,6 +56,11 @@ test("a fully migrated database skips the base schema and drops only the retired
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
     await admin.query(`INSERT INTO qm_schema_migrations(id, checksum) VALUES
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
+    const tenancy = SESSION_MIGRATIONS.filter((migration) => migration !== SESSION_SCHEMA).map(definePgMigration);
+    await admin.query("INSERT INTO qm_schema_migrations(id, checksum) SELECT * FROM unnest($1::text[], $2::text[])", [
+      tenancy.map((migration) => migration.id),
+      tenancy.map((migration) => migration.checksum),
+    ]);
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
     await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
     await admin.query(`CREATE TABLE items(seq BIGINT, kind TEXT, target_seq BIGINT,

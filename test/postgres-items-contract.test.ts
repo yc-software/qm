@@ -15,7 +15,8 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { seedTestTenants, tenantBoundUrl } from "./support/test-tenants.ts";
+import { seedTestTenants } from "./support/tenant-seed.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
