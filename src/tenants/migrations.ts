@@ -251,9 +251,8 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          IF to_regclass('qm_tenant') IS NOT NULL THEN
            INSERT INTO tenants(id, slug, name) SELECT id, 'main', 'Main' FROM qm_tenant
             WHERE NOT EXISTS (SELECT 1 FROM tenants)
-              AND (EXISTS (SELECT 1 FROM sessions) OR EXISTS (
-                SELECT 1 FROM qm_schema_migrations m JOIN pg_stat_activity a ON a.pid = pg_backend_pid()
-                 WHERE m.id = 'sessions/store/0047-base-schema' AND m.applied_at < a.backend_start));
+              AND (EXISTS (SELECT 1 FROM sessions) OR 'sessions/store/0047-base-schema' =
+                ANY (string_to_array(current_setting('qm.migrations_before_run', true), ',')));
          END IF;
        END $qm_tenant_seed$`,
       `DROP FUNCTION IF EXISTS qm_tenant_id()`,
