@@ -1,13 +1,15 @@
 import type { ConversationKind } from "../types.ts";
 import type { SurfaceRef } from "./contract.ts";
 
-const SEGMENT = /^[A-Za-z0-9_.-]+$/;
 const KIND_TAG: Record<ConversationKind, string> = { dm: "dm", channel: "ch", group: "grp" };
 const TAG_KIND = new Map(Object.entries(KIND_TAG).map(([kind, tag]) => [tag, kind as ConversationKind]));
 
+const isSegment = (value: string | undefined): value is string =>
+  value !== undefined && value !== "" && !value.includes(":");
+
 function segment(value: string, field: string): string {
-  if (!SEGMENT.test(value))
-    throw new Error(`surface ref ${field} must match ${SEGMENT.source}: ${JSON.stringify(value)}`);
+  if (!isSegment(value))
+    throw new Error(`surface ref ${field} must be non-empty without ":": ${JSON.stringify(value)}`);
   return value;
 }
 
@@ -27,8 +29,7 @@ export function surfaceThreadRef(ref: SurfaceRef): string {
 export function parseSurfaceThreadRef(threadRef: string): SurfaceRef | undefined {
   const [surface, account, tag, container, thread, ...rest] = threadRef.split(":");
   const kind = tag === undefined ? undefined : TAG_KIND.get(tag);
-  if (!kind || rest.length) return undefined;
-  if (![surface, account, container].every((part) => part !== undefined && SEGMENT.test(part))) return undefined;
-  if (thread !== undefined && !SEGMENT.test(thread)) return undefined;
-  return { surface: surface!, account: account!, kind, container: container!, ...(thread ? { thread } : {}) };
+  if (!kind || rest.length || !isSegment(surface) || !isSegment(account) || !isSegment(container)) return undefined;
+  if (thread !== undefined && !isSegment(thread)) return undefined;
+  return { surface, account, kind, container, ...(thread ? { thread } : {}) };
 }
