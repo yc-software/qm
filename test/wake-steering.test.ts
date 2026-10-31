@@ -594,14 +594,14 @@ test("web's queued second run waits for the lock: not claimable until the live r
   );
 
   const live = await claimTurn(built.ledger);
-  assert.ok(live && queued.includes(live.id), "one of the two queued runs is claimed");
+  assert.ok(live && queued.includes(live.run.id), "one of the two queued runs is claimed");
   assert.equal(await claimTurn(built.ledger), null, "the other must NOT be claimable while it runs");
 
   await endTurn(live!, { status: "ok", reply: "done" });
   const next = await claimTurn(built.ledger);
   assert.equal(
-    next?.id,
-    queued.find((id) => id !== live!.id),
+    next?.run.id,
+    queued.find((id) => id !== live!.run.id),
     "the waiting run is claimed once the lock frees",
   );
 });
@@ -672,8 +672,8 @@ test("a queued web turn runs on its own — the sender's client need never come 
 
   await endTurn(live!, { status: "ok", reply: "done" });
   const next = await claimTurn(built.ledger);
-  assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
-  assert.equal(next?.request.text, "the queued one");
+  assert.equal(next?.run.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
+  assert.equal(next?.run.request.text, "the queued one");
 });
 
 // ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
@@ -699,7 +699,7 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
 
   await built.app.turn({ ...mention("@bot why did you do it wrong?", channel, root), triggerTs: "900.010" });
   const claimed = await claimTurn(built.ledger);
-  assert.equal(claimed?.id, liveRunId);
+  assert.equal(claimed?.run.id, liveRunId);
   await endTurn(claimed!, { status: "silent" });
 
   const replayed = await until(async () =>

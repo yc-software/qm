@@ -11,7 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
-import { appLedger, claimTurn, endTurn, pauseTurns } from "./support/turns.ts";
+import { appLedger, claimTurn, endTurn, pauseTurns, resumeTurns } from "./support/turns.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 function freshApp() {
@@ -276,7 +276,7 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   const built = freshApp();
   const thread = "web:U1:failed";
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, thread));
-  assert.equal(parked.status, "pending_approval");
+  assert.equal(parked.status, "pending_approval", parked.reason);
   const uuid = parked.sessionId;
   assert.ok(uuid && uuid !== thread);
   const got = record(built.sessionStateBus);
@@ -392,9 +392,10 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   });
   const leased = await claimTurn(built.ledger, run.id);
   assert.ok(leased, "the subagent's turn is running");
+  resumeTurns(built);
   const got = record(built.sessionStateBus);
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
-  assert.equal(parked.status, "pending_approval");
+  assert.equal(parked.status, "pending_approval", parked.reason);
   assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
   const row = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
   assert.equal(row?.awaitingInput, true);

@@ -352,6 +352,7 @@ test("core engagement is signaled once for local or durable replies, never quiet
     const core = createSlackCoreClient({
       runs: {
         onTerminal() {},
+        leaseHeld: async () => true,
         get: async () => {
           if (++polls === 1 && mode === "local") stream.begin("r1");
           return {

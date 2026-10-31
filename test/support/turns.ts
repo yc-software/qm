@@ -10,6 +10,7 @@ import { createTurnRunner, type TurnRunner, type TurnRunnerDeps } from "../../sr
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { testMigratedDatabaseUrl } from "./test-database.ts";
 import { CONFIG_DEFAULTS } from "../../src/config.ts";
+import type { Runtime } from "../../src/wiring.ts";
 
 type Runs = Pick<RunStore, "get" | "activeForThread" | "list">;
 
@@ -125,9 +126,23 @@ export function appLedger(built: { runs: Pick<RunStore, "emitTerminal"> }, datab
   return ledger;
 }
 
-/** Stops a built app's turn runner from claiming, so a test can claim and end turns by hand. */
-export async function pauseTurns(built: { runtime: { stopBackgroundClaims(): Promise<void> } }): Promise<void> {
-  await built.runtime.stopBackgroundClaims();
+/**
+ * Stops a built app's turn runner from starting turns, so a test can claim and end them by hand. A claim already in
+ * flight is handed straight back; the short wait lets it land. Sync turns hang while paused: `resumeTurns` first.
+ */
+export async function pauseTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): Promise<void> {
+  built.runtime.setBackgroundAdmission(
+    () => false,
+    () => false,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+export function resumeTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): void {
+  built.runtime.setBackgroundAdmission(
+    () => true,
+    () => false,
+  );
 }
 
 /** A started turn runner over `ledger` that retries at once; stops claiming at the end of the file. */
