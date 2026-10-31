@@ -156,7 +156,7 @@ function shortCron(expression: string): string {
     !pattern.lastDayOfMonth &&
     !pattern.lastWeekday &&
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
-  if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
+  if (!plain) return cronstrue.toString(expression.toUpperCase().replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
   return `${setIndexes(pattern.hour)
     .map((hour) => clockTime(hour, minute))

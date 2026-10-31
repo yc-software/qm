@@ -72,14 +72,18 @@ function normalizeTimezone(input: string | undefined, fallback: string = DEFAULT
 }
 
 function normalizeCronExpression(input: string): string {
-  const cron = input.trim().replace(/\s+/g, " ");
+  const cron = input.trim().replace(/\s+/g, " ").replaceAll("?", "*");
   if (cron.split(" ").length !== 5) throw new Error("schedule.cron must be a 5-field cron expression");
   return cron;
 }
 
 function calendarJob(schedule: CronSchedule): Croner {
   if (!schedule.cron) throw new Error("schedule.cron is required");
-  return new Croner(schedule.cron, { timezone: normalizeTimezone(schedule.timezone), paused: true, mode: "5-part" });
+  return new Croner(normalizeCronExpression(schedule.cron), {
+    timezone: normalizeTimezone(schedule.timezone),
+    paused: true,
+    mode: "5-part",
+  });
 }
 
 function nextCalendarFireAfter(schedule: CronSchedule, after: number): number | undefined {
