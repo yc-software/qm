@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import type { ErrorLog } from "../../src/admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { isTerminal, type Run, type RunStore } from "../../src/runs/run-store.ts";
 import type { TurnRequest, TurnResult } from "../../src/types.ts";
@@ -106,4 +108,17 @@ export function testRunStore(databaseUrl = testMigratedDatabaseUrl()): TestRunSt
       await store.close();
     },
   };
+}
+
+export async function failedTurnError(
+  built: { app: Pick<App, "turn">; errors: Pick<ErrorLog, "flush" | "list"> },
+  request: TurnRequest,
+): Promise<string> {
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  await built.errors.flush();
+  return (await built.errors.list({ limit: 100 }))
+    .filter((event) => event.category === "turn")
+    .map((event) => event.message)
+    .join("\n");
 }
