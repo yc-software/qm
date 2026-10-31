@@ -59,6 +59,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
           PATH: process.env.PATH,
           NODE_ENV: "test",
           DATABASE_URL: url,
+          DATABASE_OWNER_URL: url,
           SANDBOX_BACKEND: "local",
           SESSION_STORE: "postgres",
           ORG_ID: "migration-test",

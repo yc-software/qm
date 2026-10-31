@@ -43,9 +43,10 @@ export const ownerDatabaseUrl = (connectionString: string): string =>
   connectionString === poolingConfig.databaseUrl && poolingConfig.ownerUrl ? poolingConfig.ownerUrl : connectionString;
 
 function ownerLogin(connectionString: string): string {
-  if (connectionString !== poolingConfig.databaseUrl || !poolingConfig.ownerUrl)
+  const { databaseUrl, ownerUrl } = poolingConfig;
+  if (!ownerUrl || (connectionString !== databaseUrl && connectionString !== ownerUrl))
     throw new Error("Cross-tenant claims need DATABASE_OWNER_URL for this database");
-  return poolingConfig.ownerUrl;
+  return ownerUrl;
 }
 
 let loginPasswordsSet = false;
