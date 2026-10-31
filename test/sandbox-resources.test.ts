@@ -4,7 +4,7 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
-import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
+import { createSandboxRouter, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
@@ -16,6 +16,21 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { currentTenant, withTenant } from "../src/tenants/context.ts";
+
+const [TENANT_A, TENANT_B] = ["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"];
+
+function localUpgrade(available: SandboxBackendName[]) {
+  return async () => ({ available, legacyBackend: () => "local" as const });
+}
+
+type ResourceOptions = Parameters<typeof createSandboxResources>[0];
+
+function wired(options: ResourceOptions, backends: ResourceOptions["backends"], name: SandboxBackendName) {
+  const defaultBackend = async () => name;
+  const resources = createSandboxResources({ ...options, backends, defaultBackend });
+  return { resources, router: createSandboxRouter({ backends, defaultBackend, resources }) };
+}
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -66,7 +81,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     (overrides: Partial<Parameters<typeof upgradeLegacySandboxes>[0]> = {}) =>
     () =>
       upgradeLegacySandboxes({
-        backends: async () => ({ available: ["local"], legacyBackend: () => "local" }),
+        backends: localUpgrade(["local"]),
         records,
         defaults,
         marker,
@@ -85,8 +100,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     canUseScope: async (actor: string, scope: string) =>
       actor === "admin" || scope === `personal:${actor}` || (actor === "alice" && scope === "channel:team"),
   } satisfies Parameters<typeof createSandboxResources>[0];
-  const resources = createSandboxResources(options);
-  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: async () => "local", resources });
+  const { resources, router } = wired(options, { local: backend }, "local");
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, marker, upgrade };
 }
@@ -223,9 +237,7 @@ test("listing an untouched scope never invents a legacy machine", async () => {
 test("turn default changes invalidate cached provisioning while explicit calls dedupe and cleanup each computer once", async () => {
   const { resources, router, layers, backend } = fixture();
   const released: string[] = [];
-  backend.teardown = async (handle) => {
-    released.push(handle.id);
-  };
+  backend.teardown = async (handle) => void released.push(handle.id);
   const a = await resources.create("alice", "personal:alice", "local");
   const b = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", a.id);
@@ -266,20 +278,14 @@ test("retirement refuses the default, waits for an active command, and prevents 
   await resources.setDefault("alice", "personal:alice", null);
   let finish!: () => void;
   let started!: () => void;
-  const running = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const running = new Promise<void>((resolve) => (started = resolve));
   backend.run = async () => {
     started();
-    await new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    await new Promise<void>((resolve) => (finish = resolve));
     return { stdout: "done", stderr: "", code: 0, timedOut: false };
   };
   let destroyed = false;
-  backend.destroyScope = async () => {
-    destroyed = true;
-  };
+  backend.destroyScope = async () => void (destroyed = true);
   const command = router.run(handle, "work");
   await running;
   const retiring = resources.retire("alice", record.id);
@@ -344,12 +350,8 @@ for (const fail of [false, true])
     const provision = backend.provision;
     let release!: () => void;
     let entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const started = new Promise<void>((resolve) => (entered = resolve));
     let first = true;
     backend.provision = async (layers, options) => {
       if (first) {
@@ -370,9 +372,7 @@ for (const fail of [false, true])
     await started;
     const record = (await records.all())[0]!;
     let retired = false;
-    const retiring = resources.retire("alice", record.id).then(() => {
-      retired = true;
-    });
+    const retiring = resources.retire("alice", record.id).then(() => void (retired = true));
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(retired, false);
     assert.equal((await records.get(record.id))?.state, "provisioning");
@@ -405,7 +405,7 @@ test("activation preserves routes, cold identities and explicit nulls without ca
   const resources = createSandboxResources({
     ...options,
     upgrade: upgrade({
-      backends: async () => ({ available: ["local", "modal"], legacyBackend: () => "local" }),
+      backends: localUpgrade(["local", "modal"]),
       legacyScopes: async () => ["personal:old-session", "personal:unset"],
       legacySandboxes: async () => [
         { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
@@ -483,9 +483,7 @@ test("retirement deletes an inferred missing computer without provisioning, stat
   backend.computerStatus = async () => {
     throw new Error("must not probe");
   };
-  backend.destroyScope = async (scope) => {
-    destroyed.push(scope);
-  };
+  backend.destroyScope = async (scope) => void destroyed.push(scope);
   await resources.retire("alice", record!.id);
   await resources.retire("alice", record!.id);
   assert.deepEqual(destroyed, ["personal:alice"]);
@@ -520,9 +518,7 @@ test("failed retirement stays unroutable and retries cleanup by backing scope af
     ["retire"],
   );
   const destroyed: string[] = [];
-  backend.destroyScope = async (scope) => {
-    destroyed.push(scope);
-  };
+  backend.destroyScope = async (scope) => void destroyed.push(scope);
   backend.provision = async () => {
     throw new Error("must not restore");
   };
@@ -538,9 +534,7 @@ test("a pending retirement without an error remains retryable after a crash", as
   const record = await resources.create("alice", "personal:alice", "local");
   await records.put(record.id, { ...record, state: "retired", cleanupPending: true });
   let destroyed = false;
-  backend.destroyScope = async () => {
-    destroyed = true;
-  };
+  backend.destroyScope = async () => void (destroyed = true);
   await createSandboxResources(options).retire("alice", record.id);
   assert.equal(destroyed, true);
   assert.equal((await records.get(record.id))?.cleanupPending, false);
@@ -550,9 +544,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
   const { resources, records, options, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   let destroyed = false;
-  backend.destroyScope = async () => {
-    destroyed = true;
-  };
+  backend.destroyScope = async () => void (destroyed = true);
   const guarded = createSandboxResources({
     ...options,
     beforeRetire: async () => {
@@ -598,9 +590,7 @@ test("retirement waits for background startup to commit its live registry row", 
   const starting = broker.start(handle, "sleep 60", "Run background tests");
   await entering.promise;
   let destroyed = false;
-  backend.destroyScope = async () => {
-    destroyed = true;
-  };
+  backend.destroyScope = async () => void (destroyed = true);
   const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
   release.resolve();
   await Promise.all([starting, retiring]);
@@ -625,9 +615,7 @@ test("failed background registration kills its process and releases the resource
     throw new Error("registry unavailable");
   };
   const signals: string[] = [];
-  backend.signalProcess = async (_handle, id, signal) => {
-    signals.push(`${id}:${signal}`);
-  };
+  backend.signalProcess = async (_handle, id, signal) => void signals.push(`${id}:${signal}`);
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
   await assert.rejects(broker.start(handle, "sleep 60", "Run background tests"), /registry unavailable/);
   assert.deepEqual(signals, ["unregistered:KILL"]);
@@ -673,12 +661,7 @@ for (const [kind, waiting] of [
 ] as const) {
   test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
     const { options, backend, layers } = fixture();
-    const resources = createSandboxResources({
-      ...options,
-      backends: { [kind]: backend },
-      defaultBackend: async () => kind,
-    });
-    const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: async () => kind, resources });
+    const { resources, router } = wired(options, { [kind]: backend }, kind);
     const record = await resources.create("alice", "personal:alice", kind);
     await resources.setDefault("alice", "personal:alice", record.id);
     const handle = await router.provision(layers);
@@ -695,9 +678,7 @@ for (const [kind, waiting] of [
     };
     const long = waiting === "command" ? router.run(handle, "long") : router.teardown(handle);
     let restarted = false;
-    backend.restartComputer = async () => {
-      restarted = true;
-    };
+    backend.restartComputer = async () => void (restarted = true);
     let restarting: Promise<void> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -729,12 +710,7 @@ for (const [kind, waiting] of [
 
 test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
-  const resources = createSandboxResources({
-    ...options,
-    backends: { modal: backend },
-    defaultBackend: async () => "modal",
-  });
-  const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: async () => "modal", resources });
+  const { resources, router } = wired(options, { modal: backend }, "modal");
   const record = await resources.create("alice", "personal:alice", "modal");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();
@@ -752,9 +728,7 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
     provisioned = true;
     return handle;
   };
-  backend.teardown = async () => {
-    destroyed = true;
-  };
+  backend.teardown = async () => void (destroyed = true);
   const provision = router.provision(layers, { sandboxId: record.id });
   const teardown = router.teardown(handle, { destroy: true });
   try {
@@ -771,16 +745,7 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
-  const resources = createSandboxResources({
-    ...options,
-    backends: { sprites: backend },
-    defaultBackend: async () => "sprites",
-  });
-  const router = createSandboxRouter({
-    backends: { sprites: backend },
-    defaultBackend: async () => "sprites",
-    resources,
-  });
+  const { resources, router } = wired(options, { sprites: backend }, "sprites");
   const record = await resources.create("alice", "personal:alice", "sprites");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const release = Promise.withResolvers<void>();
@@ -804,12 +769,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
 test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
-  const resources = createSandboxResources({
-    ...options,
-    backends: { e2b: parking },
-    defaultBackend: async () => "e2b",
-  });
-  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: async () => "e2b", resources });
+  const { resources, router } = wired(options, { e2b: parking }, "e2b");
   const record = await resources.create("alice", "personal:alice", "e2b");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();
@@ -820,9 +780,7 @@ test("parking teardown waits for active commands on the computer", { timeout: 10
     return { stdout: "done", stderr: "", code: 0, timedOut: false };
   };
   let parked = false;
-  parking.teardown = async () => {
-    parked = true;
-  };
+  parking.teardown = async () => void (parked = true);
   const running = router.run(handle, "long");
   await entered.promise;
   const teardown = router.teardown(handle);
@@ -859,10 +817,7 @@ test("a verified live turn can create only its own new scope computer without di
 
 test("legacy import refuses an unavailable selected provider before writing any adoption state", async () => {
   const { options, upgrade, records, defaults, marker } = fixture();
-  const resources = createSandboxResources({
-    ...options,
-    upgrade: upgrade({ backends: async () => ({ available: [], legacyBackend: () => "local" }) }),
-  });
+  const resources = createSandboxResources({ ...options, upgrade: upgrade({ backends: localUpgrade([]) }) });
   await assert.rejects(resources.initialize(), /personal:alice: backend local is not configured/);
   assert.deepEqual(await records.all(), []);
   assert.deepEqual(await defaults.all(), []);
@@ -875,10 +830,7 @@ test("legacy import does not validate obsolete provider choices after explicit s
   const { options, upgrade, defaults, marker } = fixture(undefined, ["personal:cleared", "personal:selected"]);
   await defaults.put("personal:cleared", { sandboxId: null });
   await defaults.put("personal:selected", { sandboxId: "newer-computer" });
-  await createSandboxResources({
-    ...options,
-    upgrade: upgrade({ backends: async () => ({ available: [], legacyBackend: () => "local" }) }),
-  }).initialize();
+  await createSandboxResources({ ...options, upgrade: upgrade({ backends: localUpgrade([]) }) }).initialize();
   assert.deepEqual(await defaults.get("personal:cleared"), { sandboxId: null });
   assert.deepEqual(await defaults.get("personal:selected"), { sandboxId: "newer-computer" });
   assert.ok(await marker.get("explicit-defaults"));
@@ -903,18 +855,11 @@ test("a computer stays held until its last live run releases it, and ended runs 
 test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
-  const resources = createSandboxResources({
-    ...options,
-    backends: { e2b: parking },
-    defaultBackend: async () => "e2b",
-  });
-  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: async () => "e2b", resources });
+  const { resources, router } = wired(options, { e2b: parking }, "e2b");
   const record = await resources.create("alice", "personal:alice", "e2b");
   await resources.setDefault("alice", "personal:alice", record.id);
   const teardowns: unknown[] = [];
-  parking.teardown = async (_handle, opts) => {
-    teardowns.push(opts ?? {});
-  };
+  parking.teardown = async (_handle, opts) => void teardowns.push(opts ?? {});
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
     await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
@@ -1060,10 +1005,7 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
 test("sandbox inventory runs the legacy upgrade once per tenant and offers only that tenant's usable providers", async () => {
   const { options, backend } = fixture();
   const upgradedFor: string[] = [];
-  const usable: Record<string, Array<"local" | "sprites">> = {
-    [TENANT_A]: ["local", "sprites"],
-    [TENANT_B]: ["local"],
-  };
+  const usable: Record<string, SandboxBackendName[]> = { [TENANT_A]: ["local", "sprites"], [TENANT_B]: ["local"] };
   const resources = createSandboxResources({
     ...options,
     backends: { local: backend, sprites: backend },
@@ -1073,17 +1015,10 @@ test("sandbox inventory runs the legacy upgrade once per tenant and offers only 
   });
   for (const tenant of [TENANT_A, TENANT_B, TENANT_A, TENANT_B]) await withTenant(tenant, () => resources.initialize());
   assert.deepEqual(upgradedFor, [TENANT_A, TENANT_B]);
-  assert.deepEqual(
-    (await withTenant(TENANT_B, () => resources.profiles())).map((profile) => profile.name),
-    ["local"],
-  );
+  const profiles = await withTenant(TENANT_B, () => resources.profiles());
+  assert.equal(profiles.map((profile) => profile.name).join(), "local");
   assert.equal(await withTenant(TENANT_A, () => resources.defaultBackend()), "sprites");
-  await assert.rejects(
-    withTenant(TENANT_B, () => resources.create("alice", "personal:alice", "sprites")),
-    /sandbox backend unavailable: sprites/,
-  );
-  assert.equal(
-    (await withTenant(TENANT_A, () => resources.create("alice", "personal:alice", "sprites"))).backend,
-    "sprites",
-  );
+  const create = (tenant: string) => withTenant(tenant, () => resources.create("alice", "personal:alice", "sprites"));
+  await assert.rejects(create(TENANT_B), /sandbox backend unavailable: sprites/);
+  assert.equal((await create(TENANT_A)).backend, "sprites");
 });
