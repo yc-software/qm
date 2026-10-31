@@ -1215,12 +1215,12 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     deps.config.getWebuiModelsDurable(tenantRootScope()),
     deps.config.getBaseModelDurable(tenantRootScope()),
     deps.config.getExternalSlackParticipantsDurable(tenantRootScope()),
-    resolveBranding(deps.config, tenantRootScope(), deps.brandingDefault),
+    resolveBranding(deps.config, tenantRootScope()),
   ]);
   const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const configuredKeys = deps.providerKeys ?? managedKeys;
-  const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
+  const providerStatus = managedKeys;
+  const harnessCarriedModelAuth = await deps.harnessCarriedModelAuth?.();
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
@@ -1230,7 +1230,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
   const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
     ? baseModel!
-    : defaultModelForHarness(harnessId, deps.baseModelDefault);
+    : defaultModelForHarness(harnessId, deps.baseModelDefault?.());
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
     ...(branding.accent ? { accent: branding.accent } : {}),
@@ -1248,7 +1248,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
         providerStatus.openai ||
         providerStatus.openrouter ||
         providerStatus.modelIds?.size ||
-        deps.harnessCarriedModelAuth,
+        harnessCarriedModelAuth,
       ),
     }),
     externalSlackParticipants,

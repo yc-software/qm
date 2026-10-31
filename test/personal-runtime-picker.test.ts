@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
@@ -19,8 +19,8 @@ async function setup() {
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
+    modelCredentials: built.modelCredentials,
     harnessId: "pi",
-    providerKeys: { anthropic: false, openai: false, openrouter: false },
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

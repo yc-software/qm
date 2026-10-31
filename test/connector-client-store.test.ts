@@ -8,15 +8,9 @@ import {
   decryptSecret,
   deriveConnectorKey,
 } from "../src/connectors/connector-client-store.ts";
-import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
-
-const envWithSlack = {
-  SLACK_OAUTH_CLIENT_ID: "env-sid",
-  SLACK_OAUTH_CLIENT_SECRET: "env-ssecret",
-} as NodeJS.ProcessEnv;
 
 test("AES-GCM secret round-trips and ciphertext differs from plaintext", () => {
   const key = deriveConnectorKey("a-persistent-key");
@@ -54,7 +48,7 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
   assert.throws(() => decryptSecret("just-one-part", key), /malformed/);
 });
 
-test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
+test("BYO record resolves; the secret is encrypted at rest and never echoed", async () => {
   const store = createMemoryConfigStore({ connectorSecretKey: "persistent-key" });
   await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
     clientId: "org-cid",
@@ -73,10 +67,7 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
   assert.equal((pub[0] as unknown as Record<string, unknown>).secretEnc, undefined);
   assert.doesNotMatch(JSON.stringify(pub), /org-secret/);
 
-  const resolve = createConnectorClientResolver({
-    reader: store,
-    secrets: createEnvSecretSource(envWithSlack),
-  });
+  const resolve = createConnectorClientResolver({ reader: store });
   const c = await resolve("google", {});
   assert.equal(c.id, "org-cid");
   assert.equal(c.secret, "org-secret");
@@ -85,16 +76,21 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
   assert.equal(c.clientRef, `${TEST_ROOT_SCOPE}:google`);
 });
 
-test("a provider with no org record falls back to env", async () => {
+test("a provider with no org record is unconfigured even when its OAuth env vars are set", async () => {
   const store = createMemoryConfigStore({ connectorSecretKey: "k" });
-  const resolve = createConnectorClientResolver({
-    reader: store,
-    secrets: createEnvSecretSource(envWithSlack),
-  });
-  const c = await resolve("slack", {});
-  assert.equal(c.id, "env-sid");
-  assert.equal(c.clientRef, "env:slack");
-  await assert.rejects(resolve("google", {}), /GOOGLE_OAUTH_CLIENT_ID/);
+  const resolve = createConnectorClientResolver({ reader: store });
+  const prior = { id: process.env.SLACK_OAUTH_CLIENT_ID, secret: process.env.SLACK_OAUTH_CLIENT_SECRET };
+  process.env.SLACK_OAUTH_CLIENT_ID = "env-sid";
+  process.env.SLACK_OAUTH_CLIENT_SECRET = "env-ssecret";
+  try {
+    await assert.rejects(resolve("slack", {}), /admin must add the slack OAuth client/);
+    await assert.rejects(resolve("google", {}), /not configured/);
+  } finally {
+    if (prior.id === undefined) delete process.env.SLACK_OAUTH_CLIENT_ID;
+    else process.env.SLACK_OAUTH_CLIENT_ID = prior.id;
+    if (prior.secret === undefined) delete process.env.SLACK_OAUTH_CLIENT_SECRET;
+    else process.env.SLACK_OAUTH_CLIENT_SECRET = prior.secret;
+  }
 });
 
 test("a disabled org connector is refused (grays out the app grid)", async () => {
@@ -108,7 +104,7 @@ test("a disabled org connector is refused (grays out the app grid)", async () =>
   await assert.rejects(resolve("google", {}), /disabled/);
 });
 
-test("deleting a connector record falls back to env / unconfigured", async () => {
+test("deleting a connector record leaves it unconfigured", async () => {
   const store = createMemoryConfigStore({ connectorSecretKey: "k" });
   await store.setConnectorClient(TEST_ROOT_SCOPE, "google", { clientId: "c", clientSecret: "s" });
   assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 1);

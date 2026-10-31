@@ -85,7 +85,7 @@ test("provider default is pinned before retries and child provisioning, with no 
     records: f.records,
     defaults: createMemoryMap(),
     backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
-    defaultBackend: "aws",
+    defaultBackend: async () => "aws",
     lock: f.serviceOptions.lock,
     canUseScope: async () => true,
   };
@@ -93,7 +93,7 @@ test("provider default is pinned before retries and child provisioning, with no 
   const service = createSwarmService({ ...f.serviceOptions, sandboxes });
   const [peer] = await service.spawn(f.caller, { requestId: "initial", text: "work" });
   assert.equal((await f.store.get(f.root.id))!.backend, "aws");
-  options.defaultBackend = "modal";
+  options.defaultBackend = async () => "modal";
   await service.sweep();
   assert.equal((await f.records.get(peer!.id))!.backend, "aws");
   const worker = await f.workerCaller(peer!.id);
@@ -113,7 +113,7 @@ test("selected scope computer determines new worker provider, but its private di
     records: f.records,
     defaults: createMemoryMap(),
     backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
-    defaultBackend: "modal",
+    defaultBackend: async () => "modal",
     lock: f.serviceOptions.lock,
     canUseScope: async () => true,
   });

@@ -30,10 +30,10 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "dynamic-openrouter-model-")),
-      openrouterApiKey: "deployment-openrouter-key",
     }),
     { modelCredentialFetch: oxAlphaCatalog },
   );
+  await built.modelCredentials.set("openrouter", "deployment-openrouter-key", "admin");
   await built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
     harnessId: "pi",
     modelId: "stealth/ox-alpha",

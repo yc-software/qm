@@ -6,7 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
@@ -17,6 +18,8 @@ import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+
+enterTenant(TEST_TENANT);
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -31,6 +34,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
     server = createInsecureTestServer(built.app, {
       capabilitySecret: CAP,
       portalIdentitySecret: PID,

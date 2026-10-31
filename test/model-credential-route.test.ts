@@ -7,9 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";
+import type { BuiltApp } from "../src/wiring.ts";
+import { harnessCarriedModelAuthFor } from "../src/model/tenant-models.ts";
+import type { ModelProvider } from "../src/model/pi-models.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testConfig } from "./support/test-config.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
@@ -19,27 +22,64 @@ bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
-function start(
-  config: Parameters<typeof testConfig>[0] = {},
+const GATEWAY: TenantSettingValues = {
+  MODEL_GATEWAY_URL: "http://gateway.internal:8080",
+  MODEL_GATEWAY_API_KEY: "gateway-secret",
+  MODEL_GATEWAY_API_KEY_HEADER: "api-key",
+};
+
+function gatewaySettings(models: Record<string, string>): TenantSettingValues {
+  return {
+    ...GATEWAY,
+    MODEL_GATEWAY_MODELS: Object.entries(models)
+      .map(([source, target]) => `${source}=${target}`)
+      .join(","),
+  };
+}
+
+async function buildWith(
+  options: {
+    config?: Parameters<typeof testConfig>[0];
+    settings?: TenantSettingValues;
+    keys?: Partial<Record<ModelProvider, string>>;
+  } = {},
+  modelCredentialFetch?: typeof fetch,
+): Promise<BuiltApp> {
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
+    ...options.config,
+  });
+  const built = buildApp(config, {
+    tenantSettings: testTenantSettings(options.settings, config.harness),
+    ...(modelCredentialFetch ? { modelCredentialFetch } : {}),
+  });
+  for (const [provider, key] of Object.entries(options.keys ?? {}))
+    await built.modelCredentials.set(provider as ModelProvider, key, "deployment");
+  return built;
+}
+
+async function start(
+  options: {
+    config?: Parameters<typeof testConfig>[0];
+    settings?: TenantSettingValues;
+    keys?: Partial<Record<ModelProvider, string>>;
+  } = {},
   modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 }),
-): {
+): Promise<{
   base: string;
   built: BuiltApp;
   close: () => Promise<void>;
-} {
-  const appConfig = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "model-credential-route-")),
-    ...config,
-  });
-  const built = buildApp(appConfig, { modelCredentialFetch });
+}> {
+  const built = await buildWith(options, modelCredentialFetch);
+  const harness = options.config?.harness ?? "pi";
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
     modelCredentialFetch,
-    harnessId: config.harness ?? "pi",
-    ...(harnessCarriedModelAuth(appConfig) ? { harnessCarriedModelAuth: harnessCarriedModelAuth(appConfig) } : {}),
-    providerKeys: providerKeysPresent(appConfig),
+    harnessId: harness,
+    tenantSettings: built.tenantSettings,
+    harnessCarriedModelAuth: async () => harnessCarriedModelAuthFor(await built.tenantSettings.get(), harness),
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -52,42 +92,54 @@ function start(
 }
 
 test("admin model credentials are encrypted, write-only, live, and removable", async () => {
-  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  const srv = await start({ keys: { anthropic: "deployment-anthropic-key" } });
   try {
     const initial = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
     assert.equal(initial.status, 200);
-    assert.deepEqual(await initial.json(), {
-      providers: [
-        { provider: "anthropic", configured: true, source: "environment" },
-        { provider: "openai", configured: false, source: "absent" },
-        { provider: "openrouter", configured: false, source: "absent" },
-      ],
-      models: [
-        { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
-        { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
-        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-        { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
-        { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-        { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", provider: "anthropic" },
-        { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
-        { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", provider: "anthropic" },
-        { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
-        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-        { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
-        { id: "gpt-6-astra-ultrafast", name: "GPT-6 Astra · Ultrafast (6× cost)", provider: "openai" },
-        { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", provider: "openai" },
-        { id: "gpt-6.1-sol-ultrafast", name: "GPT-6.1 Sol · Ultrafast (6× cost)", provider: "openai" },
-        { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", provider: "openai" },
-        { id: "gpt-6-sol", name: "GPT-6 Sol", provider: "openai" },
-        { id: "gpt-6-luna", name: "GPT-6 Luna", provider: "openai" },
-        { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
-      ],
-    });
-    const scopeBefore = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
-      headers: ADMIN,
-    });
+    const initialBody = (await initial.json()) as {
+      providers: Array<{ provider: string; configured: boolean; source: string; updatedBy?: string }>;
+    };
+    assert.deepEqual(
+      {
+        ...initialBody,
+        providers: initialBody.providers.map(({ provider, configured, source, updatedBy }) => ({
+          provider,
+          configured,
+          source,
+          ...(updatedBy ? { updatedBy } : {}),
+        })),
+      },
+      {
+        providers: [
+          { provider: "anthropic", configured: true, source: "admin", updatedBy: "deployment" },
+          { provider: "openai", configured: false, source: "absent" },
+          { provider: "openrouter", configured: false, source: "absent" },
+        ],
+        models: [
+          { id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: "anthropic" },
+          { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "anthropic" },
+          { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
+          { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
+          { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+          { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", provider: "anthropic" },
+          { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
+          { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", provider: "anthropic" },
+          { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
+          { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+          { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
+          { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+          { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
+          { id: "gpt-6-astra-ultrafast", name: "GPT-6 Astra · Ultrafast (6× cost)", provider: "openai" },
+          { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", provider: "openai" },
+          { id: "gpt-6.1-sol-ultrafast", name: "GPT-6.1 Sol · Ultrafast (6× cost)", provider: "openai" },
+          { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", provider: "openai" },
+          { id: "gpt-6-sol", name: "GPT-6 Sol", provider: "openai" },
+          { id: "gpt-6-luna", name: "GPT-6 Luna", provider: "openai" },
+          { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
+        ],
+      },
+    );
+    const scopeBefore = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
     assert.equal(scopeBefore.status, 200);
     const beforeOptions = ((await scopeBefore.json()) as { baseModelOptions: Array<{ id: string }> }).baseModelOptions;
     assert.ok(!beforeOptions.some((model) => model.id === "gpt-5.6-sol"));
@@ -132,16 +184,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
 });
 
 test("model gateway credentials stay separate and advertise only routed models", async () => {
-  const partial = buildApp(
-    testConfig({
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
-    }),
-  );
+  const partial = await buildWith({ settings: gatewaySettings({ "claude-opus-5": "router/opus" }) });
   assert.equal(await partial.modelCredentials.resolve("anthropic"), null);
   const partialAvailability = await partial.modelCredentials.availability();
   assert.equal(partialAvailability.anthropic, false);
@@ -150,16 +193,7 @@ test("model gateway credentials stay separate and advertise only routed models",
   await partial.modelCredentials.set("anthropic", "admin-anthropic-key", "admin-alice");
   assert.equal(modelServiceable("claude-sonnet-4-5", await partial.modelCredentials.availability()), true);
 
-  const openrouter = buildApp(
-    testConfig({
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "openrouter/auto": "router/auto" },
-      },
-    }),
-  );
+  const openrouter = await buildWith({ settings: gatewaySettings({ "openrouter/auto": "router/auto" }) });
   const openrouterAvailability = await openrouter.modelCredentials.availability();
   assert.equal(openrouterAvailability.openrouter, false);
   assert.equal(modelServiceable("openrouter/auto", openrouterAvailability), true);
@@ -168,29 +202,13 @@ test("model gateway credentials stay separate and advertise only routed models",
   const anthropicModels = Object.fromEntries(
     MODEL_REGISTRY.filter(({ id }) => resolveModel(id)?.provider === "anthropic").map(({ id }) => [id, `router/${id}`]),
   );
-  const complete = buildApp(
-    testConfig({
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: anthropicModels,
-      },
-    }),
-  );
+  const complete = await buildWith({ settings: gatewaySettings(anthropicModels) });
   assert.equal(await complete.modelCredentials.resolve("anthropic"), null);
   const completeAvailability = await complete.modelCredentials.availability();
   assert.equal(completeAvailability.anthropic, false);
   assert.ok(Object.keys(anthropicModels).every((id) => modelServiceable(id, completeAvailability)));
 
-  const srv = start({
-    modelGateway: {
-      url: "http://gateway.internal:8080",
-      apiKey: "gateway-secret",
-      apiKeyHeader: "api-key",
-      models: anthropicModels,
-    },
-  });
+  const srv = await start({ settings: gatewaySettings(anthropicModels) });
   try {
     const selected = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/runtime`, {
       method: "PUT",
@@ -202,23 +220,16 @@ test("model gateway credentials stay separate and advertise only routed models",
     await srv.close();
   }
 
-  const direct = buildApp(
-    testConfig({
-      anthropicApiKey: "direct-provider-key",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
-    }),
-  );
+  const direct = await buildWith({
+    settings: gatewaySettings({ "claude-opus-5": "router/opus" }),
+    keys: { anthropic: "direct-provider-key" },
+  });
   assert.equal(await direct.modelCredentials.resolve("anthropic"), "direct-provider-key");
 });
 
 test("OpenRouter validation uses an authenticated endpoint", async () => {
   let requested = "";
-  const srv = start({}, async (input) => {
+  const srv = await start({}, async (input) => {
     requested = String(input);
     return new Response(null, { status: 401 });
   });
@@ -239,7 +250,7 @@ test("OpenRouter validation uses an authenticated endpoint", async () => {
 test("OpenRouter catalog exposes runtime-supported tool models as selectable base models", async () => {
   let requested = "";
   let catalogRequests = 0;
-  const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async (input) => {
+  const srv = await start({ keys: { openrouter: "deployment-openrouter-key" } }, async (input) => {
     requested = String(input);
     catalogRequests++;
     return Response.json({
@@ -350,7 +361,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
 });
 
 test("web turns keep a persisted OpenRouter model enabled when the refreshed catalog omits it", async () => {
-  const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async () =>
+  const srv = await start({ keys: { openrouter: "deployment-openrouter-key" } }, async () =>
     Response.json({
       data: [
         {
@@ -389,7 +400,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
 });
 
 test("an oversized OpenRouter catalog falls back to the built-in models", async () => {
-  const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async () =>
+  const srv = await start({ keys: { openrouter: "deployment-openrouter-key" } }, async () =>
     Response.json({
       data: [
         {
@@ -416,7 +427,7 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
 });
 
 test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
-  const srv = start();
+  const srv = await start();
   try {
     await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-5" });
     const response = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
@@ -443,7 +454,7 @@ test("admin scope keeps the selected runtime model visible when its provider is 
 });
 
 test("web turns gate the requested harness against approval and its real key source", async () => {
-  const srv = start({ harness: "pi" });
+  const srv = await start({ config: { harness: "pi" } });
   try {
     const turn = (threadRef: string, overrides: { harness?: string; model?: string } = {}) =>
       srv.built.app.turn({
@@ -467,10 +478,10 @@ test("web turns gate the requested harness against approval and its real key sou
   }
 });
 
-test("a rejected rotation preserves the prior key and disabling suppresses environment fallback", async () => {
+test("a rejected rotation preserves the prior key and disabling removes the stored key", async () => {
   let accepts = true;
-  const srv = start(
-    { anthropicApiKey: "deployment-anthropic-key" },
+  const srv = await start(
+    { keys: { anthropic: "deployment-anthropic-key" } },
     async () => new Response(null, { status: accepts ? 200 : 401 }),
   );
   try {
@@ -501,7 +512,7 @@ test("a rejected rotation preserves the prior key and disabling suppresses envir
 });
 
 test("surface-config reports whether any model provider is configured", async () => {
-  const srv = start();
+  const srv = await start();
   try {
     const before = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(before.status, 200);
@@ -515,8 +526,8 @@ test("surface-config reports whether any model provider is configured", async ()
   }
 });
 
-test("surface-config respects an admin-disabled environment provider", async () => {
-  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+test("surface-config respects an admin-disabled provider", async () => {
+  const srv = await start({ keys: { anthropic: "deployment-anthropic-key" } });
   try {
     const before = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
@@ -533,7 +544,7 @@ test("surface-config respects an admin-disabled environment provider", async () 
 });
 
 test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
-  const srv = start({ harness: "pi", codexAuthFile: "/tmp/codex-auth.json" });
+  const srv = await start({ config: { harness: "pi" }, settings: { CODEX_AUTH_CREDENTIAL: "company-codex" } });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
@@ -544,10 +555,7 @@ test("surface-config reports company ChatGPT OAuth without making it a Pi API cr
 });
 
 test("a claude harness with an OAuth token counts as configured without corrupting store statuses", async () => {
-  const srv = start({
-    harness: "claude",
-    claudeProcessEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-test" } as NodeJS.ProcessEnv,
-  });
+  const srv = await start({ config: { harness: "claude" }, settings: { CLAUDE_AUTH_CREDENTIAL: "company-claude" } });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
@@ -570,7 +578,7 @@ test("a claude harness with an OAuth token counts as configured without corrupti
 });
 
 test("a claude harness without any token stays unconfigured", async () => {
-  const srv = start({ harness: "claude" });
+  const srv = await start({ config: { harness: "claude" } });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
@@ -596,7 +604,7 @@ test("admin model credentials survive a second app instance on the same durable 
 });
 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
-  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  const srv = await start({ keys: { anthropic: "deployment-anthropic-key" } });
   try {
     await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
@@ -629,7 +637,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
 });
 
 test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
-  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+  const srv = await start({ keys: { anthropic: "deployment-anthropic-key" } });
   try {
     await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
@@ -653,7 +661,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
 });
 
 test("company runtime reads exclude personal-only models without changing the regular picker", async () => {
-  const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
+  const srv = await start();
   try {
     await srv.built.config.setApprovedHarnesses(["pi"]);
     await srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai");

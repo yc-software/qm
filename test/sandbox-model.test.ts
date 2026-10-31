@@ -6,7 +6,7 @@ import { createHmac } from "node:crypto";
 import { createServer as httpServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { serverDeps } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   mintCapabilityToken,
@@ -58,7 +58,12 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   let overBudget = false;
   const server = createServer(built.app, {
     ...serverDeps(config, built),
-    modelGatewayTransport: { url: `${upstreamUrl}/v1`, apiKey: key, apiKeyHeader: "api-key", models: routes },
+    modelGatewayTransport: async () => ({
+      url: `${upstreamUrl}/v1`,
+      apiKey: key,
+      apiKeyHeader: "api-key",
+      models: routes,
+    }),
     budget: {
       check: async () => ({ allowed: !overBudget, spentUsd: 0, limitUsd: 1 }),
       record: async () => {},
@@ -193,9 +198,18 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test/",
-    modelGateway: { url: "https://models.invalid", apiKey: key, apiKeyHeader: "api-key", models: routes },
   });
-  const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
+  const built = buildApp(config, {
+    modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
+    tenantSettings: testTenantSettings({
+      MODEL_GATEWAY_URL: "https://models.invalid",
+      MODEL_GATEWAY_API_KEY: key,
+      MODEL_GATEWAY_API_KEY_HEADER: "api-key",
+      MODEL_GATEWAY_MODELS: Object.entries(routes)
+        .map(([id, target]) => `${id}=${target}`)
+        .join(","),
+    }),
+  });
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);

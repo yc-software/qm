@@ -68,7 +68,7 @@ export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "b
   const harnessId = harnessIdOrPi(deps.harnessId);
   return {
     harnessId,
-    modelId: defaultModelForHarness(harnessId, deps.baseModelDefault),
+    modelId: defaultModelForHarness(harnessId, deps.baseModelDefault?.()),
     rubric: DEFAULT_SECURITY_SCREEN_RUBRIC,
   };
 }
@@ -78,7 +78,7 @@ export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "b
  * rubric that tests cleanly is exactly the one that can be applied.
  */
 export async function parseAutoFlaggerDraft(
-  deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
+  deps: Pick<ServerDeps, "modelCredentials">,
   body: { harnessId?: unknown; modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
   if (typeof body.harnessId !== "string" || !isHarnessId(body.harnessId)) {
@@ -96,9 +96,8 @@ export async function parseAutoFlaggerDraft(
       error: `auto-flagger requires a non-empty rubric of at most ${AUTO_FLAGGER_MAX_RUBRIC_CHARS} characters`,
     };
   }
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  if (!modelServiceable(modelId, modelProviderAvailabilityFor(body.harnessId, configuredKeys, managedKeys))) {
+  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : ALL_PROVIDERS_AVAILABLE;
+  if (!modelServiceable(modelId, modelProviderAvailabilityFor(body.harnessId, managedKeys))) {
     return { error: `model ${modelId} isn't serviceable on this deployment` };
   }
   return { value: { harnessId: body.harnessId, modelId, rubric: body.rubric.trim() } };
@@ -535,10 +534,11 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       const unserviceable = (harness: string): { error: string } | null =>
-        modelId && !modelServiceable(modelId, modelProviderAvailabilityFor(harness, configuredKeys, managedKeys))
+        modelId && !modelServiceable(modelId, modelProviderAvailabilityFor(harness, managedKeys))
           ? {
               error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harness} harness`,
             }
@@ -567,7 +567,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const harnessId = harnessIdOrPi(ctx.deps.harnessId);
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, tenantRootScope(), scope, {
           harnessId,
-          modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
+          modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault?.()),
         });
         if (!modelSupportedByHarness(modelId, effective.harnessId))
           return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
@@ -631,9 +631,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         (!harnessSupportsFastMode(harnessId) || !fastModeModelIds().includes(modelId))
       )
         return { error: `fast mode is not supported by ${harnessId} with ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys)))
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
+      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, managedKeys)))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
         };
@@ -782,9 +783,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      const providers = modelProviderAvailabilityFor(ctx.deps.harnessId ?? "pi", configuredKeys, managedKeys);
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
+      const providers = modelProviderAvailabilityFor(ctx.deps.harnessId ?? "pi", managedKeys);
       if (modelId && !modelServiceable(modelId, providers)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
@@ -899,12 +901,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = encodeRef(serviceCredRef(slug));
       const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
       const existing = allCreds.find((c) => c.slug === slug);
-      if (existing?.source === "deployment")
-        return {
-          error: `"${slug}" is supplied by this deployment's configuration and can't be edited, deleted or reused here.`,
-          code: "deployment_credential",
-          status: 409,
-        };
       const conflict = () => ({
         error: "Credential changed after this editor was loaded. Reload it before continuing.",
         code: "version_conflict",

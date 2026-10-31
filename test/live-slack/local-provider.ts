@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
+import { enterTenant } from "../../src/tenants/context.ts";
+import { TEST_TENANT, testTenantSettings } from "../support/build-app.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -18,18 +20,21 @@ async function main(): Promise<void> {
   assert.ok(process.env.EXPECTED_SOURCE_SHA, "the expected source pin is required");
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
   const config = loadConfig();
-  const built = buildApp({
-    ...config,
-    dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    sessionStore: "memory",
-    runStore: "memory",
-    harness: "pi",
-    sandboxBackend: "local",
+  enterTenant(TEST_TENANT);
+  const built = buildApp(
+    {
+      ...config,
+      dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
+      sessionStore: "memory",
+      runStore: "memory",
+      harness: "pi",
 
-    backgroundWorkEnabled: false,
-    turnWallClockMs: 180_000,
-    localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },
-  });
+      backgroundWorkEnabled: false,
+      turnWallClockMs: 180_000,
+      localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },
+    },
+    { tenantSettings: testTenantSettings({ SANDBOX_BACKEND: "local" }) },
+  );
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;

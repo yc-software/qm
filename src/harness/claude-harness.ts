@@ -62,8 +62,8 @@ import {
 
 export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
-  defaultModelId?: string;
-  judgeModelId?: string;
+  defaultModelId?: () => string | undefined;
+  judgeModelId?: () => string | undefined;
   binaryPath?: string;
   env?: NodeJS.ProcessEnv;
   turnWallClockMs?: number;
@@ -78,10 +78,6 @@ export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
 
 export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions {
   return {
-    ...(config.claudeModel ? { defaultModelId: config.claudeModel } : {}),
-    ...(config.judgeModelId && modelSupportedByHarness(config.judgeModelId, "claude")
-      ? { judgeModelId: config.judgeModelId }
-      : {}),
     ...(config.claudeBinPath ? { binaryPath: config.claudeBinPath } : {}),
     env: config.claudeProcessEnv,
     ...coreToolOptions(config),
@@ -295,11 +291,14 @@ function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" 
 
 export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
   const configuredModel = opts.modelId;
-  const judgeModelId = opts.judgeModelId ?? "claude-haiku-5-5";
+  const judgeModelId = (): string => {
+    const configured = opts.judgeModelId?.();
+    return configured && modelSupportedByHarness(configured, "claude") ? configured : "claude-haiku-5-5";
+  };
   const resolveModelId = (scope?: ScopeId) =>
     [
       typeof configuredModel === "function" ? configuredModel(scope) : configuredModel,
-      opts.defaultModelId,
+      opts.defaultModelId?.(),
       DEFAULT_AGENT_MODEL_ID,
     ].find((id): id is string => modelSupportedByHarness(id, "claude"))!;
   const defaultTurnWallClockMs = opts.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -871,7 +870,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             recordModelCall: detect.recordModelCall,
             ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
           },
-          judgeModelId,
+          judgeModelId(),
         );
         return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
       },

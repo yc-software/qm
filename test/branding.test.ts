@@ -39,23 +39,19 @@ test("sanitizeBranding accepts only https mark image urls that cannot break out 
   assert.equal(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), undefined);
 });
 
-test("resolveBranding prefers the store per field and fills the rest from the default", async () => {
+test("resolveBranding returns the stored branding and nothing when no store row exists", async () => {
   const config = { getBrandingDurable: async () => ({ selfLabel: "storebot" }) };
-  assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot", orgName: "Env Org" }), {
-    selfLabel: "storebot",
-    orgName: "Env Org",
-  });
-  assert.deepEqual(await resolveBranding(undefined, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
+  assert.deepEqual(await resolveBranding(config, ORG), { selfLabel: "storebot" });
+  assert.deepEqual(await resolveBranding(undefined, ORG), {});
   assert.deepEqual(await resolveBranding({ getBrandingDurable: async () => null }, ORG), {});
 });
 
-test("resolveBranding degrades to the default identity when the durable read fails", async () => {
+test("resolveBranding degrades to no branding when the durable read fails", async () => {
   const config = {
     getBrandingDurable: async (): Promise<never> => {
       throw new Error("postgres hiccup");
     },
   };
-  assert.deepEqual(await resolveBranding(config, ORG, { selfLabel: "envbot" }), { selfLabel: "envbot" });
   assert.deepEqual(await resolveBranding(config, ORG), {});
 });
 

@@ -1,5 +1,6 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
+import { boundTenant } from "../tenants/context.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
@@ -46,7 +47,7 @@ interface SandboxProviderProfile {
 }
 
 export interface SandboxResources {
-  profiles(): SandboxProviderProfile[];
+  profiles(): Promise<SandboxProviderProfile[]>;
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
   initialize(): Promise<void>;
   list(
@@ -78,7 +79,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(): Promise<SandboxBackendName>;
 }
 
 export class SandboxAccessError extends Error {}
@@ -104,21 +105,27 @@ export function createSandboxResources(opts: {
   records: DurableMap<SandboxResource>;
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
-  defaultBackend: SandboxBackendName;
+  defaultBackend: () => Promise<SandboxBackendName>;
+  usableBackends?: () => Promise<readonly SandboxBackendName[]>;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgraded = new Map<string, Promise<void>>();
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
-      throw error;
-    });
-    await upgraded;
+    const tenant = boundTenant() ?? "";
+    let upgrade = upgraded.get(tenant);
+    if (!upgrade) {
+      upgrade = opts.upgrade().catch((error: unknown) => {
+        upgraded.delete(tenant);
+        throw error;
+      });
+      upgraded.set(tenant, upgrade);
+    }
+    await upgrade;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
@@ -166,14 +173,18 @@ export function createSandboxResources(opts: {
       return action();
     });
   };
-  const profiles = (): SandboxProviderProfile[] =>
-    (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
-      .filter(([, backend]) => !!backend)
+  const usable = async (): Promise<readonly SandboxBackendName[]> =>
+    (await opts.usableBackends?.()) ?? (Object.keys(opts.backends) as SandboxBackendName[]);
+  const profiles = async (): Promise<SandboxProviderProfile[]> => {
+    const allowed = await usable();
+    return (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
+      .filter(([name, backend]) => !!backend && allowed.includes(name))
       .map(([name, backend]) => ({
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         actions: actionsFor(backend),
       }));
+  };
   return {
     profiles,
     forTurn: (turn) =>
@@ -182,7 +193,7 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    defaultBackend: () => opts.defaultBackend,
+    defaultBackend: opts.defaultBackend,
     initialize,
     get,
     use,
@@ -272,13 +283,17 @@ export function createSandboxResources(opts: {
         sandboxes,
         defaultSandboxId: route?.sandboxId ?? null,
         defaultMode: route?.sandboxId ? "selected" : "none",
-        providers: profiles(),
+        providers: await profiles(),
       };
     },
     async create(actorId, scopeId, backend, name, reservationId, jobOnly) {
       await initialize();
       await authorize(actorId, scopeId);
-      if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
+      if (
+        !Object.hasOwn(opts.backends, backend) ||
+        !opts.backends[backend as SandboxBackendName] ||
+        !(await usable()).includes(backend as SandboxBackendName)
+      )
         throw new Error(`sandbox backend unavailable: ${backend}`);
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(

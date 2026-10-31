@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createServer } from "../src/api/server.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
@@ -19,6 +20,8 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
+
+enterTenant(TEST_TENANT);
 
 describe("POST /v1/reach with files", () => {
   let server: Server;
@@ -106,7 +109,7 @@ describe("POST /v1/reach with files", () => {
   const secondSandbox = async (actorId: string) => {
     const scope = scopeId("personal", actorId);
     const resources = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
-    return resources.create(actorId, scope, resources.defaultBackend());
+    return resources.create(actorId, scope, await resources.defaultBackend());
   };
 
   const readDelivered = async (deliveryId: string) => {

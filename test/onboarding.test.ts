@@ -86,7 +86,8 @@ test("the opener defers Slack setup until status can be checked without requirin
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
   const built = freshApp();
-  const { app, memory } = built;
+  const { app, memory, modelCredentials } = built;
+  await modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   await waitForOnboardingSkill(built);
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {

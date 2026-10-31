@@ -58,7 +58,7 @@ export function verificationFailure(error: unknown): ModelVerificationError {
 export function createModelVerifier(input: {
   credentials: ModelCredentialStore;
   keyMaterial: string | Buffer;
-  modelGateway?: ModelGatewayTransportConfig;
+  modelGateway?: () => Promise<ModelGatewayTransportConfig | undefined>;
   probe?: typeof probeModel;
   fetchImpl?: typeof fetch;
 }): ModelVerifier {
@@ -89,7 +89,8 @@ export function createModelVerifier(input: {
         "invalid_template",
         "The model template is unavailable. Choose another template.",
       );
-    const gateway = !isEmbeddingModel(spec) && input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
+    const modelGateway = await input.modelGateway?.();
+    const gateway = !isEmbeddingModel(spec) && modelGateway?.models[spec.id] ? modelGateway : undefined;
     const key = gateway?.apiKey ?? (await input.credentials.resolve(spec.provider));
     if (!key)
       throw new ModelVerificationError(
@@ -116,7 +117,7 @@ export function createModelVerifier(input: {
       fingerprint,
       async probe(signal) {
         if (isEmbeddingModel(model)) {
-          await createMemoryEmbedder(model, key, input.modelGateway, input.fetchImpl).embed(["verification"], signal);
+          await createMemoryEmbedder(model, key, modelGateway, input.fetchImpl).embed(["verification"], signal);
           return;
         }
         const run = input.probe ?? probeModel;

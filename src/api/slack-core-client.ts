@@ -33,7 +33,7 @@ import { scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -164,7 +164,6 @@ export interface SlackCoreClientDeps {
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
-  brandingDefault?: OrgBranding;
   leaderLease: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   surfaceCache?: SurfaceCache;
@@ -216,7 +215,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
         resolveRuntimeChoiceDurable(deps.config, tenantRootScope(), scope, deps.runtimeFallback),
-        resolveBranding(deps.config, tenantRootScope(), deps.brandingDefault),
+        resolveBranding(deps.config, tenantRootScope()),
       ]);
       return {
         ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),

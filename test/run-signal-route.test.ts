@@ -23,6 +23,7 @@ bindTestTenant();
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,

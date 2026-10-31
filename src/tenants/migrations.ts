@@ -387,4 +387,98 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
        END $qm_root_scope$`,
     ],
   },
+  tenantTables(
+    "sessions/store/0048-tenant-sessions",
+    [
+      {
+        table: "sessions",
+        primaryKey: "id",
+        unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
+      },
+      { table: "participants", primaryKey: "session_id, principal_id" },
+      { table: "session_goals", primaryKey: "session_id" },
+      { table: "session_leases", primaryKey: "session_id" },
+      { table: "session_llm_requests", primaryKey: "id" },
+      { table: "session_pins", primaryKey: "id" },
+      { table: "session_spend_days", primaryKey: "day" },
+      {
+        table: "session_spend_dirty",
+        unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+      },
+      { table: "llm_prompt_envelopes", primaryKey: "hash" },
+    ],
+    {
+      foreignKeys: [
+        {
+          table: "session_goals",
+          name: "session_goals_session_id_fkey",
+          columns: "session_id",
+          references: "sessions(tenant_id, id)",
+          onDelete: "CASCADE",
+        },
+        {
+          table: "items",
+          name: "items_session_id_fkey",
+          columns: "session_id",
+          references: "sessions(tenant_id, id)",
+          onDelete: "CASCADE",
+        },
+      ],
+      after: [...SPEND_TRIGGERS, ...ITEM_SEARCH, `DROP TABLE qm_settings`],
+    },
+  ),
+  {
+    id: "sessions/store/0049-agent-reply-index",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply
+         ON items(tenant_id, session_id, created_at DESC) WHERE kind = 'AgentMessage'`,
+    ],
+  },
 ];
+
+export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
+  id: "tenants/0001-settings",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TABLE tenant_settings(
+         tenant_id UUID PRIMARY KEY DEFAULT qm_tenant_id() REFERENCES tenants ON DELETE CASCADE,
+         model_provider TEXT,
+         pi_model TEXT,
+         pi_detect_model TEXT,
+         pi_title_model TEXT,
+         pi_judge_model TEXT,
+         claude_model TEXT,
+         anthropic_base_url TEXT,
+         openai_base_url TEXT,
+         openrouter_base_url TEXT,
+         model_gateway_url TEXT,
+         model_gateway_api_key BYTEA,
+         model_gateway_api_key_header TEXT,
+         model_gateway_models TEXT,
+         codex_auth_credential TEXT,
+         claude_auth_credential TEXT,
+         sandbox_backend TEXT,
+         sprites_token BYTEA,
+         e2b_api_key BYTEA,
+         modal_token_id BYTEA,
+         modal_token_secret BYTEA,
+         do_agents_api_token BYTEA,
+         smolmachines_token BYTEA,
+         agent37_api_key BYTEA,
+         superserve_api_key BYTEA,
+         render_sandbox_api_key BYTEA,
+         render_sandbox_workspace_id TEXT,
+         security_screen TEXT,
+         security_screen_classifier TEXT,
+         security_screen_proxy_provider TEXT,
+         security_screen_proxy_endpoint TEXT,
+         security_screen_proxy_token BYTEA,
+         auth_allowed_emails TEXT,
+         auth_allowed_email_domain TEXT,
+         trusted_oidc_admin_issuer TEXT,
+         suggested_activities_context TEXT,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`,
+    ...tenantPolicies("tenant_settings"),
+  ],
+};

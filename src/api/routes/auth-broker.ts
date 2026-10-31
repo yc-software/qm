@@ -62,9 +62,10 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh();
   if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
+  const settings = await deps.tenantSettings?.get();
   const configured =
-    deps.emailAuthPrincipals?.includes(email) ||
-    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+    settings?.emailAuthPrincipals.includes(email) ||
+    Boolean(settings?.emailAuthDomain && email.endsWith(`@${settings.emailAuthDomain}`));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });

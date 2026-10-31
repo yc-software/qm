@@ -27,6 +27,8 @@ import {
 } from "../src/harness/pi-harness.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { HarnessDetectInput, HarnessLlmRequestRecord } from "../src/harness/harness.ts";
@@ -118,16 +120,6 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
 test("piHarnessConfigOptions maps every Config knob the harness consumes, field by field", () => {
   const opts = piHarnessConfigOptions(
     testConfig({
-      modelId: "model-base",
-      detectModelId: "model-detect",
-      titleModelId: "model-title",
-      anthropicApiKey: "sk-test",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-key",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
       piCaptureRequests: false,
 
       reachExecEnabled: true,
@@ -142,16 +134,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     }),
   );
   assert.deepEqual(opts, {
-    defaultModelId: "model-base",
-    detectModelId: "model-detect",
-    titleModelId: "model-title",
-    apiKey: "sk-test",
-    modelGateway: {
-      url: "http://gateway.internal:8080",
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-opus-5": "router/opus" },
-    },
     captureRequests: false,
     sandboxResources: true,
     reachExec: true,
@@ -183,10 +165,10 @@ test("piHarnessConfigOptions leaves controlTools off unless a self-API (signing 
   );
 });
 
-test("piHarnessConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
-  const opts = piHarnessConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
-  assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
+test("the tenant's model provider carries into Pi auxiliary model selection", () => {
+  const defaultModelId = defaultModelFor(parseTenantSettings({ MODEL_PROVIDER: "openai" }, "pi"), "pi");
+  assert.equal(defaultModelId, "gpt-6.1-sol");
+  assert.equal(auxiliaryModelFor(defaultModelId), "gpt-5.6-luna");
 });
 
 test("Pi title generation returns no title without an auxiliary-model credential", async () => {
@@ -217,12 +199,12 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   const harness = createPiHarness({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   await assert.rejects(harness.models.generateTitle!("User:\nInvestigate the deploy"));
@@ -277,12 +259,12 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
   const harness = createPiHarness({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   await assert.rejects(harness.models.generateTitle!("User:\nInvestigate the deploy"), {
@@ -341,12 +323,12 @@ test("Pi title generation accepts the prompted NONE sentinel without reporting a
   const harness = createPiHarness({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   assert.equal(await harness.models.generateTitle!("User:\nHello"), undefined);
@@ -411,12 +393,12 @@ async function detectAgainst(
   const harness = createPiHarness({
     defaultModelId: "claude-opus-4-8",
     detectModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "detect-model" },
-    },
+    }),
   });
   const rows: HarnessLlmRequestRecord[] = [];
   const outcome = await harness.models.shouldRespond!({
@@ -463,7 +445,13 @@ test(
 
 test("piHarnessConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = piHarnessConfigOptions(testConfig());
-  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+  for (const key of [
+    "defaultModelId",
+    "detectModelId",
+    "titleModelId",
+    "resolveProviderKeys",
+    "resolveModelGateway",
+  ] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });
@@ -633,7 +621,10 @@ test("oneShot routes configured models through the model gateway without mutatin
     modelId: "claude-haiku-4-5",
     headers: { "x-model-marker": "preserved" },
   });
-  const harness = createPiHarness({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const harness = createPiHarness({
+    defaultModelId: "claude-haiku-4-5",
+    resolveModelGateway: async () => modelGateway,
+  });
   const compact = harness.models.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],

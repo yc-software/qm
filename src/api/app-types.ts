@@ -108,7 +108,6 @@ import type {
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
-import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
@@ -690,7 +689,7 @@ export interface AppDeps {
   deliveries: DeliveryStore;
   directory: DirectoryStore;
   teams?: Pick<TeamStore, "isMember">;
-  emailAuthMembers?: DirectoryMember[];
+  emailAuthMembers?: () => Promise<readonly string[]>;
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
@@ -713,10 +712,8 @@ export interface AppDeps {
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
-  judgeModelId?: () => string;
+  judgeModelId?: () => Promise<string>;
   harnessId?: string;
-  modelProviders?: ModelProviderAvailability;
-  providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;
 }
 

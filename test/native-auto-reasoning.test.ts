@@ -6,8 +6,12 @@ import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/build-app.ts";
 
-bindTestTenant();
+enterTenant(TEST_TENANT);
+setProviderBaseUrls(TEST_TENANT, {});
 
 const adaptiveId = "claude-sonnet-4-6";
 
@@ -121,14 +125,14 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           defaultModelId: modelId,
           ...(route === "gateway"
             ? {
-                modelGateway: {
+                resolveModelGateway: async () => ({
                   url: "https://gateway.invalid",
                   apiKey: "test-key",
                   apiKeyHeader: "x-gateway-key",
                   models: { [modelId]: "routed-model" },
-                },
+                }),
               }
-            : { apiKey: "sk-offline-test-key" }),
+            : { resolveProviderKeys: async () => ({ anthropic: "sk-offline-test-key" }) }),
         });
         t.after(() => harness.turns.close?.());
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;

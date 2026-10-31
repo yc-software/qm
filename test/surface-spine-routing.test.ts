@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -359,7 +359,9 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
 
 test("reply-or-decline nudge preserves the trigger image and environment", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-image-"));
-  const built = buildApp(testConfig({ dataDir, securityPosture: "dangerous" }));
+  const config = testConfig({ dataDir });
+  const built = buildApp(config);
+  await built.config.setSecurityPosture(TEST_ROOT_SCOPE, "dangerous");
   built.runtime.start();
   try {
     const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -630,6 +632,7 @@ for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
 
 test("a shared web project turn answers with its final text, not surface tools", async () => {
   const built = freshApp();
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
   built.runtime.start();
   try {
     const project = await built.app.createProject("U1", "Launch");

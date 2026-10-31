@@ -329,6 +329,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const classifySecurityData = createSecurityClassifier(deps);
+  const screenerAvailable = async (): Promise<boolean> =>
+    Boolean(deps.harness.models.screenSecurity) || Boolean(await deps.securityScreener?.());
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -458,7 +460,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         return "block";
       };
-      if (!deps.securityScreener && !deps.harness.models.screenSecurity) return block("no-screener");
+      if (!(await screenerAvailable())) return block("no-screener");
       if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
@@ -881,10 +883,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (screenInbound) {
         const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
         if (screenPayload || hasUnscreenableAttachment) {
-          const canScreenText =
-            !!screenPayload &&
-            !screenPayload.truncated &&
-            (!!deps.securityScreener || !!deps.harness.models.screenSecurity);
+          const canScreenText = !!screenPayload && !screenPayload.truncated && (await screenerAvailable());
           const verdict = canScreenText
             ? await classifySecurityData(screenPayload!.content, actor.id, scopeId, recordScreenRequest, {
                 ...screenTrace,
@@ -896,7 +895,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
           if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
           else if (screenPayload.truncated) unscreenableCause = "oversize-input";
-          else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
+          else if (!(await screenerAvailable())) unscreenableCause = "no-screener";
           if (verdict?.decision === "strict") {
             const sources = externalPromptData.map((item) => item.source);
             flaggedScreenedInput = {
@@ -1061,7 +1060,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
-      const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
+      const branding = await resolveBranding(deps.config, resolution.orgScopeId);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
@@ -1553,10 +1552,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   )
                 : await tokens.connectorTokenStatus(host, actor.id, accountType);
               const healthy = status?.connected && !status.needsReconnect;
-              const operatorFallback =
-                accountType === undefined &&
-                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-              if (!healthy && !operatorFallback) continue;
+              if (!healthy) continue;
               addCredential(
                 {
                   handle: connectorHandle(host, accountType),
@@ -1567,12 +1563,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     return { env: [{ key: envKey(host), value: token }] };
                   },
                 },
-                !healthy && operatorFallback
-                  ? `${host}, configured operator fallback${status?.refreshError ? ` (own connection's refresh failed: ${status.refreshError})` : ""}; availability checked on use; env \`${envKey(host)}\``
-                  : credentialLineText(connectorLine(host, accountType)),
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                credentialLineText(connectorLine(host, accountType)),
+                status && "credentialId" in status ? status.credentialId : undefined,
                 actor.id,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                status && "credentialId" in status ? status.credentialId : undefined,
               );
             }
           }
@@ -1593,35 +1587,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             )
           ).map((g) => parseRef(g.ref).id),
         );
-      const orgWideAudience =
-        conversation.audience.length > 0 &&
-        conversation.audience.every((p) =>
-          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
-        );
-      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
-        const granted = await aclGrantedServiceCredSlugs();
-        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
-        return granted;
-      };
       let serviceCredRecords: PublicServiceCredential[] = [];
       let grantedCredSlugs = new Set<string>();
       if (!strictReadOnly && deps.serviceCreds) {
         serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
           serviceAllowed(record.slug),
         );
-        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
+        if (serviceCredRecords.length > 0) grantedCredSlugs = await aclGrantedServiceCredSlugs();
       }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
-        if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
-        const supplied =
-          orgWideAudience &&
-          ((await deps.serviceCreds?.listServiceCredentials(resolution.orgScopeId)) ?? []).some(
-            (record) => record.slug === slug && record.source === "deployment",
-          );
-        if (!supplied) {
+        if (!(await aclGrantedServiceCredSlugs()).has(slug))
           throw new Error(`Service credential is no longer authorized: ${slug}`);
-        }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
         // Env delivery is gated by the same service-cred grants as the broker: the env var rides
@@ -1728,7 +1705,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.capabilitySecret ?? deps.signingSecret,
           );
         }
-        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+        if (allInternal && securityPolicy.posture !== "strict" && (await deps.sandboxModels?.())) {
           connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
           connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
@@ -1774,7 +1751,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
             serviceAllowed(record.slug),
           );
-        const granted = current?.granted ?? (await grantedServiceCredSlugs(records));
+        const granted = current?.granted ?? (await aclGrantedServiceCredSlugs());
         const available = records.filter(
           (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
         );
@@ -1931,8 +1908,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         : deps.sandboxResources;
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
-            turnSandboxResources.profiles().map((profile) => profile.name),
-            turnSandboxResources.defaultBackend(),
+            (await turnSandboxResources.profiles()).map((profile) => profile.name),
+            await turnSandboxResources
+              .defaultBackend()
+              .catch(swallowAs("orchestrator: default sandbox backend", undefined)),
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
@@ -2781,7 +2760,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 fileRegistration,
                 turnInboxDir,
-                securityPolicy.screening !== "off" && (deps.securityScreener || deps.harness.models.screenSecurity)
+                securityPolicy.screening !== "off" && (await screenerAvailable())
                   ? ({ content }) =>
                       classifySecurityData(content, actor.id, scopeId, undefined, {
                         ...screenTrace,
@@ -2888,7 +2867,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (securityPolicy.screening !== "off") {
             for (const document of documentInputs.documents.slice()) {
               documentsUnscreened ||= !isTextDocument(document);
-              if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
+              if (!(await screenerAvailable())) {
                 documentsUnscreened = true;
                 continue;
               }

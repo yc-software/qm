@@ -3,6 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
@@ -35,7 +37,11 @@ function reply(): Response {
 
 for (const warm of [false, true]) {
   test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after harness reset`, async () => {
-    const built = buildApp(testConfig({ harness: "pi", anthropicApiKey: "sk-test", securityScreen: "off" }));
+    enterTenant(TEST_TENANT);
+    const built = buildApp(testConfig({ harness: "pi" }), {
+      tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }, "pi"),
+    });
+    await built.modelCredentials.set("anthropic", "sk-test", "test");
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

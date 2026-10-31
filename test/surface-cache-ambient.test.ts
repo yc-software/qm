@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
@@ -18,9 +18,14 @@ async function listFull(store: any, opts?: any): Promise<any[]> {
   return Promise.all(rows.map((r: any) => store.get(r.id)));
 }
 
+async function warmed(built: ReturnType<typeof buildApp>) {
+  await built.tenantSettings.get();
+  return built;
+}
+
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  return buildApp(testConfig({ dataDir }));
+  return warmed(buildApp(testConfig({ dataDir })));
 }
 
 async function pollDeliveries(
@@ -37,7 +42,7 @@ async function pollDeliveries(
 }
 
 test("ingest → ambient judge engages → spawns a smart-model worker that posts to the container", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C1";
@@ -62,7 +67,7 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
 });
 
 test("a prompt-injected ambient judge reason is screened even when the shown messages are benign", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.setChannelPolicy("C-reason-risk", "!engage !security-risk", "U-admin");
@@ -84,7 +89,7 @@ test("a prompt-injected ambient judge reason is screened even when the shown mes
 });
 
 test("unaddressed chatter with no standing orders stays silent (silence is the default)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.ingestSurfaceEvents([
@@ -101,7 +106,7 @@ test("unaddressed chatter with no standing orders stays silent (silence is the d
 });
 
 test("ambientEnabled=false gates the judge: engage-orders channel stays silent until re-enabled", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-off";
@@ -125,7 +130,7 @@ test("ambientEnabled=false gates the judge: engage-orders channel stays silent u
 });
 
 test("default rule: standing orders opt the room into ambient, regardless of size", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-big";
@@ -149,7 +154,7 @@ test("default rule: standing orders opt the room into ambient, regardless of siz
 });
 
 test("default rule: an action-mode bot entry opts the room in, with no standing orders", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-actionbot";
@@ -174,7 +179,7 @@ test("default rule: an action-mode bot entry opts the room in, with no standing 
 });
 
 test("default rule: ambientEnabled=true opts the room in, with no standing orders", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-opt";
@@ -191,7 +196,7 @@ test("default rule: ambientEnabled=true opts the room in, with no standing order
 });
 
 test("org-wide ambient switch off silences every channel regardless of per-channel settings", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-orgoff";
@@ -214,7 +219,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
 });
 
 test("no standing orders → an informal address does NOT engage (mention-only default)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-addr";
@@ -241,7 +246,7 @@ test("no standing orders → an informal address does NOT engage (mention-only d
 });
 
 test("a formal @mention WITH content is left to the mention turn path (excluded from ambient)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-dedup";
@@ -268,7 +273,7 @@ test("a formal @mention WITH content is left to the mention turn path (excluded 
 });
 
 test("a BARE @mention is ALSO owned by the direct dispatch path, so the ambient judge excludes it", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-bare";
@@ -287,7 +292,7 @@ test("a BARE @mention is ALSO owned by the direct dispatch path, so the ambient 
 });
 
 test("a message the direct path owns (ingested handled) is excluded from the ambient judge", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-owned";
@@ -310,7 +315,7 @@ test("a message the direct path owns (ingested handled) is excluded from the amb
 });
 
 test("a message that @mentions ANOTHER person (not the bot) is judged normally, never excluded", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-other";
@@ -335,7 +340,7 @@ test("a message that @mentions ANOTHER person (not the bot) is judged normally, 
 });
 
 test("the ambient watermark advances so a batch is judged once, not re-judged every tick", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   try {
     const container = "C-once";
     await built.app.setChannelPolicy(container, "flag launch talk", "U-admin");
@@ -349,7 +354,7 @@ test("the ambient watermark advances so a batch is judged once, not re-judged ev
 });
 
 test("mirror read interface: ingest is queryable by search + readMessages + activeThreads", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   try {
     await built.app.ingestSurfaceEvents([
       { container: "C1", ts: "1.0", authorId: "U1", text: "the deploy is green", createdAt: 1 },
@@ -369,7 +374,9 @@ test("mirror read interface: ingest is queryable by search + readMessages + acti
 
 test("dev debug footer: a surfaceTools reply carries an admin session deep-link (SURFACE_DEBUG_FOOTER)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-footer-"));
-  const built = buildApp(testConfig({ dataDir, surfaceDebugFooter: true, publicWebUrl: "https://portal.test" }));
+  const built = await warmed(
+    buildApp(testConfig({ dataDir, surfaceDebugFooter: true, publicWebUrl: "https://portal.test" })),
+  );
   built.runtime.start();
   try {
     const container = "C-footer";
@@ -390,7 +397,7 @@ test("dev debug footer: a surfaceTools reply carries an admin session deep-link 
 
 test("no debug footer when SURFACE_DEBUG_FOOTER is off (prod default)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-nofooter-"));
-  const built = buildApp(testConfig({ dataDir, publicWebUrl: "https://portal.test" }));
+  const built = await warmed(buildApp(testConfig({ dataDir, publicWebUrl: "https://portal.test" })));
   built.runtime.start();
   try {
     await built.app.setChannelPolicy("C-nf", "", "U-admin", undefined, undefined, true);
@@ -406,7 +413,7 @@ test("no debug footer when SURFACE_DEBUG_FOOTER is off (prod default)", async ()
 });
 
 test("the worker DECIDES where to post: a thread_ts roots the reply under the message it chose", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-choose";
@@ -424,7 +431,7 @@ test("the worker DECIDES where to post: a thread_ts roots the reply under the me
 });
 
 test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untrusted body escaped", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-xml";
@@ -449,7 +456,7 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
 });
 
 test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first judgment (§2.1)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-bd";
@@ -478,7 +485,7 @@ test("ambient judge: backdrop renders before NEW MESSAGES, absent on the first j
 });
 
 test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-bdcap";
@@ -507,7 +514,7 @@ test("ambient judge: backdrop is capped at the last 10 (§2.1)", async () => {
 });
 
 test("a judged batch records a durable judgment row: prompt, decision, model, ts range (§2.2)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-row";
@@ -529,7 +536,11 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
 
 test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, detectModelId: "claude-opus-4-8", judgeModelId: "claude-sonnet-5" }));
+  const built = await warmed(
+    buildApp(testConfig({ dataDir }), {
+      tenantSettings: testTenantSettings({ PI_DETECT_MODEL: "claude-opus-4-8", PI_JUDGE_MODEL: "claude-sonnet-5" }),
+    }),
+  );
   built.runtime.start();
   try {
     const container = "C-judgemodel";
@@ -546,7 +557,10 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
 
 test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, modelId: "gpt-5.6-sol", openaiApiKey: "sk-openai-test" }));
+  const built = await warmed(
+    buildApp(testConfig({ dataDir }), { tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }) }),
+  );
+  await built.modelCredentials.set("openai", "sk-openai-test", "test");
   built.runtime.start();
   try {
     const container = "C-openai-judge";
@@ -563,7 +577,8 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
+  const built = await warmed(buildApp(testConfig({ dataDir })));
+  await built.modelCredentials.set("openai", "sk-openai-test", "test");
   await built.config.setBaseModel(TEST_ROOT_SCOPE, "gpt-5.6-sol");
   built.runtime.start();
   try {
@@ -584,7 +599,7 @@ test("an admin-set org base model drives the auxiliary, not just the PI_MODEL en
 });
 
 test("a formal-mention fastlane records a fastlane row (§2.2)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-fast";
@@ -607,7 +622,7 @@ test("a formal-mention fastlane records a fastlane row (§2.2)", async () => {
 });
 
 test("worker seed is the trigger plus the 3 messages before it (§2.4)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-seed";
@@ -641,7 +656,7 @@ test("worker seed is the trigger plus the 3 messages before it (§2.4)", async (
 });
 
 test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and records no row (§3.3)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-botignore";
@@ -666,7 +681,7 @@ test("bot ledger — ignore: an ignored-bot-only delta never wakes the judge and
 });
 
 test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag; unlisted bots keep it (§3.3)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.setChannelPolicy("C-botact", "watch", "U-admin", { deploybot: { mode: "action" } });
@@ -702,7 +717,7 @@ test("bot ledger — action tags the bot as a trigger; user sheds the (bot) tag;
 });
 
 test("bot ledger — rollup holds a rollup-only delta within the window (cursor unadvanced), a human lifts it (§3.3)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-botrollup";
@@ -741,7 +756,7 @@ test("bot ledger — rollup holds a rollup-only delta within the window (cursor 
 });
 
 test("scheduled check-in: empty delta is still judged and renders the scheduled line; cursor untouched (§6.2)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-sched";
@@ -765,7 +780,7 @@ test("scheduled check-in: empty delta is still judged and renders the scheduled 
 });
 
 test("a solicited ambient wake runs as the asking person, not the system actor", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-solicited";
@@ -797,7 +812,7 @@ test("a solicited ambient wake runs as the asking person, not the system actor",
 });
 
 test("a solicited ambient wake carries the complete channel roster", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-solicited-roster";
@@ -827,7 +842,7 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
 });
 
 test("an ambient worker in a group DM runs at the group scope, not a fabricated channel scope", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-mpim";
@@ -855,7 +870,7 @@ test("an ambient worker in a group DM runs at the group scope, not a fabricated 
 });
 
 test("a solicited ask in a group DM runs as the asking person via group-membership attestation", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-mpim-solicited";
@@ -889,7 +904,7 @@ test("a solicited ask in a group DM runs as the asking person via group-membersh
 });
 
 test("a solicited ask in a group DM whose author is NOT a pushed member degrades to proactive", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-mpim-nonmember";
@@ -920,7 +935,7 @@ test("a solicited ask in a group DM whose author is NOT a pushed member degrades
 });
 
 test("a solicited verdict for a message that isn't the newest speaker's degrades to proactive", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-disarmed";
@@ -954,7 +969,7 @@ test("a solicited verdict for a message that isn't the newest speaker's degrades
 });
 
 test("a solicited wake in a private channel requires the asker in the pre-pushed membership", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-private";
@@ -981,7 +996,7 @@ test("a solicited wake in a private channel requires the asker in the pre-pushed
 });
 
 test("a solicited wake whose author isn't in the directory degrades to the proactive system actor", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const container = "C-unknown-asker";
@@ -1009,7 +1024,7 @@ test("a solicited wake whose author isn't in the directory degrades to the proac
 });
 
 test("a second ambient wake while the first worker is LIVE steers into it instead of forking a sibling reply", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const container = "C-coalesce";
   await built.app.setChannelPolicy(container, "!engage !post tag the team", "U-admin");
 

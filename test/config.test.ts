@@ -1,19 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import {
-  harnessCarriedModelAuth,
-  baseModelProviders,
-  boolEnv,
-  enabledSandboxBackends,
-  loadConfig,
-  configuredModelForHarness,
-  numEnv,
-  providerKeysPresent,
-  CONFIG_DEFAULTS,
-} from "../src/config.ts";
+import { resolve } from "node:path";
+import { boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -22,7 +10,6 @@ const productionEnv = {
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
-  SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
   SESSION_STORE: "postgres",
 } as const;
@@ -45,28 +32,6 @@ test("capability compression is explicitly enabled after verifier rollout", () =
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenCompression, true);
   assert.throws(() => loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "invalid" }), /CAPABILITY_TOKEN_COMPRESSION/);
-});
-
-test("ORG_BRAND_* parses into a validated branding default", () => {
-  assert.equal(loadConfig({}).brandingDefault, undefined);
-  assert.deepEqual(
-    loadConfig({ ORG_BRAND_ACCENT: "#6366f1", ORG_BRAND_MARK: "Q", ORG_BRAND_SELF_LABEL: "qm" }).brandingDefault,
-    { accent: "#6366f1", mark: "Q", selfLabel: "qm" },
-  );
-  assert.equal(loadConfig({ ORG_BRAND_ACCENT: "#abcde" }).brandingDefault, undefined);
-  assert.deepEqual(loadConfig({ ORG_BRAND_MARK: 'a"bc' }).brandingDefault, { mark: "ab" });
-  assert.equal(loadConfig({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 40);
-  assert.deepEqual(loadConfig({ ORG_BRAND_ORG_NAME: "Acme Corp" }).brandingDefault, { orgName: "Acme Corp" });
-  assert.equal(loadConfig({ ORG_BRAND_ORG_NAME: "x".repeat(80) }).brandingDefault?.orgName?.length, 40);
-  assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
-});
-
-test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
-  assert.equal(loadConfig({}).emailAuthPrincipals, undefined);
-  assert.deepEqual(
-    loadConfig({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " }).emailAuthPrincipals,
-    ["new@example.com", "other@example.com"],
-  );
 });
 
 test("store kinds default to memory and accept postgres", () => {
@@ -102,101 +67,15 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
-test("harness security posture defaults to auto and validates named modes", () => {
-  assert.equal(loadConfig({}).securityPosture, "auto");
-  assert.equal(loadConfig({}).securityScreen, "off");
-  assert.equal(loadConfig({}).securityScreenClassifier, "model");
-  assert.equal(loadConfig({ SECURITY_SCREEN: "Observe" }).securityScreen, "observe");
-  assert.equal(loadConfig({ SECURITY_SCREEN: "enforce" }).securityScreen, "enforce");
-  assert.throws(() => loadConfig({ SECURITY_SCREEN: "shadow" }), /SECURITY_SCREEN="shadow" is not recognized/);
-  assert.equal(loadConfig({}).securityScreenProxy, undefined);
+test("the security screen timeout defaults to 15 seconds and accepts only positive integers", () => {
   assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
   assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
-  assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "Dangerous" }).securityPosture, "dangerous");
-  assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "strict" }).securityPosture, "strict");
-  assert.throws(
-    () => loadConfig({ HARNESS_SECURITY_POSTURE: "permissive" }),
-    /HARNESS_SECURITY_POSTURE="permissive" is not recognized/,
-  );
-  const proxy = {
-    SECURITY_SCREEN: "observe",
-    SECURITY_SCREEN_CLASSIFIER: "proxy",
-    SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-    SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-    SECURITY_SCREEN_PROXY_TOKEN: "test-token",
-  };
-  assert.throws(
-    () => loadConfig({ SECURITY_SCREEN_CLASSIFIER: "proxy" }),
-    /requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN/,
-  );
-  assert.deepEqual(loadConfig(proxy).securityScreenProxy, {
-    provider: "example-screen",
-    endpoint: "https://screen.example.test/classify",
-    token: "test-token",
-  });
   for (const timeout of ["0", "-1", "1.5", "2147483648"]) {
     assert.throws(
       () => loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: timeout }),
       /SECURITY_SCREEN_TIMEOUT_MS must be a positive integer/,
     );
   }
-  assert.throws(
-    () => loadConfig({ SECURITY_SCREEN_PROXY_PROVIDER: "example-screen" }),
-    /requires SECURITY_SCREEN_CLASSIFIER=proxy/,
-  );
-  for (const provider of ["Bad Provider", "surface", "origin", "-leading", `${"x".repeat(64)}`]) {
-    assert.throws(
-      () => loadConfig({ ...proxy, SECURITY_SCREEN_PROXY_PROVIDER: provider }),
-      /SECURITY_SCREEN_PROXY_PROVIDER/,
-    );
-  }
-  for (const endpoint of [
-    "http://screen.example.test/classify",
-    "https://user:pass@screen.example.test/classify",
-    "https://screen.example.test/classify#fragment",
-    "https://screen.example.test./classify",
-  ]) {
-    assert.throws(
-      () => loadConfig({ ...proxy, SECURITY_SCREEN_PROXY_ENDPOINT: endpoint }),
-      /SECURITY_SCREEN_PROXY_ENDPOINT/,
-    );
-  }
-});
-
-test("retired security screen variables fail loudly unless they only said off", () => {
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
-  for (const env of [
-    { SECURITY_SCREEN_BACKEND: "proxy" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },
-    { SECURITY_SCREEN_ALL_POSTURES: "true" },
-    { SECURITY_SCREEN_PROXY_ROLLOUT: "shadow" },
-  ]) {
-    assert.throws(() => loadConfig(env), /retired.*SECURITY_SCREEN=off\|observe\|enforce/);
-  }
-});
-
-test("sharing posture defaults to isolated and accepts only isolated or open", () => {
-  assert.equal(loadConfig({}).sharingPosture, "isolated");
-  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "Open" }).sharingPosture, "open");
-  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "isolated" }).sharingPosture, "isolated");
-  assert.throws(
-    () => loadConfig({ HARNESS_SHARING_POSTURE: "dangerous" }),
-    /HARNESS_SHARING_POSTURE="dangerous" is not recognized/,
-  );
-});
-
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
-  } finally {
-    console.warn = original;
-  }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
 });
 
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
@@ -247,7 +126,6 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
   assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
@@ -261,46 +139,14 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
-test("sandbox backend is parsed once before production backend guards", () => {
-  assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
+test("legacy per-scope sandbox defaults are parsed with the shared backend parser", () => {
+  assert.deepEqual(loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":" superserve "}' }).legacySandboxScopeDefaults, {
+    channel: "superserve",
+  });
   assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
-    /SANDBOX_BACKEND="bogus" is not recognized/,
+    () => loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":"bogus"}' }),
+    /SANDBOX_SCOPE_BACKENDS.channel="bogus" is not recognized/,
   );
-});
-
-for (const primary of ["render", "local"] as const) {
-  test(`production requires durable Render recovery when the primary backend is ${primary}`, () => {
-    const env = {
-      ...productionEnv,
-      SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
-      RENDER_API_KEY: "test-key",
-      RENDER_WORKSPACE_ID: "tea-test",
-    };
-    for (const database of [undefined, "", "  "])
-      assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
-    const config = loadConfig({ ...env, DATABASE_URL: "postgres://qm@localhost/qm" });
-    assert.ok(enabledSandboxBackends(config).includes("render"));
-    assert.equal(config.databaseUrl, "postgres://qm@localhost/qm");
-    assert.ok(enabledSandboxBackends(loadConfig({ ...env, NODE_ENV: "development" })).includes("render"));
-  });
-
-  test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
-    const env = {
-      SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
-      RENDER_API_KEY: "test-key",
-      RENDER_WORKSPACE_ID: "tea-test",
-    };
-    for (const timeout of ["86340", "86400"])
-      assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
-    assert.equal(loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: "86339" }).renderSandbox.defaultTimeoutSec, 86339);
-  });
-}
-
-test("Render guards do not limit an unconfigured sandbox backend", () => {
-  assert.equal(loadConfig({ ...productionEnv, SANDBOX_TIMEOUT_SEC: "86400" }).sandboxBackend, "local");
 });
 
 test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
@@ -423,7 +269,6 @@ test("HARNESS accepts only the remaining harnesses", () => {
 
 test("HARNESS=claude uses native Claude authentication and does not require an Anthropic key", () => {
   assert.doesNotThrow(() => loadConfig({ HARNESS: "claude" }));
-  assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8" }).claudeModel, "claude-opus-4-8");
 });
 
 test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
@@ -438,110 +283,29 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   }
 });
 
-test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
-  assert.equal(loadConfig({}).sandboxBackend, "local");
-  assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }),
-    /SANDBOX_BACKEND must be set explicitly in production/,
-  );
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "agent37" }), /AGENT37_API_KEY/);
-  assert.equal(loadConfig({ SANDBOX_BACKEND: "agent37", AGENT37_API_KEY: "sk_live_k" }).sandboxBackend, "agent37");
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "superserve" }), /SUPERSERVE_API_KEY/);
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: "superserve", SUPERSERVE_API_KEY: "ss_live_k" }),
-    /SUPERSERVE_TEMPLATE/,
-  );
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_API_KEY: "ss_live_k" }),
-    /SUPERSERVE_TEMPLATE/,
-  );
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
-    /SUPERSERVE_API_KEY/,
-  );
+test("the sandbox backend and provider keys are not read from the environment", () => {
+  const env = {
+    SANDBOX_BACKEND: "sprites",
+    SANDBOX_SECONDARY_BACKEND: "smolmachines",
+    SPRITES_TOKEN: "sprites-env-token",
+    MODAL_TOKEN_ID: "modal-env-id",
+    MODAL_TOKEN_SECRET: "modal-env-secret",
+    SUPERSERVE_API_KEY: "ss_live_k",
+    E2B_API_KEY: "e2b-env-key",
+  };
+  const config = loadConfig(env);
+  assert.ok(!("sandboxBackend" in config));
+  assert.ok(!("sandboxSecondaryBackend" in config));
+  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k", "e2b-env-key"])
+    assert.ok(!JSON.stringify(config).includes(value), value);
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
+  assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
   assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-      SUPERSERVE_CONFIG_GENERATION: "7",
-    }).superserveSandbox.configGeneration,
-    7,
-    "a deployment that tracks its own rollouts stamps the generation its sandboxes carry",
-  );
-  assert.throws(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "superserve",
-        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        SUPERSERVE_API_KEY: "ss_live_k",
-        SUPERSERVE_CONFIG_GENERATION: "later",
-      }),
-    /SUPERSERVE_CONFIG_GENERATION/,
-  );
-  assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }).sandboxBackend,
-    "superserve",
-  );
-  assert.doesNotThrow(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "superserve",
-        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        SUPERSERVE_API_KEY: "ss_live_k",
-      }),
-    "a single-process dev instance needs no durable store",
-  );
-  assert.ok(
-    !enabledSandboxBackends(loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k" })).includes(
-      "superserve",
-    ),
-    "a stray key without a template must not enable the secondary backend",
-  );
-  assert.doesNotThrow(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "local",
-        SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-        SUPERSERVE_API_KEY: "ss_live_k",
-      }),
-    "upgrade-only provider settings do not require live credentials or templates",
-  );
-  assert.doesNotThrow(() =>
-    loadConfig({
-      SANDBOX_BACKEND: "local",
-      SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }),
-  );
-  assert.ok(
-    enabledSandboxBackends(
-      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
-    ).includes("superserve"),
-  );
-  assert.ok(
-    !enabledSandboxBackends(
-      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "   " }),
-    ).includes("superserve"),
-    "a blank template must not enable the secondary backend",
-  );
-  assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }).superserveSandbox?.template,
+    loadConfig({ SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ", SUPERSERVE_CONFIG_GENERATION: "7" }).superserveSandbox
+      .template,
     "qm-agent-1.0.0",
   );
-  const config = loadConfig({ SANDBOX_SECONDARY_BACKEND: "smolmachines" });
-  assert.equal(config.sandboxBackend, "local");
-  assert.ok(!("sandboxSecondaryBackend" in config));
+  assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: "later" }), /SUPERSERVE_CONFIG_GENERATION/);
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -563,37 +327,6 @@ test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
   assert.equal(loadConfig({}).maxClaims, CONFIG_DEFAULTS.maxClaims);
   assert.equal(loadConfig({ MAX_CLAIMS: "5" }).maxClaims, 5);
   assert.throws(() => loadConfig({ MAX_CLAIMS: "lots" }), /MAX_CLAIMS="lots" is not a number/);
-});
-
-test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
-  assert.equal(loadConfig({}).modelProvider, undefined);
-  assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
-  assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
-});
-
-test("MODEL_PROVIDER is refused when the harness can never run that vendor's models", () => {
-  assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "claude", OPENROUTER_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=claude/,
-  );
-  assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "claude", OPENAI_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=claude/,
-  );
-  assert.equal(loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", OPENAI_API_KEY: "k" }).modelProvider, "openai");
-});
-
-test("baseModelProviders constrains the base model only when a provider is declared", () => {
-  assert.deepEqual(
-    baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
-    { anthropic: false, openai: false, openrouter: true },
-    "the declaration outranks a stray key from another vendor",
-  );
-  assert.equal(
-    baseModelProviders(loadConfig({ OPENROUTER_API_KEY: "k" })),
-    undefined,
-    "with no declaration the shipped default stands, so upgrading never moves a deployment's model or its billing",
-  );
 });
 
 test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its env", () => {
@@ -683,13 +416,9 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
-    /PORTER_DEPLOY_PROJECT_ID/,
-  );
+test("a Porter token locates the API and shares the deploy provider's token", () => {
+  assert.throws(() => loadConfig({ PORTER_DEPLOY_API_TOKEN: "tok" }), /PORTER_DEPLOY_PROJECT_ID/);
   const inCluster = loadConfig({
-    SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
@@ -816,44 +545,6 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("company ChatGPT auth satisfies model onboarding on any harness without an API key", () => {
-  const config = { ...loadConfig({}), harness: "pi" as const };
-  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
-  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthFile: "/local/auth.json" }), "openai");
-  assert.equal(harnessCarriedModelAuth({ ...config, harness: "claude", codexAuthCredential: "cred-1" }), "openai");
-  assert.equal(harnessCarriedModelAuth(config), undefined);
-  assert.equal(providerKeysPresent({ ...config, codexAuthCredential: "cred-1" }).codexOAuth, true);
-  assert.equal(
-    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential,
-    "cred-1",
-  );
-});
-
-test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-config-chatgpt-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
-  const token = `e30.${claims.toString("base64url")}.sig`;
-  writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
-  chmodSync(path, 0o600);
-  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }).codexAuthFile, path);
-  assert.throws(
-    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(dir, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
-  );
-  assert.equal(
-    loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile,
-    undefined,
-  );
-  assert.throws(
-    () => loadConfig({ ...productionEnv, CODEX_AUTH_FILE: path }),
-    /CODEX_AUTH_FILE is supported for local development only/,
-  );
-  chmodSync(path, 0o644);
-  assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
-});
-
 test("retired brain environment does not configure a runtime integration and warns once", () => {
   const warnings: string[] = [];
   const original = console.warn;
@@ -869,7 +560,7 @@ test("retired brain environment does not configure a runtime integration and war
   } finally {
     console.warn = original;
   }
-  assert.deepEqual({ ...config, layerEnv: {} }, loadConfig({}));
+  assert.deepEqual(config, loadConfig({}));
   const retired = warnings.filter((w) => w.includes("retired and ignored"));
   assert.equal(retired.length, 1);
   assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
@@ -1001,20 +692,6 @@ test("sandbox capability TTL is deployment-configurable with a 48-hour default",
   assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
 });
 
-test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
-  const base = { ...loadConfig({}), harness: "pi" as const };
-  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-6.1-sol");
-  assert.equal(
-    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }, "pi"),
-    undefined,
-  );
-  assert.equal(
-    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", modelId: "claude-opus-5" }, "pi"),
-    "claude-opus-5",
-  );
-  assert.equal(configuredModelForHarness(base, "pi"), undefined);
-});
-
 test("Render app region defaults to the core region and accepts a separate creation region", () => {
   assert.equal(loadConfig({}).renderDeploy.appRegion, "oregon");
   assert.equal(loadConfig({ RENDER_REGION: "ohio" }).renderDeploy.appRegion, "ohio");
@@ -1042,10 +719,4 @@ test("Render app publishing needs a complete source, project, and environment", 
     /requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA/,
   );
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
-});
-
-test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
-  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
-  assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });

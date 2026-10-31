@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { serverDeps } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   mintCapabilityToken,
@@ -21,6 +21,13 @@ bindTestTenant();
 
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
+const gatewaySettings = () =>
+  testTenantSettings({
+    MODEL_GATEWAY_URL: "https://models.invalid",
+    MODEL_GATEWAY_API_KEY: key,
+    MODEL_GATEWAY_API_KEY_HEADER: "Authorization",
+    MODEL_GATEWAY_MODELS: `${model}=anthropic/claude-opus-5`,
+  });
 
 test("browser inference uses the company gateway with scoped model authorization", async (t) => {
   const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
@@ -43,12 +50,12 @@ test("browser inference uses the company gateway with scoped model authorization
   const routes: Record<string, string> = { [model]: "anthropic/claude-opus-5" };
   const server = createServer(built.app, {
     ...serverDeps(config, built),
-    modelGatewayTransport: {
+    modelGatewayTransport: async () => ({
       url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
       apiKey: `Bearer ${key}`,
       apiKeyHeader: "Authorization",
       models: routes,
-    },
+    }),
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -135,14 +142,11 @@ test("gateway deployment provisions a browser token without exposing the company
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test",
-    modelGateway: {
-      url: "https://models.invalid",
-      apiKey: key,
-      apiKeyHeader: "Authorization",
-      models: { [model]: "anthropic/claude-opus-5" },
-    },
   });
-  const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
+  const built = buildApp(config, {
+    modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
+    tenantSettings: gatewaySettings(),
+  });
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
@@ -173,14 +177,11 @@ test("gateway browsing never selects a direct provider when callback signing or 
       signingSecret: "ingress-secret".repeat(3),
       apiBaseUrl: "https://core.example.test",
       ...missing,
-      modelGateway: {
-        url: "https://models.invalid",
-        apiKey: key,
-        apiKeyHeader: "Authorization",
-        models: { [model]: "anthropic/claude-opus-5" },
-      },
     });
-    const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
+    const built = buildApp(config, {
+      modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
+      tenantSettings: gatewaySettings(),
+    });
     await selectDefaultSandbox(built, "U1", "personal:U1");
     let captured: ProvisionOptions | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
@@ -234,10 +235,14 @@ test("company browsing without a gateway uses current deployment credentials and
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test",
-    anthropicApiKey: "deployment-key",
-    providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
   });
-  const built = buildApp(config);
+  const built = buildApp(config, {
+    tenantSettings: testTenantSettings({
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
+    }),
+  });
+  await built.modelCredentials.set("anthropic", "deployment-key", "U1");
+  await built.tenantSettings.get();
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

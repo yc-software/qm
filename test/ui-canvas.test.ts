@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -17,6 +18,8 @@ import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+
+enterTenant(TEST_TENANT);
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -71,6 +74,7 @@ describe("ui canvas and ui observe", () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
     const deps = {
       sessions: built.sessions,
       uiState: built.uiState,

@@ -111,7 +111,10 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const harness = createPiHarness({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const harness = createPiHarness({
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
+    ...(signals ? { signals } : {}),
+  });
   const emitted: SessionEntry[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;

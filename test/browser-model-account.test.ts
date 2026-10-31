@@ -1,11 +1,8 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp, TEST_TENANT } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
@@ -166,8 +163,11 @@ test("Claude subscription browser requests fail without deriving or sending cred
 
 test("personal API keys bypass organization provider endpoint overrides", async (t) => {
   const built = buildApp(testConfig());
-  setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
-  t.after(() => setProviderBaseUrls({}));
+  setProviderBaseUrls(TEST_TENANT, {
+    openai: "https://organization.invalid/v1",
+    anthropic: "https://organization.invalid",
+  });
+  t.after(() => setProviderBaseUrls(TEST_TENANT, {}));
   for (const provider of ["openai", "anthropic"] as const) {
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, provider);
@@ -209,28 +209,22 @@ test("personal API keys bypass organization provider endpoint overrides", async 
   }
 });
 
-test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const authFile = join(dir, "auth.json");
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async () => {
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    }),
-    { mode: 0o600 },
-  );
-  const built = buildApp(
-    testConfig({
-      harness: "pi",
-      codexAuthFile: authFile,
-      openaiApiKey: "must-not-fallback",
-    }),
-  );
+  const auth = JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
+  });
+  const built = buildApp(testConfig({ harness: "pi" }));
+  const credential = await built.keychain!.save({
+    ownerId: "company-admin",
+    service: "codex",
+    files: [{ path: ".codex/auth.json", contentBase64: Buffer.from(auth).toString("base64") }],
+  });
+  await built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: credential.id });
+  await built.modelCredentials.set("openai", "must-not-fallback", "admin");
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

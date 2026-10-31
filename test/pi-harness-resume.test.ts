@@ -37,7 +37,7 @@ const scope = "personal:tester" as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";
 
 test("the pi harness re-runs a retry-safe interrupted call before the model sees the resumed turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const entries: Array<{ seq: number; type: string; payload: unknown }> = [];
   const queries: string[] = [];
   const requests: Array<Array<{ role: string; content: Array<Record<string, unknown>> | string }>> = [];

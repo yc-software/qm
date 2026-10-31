@@ -27,6 +27,7 @@ async function setup() {
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
   );
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1"));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const credential = await built.keychain!.save({
     ownerId: "U1",
     service: "aws",

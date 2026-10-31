@@ -18,7 +18,7 @@ import type {
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
-import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { ModelAccount, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { ProjectStore } from "../../projects/project-store.ts";
@@ -123,7 +123,6 @@ export interface OrchestratorDeps {
   defaultHarness?: string;
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
-  brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
@@ -143,7 +142,7 @@ export interface OrchestratorDeps {
   approvalSummaryTimeoutMs?: number;
   turnLeaseWaitMs?: number;
   securityScreenTimeoutMs?: number;
-  securityScreener?: SecurityScreener;
+  securityScreener?: () => Promise<SecurityScreener | undefined>;
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
@@ -152,7 +151,7 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
-  sandboxModels?: boolean;
+  sandboxModels?: () => Promise<boolean>;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
    *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */

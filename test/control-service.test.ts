@@ -1030,6 +1030,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   await built.config.setApprovedHarnesses(["pi"]);
   const runtime = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
   const created = await control.createCron(
@@ -1074,6 +1075,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   await built.config.setApprovedHarnesses(["pi"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {

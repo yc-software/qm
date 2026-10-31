@@ -6,7 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -15,6 +16,8 @@ import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+
+enterTenant(TEST_TENANT);
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -38,13 +41,9 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   };
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "offboarding-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["allowed@example.com"],
-      }),
-    );
+    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "offboarding-")), signingSecret: SECRET }), {
+      tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "allowed@example.com" }),
+    });
     await built.identity.hydrate();
     server = createServer(built.app, { signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog });
     await new Promise<void>((resolve) => server.listen(0, resolve));

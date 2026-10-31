@@ -18,6 +18,7 @@ bindTestTenant();
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 built.runtime.start();
 const core = createServer(built.app, { signingSecret: SECRET });
 core.listen(0);

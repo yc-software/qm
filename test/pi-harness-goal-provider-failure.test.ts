@@ -39,7 +39,7 @@ function goalTurn(
 }
 
 test("an active goal stops continuing once a model round fails at the provider", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;
@@ -105,7 +105,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 }
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;
@@ -130,7 +130,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;

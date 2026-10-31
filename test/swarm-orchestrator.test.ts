@@ -51,8 +51,11 @@ mock.module("./support/mock-harness.ts", {
   },
 });
 const wiring = await import("./support/build-app.ts");
-const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
-  const built = wiring.buildApp(...args);
+const buildApp = (...[config, overrides]: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
+  const built = wiring.buildApp(config, {
+    tenantSettings: wiring.testTenantSettings({ MODAL_TOKEN_ID: "test-id", MODAL_TOKEN_SECRET: "test-secret" }),
+    ...overrides,
+  });
   void built.featureFlags.setEnabled("swarms", TEST_ROOT_SCOPE, true, "test");
   return built;
 };
@@ -60,7 +63,7 @@ test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
-    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+    const built = buildApp(testConfig());
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -123,11 +126,7 @@ for (const kind of ["command", "security-screen"] as const) {
 }
 
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
-  const built = buildApp(
-    testConfig({
-      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
-    }),
-  );
+  const built = buildApp(testConfig());
   try {
     const rootTurn = await built.app.turn({
       surface: "test",
@@ -224,7 +223,6 @@ for (const storage of ["memory", "postgres"] as const) {
         sessionStore: storage,
         runStore: storage,
 
-        modalSandbox: { tokenId: "test", tokenSecret: "test" },
         signingSecret: "swarm-http-source-signing-key-distinct",
         portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
         apiBaseUrl: "http://core.test",
@@ -237,6 +235,7 @@ for (const storage of ["memory", "postgres"] as const) {
         }
       }
       let built = buildApp(config);
+      await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
       const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
       const issuedTokens = new Map<string, string>();
       const captureIssuedTokens = () => {
@@ -480,6 +479,7 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const sandbox = await built.sandboxResources.create("U1", "personal:U1", "sprites");
   await built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id);
   const request: TurnRequest = {
@@ -604,7 +604,7 @@ test("swarms stay off for a person until the swarms flag names their personal sc
 });
 
 test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
@@ -651,7 +651,7 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
 });
 
 test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
@@ -697,7 +697,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 
 for (const stopped of [false, true])
   test(`a replacement goal sent to a busy worker takes over its running goal turn (turn ${stopped ? "stopped" : "finishes"})`, async () => {
-    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+    const built = buildApp(testConfig());
     try {
       const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
       await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
@@ -768,7 +768,7 @@ for (const stopped of [false, true])
   });
 
 test("a worker's reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
