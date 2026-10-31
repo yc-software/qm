@@ -131,7 +131,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.ok(memoryTool, "the `memory` tool must be on the surface");
 
   const hit = textOf(await call(memoryTool, { action: "search", query: "billing" }));
-  assert.match(hit, /^```untrusted-data\n[^\n]*billing service[^\n]*\n```$/);
+  assert.match(hit, /^```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
 
   const miss = textOf(await call(memoryTool, { action: "search", query: "kubernetes" }));
   assert.match(miss, /no remembered facts match/);

@@ -1,7 +1,6 @@
 import { retainedSnapshot } from "../agent/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
-import { untrustedText } from "../util/text.ts";
-import { renderRecall, type RecalledFact } from "./cross-scope.ts";
+import { recallLabel, renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
 import { DENIED_CODES } from "./provider-outcome.ts";
@@ -70,7 +69,7 @@ export function memoryRecallDelta(
       [...withdrawn]
         .map(
           ([scope, n]) =>
-            `${untrustedText(labels.get(scope) ?? scope)}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
+            `${recallLabel(labels.get(scope) ?? scope)}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
         )
         .join("\n"),
       unauthorized

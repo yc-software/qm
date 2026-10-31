@@ -15,10 +15,10 @@ type Block = Pick<RecalledFact, "scope" | "source">;
 
 const blockKey = ({ scope, source }: Block) => JSON.stringify([scope, source?.provider ?? null]);
 
-const label = (text: string) => untrustedText(text).replace(/\s+/g, " ");
+export const recallLabel = (text: string) => untrustedText(text).replace(/\s+/g, " ");
 
 const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
-  `### ${label(labels.get(scope) ?? scope)}${source ? ` · ${label(source.label)}` : ""}`;
+  `### ${recallLabel(labels.get(scope) ?? scope)}${source ? ` · ${recallLabel(source.label)}` : ""}`;
 
 const BLOCK_FRAME = quotedData("").length;
 

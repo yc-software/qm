@@ -47,6 +47,9 @@ export function untrustedText(value: string): string {
 export function quotedData(value: string): string {
   const lines = untrustedText(value)
     .split("\n")
-    .map((line) => (line.trimStart().startsWith("#") ? `\\${line}` : line));
+    .map((line) => {
+      const text = line.trimStart();
+      return text.startsWith("#") && "# \t".includes(text[1] ?? " ") ? `\\${line}` : line;
+    });
   return ["```untrusted-data", ...lines, "```"].join("\n");
 }
