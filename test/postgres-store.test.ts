@@ -12,20 +12,12 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { seedTestTenants, tenantBoundUrl } from "./support/test-tenants.ts";
+import { recreateTenantSchema, tenantBoundUrl } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
 
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
-  await p.query("DROP SCHEMA public CASCADE");
-  await p.query("CREATE SCHEMA public");
-  await p.end();
-  await seedTestTenants(URL);
-});
+before(() => URL && recreateTenantSchema(URL));
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({

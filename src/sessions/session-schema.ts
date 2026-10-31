@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { tenantTableStatements } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantTableStatements } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -290,7 +290,7 @@ END $base_schema$`,
   ],
 };
 
-export const SESSION_TENANCY: PgMigrationDefinition = {
+const SESSION_TENANCY: PgMigrationDefinition = {
   id: "sessions/store/0048-tenant-rls",
   statements: [
     `INSERT INTO tenants(id, slug, name)
@@ -303,3 +303,5 @@ export const SESSION_TENANCY: PgMigrationDefinition = {
     `DROP TABLE qm_tenant`,
   ],
 };
+
+export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA, SESSION_TENANCY];

@@ -121,7 +121,7 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
-export async function bindTenant(client: Pick<PoolClient, "query">, tenant = boundTenant()): Promise<void> {
+async function bindTenant(client: Pick<PoolClient, "query">, tenant = boundTenant()): Promise<void> {
   if (tenant !== undefined) await client.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
 }
 

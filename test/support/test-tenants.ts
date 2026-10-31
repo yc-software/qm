@@ -21,6 +21,17 @@ export async function seedTestTenants(databaseUrl: string): Promise<void> {
   }
 }
 
+export async function recreateTenantSchema(databaseUrl: string): Promise<void> {
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+  } finally {
+    await pool.end();
+  }
+  await seedTestTenants(databaseUrl);
+}
+
 export function tenantBoundUrl(databaseUrl: string, tenant = testTenants()[0]): string {
   const url = new URL(databaseUrl);
   const options = url.searchParams.get("options");
