@@ -44,7 +44,7 @@ test("whoami reports an org_admin as admin with the org scope", async () => {
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
       tenant: TEST_TENANT,
-      tenantName: TEST_TENANT,
+      tenantName: `t-${TEST_TENANT.slice(-12)}`,
     });
   } finally {
     await s.close();
@@ -56,7 +56,12 @@ test("whoami reports an ungranted actor as not-admin", async () => {
   try {
     const r = await whoami(s.base, "U-nobody");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT, tenantName: TEST_TENANT });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+      tenantName: `t-${TEST_TENANT.slice(-12)}`,
+    });
   } finally {
     await s.close();
   }
@@ -67,7 +72,12 @@ test("whoami reports a foreign-org actor as not-admin (resolveActor null → 200
   try {
     const r = await whoami(s.base, "admin-alice@other-org");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT, tenantName: TEST_TENANT });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+      tenantName: `t-${TEST_TENANT.slice(-12)}`,
+    });
   } finally {
     await s.close();
   }
@@ -78,7 +88,12 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
   try {
     const r = await whoami(s.base);
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT, tenantName: TEST_TENANT });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+      tenantName: `t-${TEST_TENANT.slice(-12)}`,
+    });
   } finally {
     await s.close();
   }
@@ -130,7 +145,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
       tenant: TEST_TENANT,
-      tenantName: TEST_TENANT,
+      tenantName: `t-${TEST_TENANT.slice(-12)}`,
     });
   } finally {
     await s.close();
