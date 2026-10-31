@@ -54,6 +54,7 @@ import {
   withoutTenant,
   tenantRootScope,
   onFirstBind,
+  tenantReady,
   withTenant,
 } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
@@ -1234,8 +1235,10 @@ export function buildApp(
       }),
     auditLog,
   );
-  const judgeModelId = async (): Promise<string> =>
-    (await tenantSettings.get()).piJudgeModel ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const judgeModelId = async (): Promise<string> => {
+    await tenantReady();
+    return (await tenantSettings.get()).piJudgeModel ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  };
   const hydrateModelCatalog = async (): Promise<unknown> => {
     await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;
