@@ -18,7 +18,7 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
+import { memoryRows, type KeyedRows } from "../src/persistence/keyed-rows.ts";
 import { scopeId } from "../src/types.ts";
 import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";

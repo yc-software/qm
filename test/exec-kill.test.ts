@@ -9,7 +9,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

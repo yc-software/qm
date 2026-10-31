@@ -6,7 +6,7 @@ import {
   recordStoppedFlyPeers,
   type FlyPeerClaim,
 } from "../src/deploy/fly-peer-claims.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

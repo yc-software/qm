@@ -23,7 +23,7 @@ import {
   E2bSandboxGoneError,
 } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { ECSClient } from "@aws-sdk/client-ecs";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import type { FlyPeerClaim } from "../src/deploy/fly-peer-claims.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

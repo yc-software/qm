@@ -28,12 +28,11 @@ export function currentTenant(): string {
   return id;
 }
 
-export function tenantMap<V>(): () => Map<string, V> {
-  const tenants = new Map<string, Map<string, V>>();
+export function perTenant<V>(create: () => V): () => V {
+  const values = new Map<string, V>();
   return () => {
-    const tenant = currentTenant();
-    let rows = tenants.get(tenant);
-    if (!rows) tenants.set(tenant, (rows = new Map()));
-    return rows;
+    const id = currentTenant();
+    if (!values.has(id)) values.set(id, create());
+    return values.get(id)!;
   };
 }

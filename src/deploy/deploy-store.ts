@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
-import { tenantMap } from "../tenants/context.ts";
+import { pgRows, type RowColumns } from "../persistence/keyed-rows.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { typedColumns } from "../persistence/typed-columns.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
+import { perTenant } from "../tenants/context.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -146,35 +149,27 @@ const versionRef = (version: number): string => `refs/versions/${version}`;
 const NAME_INDEX = "deployments_name_key";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
-const DEPLOYMENTS: TableSpec<Deployment, "id"> = {
-  table: "deployments",
-  fieldKey: "id",
-  required: ["ownerScopeId", "createdBy", "currentVersion", "status", "versions"],
-  preserve: ["lastAccessAt"],
-  indexes: [
-    `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
-    `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
-       (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
-  ],
-  columns: {
-    ownerScopeId: "text",
-    createdBy: "text",
-    createdInScope: "text",
-    defaultAudience: "jsonb",
-    name: "text",
-    displayName: "text",
-    currentVersion: "bigint",
-    status: "text",
-    endpoint: "jsonb",
-    alwaysOn: "boolean",
-    embedAncestors: "text[]",
-    connectors: "text[]",
-    public: "boolean",
-    lastAccessAt: "bigint",
-    appliedVersion: "bigint",
-    versions: "jsonb",
-  },
+const DEPLOYMENT_COLUMNS: RowColumns<Deployment, "id"> = {
+  id: "text",
+  ownerScopeId: "text",
+  createdBy: "text",
+  createdInScope: "text",
+  defaultAudience: "jsonb",
+  name: "text",
+  displayName: "text",
+  currentVersion: "bigint",
+  status: "text",
+  endpoint: "jsonb",
+  alwaysOn: "boolean",
+  embedAncestors: "text[]",
+  connectors: "text[]",
+  public: "boolean",
+  lastAccessAt: "bigint",
+  appliedVersion: "bigint",
+  versions: "jsonb",
 };
+
+const { lastAccessAt: _lastAccessAt, ...WRITTEN_COLUMNS } = DEPLOYMENT_COLUMNS;
 
 const DEPLOYMENT_MIGRATIONS = [
   {
@@ -194,23 +189,58 @@ const DEPLOYMENT_MIGRATIONS = [
        END $prep$`,
     ],
   },
-  tableConversion(DEPLOYMENTS),
+  typedTableMigration({
+    table: "deployments",
+    columns: [
+      "id TEXT NOT NULL",
+      "owner_scope_id TEXT NOT NULL",
+      "created_by TEXT NOT NULL",
+      "created_in_scope TEXT",
+      "default_audience JSONB",
+      "name TEXT",
+      "display_name TEXT",
+      "current_version BIGINT NOT NULL",
+      "status TEXT NOT NULL",
+      "endpoint JSONB",
+      "always_on BOOLEAN",
+      "embed_ancestors TEXT[]",
+      "connectors TEXT[]",
+      "public BOOLEAN",
+      "last_access_at BIGINT",
+      "applied_version BIGINT",
+      "versions JSONB NOT NULL",
+    ],
+    primaryKey: ["id"],
+    backfill: jsonBackfill("deployments", DEPLOYMENT_COLUMNS),
+    indexes: [
+      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
+      `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
+         (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
+    ],
+  }),
 ];
 
 const withEndpoint = (d: Deployment): Deployment => ({ ...d, endpoint: d.endpoint ?? null });
 
 export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRows {
-  const table = typedTable(databaseUrl, DEPLOYMENTS, DEPLOYMENT_MIGRATIONS[1]!, [DEPLOYMENT_MIGRATIONS[0]!]);
-  const one = async (where: string, params: unknown[]) =>
-    (await table.db.q(`${table.select} WHERE ${table.scoped(where)}`, params)).map(table.row).map(withEndpoint)[0] ??
-    null;
+  const table = pgRows<Omit<Deployment, "lastAccessAt">, "id">(databaseUrl, {
+    table: "deployments",
+    key: "id",
+    recordKey: true,
+    columns: WRITTEN_COLUMNS,
+    migrations: DEPLOYMENT_MIGRATIONS,
+  });
+  const read = typedColumns<Deployment>(DEPLOYMENT_COLUMNS);
+  const rows = async (where: string, params: unknown[] = []) =>
+    (await table.db.q(`SELECT ${read.names} FROM deployments WHERE ${table.scoped(where)} ORDER BY id`, params))
+      .map((r) => read.fromRow(r))
+      .map(withEndpoint);
   return {
-    get: (id) => one("id = $1", [id]),
+    get: async (id) => (await rows("id = $1", [id]))[0] ?? null,
     put: table.put,
     merge: table.merge,
-    list: async () =>
-      (await table.db.q(`${table.select} WHERE ${table.scoped("true")} ORDER BY id`)).map(table.row).map(withEndpoint),
-    byName: (name) => one("name = $1", [name]),
+    list: () => rows("true"),
+    byName: async (name) => (await rows("name = $1", [name]))[0] ?? null,
     touch: async (id, at) =>
       (
         await table.db.query(
@@ -222,7 +252,7 @@ export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRow
 }
 
 export function createMemoryDeploymentRows(): DeploymentRows {
-  const tenantRows = tenantMap<Deployment>();
+  const tenantRows = perTenant(() => new Map<string, Deployment>());
   const copy = (d: Deployment | undefined) => (d ? structuredClone(d) : null);
   return {
     get: async (id) => copy(tenantRows().get(id)),

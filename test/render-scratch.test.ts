@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { memoryRows, tableConversion, typedTable } from "../src/persistence/typed-table.ts";
+import { memoryRows, pgRows } from "../src/persistence/keyed-rows.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -307,9 +307,8 @@ test(
   async (t) => {
     const { make, fake } = setup(t);
     const tables = (url: string) => {
-      const conversion = tableConversion(RENDER_SCRATCH_BODIES);
-      const first = typedTable(url, RENDER_SCRATCH_BODIES, conversion);
-      const second = typedTable(url, RENDER_SCRATCH_BODIES, conversion);
+      const first = pgRows(url, RENDER_SCRATCH_BODIES);
+      const second = pgRows(url, RENDER_SCRATCH_BODIES);
       return { first, second, close: () => second.close() };
     };
     await withTypedTableDb(tables, async ({ store: { first, second }, tenant }) => {

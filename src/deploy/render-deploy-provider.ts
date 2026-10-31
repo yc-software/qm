@@ -1,6 +1,8 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { createHmac, randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
@@ -64,20 +66,41 @@ export interface StoredRenderDeploy {
   pending?: RenderPending;
 }
 
-export const RENDER_DEPLOY_BODIES: TableSpec<StoredRenderDeploy, "deploymentId"> = {
+const RENDER_DEPLOY_BODIES_COLUMNS: RowColumns<StoredRenderDeploy, "deploymentId"> = {
+  deploymentId: "text",
+  appRegion: "text",
+  serviceId: "text",
+  environmentId: "text",
+  host: "text",
+  token: "text",
+  liveVersion: "bigint",
+  suspended: "boolean",
+  pending: "jsonb",
+};
+
+export const RENDER_DEPLOY_BODIES: RowTable<StoredRenderDeploy, "deploymentId"> = {
   table: "render_deploy_bodies",
-  fieldKey: "deploymentId",
-  required: ["appRegion", "token", "suspended"],
-  columns: {
-    appRegion: "text",
-    serviceId: "text",
-    environmentId: "text",
-    host: "text",
-    token: "text",
-    liveVersion: "bigint",
-    suspended: "boolean",
-    pending: "jsonb",
-  },
+  key: "deploymentId",
+  recordKey: true,
+  columns: RENDER_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "app_region TEXT NOT NULL",
+        "service_id TEXT",
+        "environment_id TEXT",
+        "host TEXT",
+        "token TEXT NOT NULL",
+        "live_version BIGINT",
+        "suspended BOOLEAN NOT NULL",
+        "pending JSONB",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("render_deploy_bodies", RENDER_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
 };
 
 export type RenderDeployBodies = Pick<KeyedRows<StoredRenderDeploy>, "get" | "put" | "putIfAbsent" | "merge">;

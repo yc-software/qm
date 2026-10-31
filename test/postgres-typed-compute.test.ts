@@ -4,12 +4,12 @@ import { withTenant } from "../src/tenants/context.ts";
 import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import { DEPLOYMENT_LAYER, type StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
-import { tableConversion, typedTable, type TableSpec } from "../src/persistence/typed-table.ts";
+import { pgRows, type RowTable } from "../src/persistence/keyed-rows.ts";
 
 const table =
-  <T extends object>(spec: TableSpec<T>) =>
+  <T, K extends string>(spec: RowTable<T, K>) =>
   (url: string) =>
-    typedTable(url, spec, tableConversion(spec));
+    pgRows(url, spec);
 import { seedKeyValueTable, skipWithoutPg as skip, withTypedTableDb } from "./support/typed-table.ts";
 
 const resource = (id: string, extra: Partial<SandboxResource> = {}): SandboxResource => ({

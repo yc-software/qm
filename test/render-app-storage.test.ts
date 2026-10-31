@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";

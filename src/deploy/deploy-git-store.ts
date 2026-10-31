@@ -1,10 +1,12 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
+import { pgRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -62,17 +64,37 @@ export interface DeployGitArchives {
   delete(deploymentId: string): Promise<void>;
 }
 
-const ARCHIVES: TableSpec<DeployGitArchive, "deploymentId"> = {
-  table: "deploy_git_repos",
-  fieldKey: "deploymentId",
-  required: ["etag", "updatedAt"],
-  columns: { bundleB64: "text", blobKey: "text", etag: "text", updatedAt: "bigint" },
+const ARCHIVES_COLUMNS: RowColumns<DeployGitArchive, "deploymentId"> = {
+  deploymentId: "text",
+  bundleB64: "text",
+  blobKey: "text",
+  etag: "text",
+  updatedAt: "bigint",
 };
 
-const DEPLOY_GIT_ARCHIVE_MIGRATION = tableConversion(ARCHIVES);
+const ARCHIVES: RowTable<DeployGitArchive, "deploymentId"> = {
+  table: "deploy_git_repos",
+  key: "deploymentId",
+  recordKey: true,
+  columns: ARCHIVES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "deploy_git_repos",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "bundle_b64 TEXT",
+        "blob_key TEXT",
+        "etag TEXT NOT NULL",
+        "updated_at BIGINT NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("deploy_git_repos", ARCHIVES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
 
 export function createPostgresDeployGitArchives(databaseUrl: string): DeployGitArchives {
-  const { get, put, update, delete: remove } = typedTable(databaseUrl, ARCHIVES, DEPLOY_GIT_ARCHIVE_MIGRATION);
+  const { get, put, update, delete: remove } = pgRows(databaseUrl, ARCHIVES);
   return { get, put, update, delete: remove };
 }
 

@@ -18,7 +18,7 @@ import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

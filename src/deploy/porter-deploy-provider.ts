@@ -1,3 +1,5 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
@@ -28,7 +30,7 @@ import {
   type PorterClientLike,
   type PorterSandboxLike,
 } from "./porter-client.ts";
-import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable, memoryRows } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -59,11 +61,35 @@ export interface StoredPorterDeployBody {
   createdAtMs: number;
 }
 
-export const PORTER_DEPLOY_BODIES: TableSpec<StoredPorterDeployBody, "deploymentId"> = {
+const PORTER_DEPLOY_BODIES_COLUMNS: RowColumns<StoredPorterDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  sandboxId: "text",
+  name: "text",
+  host: "text",
+  port: "bigint",
+  createdAtMs: "bigint",
+};
+
+export const PORTER_DEPLOY_BODIES: RowTable<StoredPorterDeployBody, "deploymentId"> = {
   table: "porter_deploy_bodies",
-  fieldKey: "deploymentId",
-  required: ["sandboxId", "name", "host", "createdAtMs"],
-  columns: { sandboxId: "text", name: "text", host: "text", port: "bigint", createdAtMs: "bigint" },
+  key: "deploymentId",
+  recordKey: true,
+  columns: PORTER_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "porter_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "name TEXT NOT NULL",
+        "host TEXT NOT NULL",
+        "port BIGINT",
+        "created_at_ms BIGINT NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("porter_deploy_bodies", PORTER_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
 };
 
 export interface PorterDeployProviderOptions {

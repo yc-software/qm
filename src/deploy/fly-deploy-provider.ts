@@ -7,7 +7,7 @@ import { makeTar } from "../sandbox/tar.ts";
 import { sleep } from "../util/async.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import type { KeyedRows } from "../persistence/typed-table.ts";
+import type { KeyedRows } from "../persistence/keyed-rows.ts";
 import type { FlyPortClaims } from "./fly-deploy-stores.ts";
 import {
   appBoot,

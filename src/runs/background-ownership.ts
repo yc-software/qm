@@ -1,10 +1,4 @@
-import {
-  globalConversion,
-  memoryRows,
-  typedTable,
-  type KeyedRows,
-  type TableSpec,
-} from "../persistence/typed-table.ts";
+import { keyedRows, type KeyedRows, type RowColumns } from "../persistence/keyed-rows.ts";
 
 export interface BackgroundOwnership {
   ownerDeploymentId: string | null;
@@ -20,26 +14,53 @@ export interface BackgroundOwnershipChange {
 
 export class BackgroundOwnershipConflict extends Error {}
 
-const BACKGROUND_OWNERSHIP: TableSpec<BackgroundOwnership> = {
-  table: "background_ownership",
-  global: true,
-  columns: { ownerDeploymentId: "text", setAt: "text", setBy: "text" },
+const COLUMNS: RowColumns<BackgroundOwnership, "id"> = {
+  id: "text",
+  ownerDeploymentId: "text",
+  setAt: "text",
+  setBy: "text",
 };
 
 const OWNED = `json ? 'ownerDeploymentId' AND (NOT json ? 'desiredDeploymentId'
   OR json->'desiredDeploymentId' = json->'ownerDeploymentId')`;
 
-const BACKGROUND_OWNERSHIP_MIGRATION = globalConversion(BACKGROUND_OWNERSHIP, {
-  ownerDeploymentId: `CASE WHEN ${OWNED} THEN json->>'ownerDeploymentId'
-    WHEN json->>'enabled' = 'true' THEN json->>'desiredDeploymentId' END`,
-  setAt: `CASE WHEN ${OWNED} THEN json->>'setAt' END`,
-  setBy: `CASE WHEN ${OWNED} THEN json->>'setBy' END`,
-});
+const BACKGROUND_OWNERSHIP_MIGRATION = {
+  id: "tenancy/background_ownership/0001-typed",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TABLE IF NOT EXISTS background_ownership(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    `ALTER TABLE background_ownership RENAME TO background_ownership_kv`,
+    `ALTER INDEX background_ownership_pkey RENAME TO background_ownership_kv_pkey`,
+    `CREATE TABLE background_ownership(
+       id TEXT PRIMARY KEY,
+       owner_deployment_id TEXT,
+       set_at TEXT,
+       set_by TEXT
+     )`,
+    `INSERT INTO background_ownership(id, owner_deployment_id, set_at, set_by)
+       SELECT id,
+              CASE WHEN ${OWNED} THEN json->>'ownerDeploymentId'
+                   WHEN json->>'enabled' = 'true' THEN json->>'desiredDeploymentId' END,
+              CASE WHEN ${OWNED} THEN json->>'setAt' END,
+              CASE WHEN ${OWNED} THEN json->>'setBy' END
+         FROM background_ownership_kv`,
+    `DROP TABLE background_ownership_kv`,
+    `DO $drop_version$ BEGIN
+       IF to_regclass('durable_map_versions') IS NOT NULL THEN
+         DELETE FROM durable_map_versions WHERE tbl = 'background_ownership';
+       END IF;
+     END $drop_version$`,
+  ],
+};
 
 export function createBackgroundOwnershipRows(databaseUrl: string | undefined): KeyedRows<BackgroundOwnership> {
-  return databaseUrl
-    ? typedTable(databaseUrl, BACKGROUND_OWNERSHIP, BACKGROUND_OWNERSHIP_MIGRATION)
-    : memoryRows<BackgroundOwnership>(true);
+  return keyedRows(databaseUrl, {
+    table: "background_ownership",
+    key: "id",
+    global: true,
+    columns: COLUMNS,
+    migrations: [BACKGROUND_OWNERSHIP_MIGRATION],
+  });
 }
 
 const normalized = (value: Partial<BackgroundOwnership>): BackgroundOwnership => ({

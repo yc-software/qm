@@ -414,7 +414,7 @@ import {
   LAYER_REVIEWER,
   type DeploymentLayerStore,
 } from "./deployment/deployment-layer-store.ts";
-import { keyedRows, memoryRows } from "./persistence/typed-table.ts";
+import { keyedRows, memoryRows } from "./persistence/keyed-rows.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";

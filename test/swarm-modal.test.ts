@@ -10,7 +10,7 @@ import { installFakeModal } from "./support/fake-modal.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

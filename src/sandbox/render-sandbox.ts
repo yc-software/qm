@@ -1,6 +1,8 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -54,35 +56,94 @@ export interface StoredRenderCleanup {
   error?: string;
 }
 
-export const RENDER_SANDBOX_BODIES: TableSpec<StoredRenderSandbox> = {
+const RENDER_SANDBOX_BODIES_COLUMNS: RowColumns<StoredRenderSandbox, "scopeId"> = {
+  scopeId: "text",
+  sandboxId: "text",
+  checkpoint: "jsonb",
+  expiresAtMs: "bigint",
+  lastActivityMs: "bigint",
+  homeDirty: "boolean",
+  savedAtMs: "bigint",
+  retiredResources: "jsonb",
+  retirementError: "text",
+  recoveryError: "text",
+};
+
+export const RENDER_SANDBOX_BODIES: RowTable<StoredRenderSandbox, "scopeId"> = {
   table: "render_sandbox_bodies",
   key: "scopeId",
-  required: ["sandboxId", "expiresAtMs", "lastActivityMs"],
-  columns: {
-    sandboxId: "text",
-    checkpoint: "jsonb",
-    expiresAtMs: "bigint",
-    lastActivityMs: "bigint",
-    homeDirty: "boolean",
-    savedAtMs: "bigint",
-    retiredResources: "jsonb",
-    retirementError: "text",
-    recoveryError: "text",
-  },
+  columns: RENDER_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "checkpoint JSONB",
+        "expires_at_ms BIGINT NOT NULL",
+        "last_activity_ms BIGINT NOT NULL",
+        "home_dirty BOOLEAN",
+        "saved_at_ms BIGINT",
+        "retired_resources JSONB",
+        "retirement_error TEXT",
+        "recovery_error TEXT",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("render_sandbox_bodies", RENDER_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
 };
 
-export const RENDER_SCRATCH_BODIES: TableSpec<StoredRenderScratch> = {
+const RENDER_SCRATCH_BODIES_COLUMNS: RowColumns<StoredRenderScratch, "name"> = {
+  name: "text",
+  id: "text",
+  status: "text",
+  expiresAtMs: "bigint",
+  cleanupPending: "boolean",
+};
+
+export const RENDER_SCRATCH_BODIES: RowTable<StoredRenderScratch, "name"> = {
   table: "render_scratch_bodies",
   key: "name",
-  required: ["id", "status", "expiresAtMs"],
-  columns: { id: "text", status: "text", expiresAtMs: "bigint", cleanupPending: "boolean" },
+  columns: RENDER_SCRATCH_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_scratch_bodies",
+      columns: [
+        "name TEXT NOT NULL",
+        "id TEXT NOT NULL",
+        "status TEXT NOT NULL",
+        "expires_at_ms BIGINT NOT NULL",
+        "cleanup_pending BOOLEAN",
+      ],
+      primaryKey: ["name"],
+      backfill: {
+        ...jsonBackfill("render_scratch_bodies", RENDER_SCRATCH_BODIES_COLUMNS),
+        name: "id",
+        id: "CASE WHEN jsonb_typeof(json->'id') = 'string' THEN json->>'id' END",
+      },
+    }),
+  ],
 };
 
-export const RENDER_SANDBOX_CLEANUP: TableSpec<StoredRenderCleanup> = {
+const RENDER_SANDBOX_CLEANUP_COLUMNS: RowColumns<StoredRenderCleanup, "scopeId"> = {
+  scopeId: "text",
+  resources: "jsonb",
+  error: "text",
+};
+
+export const RENDER_SANDBOX_CLEANUP: RowTable<StoredRenderCleanup, "scopeId"> = {
   table: "render_sandbox_cleanup",
   key: "scopeId",
-  required: ["resources"],
-  columns: { resources: "jsonb", error: "text" },
+  columns: RENDER_SANDBOX_CLEANUP_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_sandbox_cleanup",
+      columns: ["scope_id TEXT NOT NULL", "resources JSONB NOT NULL", "error TEXT"],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("render_sandbox_cleanup", RENDER_SANDBOX_CLEANUP_COLUMNS), scope_id: "id" },
+    }),
+  ],
 };
 
 export interface RenderSandboxOptions extends BlobStagingOptions {

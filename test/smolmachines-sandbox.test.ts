@@ -17,7 +17,7 @@ import {
 } from "./support/fake-smolmachines.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";

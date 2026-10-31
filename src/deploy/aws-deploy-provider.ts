@@ -1,11 +1,12 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable, memoryRows } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -65,23 +66,41 @@ export interface StoredDeployBody {
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
   replacementMicrovmId?: string;
-  orgId?: string;
 }
 
-export const AWS_DEPLOY_BODIES: TableSpec<StoredDeployBody, "deploymentId"> = {
+const AWS_DEPLOY_BODIES_COLUMNS: RowColumns<StoredDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  microvmId: "text",
+  endpoint: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  dataCredsAtMs: "bigint",
+  rotateNotBeforeMs: "bigint",
+  replacementMicrovmId: "text",
+};
+
+export const AWS_DEPLOY_BODIES: RowTable<StoredDeployBody, "deploymentId"> = {
   table: "aws_deploy_bodies",
-  fieldKey: "deploymentId",
-  required: ["microvmId", "endpoint", "createdAtMs"],
-  columns: {
-    microvmId: "text",
-    endpoint: "text",
-    createdAtMs: "bigint",
-    lastSnapshotMs: "bigint",
-    dataCredsAtMs: "bigint",
-    rotateNotBeforeMs: "bigint",
-    replacementMicrovmId: "text",
-    orgId: "text",
-  },
+  key: "deploymentId",
+  recordKey: true,
+  columns: AWS_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "aws_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "microvm_id TEXT NOT NULL",
+        "endpoint TEXT NOT NULL",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "data_creds_at_ms BIGINT",
+        "rotate_not_before_ms BIGINT",
+        "replacement_microvm_id TEXT",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("aws_deploy_bodies", AWS_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
 };
 
 export interface AwsDeployProviderOptions {
@@ -441,7 +460,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         endpoint: body.endpoint,
         createdAtMs: Date.now(),
         lastSnapshotMs: Date.now(),
-        orgId: configOrgId(),
       });
       return { id: body.id, endpoint: body.endpoint, fresh: true };
     });

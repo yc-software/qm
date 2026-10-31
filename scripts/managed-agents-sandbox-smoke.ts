@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";

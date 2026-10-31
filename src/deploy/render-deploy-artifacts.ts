@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomBytes } from "node:crypto";
 import { mintDeployGitAccess } from "./access-token.ts";
 import type { Deployment, DeploymentVersion, DeployStore } from "./deploy-store.ts";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 
 const PRINCIPAL_PREFIX = "render-deploy:";
 
@@ -16,11 +18,26 @@ export interface StoredRenderDeployCredential {
   principalId: string;
 }
 
-export const RENDER_DEPLOY_CREDENTIALS: TableSpec<StoredRenderDeployCredential> = {
+const RENDER_DEPLOY_CREDENTIALS_COLUMNS: RowColumns<StoredRenderDeployCredential, "deploymentId"> = {
+  deploymentId: "text",
+  principalId: "text",
+};
+
+export const RENDER_DEPLOY_CREDENTIALS: RowTable<StoredRenderDeployCredential, "deploymentId"> = {
   table: "render_deploy_credentials",
   key: "deploymentId",
-  required: ["principalId"],
-  columns: { principalId: "text" },
+  columns: RENDER_DEPLOY_CREDENTIALS_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_deploy_credentials",
+      columns: ["deployment_id TEXT NOT NULL", "principal_id TEXT NOT NULL"],
+      primaryKey: ["deployment_id"],
+      backfill: {
+        ...jsonBackfill("render_deploy_credentials", RENDER_DEPLOY_CREDENTIALS_COLUMNS),
+        deployment_id: "id",
+      },
+    }),
+  ],
 };
 
 export interface RenderDeployArtifacts {

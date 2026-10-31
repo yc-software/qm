@@ -1,5 +1,5 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";

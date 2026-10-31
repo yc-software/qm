@@ -1,5 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";

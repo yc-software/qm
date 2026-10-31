@@ -13,9 +13,8 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
-import { bindTestTenant } from "./tenant.ts";
-
-bindTestTenant();
+import { enterTenant } from "../../src/tenants/context.ts";
+import { TEST_TENANT } from "./tenant.ts";
 
 export async function swarmFixture(
   options: {
@@ -27,6 +26,7 @@ export async function swarmFixture(
     runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
+  enterTenant(TEST_TENANT);
   const sessions = options.sessions ?? createMemorySessionStore();
   const runs = options.runs ?? createMemoryRunStore().runs;
   const lock = options.lock ?? createMemoryAdvisoryLock();

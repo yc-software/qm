@@ -18,6 +18,7 @@ export interface SandboxResource {
   legacy: boolean;
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
   machineId?: string;
+  providerName?: string;
   cleanupPending?: boolean;
   holders?: string[];
   spec?: AgentComputerSpec;

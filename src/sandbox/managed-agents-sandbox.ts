@@ -1,8 +1,10 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -83,23 +85,49 @@ export interface StoredManagedAgentsSandbox {
   pendingCheckpointDeletes?: string[];
 }
 
-export const MANAGED_AGENTS_SANDBOX_BODIES: TableSpec<StoredManagedAgentsSandbox> = {
+const MANAGED_AGENTS_SANDBOX_BODIES_COLUMNS: RowColumns<StoredManagedAgentsSandbox, "scopeId"> = {
+  scopeId: "text",
+  sessionId: "text",
+  sandboxId: "text",
+  preservationState: "text",
+  preservationError: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  homeDirty: "boolean",
+  checkpointId: "text",
+  checkpointAtMs: "bigint",
+  checkpointError: "text",
+  pendingCheckpointDeletes: "text[]",
+};
+
+export const MANAGED_AGENTS_SANDBOX_BODIES: RowTable<StoredManagedAgentsSandbox, "scopeId"> = {
   table: "do_managed_agents_sandbox_bodies",
   key: "scopeId",
-  required: ["sessionId", "sandboxId", "createdAtMs"],
-  columns: {
-    sessionId: "text",
-    sandboxId: "text",
-    preservationState: "text",
-    preservationError: "text",
-    createdAtMs: "bigint",
-    lastSnapshotMs: "bigint",
-    homeDirty: "boolean",
-    checkpointId: "text",
-    checkpointAtMs: "bigint",
-    checkpointError: "text",
-    pendingCheckpointDeletes: "text[]",
-  },
+  columns: MANAGED_AGENTS_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "do_managed_agents_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "session_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "preservation_state TEXT",
+        "preservation_error TEXT",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "home_dirty BOOLEAN",
+        "checkpoint_id TEXT",
+        "checkpoint_at_ms BIGINT",
+        "checkpoint_error TEXT",
+        "pending_checkpoint_deletes TEXT[]",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: {
+        ...jsonBackfill("do_managed_agents_sandbox_bodies", MANAGED_AGENTS_SANDBOX_BODIES_COLUMNS),
+        scope_id: "id",
+      },
+    }),
+  ],
 };
 
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {

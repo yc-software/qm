@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure, errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -65,10 +67,32 @@ export interface StoredSmolmachinesSandbox {
   snapshotError?: string;
 }
 
-export const SMOLMACHINES_SANDBOX_BODIES: TableSpec<StoredSmolmachinesSandbox> = {
+const SMOLMACHINES_SANDBOX_BODIES_COLUMNS: RowColumns<StoredSmolmachinesSandbox, "scopeId"> = {
+  scopeId: "text",
+  initializationPending: "boolean",
+  lastSnapshotMs: "bigint",
+  homeDirty: "boolean",
+  snapshotError: "text",
+};
+
+export const SMOLMACHINES_SANDBOX_BODIES: RowTable<StoredSmolmachinesSandbox, "scopeId"> = {
   table: "smolmachines_sandbox_bodies",
   key: "scopeId",
-  columns: { initializationPending: "boolean", lastSnapshotMs: "bigint", homeDirty: "boolean", snapshotError: "text" },
+  columns: SMOLMACHINES_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "smolmachines_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "initialization_pending BOOLEAN",
+        "last_snapshot_ms BIGINT",
+        "home_dirty BOOLEAN",
+        "snapshot_error TEXT",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("smolmachines_sandbox_bodies", SMOLMACHINES_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
 };
 
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {

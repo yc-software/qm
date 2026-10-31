@@ -1,22 +1,44 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import type { TableSpec } from "../persistence/typed-table.ts";
+import { type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import type { FlyMachineConfig } from "./fly-deploy-provider.ts";
 
-export const FLY_DEPLOY_CONFIGS: TableSpec<FlyMachineConfig> = {
+const FLY_DEPLOY_CONFIGS_COLUMNS: RowColumns<FlyMachineConfig, "deploymentId"> = {
+  deploymentId: "text",
+  image: "text",
+  metadata: "jsonb",
+  mounts: "jsonb",
+  env: "jsonb",
+  guest: "jsonb",
+  files: "jsonb",
+  services: "jsonb",
+  init: "jsonb",
+};
+
+export const FLY_DEPLOY_CONFIGS: RowTable<FlyMachineConfig, "deploymentId"> = {
   table: "fly_deploy_configs",
   key: "deploymentId",
-  required: ["image", "env", "guest", "files", "services", "init"],
-  columns: {
-    image: "text",
-    metadata: "jsonb",
-    mounts: "jsonb",
-    env: "jsonb",
-    guest: "jsonb",
-    files: "jsonb",
-    services: "jsonb",
-    init: "jsonb",
-  },
+  columns: FLY_DEPLOY_CONFIGS_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "fly_deploy_configs",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "image TEXT NOT NULL",
+        "metadata JSONB",
+        "mounts JSONB",
+        "env JSONB NOT NULL",
+        "guest JSONB NOT NULL",
+        "files JSONB NOT NULL",
+        "services JSONB NOT NULL",
+        "init JSONB NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("fly_deploy_configs", FLY_DEPLOY_CONFIGS_COLUMNS), deployment_id: "id" },
+    }),
+  ],
 };
 
 export interface FlyPortClaims {

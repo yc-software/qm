@@ -1,5 +1,5 @@
 import { test, afterEach } from "node:test";
-import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
+import { memoryRows, type KeyedRows } from "../src/persistence/keyed-rows.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";

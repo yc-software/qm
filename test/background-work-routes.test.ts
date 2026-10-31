@@ -7,7 +7,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
 

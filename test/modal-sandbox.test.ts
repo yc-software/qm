@@ -10,7 +10,7 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
+import { memoryRows, type KeyedRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { orgId } from "../src/config.ts";

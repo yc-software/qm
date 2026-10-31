@@ -1,6 +1,8 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { tableConversion, typedTable, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
+import { pgRows, type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -263,22 +265,42 @@ function validateBundle(
 
 export type DeploymentLayerRows = Pick<KeyedRows<StoredDeploymentLayer>, "get" | "putIfAbsent" | "update">;
 
-export const DEPLOYMENT_LAYER: TableSpec<StoredDeploymentLayer> = {
+const DEPLOYMENT_LAYER_COLUMNS: RowColumns<StoredDeploymentLayer, "id"> = {
+  id: "text",
+  contentHash: "text",
+  version: "bigint",
+  updatedAt: "bigint",
+  updatedBy: "text",
+  bundle: "jsonb",
+  resolved: "jsonb",
+  pendingAudits: "jsonb",
+};
+
+export const DEPLOYMENT_LAYER: RowTable<StoredDeploymentLayer, "id"> = {
   table: "deployment_layer",
-  required: ["contentHash", "version", "updatedAt", "updatedBy", "bundle", "resolved"],
-  columns: {
-    contentHash: "text",
-    version: "bigint",
-    updatedAt: "bigint",
-    updatedBy: "text",
-    bundle: "jsonb",
-    resolved: "jsonb",
-    pendingAudits: "jsonb",
-  },
+  key: "id",
+  columns: DEPLOYMENT_LAYER_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "deployment_layer",
+      columns: [
+        "id TEXT NOT NULL",
+        "content_hash TEXT NOT NULL",
+        "version BIGINT NOT NULL",
+        "updated_at BIGINT NOT NULL",
+        "updated_by TEXT NOT NULL",
+        "bundle JSONB NOT NULL",
+        "resolved JSONB NOT NULL",
+        "pending_audits JSONB",
+      ],
+      primaryKey: ["id"],
+      backfill: { ...jsonBackfill("deployment_layer", DEPLOYMENT_LAYER_COLUMNS) },
+    }),
+  ],
 };
 
 export function createPostgresDeploymentLayerRows(databaseUrl: string): DeploymentLayerRows {
-  const { get, putIfAbsent, update } = typedTable(databaseUrl, DEPLOYMENT_LAYER, tableConversion(DEPLOYMENT_LAYER));
+  const { get, putIfAbsent, update } = pgRows(databaseUrl, DEPLOYMENT_LAYER);
   return { get, putIfAbsent, update };
 }
 

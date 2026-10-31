@@ -1,8 +1,10 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -75,21 +77,42 @@ export interface StoredE2bSandbox {
   homeDirty?: boolean;
 }
 
-export const E2B_SANDBOX_BODIES: TableSpec<StoredE2bSandbox> = {
+const E2B_SANDBOX_BODIES_COLUMNS: RowColumns<StoredE2bSandbox, "scopeId"> = {
+  scopeId: "text",
+  sandboxId: "text",
+  nativePause: "boolean",
+  preservationState: "text",
+  preservationError: "text",
+  recoverySnapshotId: "text",
+  recoveryError: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  homeDirty: "boolean",
+};
+
+export const E2B_SANDBOX_BODIES: RowTable<StoredE2bSandbox, "scopeId"> = {
   table: "e2b_sandbox_bodies",
   key: "scopeId",
-  required: ["sandboxId", "createdAtMs"],
-  columns: {
-    sandboxId: "text",
-    nativePause: "boolean",
-    preservationState: "text",
-    preservationError: "text",
-    recoverySnapshotId: "text",
-    recoveryError: "text",
-    createdAtMs: "bigint",
-    lastSnapshotMs: "bigint",
-    homeDirty: "boolean",
-  },
+  columns: E2B_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "e2b_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "native_pause BOOLEAN",
+        "preservation_state TEXT",
+        "preservation_error TEXT",
+        "recovery_snapshot_id TEXT",
+        "recovery_error TEXT",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "home_dirty BOOLEAN",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("e2b_sandbox_bodies", E2B_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
 };
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];

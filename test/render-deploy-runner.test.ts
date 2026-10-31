@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { chmod, chown, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";

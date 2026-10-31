@@ -32,7 +32,7 @@ import {
   turnFileId,
 } from "../src/core/attachments.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

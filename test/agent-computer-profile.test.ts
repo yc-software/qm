@@ -8,7 +8,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { effectiveEgressEnforcement } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

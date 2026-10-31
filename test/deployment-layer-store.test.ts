@@ -9,7 +9,7 @@ import {
 } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
+import { memoryRows, type KeyedRows } from "../src/persistence/keyed-rows.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";

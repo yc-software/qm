@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
-import { globalConversion, tableConversion, typedTable, type TableSpec } from "../src/persistence/typed-table.ts";
+import { pgRows, type RowTable } from "../src/persistence/keyed-rows.ts";
 import { E2B_SANDBOX_BODIES } from "../src/sandbox/e2b-sandbox.ts";
 import { MODAL_SANDBOX_BODIES } from "../src/sandbox/modal-sandbox.ts";
 import { MANAGED_AGENTS_SANDBOX_BODIES } from "../src/sandbox/managed-agents-sandbox.ts";
@@ -18,7 +18,7 @@ import { FLY_DEPLOY_CONFIGS, createFlyPortClaims } from "../src/deploy/fly-deplo
 import { FLY_PEER_CLAIMS } from "../src/deploy/fly-peer-claims.ts";
 import { seedKeyValueTable, skipWithoutPg as skip, withTypedTableDb } from "./support/typed-table.ts";
 
-type Spec = TableSpec<object, string>;
+type Spec = RowTable<Record<string, unknown>, string>;
 
 const rows: Array<[Spec, string, Record<string, unknown>]> = [
   [
@@ -45,7 +45,6 @@ const rows: Array<[Spec, string, Record<string, unknown>]> = [
       snapshotGeneration: 4,
       createdAtMs: 1_730_000_000_000,
       lastActivityMs: 1_730_000_000_900,
-      orgId: "org-1",
     },
   ],
   [
@@ -124,7 +123,7 @@ const rows: Array<[Spec, string, Record<string, unknown>]> = [
 for (const [spec, key, row] of rows) {
   test(`${spec.table} backfills its key-value rows and stays inside one tenant`, { skip }, async () => {
     await withTypedTableDb(
-      (url) => typedTable(url, spec, tableConversion(spec)),
+      (url) => pgRows(url, spec),
       async ({ store, tenant, otherTenant, admin }) => {
         await withTenant(tenant, async () => {
           assert.deepEqual(await store.get(key), row);
@@ -138,8 +137,12 @@ for (const [spec, key, row] of rows) {
           await store.put(key, row);
         });
         await withTenant(tenant, async () => {
-          const required = new Set<string>([...(spec.required ?? []), spec.fieldKey ?? ""]);
-          const field = Object.keys(row).find((name) => !required.has(name));
+          const ddl = spec.migrations.flatMap((m) => m.statements).join("\n");
+          const field = Object.keys(row).find(
+            (name) =>
+              name !== spec.key &&
+              !new RegExp(`\\b${name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)} [A-Z[\\] ]*NOT NULL`).test(ddl),
+          );
           if (field) {
             const merged = await store.merge(key, { [field]: undefined });
             assert.equal((merged as Record<string, unknown>)[field], undefined);
@@ -159,7 +162,7 @@ for (const [spec, key, row] of rows) {
 
 test("global infra tables backfill without a tenant and are shared by every tenant", { skip }, async () => {
   const make = (url: string) => {
-    const claims = typedTable(url, FLY_PEER_CLAIMS, globalConversion(FLY_PEER_CLAIMS));
+    const claims = pgRows(url, FLY_PEER_CLAIMS);
     return {
       claims,
       ports: createFlyPortClaims(url),

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { test } from "node:test";
 import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";

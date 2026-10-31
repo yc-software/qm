@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
@@ -115,11 +117,23 @@ export interface SpritesInitialization {
   pending: boolean;
 }
 
-export const SPRITES_INITIALIZATION: TableSpec<SpritesInitialization> = {
+const SPRITES_INITIALIZATION_COLUMNS: RowColumns<SpritesInitialization, "name"> = {
+  name: "text",
+  pending: "boolean",
+};
+
+export const SPRITES_INITIALIZATION: RowTable<SpritesInitialization, "name"> = {
   table: "sprites_initialization",
   key: "name",
-  required: ["pending"],
-  columns: { pending: "boolean" },
+  columns: SPRITES_INITIALIZATION_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "sprites_initialization",
+      columns: ["name TEXT NOT NULL", "pending BOOLEAN NOT NULL"],
+      primaryKey: ["name"],
+      backfill: { ...jsonBackfill("sprites_initialization", SPRITES_INITIALIZATION_COLUMNS), name: "id" },
+    }),
+  ],
 };
 
 export interface SpritesSandboxOptions extends BlobStagingOptions {

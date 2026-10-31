@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { memoryRows } from "../src/persistence/typed-table.ts";
+import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
