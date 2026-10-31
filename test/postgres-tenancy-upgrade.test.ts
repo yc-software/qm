@@ -83,3 +83,18 @@ test("a fresh database ends with no tenant row", { skip }, async () => {
     assert.deepEqual((await db.query("SELECT count(*)::int AS n FROM tenants")).rows, [{ n: 0 }]);
   });
 });
+
+test("a booted database without rows keeps its instance uuid as its one tenant", { skip }, async () => {
+  await withSchema(async (url, db) => {
+    createPostgresSessionStore(url);
+    createPostgresRunStore(url);
+    createPostgresGrantStore(url);
+    await applyPgMigrations(
+      db,
+      registeredPgMigrations(url).filter((m) => !TENANCY.test(m.id)),
+    );
+    const instance = String((await db.query("SELECT id FROM qm_tenant")).rows[0].id);
+    await migrateRegisteredPgSchemas(url);
+    assert.deepEqual((await db.query("SELECT id::text AS id FROM tenants")).rows, [{ id: instance }]);
+  });
+});
