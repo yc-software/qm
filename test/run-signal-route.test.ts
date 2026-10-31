@@ -22,6 +22,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
@@ -36,7 +37,6 @@ const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = coreBase;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);
@@ -387,11 +387,9 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
       conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
     },
   });
-  const previousAllowlist = process.env.INBOX_USERS;
   const steer = (body: Record<string, unknown>) =>
     fetch(`${webBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
   try {
-    process.env.INBOX_USERS = "alice";
     for (const enabled of [false, true]) {
       await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
       for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
@@ -414,16 +412,10 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
         assert.match(signals[0]?.request?.conversationHeader ?? "", /fresh snapshot/);
       }
     }
-    process.env.INBOX_USERS = "bob";
-    const denied = await steer({ kind: "steer", text: "Prioritize these", threadRef });
-    assert.equal(denied.status, 403);
-    assert.deepEqual(await built.signals.takePending(run.id), []);
     const abort = await steer({ kind: "abort" });
     assert.equal(abort.status, 200);
   } finally {
     await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
-    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
-    else process.env.INBOX_USERS = previousAllowlist;
   }
 });
 
@@ -439,25 +431,18 @@ test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", asy
       conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
     },
   });
-  const previousAllowlist = process.env.INBOX_USERS;
-  try {
-    process.env.INBOX_USERS = "nobody";
-    for (const scopeId of ["channel:any", "group:any"]) {
-      for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
-        const response = await fetch(
-          `${webBase}${path}`,
-          asUser(user, {
-            method: "POST",
-            body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
-          }),
-        );
-        assert.equal(response.status, 403);
-        assert.deepEqual(await built.signals.takePending(run.id), []);
-      }
+  for (const scopeId of ["channel:any", "group:any"]) {
+    for (const path of ["/api/turn", `/api/runs/${run.id}/signal`]) {
+      const response = await fetch(
+        `${webBase}${path}`,
+        asUser(user, {
+          method: "POST",
+          body: JSON.stringify({ kind: "steer", text: "Prioritize these", threadRef, scopeId }),
+        }),
+      );
+      assert.equal(response.status, 403);
+      assert.deepEqual(await built.signals.takePending(run.id), []);
     }
-  } finally {
-    if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
-    else process.env.INBOX_USERS = previousAllowlist;
   }
 });
 

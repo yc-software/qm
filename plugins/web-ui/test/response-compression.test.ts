@@ -33,7 +33,6 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const assetsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web", "assets");
 const assetName = "compression-fixture-Aa1Bb2Cc.js";

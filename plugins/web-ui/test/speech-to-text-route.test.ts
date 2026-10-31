@@ -14,7 +14,6 @@ const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_USERS = "alice";
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
 const { sweepDictationSpool } = await import("../server/voice-routes.ts");
@@ -55,10 +54,9 @@ test.after(() => {
   void rm(testTmp, { recursive: true, force: true });
 });
 
-test("dictation checks identity, origin, allowlist and format before provider access", async () => {
+test("dictation checks identity, origin, impersonation and format before provider access", async () => {
   for (const [requestHeaders, expected] of [
     [{}, 401],
-    [{ ...headers, ...identity("bob") }, 404],
     [
       {
         ...headers,

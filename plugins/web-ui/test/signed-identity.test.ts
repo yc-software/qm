@@ -20,7 +20,6 @@ await new Promise<void>((r) => core.listen(0, r));
 const SECRET = "signed-identity-test-secret";
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");

@@ -66,7 +66,7 @@ export interface StoredSmolmachinesSandbox {
 }
 
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
-  token?: string;
+  token: () => Promise<string>;
   baseUrl?: string;
   namePrefix?: string;
   image?: string;
@@ -88,7 +88,6 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
 }
 
 export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): Sandbox {
-  if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
@@ -112,7 +111,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
   const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
-  function send(
+  async function send(
     method: string,
     path: string,
     body?: unknown,
@@ -122,7 +121,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${opts.token ?? ""}`,
+        authorization: `Bearer ${await opts.token()}`,
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -293,11 +292,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const id = await machineIdFor(name);
+    const token = await opts.token();
     const res = await fetchWithRetry(
       (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
           method: "PUT",
-          headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/octet-stream" },
           body: Buffer.from(data),
           signal,
         }),
@@ -311,10 +311,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
     const id = await machineIdFor(name);
+    const token = await opts.token();
     const res = await fetchWithRetry(
       (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
-          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          headers: { authorization: `Bearer ${token}` },
           signal,
         }),
       "idempotent",

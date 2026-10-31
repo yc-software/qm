@@ -27,6 +27,7 @@ import {
   type HomeSnapshotStore,
   type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
+import { clientPerCredential } from "./tenant-credentials.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type {
   AgentComputerProfile,
@@ -112,7 +113,7 @@ export function processKeepaliveScript(processId: string): string {
 }
 
 export interface SpritesSandboxOptions extends BlobStagingOptions {
-  token?: string;
+  token: () => Promise<string>;
   baseUrl?: string;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -137,9 +138,11 @@ interface RawExec {
 }
 
 export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): Sandbox {
-  if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
-  const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
-  const sprite = (name: string) => client.sprite(name);
+  const clients = clientPerCredential(
+    (token) => new SpritesClient(token, opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+  );
+  const client = async (): Promise<SpritesClient> => clients(await opts.token());
+  const sprite = async (name: string) => (await client()).sprite(name);
   const prefix = opts.namePrefix ?? "qm";
   const initializationStore = opts.initializationStore;
   const advisoryLock = opts.advisoryLock;
@@ -175,7 +178,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   async function spawnExec(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
-    const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
+    const cmd = (await sprite(name)).spawn(argv[0]!, argv.slice(1));
     let submissionStarted = false;
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -274,7 +277,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
-    const fs = sprite(name).filesystem();
+    const fs = (await sprite(name)).filesystem();
     const tmp = `${absPath}.part.${randomUUID()}`;
     await attempt(`write ${absPath} failed`, async () => {
       await fs.writeFile(tmp, Buffer.from(data));
@@ -284,7 +287,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
     try {
-      return await sprite(name).filesystem().readFile(absPath, null);
+      return await (await sprite(name)).filesystem().readFile(absPath, null);
     } catch (e) {
       if ((e as { code?: string }).code === "ENOENT") return null;
       throw new Error(`sprites read ${absPath} failed: ${spritesErrorDetail(e)}`, { cause: e });
@@ -311,7 +314,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const rules = egressProxyHosts.map((domain) => ({ domain, action: "allow" as const }));
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
-    const s = sprite(name);
+    const s = await sprite(name);
     await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
     const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
     const actual = got.rules ?? [];
@@ -326,15 +329,15 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function applyResources(name: string): Promise<void> {
     if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
-    await attempt(`resources policy ${name}`, () =>
-      sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
+    await attempt(`resources policy ${name}`, async () =>
+      (await sprite(name)).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
     );
     resourcesApplied.add(name);
   }
 
   async function spriteExists(name: string): Promise<boolean> {
     try {
-      await retrySpritesControl(() => client.getSprite(name));
+      await retrySpritesControl(async () => (await client()).getSprite(name));
       return true;
     } catch (e) {
       if (isMissing(e)) return false;
@@ -344,7 +347,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   async function deleteSprite(name: string): Promise<void> {
     try {
-      await retrySpritesControl(() => client.deleteSprite(name));
+      await retrySpritesControl(async () => (await client()).deleteSprite(name));
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
@@ -387,11 +390,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   }
 
   async function createCheckpoint(name: string): Promise<void> {
-    await settleStream(await sprite(name).createCheckpoint(CHECKPOINT_COMMENT), `sprites checkpoint ${name}`);
+    await settleStream(await (await sprite(name)).createCheckpoint(CHECKPOINT_COMMENT), `sprites checkpoint ${name}`);
   }
 
   async function latestCheckpoint(name: string): Promise<Checkpoint | undefined> {
-    const list = await retrySpritesControl(() => sprite(name).listCheckpoints());
+    const list = await retrySpritesControl(async () => (await sprite(name)).listCheckpoints());
     return list
       .filter((c) => c.id !== "Current" && !c.health)
       .sort((a, b) => b.createTime.getTime() - a.createTime.getTime())[0];
@@ -400,7 +403,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   async function restoreLatestCheckpoint(name: string): Promise<Checkpoint | undefined> {
     const latest = await latestCheckpoint(name);
     if (!latest) return undefined;
-    await settleStream(await sprite(name).restoreCheckpoint(latest.id), `sprites restore ${name} ${latest.id}`);
+    await settleStream(await (await sprite(name)).restoreCheckpoint(latest.id), `sprites restore ${name} ${latest.id}`);
     return latest;
   }
 
@@ -460,7 +463,8 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         onStatus?.("Preparing the sandbox…");
         const scope = base.scopeFor(name);
         try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+          if (!exists)
+            await attempt(`create ${name}`, async () => (await client()).createSprite(name, { waitForCapacity: true }));
           await applyResources(name);
           const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
           await initializationStore.delete(name);
@@ -479,7 +483,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     isProvisioned: (name) => ensured.has(name),
     async recreateScratch(name) {
       if (await spriteExists(name)) await deleteSprite(name);
-      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+      await attempt(`create ${name}`, async () => (await client()).createSprite(name, { waitForCapacity: true }));
       await applyResources(name);
       ensured.add(name);
     },
@@ -602,7 +606,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);
       const [checked, latest] = await Promise.allSettled([
-        retrySpritesControl(() => sprite(name).check()),
+        retrySpritesControl(async () => (await sprite(name)).check()),
         latestCheckpoint(name),
       ]);
       if (checked.status === "rejected" && isMissing(checked.reason)) {
@@ -646,7 +650,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         withLifecycle(name, async () => {
           await requireInitialized(name);
           forget(name);
-          const s = sprite(name);
+          const s = await sprite(name);
           const restartFailure = await s.restart().then(
             () => undefined,
             (e) => spritesErrorDetail(e),

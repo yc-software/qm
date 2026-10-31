@@ -10,13 +10,6 @@ const problemsFor = (over: Record<string, string | undefined>, isProd = true): s
 test("a complete broker configuration boots", () => {
   const signing = { CORE_SIGNING_SECRET: "a".repeat(48) };
   assert.deepEqual(bootProblems(readConfig(testEnv(signing)), true), []);
-  assert.deepEqual(
-    bootProblems(
-      readConfig(testEnv({ ...signing, AUTH_ALLOWED_EMAILS: undefined, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" })),
-      true,
-    ),
-    [],
-  );
 });
 
 test("the broker boots without email delivery while keeping its authentication requirements", () => {
@@ -31,17 +24,8 @@ test("the broker boots without email delivery while keeping its authentication r
       CORE_SIGNING_SECRET: "a".repeat(48),
     };
     assert.equal(problemsFor(withoutEmail), "");
-    assert.match(
-      problemsFor({ ...withoutEmail, AUTH_ALLOWED_EMAILS: undefined }),
-      /AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required/,
-    );
     assert.match(problemsFor({ ...withoutEmail, AUTH_TOKEN_SECRET: undefined }), /AUTH_TOKEN_SECRET is required/);
   }
-});
-
-test("production refuses to start without a trust boundary", () => {
-  const problems = problemsFor({ AUTH_ALLOWED_EMAILS: undefined, AUTH_ALLOWED_EMAIL_DOMAIN: undefined });
-  assert.match(problems, /AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required/);
 });
 
 test("production refuses missing or placeholder credentials and keys", () => {
@@ -110,12 +94,7 @@ test("missing any email credential disables delivery without preventing startup"
   }
 });
 
-test("malformed allowlists and senders are refused", () => {
-  assert.match(problemsFor({ AUTH_ALLOWED_EMAILS: "not-an-email" }), /valid, non-placeholder email addresses/);
-  assert.match(
-    problemsFor({ AUTH_ALLOWED_EMAILS: undefined, AUTH_ALLOWED_EMAIL_DOMAIN: "nodot" }),
-    /valid, non-placeholder email domain/,
-  );
+test("malformed senders are refused", () => {
   assert.match(problemsFor({ AUTH_EMAIL_FROM: "qm <not-an-address>" }), /verified sender address/);
   assert.match(problemsFor({ AUTH_EMAIL_FROM: "replace-me" }), /verified sender address/);
   assert.match(problemsFor({ RESEND_API_KEY: "replace-me" }), /RESEND_API_KEY is required/);

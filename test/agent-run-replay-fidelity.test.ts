@@ -113,7 +113,10 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const agent = createAgent({
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
+    ...(signals ? { signals } : {}),
+  });
   const emitted: SessionEntry[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;

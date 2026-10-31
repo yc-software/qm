@@ -8,9 +8,11 @@ let loopRequests = 0;
 let autopilotRequests = 0;
 let autopilotBody: unknown;
 const core = createServer((req: IncomingMessage, res) => {
-  const path = new URL(req.url ?? "/", "http://core").pathname;
+  const url = new URL(req.url ?? "/", "http://core");
+  const path = url.pathname;
   res.setHeader("content-type", "application/json");
-  if (path === "/v1/inbox/access") return void res.end(JSON.stringify({ enabled: true }));
+  if (path === "/v1/inbox/access")
+    return void res.end(JSON.stringify({ enabled: url.searchParams.get("principalId") === "Alice@example.com" }));
   if (req.method === "POST" && path === "/v1/session-cap") {
     return void res.end(JSON.stringify({ token: "loops-test-cap" }));
   }
@@ -38,10 +40,8 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = "loops-web-route-test";
-process.env.WEB_UI_PRINCIPALS = "Alice@example.com,bob@example.com";
-process.env.LOOPS_USERS = " other@example.com, ALICE@EXAMPLE.COM ";
 
-const { handler, isLoopsUser } = await import("../server/index.ts");
+const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
@@ -57,11 +57,11 @@ test.after(() => {
   core.close();
 });
 
-test("allowlisted user gets loops permission and loop routes pass through", async () => {
+test("a user with inbox_loops gets loops and inbox and loop routes pass through", async () => {
   const headers = identity("Alice@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member", "loops"]);
+  assert.deepEqual((await me.json()).permissions, ["member", "loops", "inbox"]);
 
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 200);
@@ -77,7 +77,7 @@ test("allowlisted user gets loops permission and loop routes pass through", asyn
   assert.deepEqual(autopilotBody, { enabled: true });
 });
 
-test("user outside the allowlist lacks permission and loop routes return 403", async () => {
+test("a user without inbox_loops lacks both and loop routes return 403", async () => {
   const headers = identity("bob@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
@@ -85,7 +85,7 @@ test("user outside the allowlist lacks permission and loop routes return 403", a
 
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 403);
-  assert.deepEqual(await loops.json(), { error: "forbidden" });
+  assert.deepEqual(await loops.json(), { error: "feature_disabled" });
   assert.equal(loopRequests, 1);
 
   const autopilot = await fetch(`${base}/api/loops/loop-1/autopilot`, {
@@ -95,13 +95,4 @@ test("user outside the allowlist lacks permission and loop routes return 403", a
   });
   assert.equal(autopilot.status, 403);
   assert.equal(autopilotRequests, 1);
-});
-
-test("unset or empty LOOPS_USERS denies everyone", () => {
-  const configured = process.env.LOOPS_USERS;
-  delete process.env.LOOPS_USERS;
-  assert.equal(isLoopsUser("Alice@example.com"), false);
-  process.env.LOOPS_USERS = configured;
-  assert.equal(isLoopsUser("Alice@example.com", ""), false);
-  assert.equal(isLoopsUser(" alice@example.com ", " ALICE@EXAMPLE.COM "), true);
 });

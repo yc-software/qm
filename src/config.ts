@@ -1,8 +1,3 @@
-import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
-import {
-  deploymentBrokerCredentialsFromEnv,
-  type DeploymentBrokerCredential,
-} from "./credentials/deployment-credentials.ts";
 import { boolEnv, boolEnvStrict, numEnvStrict, optNum } from "./util/env.ts";
 import { sandboxSettings, type SandboxSettings } from "./sandbox/sandbox-settings.ts";
 import { deploySettings, type DeploySettings } from "./deploy/deploy-settings.ts";
@@ -10,12 +5,6 @@ import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
-import {
-  parseProviderBaseUrl,
-  providerBaseUrlsFromEnv,
-  type ModelGatewayTransportConfig,
-  type ProviderBaseUrls,
-} from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import {
   parseMemoryCaptureMode,
@@ -25,34 +14,15 @@ import {
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
-import { sanitizeBranding } from "./resolution/branding.ts";
-import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
-import {
-  parseSecurityPosture,
-  SECURITY_SCREEN_MODES,
-  type SecurityPosture,
-  type SecurityScreenMode,
-} from "./security/security-posture.ts";
-import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
+import { layerBrokerEnv, loadDeploymentLayer } from "./deployment/load-layer.ts";
 import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
-import {
-  DEFAULT_CODEX_MODEL_ID,
-  MODEL_PROVIDERS,
-  defaultModelForProvider,
-  isModelProvider,
-  onlyProvider,
-  type ModelProvider,
-  type ModelProviderAvailability,
-} from "./model/pi-models.ts";
-
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
   productAnalytics?: { apiKey: string; host?: string };
   suggestedActivitiesEnabled?: boolean;
-  suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
@@ -67,28 +37,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  securityPosture: SecurityPosture;
-  sharingPosture: SharingPosture;
-  egressServiceHosts?: string[];
-  brandingDefault?: OrgBranding;
-  modelId?: string;
-  codexAuthCredential?: string;
-  claudeAuthCredential?: string;
-  detectModelId?: string;
-  titleModelId?: string;
-  judgeModelId?: string;
-  anthropicApiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
-  modelProvider?: ModelProvider;
-  providerBaseUrls: ProviderBaseUrls;
-  modelGateway?: ModelGatewayTransportConfig;
-  brokerCredentials?: DeploymentBrokerCredential[];
   captureLlmRequests: boolean;
-  adminGrants?: string;
-  trustedOidcAdminIssuer?: string;
-  emailAuthPrincipals?: string[];
-  emailAuthDomain?: string;
   resendApiKey?: string;
   emailFrom?: string;
   rateLimitPerWindow: number;
@@ -120,8 +69,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  secretsBackend: "env" | "aws";
-  secretsPrefix: string;
   apiBaseUrl?: string;
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
@@ -134,7 +81,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   skillsSeedDir: string;
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
-  layerEnv?: Readonly<Record<string, string | undefined>>;
+  layerBrokerEnv?: Readonly<Record<string, string>>;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
   workspaceStore: "local" | "postgres";
@@ -165,46 +112,8 @@ export interface Config extends SandboxSettings, DeploySettings {
   approvalSummaryTimeoutMs: number;
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
-  securityScreen: SecurityScreenMode;
-  securityScreenClassifier: "model" | "proxy";
-  securityScreenProxy?: {
-    provider: string;
-    endpoint: string;
-    token: string;
-  };
   reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
-}
-
-export function configuredModel(config: Config): string | undefined {
-  if (
-    !config.modelId &&
-    !config.anthropicApiKey &&
-    !config.modelProvider &&
-    companySubscriptionAuth(config) === "openai"
-  )
-    return DEFAULT_CODEX_MODEL_ID;
-  return config.modelId;
-}
-
-export function providerKeysPresent(config: Config): ModelProviderAvailability {
-  return {
-    anthropic: Boolean(config.anthropicApiKey || config.claudeAuthCredential),
-    openai: Boolean(config.openaiApiKey),
-    openrouter: Boolean(config.openrouterApiKey),
-    ...(config.codexAuthCredential ? { codexOAuth: true } : {}),
-  };
-}
-
-export function baseModelProviders(config: Config): ModelProviderAvailability | undefined {
-  return config.modelProvider ? onlyProvider(config.modelProvider) : undefined;
-}
-
-export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
-  if (config.anthropicApiKey ? isClaudeSubscriptionToken(config.anthropicApiKey) : config.claudeAuthCredential)
-    return "anthropic";
-  if (config.codexAuthCredential) return "openai";
-  return undefined;
 }
 
 const DEFAULT_ORG_ID = "default-org";
@@ -249,54 +158,6 @@ export const CONFIG_DEFAULTS = {
   processReaperIntervalMs: 30_000,
 } as const;
 
-function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
-  return sanitizeBranding({
-    accent: env.ORG_BRAND_ACCENT,
-    mark: env.ORG_BRAND_MARK,
-    selfLabel: env.ORG_BRAND_SELF_LABEL,
-    orgName: env.ORG_BRAND_ORG_NAME,
-  });
-}
-
-function secretsBackendEnvStrict(value: string | undefined, prefix: string): Config["secretsBackend"] {
-  if (value === undefined || value.trim() === "") return "env";
-  const backend = value.trim();
-  if (backend === "env") return backend;
-  if (backend === "aws") {
-    if (!prefix)
-      throw new Error(
-        "SECRETS_BACKEND=aws requires a non-empty SECRETS_PREFIX (e.g. qm-prod-) so lookups can't collide across stacks sharing an account.",
-      );
-    return backend;
-  }
-  throw new Error(`SECRETS_BACKEND=${JSON.stringify(value)} is not recognized — use env or aws, or unset it.`);
-}
-
-function securityPostureEnvStrict(value: string | undefined): SecurityPosture {
-  if (value === undefined || value.trim() === "") return "auto";
-  const posture = parseSecurityPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SECURITY_POSTURE=${JSON.stringify(value)} is not recognized — use dangerous, auto, or strict, or unset it.`,
-  );
-}
-
-function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
-  if (value === undefined || value.trim() === "") return "isolated";
-  const posture = parseSharingPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SHARING_POSTURE=${JSON.stringify(value)} is not recognized — use isolated or open, or unset it.`,
-  );
-}
-
-function choiceEnvStrict<T extends string>(name: string, value: string | undefined, choices: readonly T[]): T {
-  if (value === undefined || value.trim() === "") return choices[0]!;
-  const choice = value.trim().toLowerCase();
-  if ((choices as readonly string[]).includes(choice)) return choice as T;
-  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use ${choices.join(", ")}, or unset it.`);
-}
-
 function csvPaths(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   if (boolEnv(value) === false) return [];
@@ -305,33 +166,6 @@ function csvPaths(value: string | undefined): string[] | undefined {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((p) => resolve(p));
-}
-
-export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
-  const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
-  if (!names.some((name) => env[name]?.trim())) return undefined;
-  for (const name of names.filter((name) => name !== "MODEL_GATEWAY_MODELS")) {
-    if (!env[name]?.trim()) throw new Error(`${name} is required when model gateway routing is configured`);
-  }
-  const apiKeyHeader = env.MODEL_GATEWAY_API_KEY_HEADER!.trim();
-  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(apiKeyHeader)) {
-    throw new Error("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
-  }
-  const models: Record<string, string> = {};
-  for (const mapping of env.MODEL_GATEWAY_MODELS?.trim() ? env.MODEL_GATEWAY_MODELS.split(",") : []) {
-    const separator = mapping.indexOf("=");
-    const source = mapping.slice(0, separator).trim();
-    const target = mapping.slice(separator + 1).trim();
-    if (separator < 1 || !source || !target) throw new Error(`invalid MODEL_GATEWAY_MODELS mapping: ${mapping}`);
-    if (models[source]) throw new Error(`duplicate MODEL_GATEWAY_MODELS source: ${source}`);
-    models[source] = target;
-  }
-  return {
-    url: parseProviderBaseUrl("MODEL_GATEWAY_URL", env.MODEL_GATEWAY_URL!),
-    apiKey: env.MODEL_GATEWAY_API_KEY!,
-    apiKeyHeader,
-    models,
-  };
 }
 
 function defaultPluginSkillDirs(): string[] {
@@ -344,22 +178,6 @@ function defaultPluginSkillDirs(): string[] {
   } catch {
     return [];
   }
-}
-
-function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefined {
-  const declared = env.MODEL_PROVIDER?.trim();
-  if (!declared) return undefined;
-  if (!isModelProvider(declared)) {
-    throw new Error(
-      `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
-    );
-  }
-  if (!defaultModelForProvider(declared)) {
-    throw new Error(
-      `MODEL_PROVIDER=${declared} cannot serve a base model — no ${declared} model is available, so every turn would be refused.`,
-    );
-  }
-  return declared;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -406,8 +224,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const swarmDefaults = resolveSwarmSettings(
     env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
   );
-  const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
-  const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
   const deploy = deploySettings(env, publicUrl);
@@ -419,44 +235,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     });
     throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
-  const modelProvider = modelProviderEnvStrict(env);
   const sandbox = sandboxSettings(env);
   const dataDir = resolve(env.DATA_DIR ?? "./data");
 
-  const securityScreen = choiceEnvStrict("SECURITY_SCREEN", env.SECURITY_SCREEN, SECURITY_SCREEN_MODES);
-  const securityScreenClassifier = choiceEnvStrict("SECURITY_SCREEN_CLASSIFIER", env.SECURITY_SCREEN_CLASSIFIER, [
-    "model",
-    "proxy",
-  ] as const);
-  const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
-  const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
-  const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
-  const hasProxyConfig = [proxyProvider, proxyEndpoint, proxyToken].some(Boolean);
-  if (securityScreenClassifier === "proxy" && (!proxyProvider || !proxyEndpoint || !proxyToken)) {
-    throw new Error(
-      "SECURITY_SCREEN_CLASSIFIER=proxy requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN",
-    );
-  }
-  if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
-    throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
-  }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
-    throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
-  }
-  if (proxyProvider === "surface" || proxyProvider === "origin") {
-    throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must not collide with a security screen metadata field");
-  }
-  if (proxyEndpoint) {
-    try {
-      const url = new URL(proxyEndpoint);
-      if (url.protocol !== "https:" || url.username || url.password || url.hash || url.hostname.endsWith("."))
-        throw new Error("endpoint");
-    } catch {
-      throw new Error(
-        "SECURITY_SCREEN_PROXY_ENDPOINT must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot",
-      );
-    }
-  }
   const securityScreenTimeoutMs =
     numEnvStrict("SECURITY_SCREEN_TIMEOUT_MS", env.SECURITY_SCREEN_TIMEOUT_MS) ??
     CONFIG_DEFAULTS.securityScreenTimeoutMs;
@@ -467,9 +248,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error("SECURITY_SCREEN_TIMEOUT_MS must be a positive integer no greater than 2147483647");
   }
-  const providerBaseUrls = providerBaseUrlsFromEnv(env);
-  const modelGateway = modelGatewayFromEnv(env);
-  const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
   const turnWallClockMs =
     (numEnvStrict("TURN_WALL_CLOCK_SEC", env.TURN_WALL_CLOCK_SEC) ?? CONFIG_DEFAULTS.turnWallClockSec) * 1000;
   const runMaxAgeMs =
@@ -492,9 +270,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const memoryProviderConfig = parseMemoryProviderConfig(env.MEMORY_PROVIDER_CONFIG, env);
   return {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
-    ...(env.SUGGESTED_ACTIVITIES_CONTEXT
-      ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
-      : {}),
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
@@ -512,50 +287,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
-    securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
-    sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
-    securityScreen,
-    securityScreenClassifier,
-    ...(securityScreenClassifier === "proxy"
-      ? { securityScreenProxy: { provider: proxyProvider!, endpoint: proxyEndpoint!, token: proxyToken! } }
-      : {}),
-    ...(env.EGRESS_SERVICE_HOSTS
-      ? {
-          egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }
-      : {}),
-    ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
-    ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
-    ...(codexAuthCredential ? { codexAuthCredential } : {}),
-    ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
-    ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
-    ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
-    ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
-    ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
-    ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
-    ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
-    ...(modelProvider ? { modelProvider } : {}),
-    providerBaseUrls,
-    ...(modelGateway ? { modelGateway } : {}),
-    ...(brokerCredentials.length ? { brokerCredentials } : {}),
-    ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
-    ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
-    ...(env.AUTH_ALLOWED_EMAILS
-      ? {
-          emailAuthPrincipals: [
-            ...new Set(
-              env.AUTH_ALLOWED_EMAILS.split(",")
-                .map((email) => email.trim().toLowerCase())
-                .filter(Boolean),
-            ),
-          ],
-        }
-      : {}),
-    ...(env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim()
-      ? { emailAuthDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN.trim().toLowerCase() }
-      : {}),
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
     captureLlmRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
@@ -607,9 +338,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
-    secretsPrefix: env.SECRETS_PREFIX ?? "",
-    layerEnv: { ...env },
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
     ...(publicUrl ? { publicUrl } : {}),
     ...(env.GMAIL_PUBSUB_TOPIC && env.GMAIL_PUBSUB_AUDIENCE && env.GMAIL_PUBSUB_SERVICE_ACCOUNT
@@ -629,7 +357,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     seedSkills: boolEnvStrict("SEED_SKILLS", env.SEED_SKILLS) ?? true,
     skillsSeedDir: resolve(env.SKILLS_SEED_DIR ?? "./skills-seed"),
     pluginSkillDirs: csvPaths(env.PLUGIN_SKILLS_DIRS) ?? defaultPluginSkillDirs(),
-    ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
+    ...(env.DEPLOYMENT_LAYER
+      ? {
+          deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER),
+          layerBrokerEnv: layerBrokerEnv(loadDeploymentLayer(resolve(env.DEPLOYMENT_LAYER)).brokeredTools, env),
+        }
+      : {}),
     memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),

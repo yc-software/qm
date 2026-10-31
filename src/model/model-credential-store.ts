@@ -16,7 +16,7 @@ export interface StoredModelCredential {
 interface ModelCredentialStatus {
   provider: ModelProvider;
   configured: boolean;
-  source: "admin" | "environment" | "absent";
+  source: "admin" | "absent";
   updatedAt?: number;
   updatedBy?: string;
 }
@@ -32,7 +32,6 @@ export interface ModelCredentialStore {
 export function createModelCredentialStore(input: {
   backing: DurableMap<StoredModelCredential>;
   keyMaterial: string | Buffer;
-  fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
   const key = deriveConnectorKey(input.keyMaterial, "model-credentials");
 
@@ -44,7 +43,7 @@ export function createModelCredentialStore(input: {
     async resolve(provider) {
       const saved = await record(provider);
       if (saved?.disabled) return null;
-      return saved?.secretEnc ? decryptSecret(saved.secretEnc, key) : input.fallback?.[provider]?.trim() || null;
+      return saved?.secretEnc ? decryptSecret(saved.secretEnc, key) : null;
     },
 
     async set(provider, apiKey, updatedBy) {
@@ -82,9 +81,7 @@ export function createModelCredentialStore(input: {
               updatedAt: saved.updatedAt,
               updatedBy: saved.updatedBy,
             };
-          return input.fallback?.[provider]?.trim()
-            ? { provider, configured: true, source: "environment" }
-            : { provider, configured: false, source: "absent" };
+          return { provider, configured: false, source: "absent" };
         }),
       );
     },

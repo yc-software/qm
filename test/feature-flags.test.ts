@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { scopeId } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
@@ -56,4 +57,13 @@ test("retired feature records are not offered as configurable flags", async () =
     (await store.list()).map((row) => row.featureName),
     ["inbox_loops"],
   );
+});
+
+test("email ids match a person's flags in any case", async () => {
+  const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
+  await store.setEnabled("inbox_loops", scopeId("personal", "Ada@Example.com"), true, "admin");
+  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, [scopeId("personal", "ada@example.com")]);
+  assert.ok((await store.enabledFor(scopeId("personal", "ADA@example.COM"))).has("inbox_loops"));
+  await store.setEnabled("inbox_loops", scopeId("personal", "ada@EXAMPLE.com"), false, "admin");
+  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, []);
 });

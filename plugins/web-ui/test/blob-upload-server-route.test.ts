@@ -54,7 +54,6 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 const SECRET = "blob-route-test-secret";
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 

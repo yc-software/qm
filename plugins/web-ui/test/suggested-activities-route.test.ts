@@ -25,7 +25,6 @@ const core = createServer(async (req, res) => {
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "suggestions-route-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.WEB_UI_SUGGESTED_ACTIVITIES = JSON.stringify(activities);
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

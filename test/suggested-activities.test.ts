@@ -184,10 +184,10 @@ test("guidance updates managed task text while preserving user edits", async () 
   await f.service.get("alice", []);
   await f.settle();
   const id = (await f.crons.list())[0]!.id;
-  await createSuggestedActivityService({ ...f.deps, context: "Acme team guidance" }).get("alice", []);
+  await createSuggestedActivityService({ ...f.deps, context: async () => "Acme team guidance" }).get("alice", []);
   assert.match((await f.crons.get(id))!.action!, /Acme team guidance/);
   await f.crons.update(id, { action: "My custom research task" });
-  await createSuggestedActivityService({ ...f.deps, context: "Changed guidance" }).get("alice", []);
+  await createSuggestedActivityService({ ...f.deps, context: async () => "Changed guidance" }).get("alice", []);
   assert.equal((await f.crons.get(id))!.action, "My custom research task");
 });
 
@@ -198,7 +198,7 @@ test("a task edited and later reverted to the standard instructions is managed a
   const id = (await f.crons.list())[0]!.id;
   const standard = (await f.crons.get(id))!.action!;
   await f.crons.update(id, { action: "My custom research task" });
-  const service = createSuggestedActivityService({ ...f.deps, context: "Changed guidance" });
+  const service = createSuggestedActivityService({ ...f.deps, context: async () => "Changed guidance" });
   await service.get("alice", []);
   assert.equal((await f.crons.get(id))!.action, "My custom research task");
   await f.crons.update(id, { action: standard.replace("No special deployment context.", "Older guidance") });

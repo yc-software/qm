@@ -20,6 +20,7 @@ const PUBLIC = "https://core.public.example";
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-wh-")) }));
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  featureFlags: built.featureFlags,
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
   publicUrl: PUBLIC,
@@ -29,7 +30,6 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);

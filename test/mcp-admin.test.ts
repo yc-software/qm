@@ -128,7 +128,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   const dir = await mkdtemp(join(tmpdir(), "mcp-wiring-"));
   const previous = process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
   process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = "operator-token";
-  const built = buildApp(testConfig({ dataDir: dir, egressServiceHosts: ["accounts.example.com"] }));
+  const built = buildApp(testConfig({ dataDir: dir }));
   const remote = await startMcpTestServer(t, {
     tools: [{ name: "identity", inputSchema: { type: "object" } }],
     call: (_name, _args, authorization) => ({ content: [{ type: "text", text: authorization ?? "" }] }),
@@ -153,10 +153,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     updatedBy: "internal:admin",
   });
   await built.mcpToolService.refresh();
-  assert.equal(
-    await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"),
-    "operator-token",
-  );
+  assert.equal(await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"), null);
   assert.match(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Sign in to CRM/);
   assert.equal(remote.requests.length, 0);
   await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {

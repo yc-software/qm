@@ -66,7 +66,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     externalUsers,
     inviteEmail,
     access: {
-      emailDomain: deps.emailAuthDomain ?? null,
+      emailDomain: (await deps.tenantSettings?.get())?.emailAuthDomain ?? null,
       slackAllowFrom: deps.slackAllowFrom ?? null,
     },
   });
@@ -87,8 +87,9 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
 
 async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
   const { deps } = ctx;
-  if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
-  if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
+  const settings = await deps.tenantSettings?.get();
+  if (settings?.emailAuthDomain && email.endsWith(`@${settings.emailAuthDomain}`)) return true;
+  if ((settings?.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
   if (await deps.directory?.get(email)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
@@ -201,7 +202,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     else if (!signInUrl)
       emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
     else {
-      const branding = await resolveBranding(deps.config, scope, deps.brandingDefault);
+      const branding = await resolveBranding(deps.config, scope);
       try {
         await deps.inviteMailer.send({
           to: email,

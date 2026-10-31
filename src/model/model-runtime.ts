@@ -1,4 +1,5 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { boundTenant } from "../tenants/context.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -93,10 +94,12 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const cachedCustomModels = new Map<string, { version: number; path: string | null }>();
 function customModelsPath(): string | null {
+  const tenant = boundTenant() ?? "";
   const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  const cached = cachedCustomModels.get(tenant);
+  if (cached?.version === version) return cached.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -104,9 +107,11 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  cachedCustomModels.set(tenant, { version, path });
   return path;
 }
+
+const TENANT_AUTH_SOURCES = new Set(["stored credential", "OAuth"]);
 
 export async function buildModelRuntime(
   keys: ProviderKeys | string,
@@ -126,30 +131,34 @@ export async function buildModelRuntime(
     }));
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
+  const authorized = new Set<string>(subscriptionToken ? [CODEX_SUBSCRIPTION_PROVIDER] : []);
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
-    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+    if (!apiKey) continue;
+    authorized.add(provider);
+    await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
-  if (modelGateway) {
-    const providers = new Set(
-      Object.keys(modelGateway.models).flatMap((id) => {
-        const model = resolveModel(id);
-        return model ? [model.provider] : [];
-      }),
-    );
-    const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
-    runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
-    const getAuth = runtime.getAuth.bind(runtime);
-    runtime.getAuth = (async (model, overrides) => {
-      if (typeof model === "string") return getAuth(model, overrides);
+  for (const id of Object.keys(modelGateway?.models ?? {})) {
+    const model = resolveModel(id);
+    if (model) authorized.add(model.provider);
+  }
+  runtime.hasConfiguredAuth = (provider) => authorized.has(provider);
+  const getAuth = runtime.getAuth.bind(runtime) as (
+    model: string | Model<Api>,
+    overrides?: object,
+  ) => Promise<{ source?: string } | undefined>;
+  runtime.getAuth = (async (model: string | Model<Api>, overrides?: object) => {
+    if (typeof model !== "string") {
       const request = modelGatewayRequest(modelGateway, model);
       if (request)
         return {
           auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
           source: "model gateway",
         };
-      return getAuth(model, overrides);
-    }) as typeof runtime.getAuth;
-  }
+    }
+    if (!authorized.has(typeof model === "string" ? model : model.provider)) return undefined;
+    const resolution = await getAuth(model, overrides);
+    return resolution && TENANT_AUTH_SOURCES.has(resolution.source ?? "") ? resolution : undefined;
+  }) as typeof runtime.getAuth;
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(

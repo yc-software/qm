@@ -6,7 +6,6 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_USERS = "alice";
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -21,13 +20,19 @@ test.after(() => {
   surface.close();
 });
 
-test("voice route authenticates and gates accounts before spending", async () => {
+test("voice route authenticates and refuses impersonated sessions before spending", async () => {
   assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", body: offer })).status, 401);
   assert.equal(
     (
       await fetch(`${base}/api/voice/sessions`, {
         method: "POST",
-        headers: { ...headers, ...identity("bob") },
+        headers: {
+          ...headers,
+          [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+            { p: "alice", imp: "admin", exp: Date.now() + 60_000 },
+            "voice-route-test",
+          ),
+        },
         body: offer,
       })
     ).status,

@@ -134,11 +134,10 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
   const release = Promise.withResolvers<string[]>();
   try {
     const maps = (pg: typeof pgA) => ({
-      availableBackends: ["local"] as const,
+      backends: async () => ({ available: ["local"] as const, legacyBackend: () => "local" as const }),
       records: createPostgresMap<SandboxResource>(pg, "upgrade_sandbox_records"),
       defaults: createPostgresMap<SandboxDefault>(pg, "upgrade_sandbox_defaults"),
       marker: createPostgresMap<SandboxResourceUpgradeMarker>(pg, "upgrade_sandbox_marker"),
-      legacyBackend: () => "local" as const,
     });
     const shared = maps(pgA);
     const other = maps(pgB);

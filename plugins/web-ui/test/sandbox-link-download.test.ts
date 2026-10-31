@@ -32,7 +32,6 @@ process.env.NODE_ENV = "test";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "1";
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = "sandbox-link-download-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

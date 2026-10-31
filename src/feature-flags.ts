@@ -47,6 +47,10 @@ export interface FeatureFlagStore {
   setEnabled(featureName: FeatureName, scope: ScopeId, on: boolean, updatedBy: string): Promise<FeatureFlagRecord>;
 }
 
+function flagScope(scope: ScopeId): ScopeId {
+  return scope.startsWith("personal:") && scope.includes("@") ? (scope.toLowerCase() as ScopeId) : scope;
+}
+
 export function createFeatureFlagStore(
   backing: DurableMap<FeatureFlagRecord>,
   opts: { now?: () => number } = {},
@@ -55,12 +59,14 @@ export function createFeatureFlagStore(
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   const list = async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
-  const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> =>
-    new Set(
+  const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> => {
+    const wanted = flagScope(scope);
+    return new Set(
       (await list())
-        .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
+        .filter((row) => row.enabledScopes.some((enabled) => enabled === orgScope || flagScope(enabled) === wanted))
         .map((row) => row.featureName),
     );
+  };
   return {
     list,
     get: (featureName) => backing.get(key(featureName)),
@@ -69,9 +75,9 @@ export function createFeatureFlagStore(
     async setEnabled(featureName, scope, on, updatedBy) {
       if (!updatedBy.trim()) throw new Error("feature flag updater must not be empty");
       const current = await backing.get(key(featureName));
-      const scopes = new Set(current?.enabledScopes ?? []);
-      if (on) scopes.add(scope);
-      else scopes.delete(scope);
+      const scopes = new Set((current?.enabledScopes ?? []).map(flagScope));
+      if (on) scopes.add(flagScope(scope));
+      else scopes.delete(flagScope(scope));
       const record = {
         featureName,
         enabledScopes: [...scopes].sort(),

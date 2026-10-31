@@ -46,7 +46,7 @@ export function actorAssertionActive(
 export function createIdentityService(
   store: DurableMap<DeactivationRecord>,
   opts: {
-    directorySyncProtected?: readonly string[];
+    directorySyncProtected?: () => Promise<readonly string[]>;
     externalMembers: DurableMap<ExternalMember>;
     principalLinks?: { refresh(force?: boolean): Promise<void> };
   },
@@ -54,7 +54,7 @@ export function createIdentityService(
   const externalStore = opts.externalMembers;
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
-  const directorySyncProtected = opts.directorySyncProtected ?? [];
+  let directorySyncProtected: readonly string[] = [];
 
   const keptByDirectorySync = (key: string): boolean =>
     directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
@@ -66,7 +66,12 @@ export function createIdentityService(
   const refresh = createTtlRefresh(10_000, () =>
     exclusive(async () => {
       await opts.principalLinks?.refresh(true);
-      const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
+      const [deactivations, members, kept] = await Promise.all([
+        store.all(),
+        externalStore.all(),
+        opts.directorySyncProtected?.() ?? [],
+      ]);
+      directorySyncProtected = kept;
       deactivated.clear();
       externals.clear();
       for (const r of deactivations) {

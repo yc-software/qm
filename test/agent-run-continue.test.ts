@@ -78,7 +78,7 @@ function sse(text: string): Response {
 }
 
 async function runResume(history: SessionEntry[], overrides: Partial<AgentTurnInput> = {}) {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
   const llmTurnSeqs: Array<number | null> = [];

@@ -8,7 +8,7 @@ Source updates invalidate old held drafts before processing the new conversation
 
 ## Preview rollout
 
-The durable `inbox_loops` feature flag defaults off. Enable it only for the intended `personal:<principal>` scopes in Admin → Feature flags. Existing Web UI `INBOX_USERS` and `LOOPS_USERS` allowlists still apply. Both the UI permissions and server routes enforce the flag; Inbox migration starts only for enabled people. Event receipt and background processing also check the source owner's flag. Revocation retains queued work without accepting or processing more events.
+The durable `inbox_loops` feature flag defaults off. Enable it only for the intended `personal:<principal>` scopes in Admin → Feature flags. The flag alone grants Inbox and the whole Loops surface. Both the UI permissions and server routes enforce the flag; Inbox migration starts only for enabled people. Event receipt and background processing also check the source owner's flag. Revocation retains queued work without accepting or processing more events.
 
 Slack receipt recovery covers events already persisted by QM. There is no Slack history reconciliation yet. Enable Slack's Delayed Events option for extended delivery retries; Gmail has history reconciliation as described below.
 
