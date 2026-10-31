@@ -4,7 +4,13 @@ import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
-import { openTenantSecret, requireTenantSetting, sealTenantSecret, tenantSettingsKey, TenantSettingMissingError } from "../src/tenants/settings.ts";
+import {
+  openTenantSecret,
+  requireTenantSetting,
+  sealTenantSecret,
+  tenantSettingsKey,
+  TenantSettingMissingError,
+} from "../src/tenants/settings.ts";
 
 test("each tenant reads only the settings written under its own binding", async () => {
   const store = await testSettingsStore();
@@ -80,4 +86,3 @@ test("a tenant first bound after start has its settings loaded before its work r
     await store.stop();
   }
 });
-

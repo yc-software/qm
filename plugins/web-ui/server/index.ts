@@ -3448,7 +3448,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
     const features = requestFeatures.get(req)!;
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
-      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, { publicUrl: PUBLIC_URL, voice: features.has("voice") });
+      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
+        publicUrl: PUBLIC_URL,
+        voice: features.has("voice"),
+      });
     }
 
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");

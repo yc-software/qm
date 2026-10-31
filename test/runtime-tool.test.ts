@@ -113,7 +113,10 @@ test("runtime recovery uses only durable decisions belonging to the same run and
 test("individual-account availability does not depend on organization provider keys", async () => {
   const { config } = await setup();
   const service = createRuntimeService(
-    { config, modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: "test-key" }) },
+    {
+      config,
+      modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: "test-key" }),
+    },
     { authorizesCapabilityScope: async () => true },
   );
   const ownRuntime = { ...active, modelId: "gpt-6-astra" };

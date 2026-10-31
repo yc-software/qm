@@ -10,7 +10,16 @@ import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { TEST_TENANT, bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { getRequiredModel, resolveModel, contextTokenBudgetForModel, safeModelMetadata, modelSupported, modelSupportsFastMode, fastModeModelIds, defaultWebuiModelIds } from "../src/model/pi-models.ts";
+import {
+  getRequiredModel,
+  resolveModel,
+  contextTokenBudgetForModel,
+  safeModelMetadata,
+  modelSupported,
+  modelSupportsFastMode,
+  fastModeModelIds,
+  defaultWebuiModelIds,
+} from "../src/model/pi-models.ts";
 
 bindTestTenant();
 

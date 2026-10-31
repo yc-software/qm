@@ -62,9 +62,7 @@ test("create carries pack provenance, kept out of the signature", async () => {
 });
 
 test("a person sees their archived skill stored under a linked identity", async (t) => {
-  const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), seedSkills: false }),
-  );
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), seedSkills: false }));
   installPrincipalLinks({
     canonical: (key) => (key === "U123" ? "alice@acme.com" : undefined),
     aliases: (key) => (key === "alice@acme.com" ? ["U123"] : []),

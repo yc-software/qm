@@ -41,7 +41,6 @@ const migrate = (url: string) =>
     },
   });
 
-
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     for (const table of JSON_TABLES)

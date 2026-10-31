@@ -1,5 +1,14 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
-import { resolveEmbeddingModel, auxiliaryModelFor, codexSubscriptionModelId, isOverlayModel, modelRequestOverrides, auxiliaryModelForProvider, resolveModel, modelSupported } from "./model/pi-models.ts";
+import {
+  resolveEmbeddingModel,
+  auxiliaryModelFor,
+  codexSubscriptionModelId,
+  isOverlayModel,
+  modelRequestOverrides,
+  auxiliaryModelForProvider,
+  resolveModel,
+  modelSupported,
+} from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
@@ -38,7 +47,15 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope, onFirstBind, withTenant } from "./tenants/context.ts";
+import {
+  perTenant,
+  currentTenant,
+  tenantKey,
+  withoutTenant,
+  tenantRootScope,
+  onFirstBind,
+  withTenant,
+} from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox } from "./sessions/session-mailbox.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
@@ -638,10 +655,7 @@ export function buildApp(
   const teams = createPostgresTeamStore(databaseUrl, featureFlags);
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackTables = createSlackTables(databaseUrl);
-  const slackInstallation = createSlackInstallationStore(
-    slackTables.installation,
-    connectorSecretKey,
-  );
+  const slackInstallation = createSlackInstallationStore(slackTables.installation, connectorSecretKey);
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
@@ -996,11 +1010,7 @@ export function buildApp(
     Object.entries(buildBackend).map(([name, build]) => [name, build()]),
   );
   const misconfiguredSandboxes = renderProblem ? { render: renderProblem } : {};
-  const tenantRouting = tenantSandboxRouting(
-    () => tenantSettings.get(),
-    sandboxBackends,
-    misconfiguredSandboxes,
-  );
+  const tenantRouting = tenantSandboxRouting(() => tenantSettings.get(), sandboxBackends, misconfiguredSandboxes);
   const sandboxResources = createSandboxResources({
     ...createSandboxResourceStores(databaseUrl),
     backends: sandboxBackends,
@@ -1218,9 +1228,7 @@ export function buildApp(
         providers: async (ids) => (await decisions?.providers(ids)) ?? [],
         gateway: async () => (await tenantSettings.get()).modelGateway,
         credential: async (slug) => {
-          const rec = keychain
-            ? await serviceCreds.getServiceCredentialSecret(tenantRootScope(), slug)
-            : null;
+          const rec = keychain ? await serviceCreds.getServiceCredentialSecret(tenantRootScope(), slug) : null;
           return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
       }),
@@ -2471,10 +2479,14 @@ export function buildApp(
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
   const composioReturns = linkTables.composioReturns;
-  const composioReturnSweeper = createSweeper(() => tenants(() => composioReturns.deleteExpired(Date.now())), 30 * 60_000, {
-    label: "Composio consent returns",
-    immediate: true,
-  });
+  const composioReturnSweeper = createSweeper(
+    () => tenants(() => composioReturns.deleteExpired(Date.now())),
+    30 * 60_000,
+    {
+      label: "Composio consent returns",
+      immediate: true,
+    },
+  );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer

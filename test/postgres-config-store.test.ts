@@ -405,4 +405,3 @@ test(
     }, seedLegacyConfig);
   },
 );
-

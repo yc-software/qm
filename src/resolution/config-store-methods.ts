@@ -117,7 +117,7 @@ export function policyMethods(
   | "getEgress"
   | "setEgress"
 > {
-    const orgDefaultPolicy = defaultOrgPolicy();
+  const orgDefaultPolicy = defaultOrgPolicy();
   const orgDefaultEgress: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
   const orgSecurity = async () => (await ctx.own(ctx.org)).securityPosture ?? ctx.defaultSecurityPosture;
   const orgSharing = async () => (await ctx.own(ctx.org)).sharingPosture ?? ctx.defaultSharingPosture;
@@ -130,7 +130,11 @@ export function policyMethods(
     },
     getSecurityPostureOwnDurable: async (id) => (await ctx.own(id)).securityPosture ?? null,
     async setSecurityPosture(id, posture) {
-      await ctx.put(id, "securityPosture", id === ctx.org ? posture : composeSecurityPosture(await orgSecurity(), posture));
+      await ctx.put(
+        id,
+        "securityPosture",
+        id === ctx.org ? posture : composeSecurityPosture(await orgSecurity(), posture),
+      );
     },
     async getSharingPostureDurable(id) {
       const orgPosture = await orgSharing();
@@ -138,7 +142,9 @@ export function policyMethods(
     },
     getSharingPostureOwnDurable: async (id) => (await ctx.own(id)).sharingPosture ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
-      const [orgRow, personalRow, targetRow] = await Promise.all([ctx.org, personalId, targetId].map((id) => ctx.own(id)));
+      const [orgRow, personalRow, targetRow] = await Promise.all(
+        [ctx.org, personalId, targetId].map((id) => ctx.own(id)),
+      );
       return composeSharingPostures(orgRow!.sharingPosture ?? ctx.defaultSharingPosture, [
         personalId === ctx.org ? undefined : personalRow!.sharingPosture,
         targetId === ctx.org || targetId === personalId ? undefined : targetRow!.sharingPosture,
@@ -328,7 +334,8 @@ export function preferenceMethods(ctx: ConfigContext): Methods<PreferenceMethods
       pinChanged.note(id);
     },
     getChannelHeaderPinDurable: async (id) =>
-      (await ctx.own(id)).channelHeaderPin ?? (id === ctx.org ? false : ((await ctx.own(ctx.org)).channelHeaderPin ?? false)),
+      (await ctx.own(id)).channelHeaderPin ??
+      (id === ctx.org ? false : ((await ctx.own(ctx.org)).channelHeaderPin ?? false)),
     getChannelHeaderPinOverrideDurable: async (id) => (await ctx.own(id)).channelHeaderPin ?? null,
     getChannelHeaderPinDefaultDurable: async () => (await ctx.own(ctx.org)).channelHeaderPin ?? false,
     onChannelHeaderPinChanged: pinChanged.add,
@@ -353,7 +360,8 @@ export function preferenceMethods(ctx: ConfigContext): Methods<PreferenceMethods
       ctx.put(personal(principalId), "modelAccount", on ? (provider ?? "personal") : null),
     getWebuiModels: (id) => ctx.scope(id)?.webuiModels ?? null,
     setWebuiModels: (id, ids) => ctx.put(id, "webuiModels", list(ids)),
-    getWebuiModelsDurable: async (id) => (await ctx.own(id)).webuiModels ?? (await ctx.own(ctx.org)).webuiModels ?? null,
+    getWebuiModelsDurable: async (id) =>
+      (await ctx.own(id)).webuiModels ?? (await ctx.own(ctx.org)).webuiModels ?? null,
     getAckEmoji: (id) => ctx.scope(id)?.ackEmoji ?? null,
     setAckEmoji: (id, names) => ctx.put(id, "ackEmoji", list(names)),
     getAckEmojiDurable: async (id) => (await ctx.own(id)).ackEmoji ?? null,

@@ -214,10 +214,10 @@ function tenantCache(tables: ConfigTables) {
 }
 
 export function createConfigStore(opts: {
-    tables: ConfigTables;
-    connectorSecretKey?: Buffer | string;
-    defaultSecurityPosture?: SecurityPosture;
-    defaultSharingPosture?: SharingPosture;
+  tables: ConfigTables;
+  connectorSecretKey?: Buffer | string;
+  defaultSecurityPosture?: SecurityPosture;
+  defaultSharingPosture?: SharingPosture;
 }): ScopedConfigStore {
   const { tables } = opts;
   const cache = tenantCache(tables);

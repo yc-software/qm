@@ -54,7 +54,6 @@ export const testTidyProfiles = () => createPostgresMemoryTidyProfiles(testDatab
 export const testActivityProfiles = () => createPostgresSuggestedActivityProfiles(testDatabaseUrl());
 export const testSwarmRows = () => createPostgresSwarmRows(testDatabaseUrl());
 
-
 type IdentityOptions = Partial<Parameters<typeof createIdentityService>[1]>;
 
 export function testIdentityService(opts: IdentityOptions = {}, url = testDatabaseUrl()) {

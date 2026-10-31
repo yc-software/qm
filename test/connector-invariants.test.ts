@@ -79,10 +79,7 @@ test("cross-tenant — the callback rejects sealed state minted for a different 
   try {
     const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
     const state = await withTenant(OTHER_TENANT, () =>
-      sealOAuthState(
-        { provider: "google", principalId: "U1", redirectUri },
-        { secret: SECRET },
-      ),
+      sealOAuthState({ provider: "google", principalId: "U1", redirectUri }, { secret: SECRET }),
     );
     const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);

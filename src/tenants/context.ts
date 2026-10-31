@@ -6,7 +6,6 @@ export { boundTenant, isTenantId };
 const bindHooks = new Set<(tenant: string) => Promise<unknown>>();
 const firstBinds = new Map<string, Promise<void>>();
 
-
 export function onFirstBind(hook: (tenant: string) => Promise<unknown>): () => void {
   bindHooks.add(hook);
   return () => bindHooks.delete(hook);

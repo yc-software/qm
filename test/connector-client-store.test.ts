@@ -10,7 +10,6 @@ import {
 import { testConfigStore } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-
 test("AES-GCM secret round-trips and ciphertext differs from plaintext", () => {
   const key = deriveConnectorKey("a-persistent-key");
   const enc = encryptSecret("super-secret", key);
