@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import pg from "pg";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../../src/tenants/migrations.ts";
 import { withTenant } from "../../src/tenants/context.ts";
@@ -35,11 +36,12 @@ export function settingsDatabase(): { url: string; ready: Promise<void> } {
   const url = new URL(base);
   url.searchParams.set("options", `-c search_path=${schema}`);
   const ready = (async () => {
-    const owner = createPgPool(base);
+    const owner = new pg.Client({ connectionString: base });
+    await owner.connect();
     try {
-      await owner.q(`CREATE SCHEMA ${schema}`);
+      await owner.query(`CREATE SCHEMA ${schema}`);
     } finally {
-      await owner.close();
+      await owner.end();
     }
     await migrateSettings(url.toString());
     await seedTestTenants(url.toString());
