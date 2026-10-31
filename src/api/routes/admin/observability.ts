@@ -71,7 +71,6 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
         attempts: r.attempts,
         maxAttempts: r.maxAttempts,
         workerId: r.workerId,
-        leaseExpiresAt: null,
         createdAt: r.createdAt,
         startedAt: r.startedAt,
         finishedAt: r.finishedAt,

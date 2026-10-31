@@ -62,7 +62,6 @@ export interface Run {
   startedAt: number | null;
   finishedAt: number | null;
   lastStop?: RunStop | null;
-  absurdQueue: string | null;
   absurdTaskId: string | null;
   absurdRunId: string | null;
 }

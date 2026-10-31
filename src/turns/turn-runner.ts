@@ -7,7 +7,6 @@ import type { TurnResult } from "../types.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import type { EventBus } from "../util/event-bus.ts";
-import { retryDelay } from "../runs/retry-delay.ts";
 import {
   countedClaims,
   crashLoopReason,
@@ -84,7 +83,6 @@ export interface TurnRunnerDeps {
   canClaim?: () => boolean;
   errors?: ErrorLog;
   pollMs?: number;
-  retryDelayMs?: (priorErrors: number) => number;
   maxClaims?: number;
 }
 
@@ -95,7 +93,6 @@ interface HeldTurn {
   shutdown: AbortController;
   cancelled: boolean;
   yielding: boolean;
-  retryInMs?: number;
   done: Promise<void>;
   onCancel(): void;
 }
@@ -196,22 +193,26 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
   const claim = keepClaim(deps, held);
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
     let giveUpAt = Number.POSITIVE_INFINITY;
+    let saveError: unknown;
     for (let attempt = 1; !shutdown.signal.aborted && !claim.lost() && Date.now() < giveUpAt; attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
+        saveError = error;
         if (giveUpAt === Number.POSITIVE_INFINITY) giveUpAt = Date.now() + FINISH_GIVE_UP_MS;
         claim.stop();
         swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
-    let why = "shutdown";
-    if (claim.lost()) why = "losing its claim";
-    else if (Date.now() >= giveUpAt) why = "its claim lapsed while saving";
-    console.warn(`[turns] turn ${run.id} ended after ${why}; its result was not recorded`);
+    if (Date.now() >= giveUpAt && !claim.lost() && !shutdown.signal.aborted)
+      reportFailure(`turns: turn ${run.id} could not save its result; another attempt will run it`, saveError);
+    else
+      console.warn(
+        `[turns] turn ${run.id} ended after ${claim.lost() ? "losing its claim" : "shutdown"}; its result was not recorded`,
+      );
   };
   let ended: { kind: "result"; result: TurnResult } | { kind: "error"; err: unknown };
   try {
@@ -267,11 +268,8 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
           ...stopErrorCode(stop),
         },
       });
-    else {
-      const delayMs = (deps.retryDelayMs ?? retryDelay)(run.errorAttempts);
-      if (await deps.ledger.handBack(run, token, { stop, delayMs, countsAsError: true })) held.retryInMs = delayMs;
-      else console.warn(`[turns] turn ${run.id} could not be requeued after an error; its claim was already gone`);
-    }
+    else if (!(await deps.ledger.retry(run, token, stop)))
+      console.warn(`[turns] turn ${run.id} could not be requeued after an error; its claim was already gone`);
   } finally {
     claim.stop();
     clearTimeout(cancelTimer);
@@ -282,7 +280,7 @@ function parkForCapacity(deps: TurnRunnerDeps, inFlight: ReadonlyMap<string, Hel
   const victim = [...inFlight.values()]
     .filter(
       (held) =>
-        held.run.absurdQueue === "turns_background" &&
+        held.run.priority === 2 &&
         held.run.preemptions < MAX_PREEMPTIONS &&
         !held.yielding &&
         !held.shutdown.signal.aborted,
@@ -384,7 +382,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         if (inFlight.get(run.id) === held) inFlight.delete(run.id);
         settle();
         notify();
-        if (held.retryInMs !== undefined) setTimeout(notify, held.retryInMs).unref();
       });
   }
 

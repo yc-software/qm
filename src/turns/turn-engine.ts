@@ -32,7 +32,13 @@ export async function sweepTurns(deps: {
   sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease">;
   errors?: ErrorLog;
 }): Promise<void> {
-  await deps.ledger.startStranded();
+  for (const threadRef of await deps.ledger.startStranded())
+    deps.errors?.record({
+      category: "runs",
+      code: "turn_line_restarted",
+      message: `conversation ${threadRef} had queued turns and no active turn; started the next one`,
+      scopeLabel: "turns:pointer-repair" as ScopeId,
+    });
   for (const candidate of await deps.ledger.repairCandidates()) {
     const repaired = await deps.ledger.repair(candidate, {
       status: "failed",

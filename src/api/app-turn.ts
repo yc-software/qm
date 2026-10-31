@@ -1,3 +1,4 @@
+import { turnAlive } from "../runs/capability-run.ts";
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
@@ -688,8 +689,7 @@ export function createTurnMethods(
       const runtime = deps.turnStream?.runtime(runId) ?? run.result?.runtime;
       const firstBlock = deps.turnStream?.firstBlock(runId);
       const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
-      const alive =
-        run.status === "running" && run.leaseToken !== null && (await deps.runs.leaseHeld(run, run.leaseToken));
+      const alive = await turnAlive(deps.runs, run);
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);

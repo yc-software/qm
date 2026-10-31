@@ -14,11 +14,14 @@ import {
   emitEvent,
   completeRun,
   extendClaim,
+  failRun,
   holdsClaim,
   scheduleRun,
   spawnTask,
   TaskCancelled,
+  type SpawnOptions,
 } from "./absurd.ts";
+import { reportFailure } from "../util/errors.ts";
 import { ABSURD_MIGRATION, ABSURD_RETENTION_DAYS, TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
 
@@ -59,7 +62,6 @@ interface RepairCandidate {
   reason: string;
 }
 
-const UNKNOWN_TASK_DEFER_MS = 30_000;
 const BACKGROUND_PRIORITY: RunPriority = 2;
 
 type TurnClaim = { claimed: boolean; run: null } | { claimed: true; run: Run };
@@ -68,18 +70,15 @@ export interface TurnLedger {
   claim(queue: TurnQueue, token: string, workerId: string): Promise<TurnClaim>;
   admit(input: EnqueueInput & { priority: RunPriority; maxAttempts: number }): Promise<EnqueueResult>;
   extend(run: Run, token: string): Promise<ExtendOutcome>;
-  handBack(
-    run: Run,
-    token: string,
-    opts: { stop?: RunStop; delayMs?: number; countsAsError?: boolean; unstarted?: boolean },
-  ): Promise<boolean>;
+  handBack(run: Run, token: string, opts: { stop?: RunStop; delayMs?: number; unstarted?: boolean }): Promise<boolean>;
+  retry(run: Run, token: string, stop: RunStop): Promise<boolean>;
   finish(run: Run, token: string, outcome: TurnOutcome): Promise<boolean>;
   fenceHeld(turnId: string, token: string, client?: PoolClient): Promise<boolean>;
   withdraw(turnId: string, opts?: { unstartedOnly?: boolean }): Promise<boolean>;
   repairCandidates(limit?: number): Promise<RepairCandidate[]>;
   repair(candidate: RepairCandidate, result: TurnResult): Promise<Run | null>;
   release(candidate: RepairCandidate): Promise<void>;
-  startStranded(limit?: number): Promise<number>;
+  startStranded(): Promise<string[]>;
   cleanup(): Promise<number>;
   mustYield(run: Run): Promise<boolean>;
   yieldTo(run: Run, token: string): Promise<"yielded" | "handed_back" | "lost">;
@@ -91,15 +90,20 @@ const QUEUE_BY_PRIORITY: Record<RunPriority, TurnQueue> = {
   1: "turns_delegated",
   2: "turns_background",
 };
+const PRIORITY_BY_QUEUE: Record<TurnQueue, RunPriority> = { turns_people: 0, turns_delegated: 1, turns_background: 2 };
+const TURN_RETRY_STRATEGY: SpawnOptions["retryStrategy"] = {
+  kind: "exponential",
+  baseSeconds: 15,
+  factor: 2,
+  maxSeconds: 60,
+};
 
 function resumeEvent(turnId: string, parkings: number): string {
   return `resume:${turnId}:${parkings}`;
 }
 
-function queueOf(run: Pick<Run, "absurdQueue">): TurnQueue {
-  const queue = run.absurdQueue;
-  if (!queue || !(TURN_QUEUES as readonly string[]).includes(queue)) throw new Error("turn has no Absurd queue");
-  return queue as TurnQueue;
+export function queueOf(run: Pick<Run, "priority">): TurnQueue {
+  return QUEUE_BY_PRIORITY[run.priority];
 }
 
 function repairReason(row: Record<string, unknown>): string {
@@ -149,6 +153,7 @@ async function start(client: PoolClient, run: Run): Promise<void> {
     idempotencyKey: run.id,
     maxAttempts: null,
     maxDurationSec: TURN_MAX_DURATION_SEC,
+    retryStrategy: TURN_RETRY_STRATEGY,
   });
   await client.query(`UPDATE runs SET status = 'pending', absurd_task_id = $2 WHERE id = $1`, [run.id, spawned.taskId]);
   await point(client, run.sessionId, run.id);
@@ -258,9 +263,9 @@ async function begin(
       `UPDATE runs SET status = 'running', lease_token = $2, lease_expires_at = NULL, worker_id = $3,
          attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5,
          delivery_state = (delivery_state::jsonb - 'replying')::text
-       WHERE id = $1 AND absurd_queue = $6 AND status IN ('pending','running')
+       WHERE id = $1 AND claim_priority = $6 AND status IN ('pending','running')
        RETURNING *`,
-      [turnId, token, workerId, Date.now(), absurdRunId, queue],
+      [turnId, token, workerId, Date.now(), absurdRunId, PRIORITY_BY_QUEUE[queue]],
     );
     return rows[0] ? rowToRun(rows[0]) : null;
   });
@@ -318,8 +323,8 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
           }
           const { rows } = await client.query(
             `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at,
-               claim_priority, absurd_queue)
-             VALUES ($1, $2, 'queued', $3, $4, 0, $5, $6, $7, $8)
+               claim_priority)
+             VALUES ($1, $2, 'queued', $3, $4, 0, $5, $6, $7)
              ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
             [
               randomUUID(),
@@ -329,7 +334,6 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
               maxAttempts,
               Date.now(),
               priority,
-              QUEUE_BY_PRIORITY[priority],
             ],
           );
           inserted = rows[0];
@@ -351,7 +355,11 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
       if (!claimed) return { claimed: false, run: null };
       const params = claimed.params as Partial<TurnTaskParams> | null;
       if (claimed.taskName !== TURN_TASK || typeof params?.turnId !== "string") {
-        await scheduleRun(await db.pool(), queue, claimed.runId, new Date(Date.now() + UNKNOWN_TASK_DEFER_MS));
+        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "not a turn task" });
+        reportFailure(
+          `turns: dropped task ${claimed.taskId} on ${queue}`,
+          new Error(`task ${claimed.taskName} has no turn id or is not a turn`),
+        );
         return { claimed: true, run: null };
       }
       const run = await begin(ctx, queue, claimed.runId, params.turnId, token, workerId);
@@ -382,7 +390,9 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
   };
 }
 
-function claims(ctx: LedgerContext): Pick<TurnLedger, "extend" | "handBack" | "finish" | "fenceHeld" | "yieldTo"> {
+function claims(
+  ctx: LedgerContext,
+): Pick<TurnLedger, "extend" | "handBack" | "retry" | "finish" | "fenceHeld" | "yieldTo"> {
   const { tx, settle } = ctx;
   return {
     async extend(run, token) {
@@ -402,7 +412,7 @@ function claims(ctx: LedgerContext): Pick<TurnLedger, "extend" | "handBack" | "f
       }
     },
 
-    async handBack(run, token, { stop, delayMs = 0, countsAsError = false, unstarted = false }) {
+    async handBack(run, token, { stop, delayMs = 0, unstarted = false }) {
       const queue = queueOf(run);
       const wakeAt = Date.now() + Math.max(0, delayMs);
       return tx(async (client) => {
@@ -411,11 +421,23 @@ function claims(ctx: LedgerContext): Pick<TurnLedger, "extend" | "handBack" | "f
         const released = await releaseClaim(client, run, token, {
           stop: stop ?? null,
           parks: stop?.kind === "parked" ? 1 : 0,
-          errors: countsAsError ? 1 : 0,
+          errors: 0,
           unstarted,
         });
         if (released === null) return false;
         await requeue(client, queue, run.absurdRunId!, new Date(wakeAt));
+        return true;
+      });
+    },
+
+    async retry(run, token, stop) {
+      const queue = queueOf(run);
+      return tx(async (client) => {
+        await lockTurn(client, run.id);
+        if (!(await holdsClaim(client, queue, run.absurdRunId!, token))) return false;
+        const released = await releaseClaim(client, run, token, { stop, parks: 0, errors: 1, unstarted: false });
+        if (released === null) return false;
+        await failRun(client, queue, run.absurdRunId!, { stop });
         return true;
       });
     },
@@ -504,38 +526,33 @@ function upkeep(
 ): Pick<TurnLedger, "repairCandidates" | "repair" | "cleanup" | "release" | "startStranded"> {
   const { db, tx, settle } = ctx;
   return {
-    async startStranded(limit = 100) {
-      await db.query(
-        `UPDATE runs SET status = 'queued', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL,
-           absurd_queue = CASE claim_priority WHEN 0 THEN 'turns_people' WHEN 1 THEN 'turns_delegated' ELSE 'turns_background' END,
-           last_stop = CASE WHEN status = 'running' THEN '{"kind":"lease_expired"}' ELSE last_stop END
-         WHERE absurd_task_id IS NULL AND absurd_run_id IS NULL
-           AND (status = 'pending' OR (status = 'running' AND lease_expires_at < $1))`,
-        [Date.now()],
-      );
-      const { rows } = await db.query(
-        `SELECT DISTINCT r.session_id FROM runs r
-          LEFT JOIN session_turn_pointers p ON p.thread_ref = r.session_id
-          WHERE r.status = 'queued' AND p.active_turn_id IS NULL
-          LIMIT $1`,
-        [limit],
-      );
-      let started = 0;
-      for (const row of rows) {
-        const threadRef = String(row.session_id);
-        await tx(async (client) => {
-          if ((await lockPointer(client, threadRef)) !== null) return;
-          await advance(client, threadRef, "");
-          started += 1;
-        });
+    async startStranded() {
+      const started: string[] = [];
+      for (let afterRef = ""; ;) {
+        const { rows } = await db.query(
+          `SELECT DISTINCT r.session_id FROM runs r
+            LEFT JOIN session_turn_pointers p ON p.thread_ref = r.session_id
+            WHERE r.status = 'queued' AND p.active_turn_id IS NULL AND r.session_id > $1
+            ORDER BY r.session_id LIMIT $2`,
+          [afterRef, CLEANUP_BATCH],
+        );
+        for (const row of rows) {
+          const threadRef = String(row.session_id);
+          await tx(async (client) => {
+            if ((await lockPointer(client, threadRef)) !== null) return;
+            await advance(client, threadRef, "");
+            started.push(threadRef);
+          });
+        }
+        if (rows.length < CLEANUP_BATCH) return started;
+        afterRef = String(rows.at(-1)!.session_id);
       }
-      return started;
     },
 
     async repairCandidates(limit = 100) {
       const joins = TURN_QUEUES.map(
         (queue, i) =>
-          `LEFT JOIN ${absurdTable(queue, "t_")} k${i} ON t.absurd_queue = '${queue}' AND k${i}.task_id = t.absurd_task_id`,
+          `LEFT JOIN ${absurdTable(queue, "t_")} k${i} ON t.claim_priority = ${PRIORITY_BY_QUEUE[queue]} AND k${i}.task_id = t.absurd_task_id`,
       ).join("\n");
       const state = `COALESCE(${TURN_QUEUES.map((_, i) => `k${i}.state`).join(", ")})`;
       const cancelledAt = `COALESCE(${TURN_QUEUES.map((_, i) => `k${i}.cancelled_at`).join(", ")})`;

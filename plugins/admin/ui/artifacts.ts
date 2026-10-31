@@ -1039,7 +1039,7 @@ export function live(root: HTMLElement, d: Data, c: Context) {
       [runs.filter((r: Data) => r.status === "done").length, "Done"],
     ])}${bareCard(
       table(
-        ["Run", "Status", "Scope", "Type", "Attempts", "Worker", "Duration", "Lease", "Started"],
+        ["Run", "Status", "Scope", "Type", "Attempts", "Worker", "Duration", "Started"],
         runs.map((r: Data) => [
           { node: c.stacked("Run " + c.shortId(r.id), r.threadRef || "no thread"), cls: "mono" },
           { node: c.statusBadge(r.status) },
@@ -1051,13 +1051,6 @@ export function live(root: HTMLElement, d: Data, c: Context) {
           },
           { text: r.workerId || "-", cls: "mono" },
           { text: c.fmtDuration(r.startedAt || r.createdAt, r.finishedAt), cls: "num" },
-          {
-            text:
-              r.leaseExpiresAt && (r.status === "running" || r.status === "pending")
-                ? c.fmtTime(r.leaseExpiresAt)
-                : "-",
-            cls: "num",
-          },
           { text: r.startedAt ? c.fmtTime(r.startedAt) : "-", cls: "num" },
         ]),
         "No runs.",

@@ -8,12 +8,12 @@ export interface FenceQueryable {
 function fenceSql(lock: boolean): string {
   const share = lock ? " FOR SHARE" : "";
   const held = TURN_QUEUES.map(
-    (queue) => `WHEN '${queue}' THEN EXISTS (
+    (queue, priority) => `WHEN ${priority} THEN EXISTS (
       SELECT 1 FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} r WHERE r.run_id = t.absurd_run_id
         AND ((r.state = 'running' AND r.claimed_by = $2 AND r.claim_expires_at > absurd.current_time())
           OR r.state = 'cancelled')${share})`,
   ).join("\n");
-  return `SELECT CASE t.absurd_queue ${held} ELSE false END AS ok FROM runs t
+  return `SELECT CASE t.claim_priority ${held} ELSE false END AS ok FROM runs t
     WHERE t.id = $1 AND t.status = 'running' AND t.lease_token = $2 AND t.absurd_run_id IS NOT NULL${lock ? " FOR SHARE OF t" : ""}`;
 }
 

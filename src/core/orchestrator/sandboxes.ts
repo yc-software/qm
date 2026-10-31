@@ -1,3 +1,4 @@
+import { turnAlive } from "../../runs/capability-run.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
@@ -152,7 +153,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
     return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
       const run = await runs.get(runId);
-      return run?.status === "running" && run.leaseToken !== null && runs.leaseHeld(run, run.leaseToken);
+      return run !== null && turnAlive(runs, run);
     });
   };
   const provision = (eager = false): Promise<SandboxHandle> => {

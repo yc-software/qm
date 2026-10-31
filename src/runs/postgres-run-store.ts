@@ -39,7 +39,6 @@ export function rowToRun(r: Record<string, unknown>): Run {
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
-    absurdQueue: (r.absurd_queue as string | null) ?? null,
     absurdTaskId: r.absurd_task_id == null ? null : String(r.absurd_task_id),
     absurdRunId: r.absurd_run_id == null ? null : String(r.absurd_run_id),
   };
@@ -108,11 +107,9 @@ END $base_schema$`,
       id: "runs/store/0012-absurd-turns",
       statements: [
         `SET LOCAL lock_timeout = '60s'`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_queue TEXT`,
         `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_task_id UUID`,
         `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_run_id UUID`,
-        `UPDATE runs SET absurd_queue = CASE claim_priority WHEN 0 THEN 'turns_people' WHEN 1 THEN 'turns_delegated' ELSE 'turns_background' END,
-           status = 'queued', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, retry_after = 0,
+        `UPDATE runs SET status = 'queued', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, retry_after = 0,
            last_stop = CASE WHEN status = 'running' THEN '{"kind":"shutdown"}' ELSE last_stop END
          WHERE status IN ('pending', 'running') AND absurd_task_id IS NULL`,
         `DROP INDEX IF EXISTS idx_runs_pending_priority`,

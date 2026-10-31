@@ -1,3 +1,4 @@
+import { turnAlive } from "../runs/capability-run.ts";
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -90,13 +91,7 @@ export function createSlackSessionStatus(
                   (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
                 )
               : [];
-          const processing = (
-            await Promise.all(
-              active.map((run) =>
-                run.status === "running" && run.leaseToken !== null ? runs.leaseHeld(run, run.leaseToken) : false,
-              ),
-            )
-          ).some(Boolean);
+          const processing = (await Promise.all(active.map((run) => turnAlive(runs, run)))).some(Boolean);
           const threadRef = anchor?.request.conversation.threadRef;
           const jobs =
             optedIn && threadRef
