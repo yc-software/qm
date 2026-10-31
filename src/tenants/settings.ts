@@ -43,7 +43,36 @@ export const TENANT_SETTING_KEYS = [
   "TRUSTED_OIDC_ADMIN_ISSUER",
   "SUGGESTED_ACTIVITIES_CONTEXT",
   "ADMIN_GRANTS",
+  "OIDC_ISSUER",
+  "OIDC_AUTH_ENDPOINT",
+  "OIDC_TOKEN_ENDPOINT",
+  "OIDC_USERINFO_ENDPOINT",
+  "OIDC_JWKS_URI",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "OIDC_SCOPES",
+  "OIDC_PROMPT",
+  "OIDC_PRINCIPAL_CLAIM",
+  "OIDC_ALLOWED_EMAIL_DOMAIN",
+  "OIDC_ALLOWED_EMAILS",
+  "PORTAL_EXPECTED_TEAM_ID",
 ] as const;
+
+export const PLUGIN_SETTING_KEYS: readonly TenantSettingKey[] = [
+  "OIDC_ISSUER",
+  "OIDC_AUTH_ENDPOINT",
+  "OIDC_TOKEN_ENDPOINT",
+  "OIDC_USERINFO_ENDPOINT",
+  "OIDC_JWKS_URI",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "OIDC_SCOPES",
+  "OIDC_PROMPT",
+  "OIDC_PRINCIPAL_CLAIM",
+  "OIDC_ALLOWED_EMAIL_DOMAIN",
+  "OIDC_ALLOWED_EMAILS",
+  "PORTAL_EXPECTED_TEAM_ID",
+];
 
 export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
 export type TenantSettingValues = Partial<Record<TenantSettingKey, string>>;
@@ -59,6 +88,7 @@ export const TENANT_SECRET_KEYS: ReadonlySet<TenantSettingKey> = new Set<TenantS
   "SMOLMACHINES_TOKEN",
   "RENDER_SANDBOX_API_KEY",
   "SECURITY_SCREEN_PROXY_TOKEN",
+  "OIDC_CLIENT_SECRET",
 ]);
 
 export function isTenantSettingKey(key: string): key is TenantSettingKey {
