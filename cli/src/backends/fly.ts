@@ -444,6 +444,9 @@ function ensureObjectStorage(ctx: FlyCtx): void {
 }
 
 const FLY_SHARED_SECRETS = "QM_SHARED_SECRETS=";
+const FLY_SHARE_SCRIPT = Buffer.from(
+  `process.stdout.write(${JSON.stringify(FLY_SHARED_SECRETS)}+Buffer.from(JSON.stringify(Object.fromEntries(process.argv.slice(1).map(n=>[n,process.env[n]||""])))).toString("base64"))`,
+).toString("base64");
 
 function shareObjectStorage(ctx: FlyCtx): void {
   const harness = flyApp(ctx.appPrefix, "harness");
@@ -455,8 +458,7 @@ function shareObjectStorage(ctx: FlyCtx): void {
     throw new CliError(
       `cannot share object storage secret ${JSON.stringify(invalid)}: not an environment variable name`,
     );
-  const source = `process.stdout.write(${JSON.stringify(FLY_SHARED_SECRETS)}+Buffer.from(JSON.stringify(Object.fromEntries(${JSON.stringify(missing)}.map(n=>[n,process.env[n]||""])))).toString("base64"))`;
-  const command = `node -e "eval(Buffer.from('${Buffer.from(source).toString("base64")}','base64').toString('utf8'))"`;
+  const command = `node -e "eval(Buffer.from('${FLY_SHARE_SCRIPT}','base64').toString('utf8'))" ${missing.join(" ")}`;
   const output = flySensitive(
     ["machine", "exec", "-a", edge, flyCoreMachineId(edge), command, "--timeout", String(FLY_EXEC_TIMEOUT_SEC)],
     `failed to read object storage credentials from ${edge}`,
