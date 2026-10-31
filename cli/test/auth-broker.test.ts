@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import { derivedTomlFor } from "../src/backends/fly.ts";
 import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
-import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -28,7 +28,7 @@ function configWith(body: string): QmConfig {
 
 function configText(over: { services?: string; env?: string } = {}): string {
   return `{
-    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
+    "contract": 1, "deploymentId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
     "services": ${over.services ?? '["core", "web-ui", "admin", "portal", "auth"]'},
     "plugins": [], "skills": [],
     "env": ${over.env ?? '{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } }'}
@@ -54,21 +54,23 @@ test("the auth service is a first-class, privately addressed service with its ow
   assert.equal(def.fly?.flycast, true);
 });
 
-test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {
+test("the broker's OIDC block is a tenant setting; fly keeps only the portal's broker plumbing", () => {
   const portal = derivedTomlFor(brokerConfig(), "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
-  assert.match(portal, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
-  assert.match(portal, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
-  assert.match(portal, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
-  assert.match(portal, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
   assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
   assert.match(portal, /AUTH_BROKER_PREFIX = "\/idp"/);
-  assert.match(portal, /OIDC_PRINCIPAL_CLAIM = "email"/);
-  assert.match(portal, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
-  assert.doesNotMatch(portal, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
+  assert.doesNotMatch(portal, /OIDC_/, "sign-in settings are served to the portal by core");
+  const settings = tenantSettingsEnv(brokerConfig(), new Map());
+  assert.equal(settings.OIDC_ISSUER, "https://agent.example.com/idp");
+  assert.equal(settings.OIDC_AUTH_ENDPOINT, "https://agent.example.com/idp/authorize");
+  assert.equal(settings.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(settings.OIDC_USERINFO_ENDPOINT, "http://127.0.0.1:8099/userinfo");
+  assert.equal(settings.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+  assert.equal(settings.OIDC_PRINCIPAL_CLAIM, "email");
+  assert.equal(settings.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
 
   const core = derivedTomlFor(brokerConfig(), "core", repoRoot);
-  assert.match(core, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "core refuses in-domain external invites");
+  assert.doesNotMatch(core, /AUTH_ALLOWED_EMAIL_DOMAIN/, "the sign-in domain is a tenant setting, not core env");
+  assert.equal(tenantSettingsEnv(brokerConfig(), new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
 
   const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
   assert.equal(auth, readFileSync(join(repoRoot, "cli", "templates", "fly", "auth.toml"), "utf8"));
@@ -80,17 +82,18 @@ test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wi
   const acme = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc")).config;
   assert.ok(!acme.services.includes("auth"));
   const portal = derivedTomlFor(acme, "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/accounts\.google\.com"/);
-  assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
+  assert.doesNotMatch(portal, /OIDC_|AUTH_BROKER_UPSTREAM/);
+  assert.equal(tenantSettingsEnv(acme, new Map()).OIDC_ISSUER, "https://accounts.google.com");
 });
 
-test("a configured botName brands the docker service env for core and auth", () => {
+test("a configured botName brands the tenant settings and the docker auth env, never core env", () => {
   const config = configWith(
     configText().replace('"plugins": [],', '"botName": "straylight", "orgName": "Acme Corp", "plugins": [],'),
   );
   const core = dockerServiceEnv(config, "core");
-  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
-  assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
+  assert.equal(core.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_ORG_NAME, "Acme Corp");
   assert.equal(dockerServiceEnv(config, "auth").AUTH_BRAND_NAME, "straylight");
   const bare = configWith(configText());
   assert.equal(dockerServiceEnv(bare, "core").ORG_BRAND_SELF_LABEL, undefined);
@@ -101,13 +104,14 @@ test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerPortal = dockerServiceEnv(docker, "portal");
   assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
-  assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
+  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, undefined);
+  assert.equal(tenantSettingsEnv(docker, new Map()).OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(tenantSettingsEnv(docker, new Map()).OIDC_ISSUER, "https://agent.example.com/idp");
   assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
   assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
 
   const aws = configWith(`{
-    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
+    "contract": 1, "deploymentId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
     "services": ["core", "web-ui", "admin", "portal", "auth"], "plugins": [], "skills": [],
     "env": { "core": { "AWS_DEPLOY_IMAGE": "acme-sandbox" }, "auth": { "AUTH_EMAIL_TRANSPORT": "smtp", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } },
     "aws": {
@@ -126,9 +130,11 @@ test("docker and AWS wire the broker with parity", () => {
   }`);
   const awsPortal = serviceEnvironment(aws, "portal");
   assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(awsPortal.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
-  assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
-  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(awsPortal.OIDC_JWKS_URI, undefined);
+  assert.equal(tenantSettingsEnv(aws, new Map()).OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+  assert.equal(tenantSettingsEnv(aws, new Map()).OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  assert.equal(tenantSettingsEnv(aws, new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(
     awsPortal.PORTAL_XFF_TRUSTED_HOPS,
     "1",
@@ -154,8 +160,13 @@ test("the broker's generated secrets reach both sides under the right names", ()
   const config = brokerConfig();
   const secrets = computedSecrets(config);
   const clientSecret = secrets.find((secret) => secret.name === "AUTH_CLIENT_SECRET")!;
-  assert.deepEqual(runtimeSecretNames("auth", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("auth", clientSecret), ["AUTH_CLIENT_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("portal", clientSecret), ["AUTH_CLIENT_SECRET"]);
+  assert.equal(
+    tenantSettingsEnv(config, new Map([["AUTH_CLIENT_SECRET", "minted"]])).OIDC_CLIENT_SECRET,
+    "minted",
+    "the portal's copy is a tenant setting served by core",
+  );
   assert.ok(clientSecret.generate, "the CLI mints it rather than asking the operator");
 
   const jwk = secrets.find((secret) => secret.name === "AUTH_SIGNING_JWK")!;
@@ -179,13 +190,16 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
 });
 
-test("without a configured domain the allowlist becomes a required secret on both services", () => {
+test("without a configured domain the allowlist becomes a required tenant setting", () => {
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
   const allowed = computedSecrets(config).find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
   assert.ok(allowed.required);
-  assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("auth", allowed), []);
+  assert.deepEqual(runtimeSecretNames("portal", allowed), []);
+  assert.deepEqual(runtimeSecretNames("core", allowed), [], "core reads the allowlist from its tenant settings");
+  const settings = tenantSettingsEnv(config, new Map([["AUTH_ALLOWED_EMAILS", "a@example.com"]]));
+  assert.equal(settings.AUTH_ALLOWED_EMAILS, "a@example.com");
+  assert.equal(settings.OIDC_ALLOWED_EMAILS, "a@example.com");
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
   const resend = computedSecrets(config).find((secret) => secret.name === "RESEND_API_KEY")!;
@@ -242,31 +256,4 @@ test("a broker deployment with no allowlist at all is refused once secret values
     validatePortalTrust(config, "config", new Map([["AUTH_ALLOWED_EMAILS", "admin@example.com"]])),
   );
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
-});
-
-test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
-  const fly = join(dir, "fly");
-  const log = join(dir, "fly.log");
-  writeFileSync(
-    fly,
-    `#!/usr/bin/env node
-const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(" ")+" value="+fs.readFileSync(0,"utf8")+"\\n");`,
-  );
-  chmodSync(fly, 0o755);
-  writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
-  const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = fly;
-  try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-  }
-  const calls = readFileSync(log, "utf8");
-  const prefix = "acme";
-  assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
 });

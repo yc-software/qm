@@ -9,7 +9,7 @@ import { loadConfigAt, type QmConfig } from "../src/config.ts";
 function config(): QmConfig {
   return {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],

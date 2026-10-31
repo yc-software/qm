@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runChecks, runCheckCommand } from "../src/commands/check.ts";
 import type { QmConfig } from "../src/config.ts";
-import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
+import { computedSecrets } from "../src/secrets.ts";
+import { renderEnvExample } from "../src/env-example.ts";
 
 const CONFIG: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "http://localhost:8080",
   target: "docker",
   services: ["core"],

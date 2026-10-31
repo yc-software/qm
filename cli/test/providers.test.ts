@@ -37,7 +37,7 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
 test("provider output coordinates stay behind the registry", () => {
   const common = {
     contract: 1 as const,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.com",
     services: ["core" as const],
     plugins: [],

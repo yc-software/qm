@@ -189,6 +189,7 @@ export interface ServerDeps {
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
+  installTenant?: (slug: string) => Promise<{ tenant: string; created: boolean }>;
   spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;

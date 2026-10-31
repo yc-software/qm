@@ -5,7 +5,6 @@ primary_region = "sjc"
   QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
   PORT = "8080"
   CORE_API_URL = "http://qm-core.internal:8080"
-  CORE_ORG_ID = "acme"
   ADMIN_BASE_PATH = "/admin"
 
 [[vm]]

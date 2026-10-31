@@ -13,7 +13,7 @@ Configure every core replica with:
 | `CORE_SIGNING_SECRET`       | The normal source request signing secret.                                                                                                                |
 | `DATABASE_URL`              | The shared PostgreSQL database.                                                                                                                          |
 
-With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner, so no deployment runs background work until an operator sets one. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
+With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner until the first `PUT /v1/install/tenant` (which `qm up`, the Helm hook and the dev supervisor send after deploying core): it names the answering deployment as owner when the record has never been set, so a fresh install answers turns without a separate step. After that, only the operator endpoint changes the owner, and an explicit `null` stays paused. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
 
 ## The owner record
 

@@ -61,6 +61,8 @@ export interface Config extends SandboxSettings, DeploySettings {
   dataDir: string;
   orgId: string;
   databaseUrl?: string;
+  databaseOwnerUrl?: string;
+  databaseReaderUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
   databasePoolUrl?: string;
@@ -390,6 +392,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
       );
   }
+  if (
+    env.DEPLOYMENT_CONTROL_SECRET &&
+    (!isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) || env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET)
+  )
+    throw new Error("DEPLOYMENT_CONTROL_SECRET must be at least 32 characters and differ from CORE_SIGNING_SECRET");
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -504,6 +511,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
+    ...(env.DATABASE_READER_URL ? { databaseReaderUrl: env.DATABASE_READER_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
@@ -586,9 +595,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
-    ...(env.BACKGROUND_DEPLOYMENT_ID
-      ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
-      : {}),
+    ...(env.BACKGROUND_DEPLOYMENT_ID ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID } : {}),
+    ...(env.DEPLOYMENT_CONTROL_SECRET ? { deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET } : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,

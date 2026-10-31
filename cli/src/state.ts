@@ -26,7 +26,7 @@ function ensureDir(dir: string): string {
   return dir;
 }
 
-export const deploymentDir = (orgId: string): string => join(cliStateDir(), "deployments", orgId);
+export const deploymentDir = (deploymentId: string): string => join(cliStateDir(), "deployments", deploymentId);
 
 function releaseLock(lock: string, owner?: string): void {
   if (owner) rmSync(join(lock, owner), { force: true });
@@ -87,13 +87,13 @@ export async function withDeploymentLock<T>(lock: string, fn: () => Promise<T>):
 }
 
 export interface DeploymentState {
-  orgId: string;
+  deploymentId: string;
   network: string;
   pgPassword?: string;
 }
 
-export function readDeploymentState(orgId: string): DeploymentState | undefined {
-  const path = join(deploymentDir(orgId), "state.json");
+export function readDeploymentState(deploymentId: string): DeploymentState | undefined {
+  const path = join(deploymentDir(deploymentId), "state.json");
   if (!existsSync(path)) return undefined;
   try {
     return JSON.parse(readFileSync(path, "utf8")) as DeploymentState;
@@ -103,7 +103,7 @@ export function readDeploymentState(orgId: string): DeploymentState | undefined 
 }
 
 export function writeDeploymentState(state: DeploymentState): void {
-  const dir = ensureDir(deploymentDir(state.orgId));
+  const dir = ensureDir(deploymentDir(state.deploymentId));
   const path = join(dir, "state.json");
   writeFileSync(path, JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
   chmodSync(path, 0o600);

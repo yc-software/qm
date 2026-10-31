@@ -43,7 +43,7 @@ import { bestEffort, errMessage, formatAge, nowEpoch, sleep, swallowAs } from ".
 import { runDoctor } from "./commands/doctor.ts";
 import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
-import { validOrgId } from "../../cli/src/config.ts";
+import { validDeploymentId } from "../../cli/src/config.ts";
 
 function parseCli() {
   try {
@@ -643,7 +643,7 @@ async function cmdLogs(): Promise<number> {
 }
 
 async function main(): Promise<number> {
-  if (!validOrgId(orgId)) {
+  if (!validDeploymentId(orgId)) {
     console.error("dev: --org must be a lowercase DNS label (a-z, 0-9, and hyphens between)");
     return EXIT.usage;
   }

@@ -88,7 +88,7 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
     );
     const config: QmConfig = {
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -179,7 +179,7 @@ function startCoreStub(
 function makeConfig(publicUrl: string): QmConfig {
   return {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl,
     target: "docker",
     services: ["core"],
@@ -284,7 +284,7 @@ test("conformance passes against a live core: base-port override, signed request
       join(dir, CONFIG_FILENAME),
       JSON.stringify({
         contract: 1,
-        orgId: "acme",
+        deploymentId: "acme",
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],
@@ -342,7 +342,7 @@ test("conformance fails when the stored layer matches but the core still serves 
       join(dir, CONFIG_FILENAME),
       JSON.stringify({
         contract: 1,
-        orgId: "acme",
+        deploymentId: "acme",
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],
@@ -386,7 +386,7 @@ test("conformance reports a non-JSON layer response as a contract failure, not a
       join(dir, CONFIG_FILENAME),
       JSON.stringify({
         contract: 1,
-        orgId: "acme",
+        deploymentId: "acme",
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],

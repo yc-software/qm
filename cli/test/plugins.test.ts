@@ -9,7 +9,7 @@ import type { QmConfig } from "../src/config.ts";
 function makeConfig(plugins: QmConfig["plugins"]): QmConfig {
   return {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "http://localhost:8080",
     target: "docker",
     services: ["core"],

@@ -14,7 +14,7 @@ const service = (name: string) => ({ ecrRepository: `qm-${name}`, ecsService: `a
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://agent.acme.example",
   apiUrl: "https://api.acme.example",
   target: "aws",

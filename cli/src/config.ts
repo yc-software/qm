@@ -30,7 +30,7 @@ export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
 
-export const validOrgId = (value: string): boolean =>
+export const validDeploymentId = (value: string): boolean =>
   value.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value);
 
 export type { Target } from "./providers.ts";
@@ -152,7 +152,7 @@ export const isEmailTransport = (value: unknown): value is EmailTransport =>
 
 export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
-  orgId: string;
+  deploymentId: string;
   publicUrl: string;
   apiUrl?: string;
   target: Target;
@@ -171,6 +171,7 @@ export interface QmConfig {
   botName?: string;
   orgName?: string;
   appPrefix?: string;
+  tenant?: string;
   region?: string;
   flyOrg?: string;
   imageFrom?: string;
@@ -215,7 +216,8 @@ export function loadConfigInDir(dir: string, overrides?: { target?: Target }): {
   return loadConfigAt(path, overrides);
 }
 
-export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.orgId;
+export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.deploymentId;
+export const tenantOf = (config: QmConfig): string => config.tenant ?? "main";
 
 export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT", config.basePort ?? 8080);
 
@@ -507,19 +509,9 @@ function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfi
   return { mode: raw.mode, classifier, provider: raw.provider, endpoint: raw.endpoint };
 }
 
-export function readConfigOrgId(path: string): string | undefined {
-  try {
-    const raw = parseConfigJson(readFileSync(path, "utf8"));
-    const orgId = isPlainObject(raw) ? raw.orgId : undefined;
-    return typeof orgId === "string" && validOrgId(orgId) ? orgId : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "contract",
-  "orgId",
+  "deploymentId",
   "publicUrl",
   "apiUrl",
   "target",
@@ -538,6 +530,7 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "botName",
   "orgName",
   "appPrefix",
+  "tenant",
   "region",
   "flyOrg",
   "imageFrom",
@@ -550,6 +543,11 @@ function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
 
+  if ("orgId" in o) {
+    throw new CliError(
+      `${path}: "orgId" is now "deploymentId" — rename the key and keep its value so existing resources stay recognized`,
+    );
+  }
   for (const key of Object.keys(o)) {
     if (key !== "//" && !VALID_TOP_LEVEL_KEYS.has(key)) {
       throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);
@@ -566,9 +564,9 @@ function validate(raw: unknown, path: string): QmConfig {
     throw new CliError(`${path}: "contract" must be ${CONTRACT_VERSION}`);
   }
 
-  const orgId = o["orgId"];
-  if (typeof orgId !== "string" || !validOrgId(orgId)) {
-    throw new CliError(`${path}: "orgId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
+  const deploymentId = o["deploymentId"];
+  if (typeof deploymentId !== "string" || !validDeploymentId(deploymentId)) {
+    throw new CliError(`${path}: "deploymentId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
   }
 
   const publicUrl = o["publicUrl"];
@@ -735,7 +733,7 @@ function validate(raw: unknown, path: string): QmConfig {
 
   const out: QmConfig = {
     contract,
-    orgId,
+    deploymentId,
     publicUrl: publicUrl.replace(/\/$/, ""),
     target,
     services,
@@ -783,6 +781,11 @@ function validate(raw: unknown, path: string): QmConfig {
   const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
   if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
+  if (o["tenant"] !== undefined) {
+    if (typeof o["tenant"] !== "string" || !validDeploymentId(o["tenant"]))
+      throw new CliError(`${path}: "tenant" must be a tenant slug (a-z, 0-9, and hyphens between)`);
+    out.tenant = o["tenant"];
+  }
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];
   if (typeof o["imageFrom"] === "string") out.imageFrom = o["imageFrom"];
@@ -798,6 +801,7 @@ function validate(raw: unknown, path: string): QmConfig {
   if (o["render"] !== undefined) out.render = validateRender(o["render"], path);
   if (target === "render" && !out.render) throw new CliError(`${path}: target "render" requires a "render" block`);
   if (target === "aws" && !out.aws) throw new CliError(`${path}: target "aws" requires an "aws" block`);
+  if (out.env.core?.MODEL_PROVIDER?.trim() === "") delete out.env.core.MODEL_PROVIDER;
   validateModelProvider(out, path);
   validatePortalTrust(out, path);
   if (target === "aws") {
@@ -843,8 +847,7 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
 
 function validateModelProvider(config: QmConfig, path: string): void {
   const override = config.env.core?.MODEL_PROVIDER?.trim();
-  if (override === "") delete config.env.core!.MODEL_PROVIDER;
-  if (override !== undefined && override !== "" && !isModelProvider(override)) {
+  if (override && !isModelProvider(override)) {
     throw new CliError(
       `${path}: env.core.MODEL_PROVIDER must be one of ${MODEL_PROVIDERS.join(", ")}, or unset to use "modelProvider"`,
     );

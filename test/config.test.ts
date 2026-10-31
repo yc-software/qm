@@ -20,7 +20,9 @@ const productionEnv = {
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
-  DATABASE_URL: "postgres://qm@localhost/qm",
+  DATABASE_URL: "postgres://qm_app:app@localhost/qm",
+  DATABASE_OWNER_URL: "postgres://qm@localhost/qm",
+  DATABASE_READER_URL: "postgres://qm_reader:reader@localhost/qm",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
@@ -833,6 +835,7 @@ test("background ownership requires durable storage and an independent deploymen
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
+    DATABASE_OWNER_URL: "postgres://owner@localhost/test",
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
     DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
   };
@@ -842,11 +845,15 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(config.backgroundWorkEnabled, true);
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
   assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
-  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
-  assert.throws(
-    () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
-    /distinct DEPLOYMENT_CONTROL_SECRET/,
-  );
+  assert.throws(() => loadConfig({ ...env, DATABASE_OWNER_URL: "" }), /DATABASE_OWNER_URL/);
+  const weak = /DEPLOYMENT_CONTROL_SECRET must be at least 32 characters and differ from CORE_SIGNING_SECRET/;
+  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), weak);
+  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }), weak);
+  const { BACKGROUND_DEPLOYMENT_ID: _, ...operatorOnly } = env;
+  const plain = loadConfig(operatorOnly);
+  assert.equal(plain.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
+  assert.equal(plain.backgroundDeploymentId, undefined);
+  assert.throws(() => loadConfig({ ...operatorOnly, DEPLOYMENT_CONTROL_SECRET: "short" }), weak);
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);

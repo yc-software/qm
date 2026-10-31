@@ -56,7 +56,7 @@ export function renderSlackManifests(config: QmConfig): SlackManifests {
     features: { bot_user: { display_name: string } };
   };
   bot.display_information.name = name;
-  bot.display_information.description = `${name} workspace agent for ${config.orgId}`;
+  bot.display_information.description = `${name} workspace agent for ${config.deploymentId}`;
   bot.features.bot_user.display_name = name;
 
   const sso = JSON.parse(template("slack-sso-manifest.json")) as {
