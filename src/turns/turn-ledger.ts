@@ -257,7 +257,7 @@ async function begin(
     const { rows } = await client.query(
       `UPDATE runs SET status = 'running', lease_token = $2, lease_expires_at = NULL, worker_id = $3,
          attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5,
-         delivery_state = (delivery_state::jsonb - ARRAY['firstBlock', 'surfacePosted', 'replyDone', 'runtime'])::text
+         delivery_state = (delivery_state::jsonb - 'replying')::text
        WHERE id = $1 AND absurd_queue = $6 AND status IN ('pending','running')
        RETURNING *`,
       [turnId, token, workerId, Date.now(), absurdRunId, queue],
@@ -357,7 +357,11 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
       const run = await begin(ctx, queue, claimed.runId, params.turnId, token, workerId);
       if (run === "suspended") return { claimed: true, run: null };
       if (!run) {
-        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" });
+        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" }).catch(
+          (error: unknown) => {
+            if (!(error instanceof TaskCancelled)) throw error;
+          },
+        );
         return { claimed: true, run: null };
       }
       await db.query(
@@ -500,6 +504,14 @@ function upkeep(
   const { db, tx, settle } = ctx;
   return {
     async startStranded(limit = 100) {
+      await db.query(
+        `UPDATE runs SET status = 'queued', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL,
+           absurd_queue = CASE claim_priority WHEN 0 THEN 'turns_people' WHEN 1 THEN 'turns_delegated' ELSE 'turns_background' END,
+           last_stop = CASE WHEN status = 'running' THEN '{"kind":"lease_expired"}' ELSE last_stop END
+         WHERE absurd_task_id IS NULL AND absurd_run_id IS NULL
+           AND (status = 'pending' OR (status = 'running' AND lease_expires_at < $1))`,
+        [Date.now()],
+      );
       const { rows } = await db.query(
         `SELECT DISTINCT r.session_id FROM runs r
           LEFT JOIN session_turn_pointers p ON p.thread_ref = r.session_id

@@ -13,7 +13,7 @@ async function fixture(t: TestContext) {
     await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
   }
   t.after(async () => {
-    built.scheduler.stop();
+    built.jobs.stop();
     built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
+import { createInlineJobs } from "./support/inline-jobs.ts";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -47,6 +48,7 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
   };
   const receiver = createWebhookReceiver({
     webhooks,
+    jobs: createInlineJobs(),
     deliveries,
     idempotency: tracked(createIdempotencyStore(testMap())),
     identity,

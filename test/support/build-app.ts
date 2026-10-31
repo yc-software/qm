@@ -3,6 +3,7 @@ import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
+import { createInlineJobs } from "./inline-jobs.ts";
 
 const built: BuiltApp[] = [];
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
@@ -42,7 +43,7 @@ export function buildApp(
   const app = stopAtEnd(
     buildProductionApp(
       { anthropicApiKey: "test-anthropic-key", ...config },
-      { agent: recordingModelCalls(createMockAgent(), modelCalls), ...overrides },
+      { agent: recordingModelCalls(createMockAgent(), modelCalls), jobs: createInlineJobs(), ...overrides },
     ),
   );
   return Object.assign(app, { modelCalls });

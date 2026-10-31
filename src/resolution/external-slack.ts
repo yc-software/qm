@@ -1,7 +1,6 @@
 import { activeCapabilityRun } from "../runs/capability-run.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { RunStore } from "../runs/run-store.ts";
-import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
 import type { TurnRequest } from "../types.ts";

@@ -32,7 +32,7 @@ const FAILURE_REPORT_CONSECUTIVE = 5;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 const IDLE_POLL_MAX_MS = 5_000;
 const SWARM_MAX_CLAIMS = 3;
-const LEASE_LOST_CONSECUTIVE = 3;
+const FINISH_GIVE_UP_MS = 90_000;
 
 function runTurnInput(
   run: Run,
@@ -147,7 +147,6 @@ async function yieldHeld(deps: TurnRunnerDeps, held: HeldTurn, reason: "capacity
 function keepClaim(deps: TurnRunnerDeps, held: HeldTurn): { stop: () => void; lost: () => boolean } {
   const { run, token, cancel } = held;
   let lost = false;
-  let misses = 0;
   let extendFailures = 0;
   const beat = setInterval(() => {
     void deps.ledger
@@ -155,7 +154,6 @@ function keepClaim(deps: TurnRunnerDeps, held: HeldTurn): { stop: () => void; lo
       .then((outcome) => {
         extendFailures = 0;
         if (outcome === "held") {
-          misses = 0;
           if (run.priority === 2 && !held.yielding)
             void deps.ledger
               .mustYield(run)
@@ -167,8 +165,7 @@ function keepClaim(deps: TurnRunnerDeps, held: HeldTurn): { stop: () => void; lo
           held.onCancel();
           return;
         }
-        misses += 1;
-        if (misses >= LEASE_LOST_CONSECUTIVE && !lost) {
+        if (!lost) {
           lost = true;
           console.warn(`[turns] turn ${run.id} lost its claim; cancelling the in-process turn`);
           cancel.abort();
@@ -197,20 +194,23 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
   };
   const claim = keepClaim(deps, held);
   const finishWith = async (outcome: TurnOutcome): Promise<void> => {
-    for (let attempt = 1; !shutdown.signal.aborted && !claim.lost(); attempt++) {
+    let giveUpAt = Number.POSITIVE_INFINITY;
+    for (let attempt = 1; !shutdown.signal.aborted && !claim.lost() && Date.now() < giveUpAt; attempt++) {
       try {
         if (!(await deps.ledger.finish(run, token, outcome)))
           console.warn(`[turns] turn ${run.id} ended after losing its claim; its result was not recorded`);
         return;
       } catch (error) {
+        if (giveUpAt === Number.POSITIVE_INFINITY) giveUpAt = Date.now() + FINISH_GIVE_UP_MS;
         claim.stop();
         swallow(`turns: turn end failed for turn ${run.id} (retrying)`, error);
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
-    console.warn(
-      `[turns] turn ${run.id} ended after ${claim.lost() ? "losing its claim" : "shutdown"}; its result was not recorded`,
-    );
+    let why = "shutdown";
+    if (claim.lost()) why = "losing its claim";
+    else if (Date.now() >= giveUpAt) why = "its claim lapsed while saving";
+    console.warn(`[turns] turn ${run.id} ended after ${why}; its result was not recorded`);
   };
   let ended: { kind: "result"; result: TurnResult } | { kind: "error"; err: unknown };
   try {
@@ -392,7 +392,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   async function loop(): Promise<void> {
     let failures = 0;
     let idle = 0;
-    let claimedAny = false;
     while (!stopped) {
       const observed = generation;
       if (deps.canClaim && !deps.canClaim()) {
@@ -400,7 +399,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         continue;
       }
       try {
-        claimedAny = false;
+        let claimedAny = false;
         for (const queue of deps.queues) {
           while (mayClaim()) {
             const people = queue === "turns_people";

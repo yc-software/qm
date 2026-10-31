@@ -3,6 +3,7 @@ import test from "node:test";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
+import { inlineJobsSettled } from "./support/inline-jobs.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -63,7 +64,7 @@ function fixture() {
       notifyChanged: (id: string) => scheduler.notifyChanged(id),
       runNow: async (id: string) => {
         const result = await scheduler.runNow(id);
-        if (result.started) settled.push(result.settled);
+        if (result.started) settled.push(inlineJobsSettled());
         return result;
       },
     },

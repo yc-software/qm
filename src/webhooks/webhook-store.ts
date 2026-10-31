@@ -22,6 +22,7 @@ export interface WebhookEvent {
   deliveryId: string;
   receivedAt: number;
   payload: string;
+  pending?: boolean;
 }
 
 export interface WebhookHistory {
@@ -30,6 +31,7 @@ export interface WebhookHistory {
 
 export interface WebhookStore {
   recordEvent(id: string, event: WebhookEvent): Promise<void>;
+  settleEvent(id: string, deliveryId: string): Promise<void>;
   listEvents(id: string): Promise<WebhookEvent[]>;
   create(input: CreateWebhookInput): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
@@ -40,6 +42,14 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
+const EVENT_HISTORY = 50;
+
+function retained(events: WebhookEvent[]): WebhookEvent[] {
+  const sorted = events.toSorted((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId));
+  let settled = 0;
+  return sorted.filter((e) => e.pending || ++settled <= EVENT_HISTORY);
+}
+
 export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
   const updateHistory = history.update.bind(history);
   return {
@@ -48,17 +58,14 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       await updateHistory(id, (value) => {
         if (value.events.some((e) => e.deliveryId === event.deliveryId)) return value;
         return {
-          events: [
-            ...value.events,
-            {
-              ...event,
-              payload: event.payload.slice(0, 16_100),
-            },
-          ]
-            .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId))
-            .slice(0, 50),
+          events: retained([...value.events, { ...event, payload: event.payload.slice(0, 16_100), pending: true }]),
         };
       });
+    },
+    async settleEvent(id, deliveryId) {
+      await updateHistory(id, (value) => ({
+        events: retained(value.events.map((e) => (e.deliveryId === deliveryId ? { ...e, pending: false } : e))),
+      }));
     },
     async listEvents(id) {
       return structuredClone((await history.get(id))?.events ?? []);

@@ -8,7 +8,8 @@ export interface FenceQueryable {
 const HELD = TURN_QUEUES.map(
   (queue) => `WHEN '${queue}' THEN EXISTS (
       SELECT 1 FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} r WHERE r.run_id = t.absurd_run_id
-        AND ((r.state = 'running' AND r.claimed_by = $2) OR r.state = 'cancelled') FOR SHARE)`,
+        AND ((r.state = 'running' AND r.claimed_by = $2 AND r.claim_expires_at > absurd.current_time())
+          OR r.state = 'cancelled') FOR SHARE)`,
 ).join("\n");
 
 const FENCE_SQL = `SELECT CASE t.absurd_queue ${HELD} ELSE false END AS ok FROM runs t

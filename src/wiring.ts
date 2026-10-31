@@ -157,7 +157,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { createJobWorker, type JobWorker } from "./jobs/job-worker.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -477,6 +477,7 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
+  jobs: JobWorker;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
@@ -529,10 +530,14 @@ export interface BuiltApp {
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
+const LOOP_MAINTENANCE_INTERVAL_MS = 5000;
+const LOOP_FIRE_JOB = "loop-fire";
+const LOOP_FIRE_MAX_ATTEMPTS = 3;
 
 export function buildApp(
   config: Config,
   overrides: {
+    jobs?: JobWorker;
     securityScreener?: SecurityScreener;
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
@@ -547,6 +552,7 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
   let inlineShutdown = new AbortController();
+  let runtimeStopping = false;
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
@@ -563,6 +569,7 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
+  const jobs = overrides.jobs ?? createJobWorker(databaseUrl);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
@@ -2242,7 +2249,7 @@ export function buildApp(
     orchestrator,
     runs,
     startTurns: () => {
-      if (!backgroundStopping && !inlineShutdown.signal.aborted) turnRunner.start();
+      if (!runtimeStopping) turnRunner.start();
     },
     maxAttempts,
     turnStream,
@@ -2526,6 +2533,7 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
+    jobs,
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
@@ -2537,12 +2545,21 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     fire: loopFire,
+    fireNow: (loopId, fireKey) => jobs.spawn(LOOP_FIRE_JOB, { loopId, fireKey }, fireKey),
     crons,
     config: configStore,
   };
+  jobs.handle(
+    LOOP_FIRE_JOB,
+    async (params) => {
+      const { loopId, fireKey } = params as { loopId: string; fireKey: string };
+      await loopFire.fire(loopId, fireKey).catch(swallowAs(`manual fire of loop ${loopId}`, undefined));
+      return "done";
+    },
+    { maxAttempts: LOOP_FIRE_MAX_ATTEMPTS },
+  );
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
@@ -2556,31 +2573,30 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     deliveries,
     idempotency,
     identity,
     run: runTriggered,
-    leaderLease,
     directory,
     currentScopeMembers,
     sessions,
     resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
-    jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
-    sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
-    },
+    jobs,
+    fireConcurrency: config.cronFireConcurrency,
   });
+  jobs.every("loops-and-asks:sweep", LOOP_MAINTENANCE_INTERVAL_MS, () =>
+    admittedWork.run(async () => {
+      const now = Date.now();
+      await Promise.all([
+        loopIngress.maintain().catch(swallowAs("Loop ingress maintenance", undefined)),
+        loopFire.sweepStale(now).catch(reportFailureAs("loops: stale-fire sweep", undefined)),
+        sweepAsks?.(now).catch(reportFailureAs("keychain: ask expiry sweep", undefined)),
+      ]);
+    }),
+  );
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,
@@ -2624,6 +2640,7 @@ export function buildApp(
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
+    jobs,
     deliveries,
     idempotency,
     identity,
@@ -2663,16 +2680,10 @@ export function buildApp(
     errors,
     ...(Number.isFinite(config.maxClaims) ? { maxClaims: config.maxClaims } : {}),
   });
-  const turnRepairSweeper = createSweeper(
-    () => leaderLease.hold("turns:pointer-repair", () => sweepTurns({ ledger: turnLedger, sessions, errors })),
-    60_000,
-    { label: "turn-pointer-repair", immediate: true },
-  );
-  const turnCleanupSweeper = createSweeper(
-    () => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()),
-    60 * 60_000,
-    { label: "turn-cleanup" },
-  );
+  jobs.every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
+    immediate: true,
+  });
+  jobs.every("turns:cleanup", 60 * 60_000, () => turnLedger.cleanup());
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
@@ -2785,8 +2796,6 @@ export function buildApp(
       .catch(swallowAs("wiring: turn runner resume failed", undefined));
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
-      turnRepairSweeper.start();
-      turnCleanupSweeper.start();
       processReaper?.start();
       monitorPoller?.start(config.monitorPollMs);
       void monitorDrained
@@ -2823,8 +2832,6 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      turnRepairSweeper.stop(),
-      turnCleanupSweeper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
@@ -2854,6 +2861,7 @@ export function buildApp(
     return draining;
   }
   async function releaseInFlightRuns(): Promise<void> {
+    runtimeStopping = true;
     inlineShutdown.abort();
     await Promise.all([
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
@@ -2865,6 +2873,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      runtimeStopping = false;
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
@@ -2881,10 +2890,11 @@ export function buildApp(
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await admittedWork.drained();
+      await Promise.all([admittedWork.drained(), turnRunner.drained(config.shutdownDrainMs)]);
     },
     releaseInFlightRuns,
     async stop() {
+      runtimeStopping = true;
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -2959,6 +2969,7 @@ export function buildApp(
     skillFetcher,
     auditLog,
     scheduler,
+    jobs,
     loops,
     webhookReceiver,
     loopIngress,

@@ -747,6 +747,7 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
       return { status: "ok" };
     },
   } as never;
+  deps.fireNow = async () => void fires++;
   for (const [method, suffix, body] of [
     ["PATCH", "", { playbook: "changed instructions" }],
     ["PATCH", "", { successCondition: "changed condition" }],

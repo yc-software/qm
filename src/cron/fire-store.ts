@@ -1,5 +1,5 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
@@ -11,7 +11,12 @@ export type BeginFireResult = { begun: true } | { begun: false; running?: CronFi
 export interface CronFireStore {
   record(cronId: string, entry: CronFireLogEntry): Promise<void>;
 
-  beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
+  beginExclusive(
+    cronId: string,
+    entry: CronFireLogEntry,
+    staleRunningMs: number,
+    enqueue?: (db: PoolClient) => Promise<void>,
+  ): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
 
@@ -122,6 +127,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
   const { q, query, pool } = createPgPool(
     connectionString,
     [
+      { id: "cron/drop-pgboss", statements: ["DROP SCHEMA IF EXISTS pgboss CASCADE"] },
       {
         id: "cron/fires/0001",
         statements: [
@@ -150,7 +156,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
     async record(cronId, entry) {
       await query(UPSERT_FIRE, fireParams(cronId, entry));
     },
-    async beginExclusive(cronId, entry, staleRunningMs) {
+    async beginExclusive(cronId, entry, staleRunningMs, enqueue) {
       return withPgTransaction(await pool(), async (client) => {
         await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`cron_fires:${cronId}`]);
         const running = await client.query(
@@ -163,6 +169,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         const row = running.rows[0] as Record<string, unknown> | undefined;
         if (row) return { begun: false, running: rowToEntry(row) };
         await client.query(UPSERT_FIRE, fireParams(cronId, entry));
+        await enqueue?.(client);
         return { begun: true };
       });
     },

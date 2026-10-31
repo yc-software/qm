@@ -209,26 +209,26 @@ test("a new attempt starts with a clean reply status and the old holder cannot w
   const thread = `web:alice:${randomUUID()}`;
   await admit(thread);
   const { run, token } = await claim();
-  assert.equal(
-    await runStore.runs.setDeliveryState(run.id, token, {
-      replying: true,
-      firstBlock: "On it.",
-      surfacePosted: true,
-      replyDone: true,
-      runtime: { modelId: "m1" } as never,
-      editRef: "ts-1",
-    }),
-    true,
-  );
+  assert.equal(await runStore.runs.setDeliveryState(run.id, token, { replying: true, editRef: "ts-1" }), true);
   await admin.query(
     "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
     [run.absurdRunId],
   );
+  assert.equal(
+    await runStore.runs.setDeliveryState(run.id, token, { editRef: "lapsed" }),
+    false,
+    "a holder whose claim lapsed cannot write delivery state",
+  );
   const next = await claim();
   assert.equal(next.run.id, run.id);
-  assert.deepEqual(next.run.deliveryState, { replying: true, editRef: "ts-1" });
-  assert.equal(await runStore.runs.setDeliveryState(run.id, token, { firstBlock: "stale" }), false);
-  assert.equal((await runStore.runs.get(run.id))?.deliveryState?.firstBlock, undefined);
+  assert.deepEqual(
+    next.run.deliveryState,
+    { editRef: "ts-1" },
+    "the new attempt keeps the message to edit, not replying",
+  );
+  assert.equal(await runStore.runs.setDeliveryState(run.id, token, { editRef: "stale" }), false);
+  assert.equal(await runStore.runs.setDeliveryState(run.id, next.token, { replying: true }), true);
+  assert.deepEqual((await runStore.runs.get(run.id))?.deliveryState, { editRef: "ts-1", replying: true });
 });
 
 test("withdraw deletes a queued turn and cancels an unclaimed one, advancing the conversation", { skip }, async () => {
@@ -643,6 +643,27 @@ test(
     assert.equal((await runStore.runs.get(waiting))?.status, "pending");
   },
 );
+
+test("pointer repair adopts legacy rows written after the cutover migration ran", { skip }, async () => {
+  const thread = `web:alice:${randomUUID()}`;
+  const late = randomUUID();
+  const expired = randomUUID();
+  const live = randomUUID();
+  const other = `web:alice:${randomUUID()}`;
+  const at = Date.now();
+  await admin.query(
+    `INSERT INTO runs(id, session_id, status, request, attempts, max_attempts, created_at, claim_priority, lease_token, lease_expires_at)
+     VALUES ($1, $4, 'running', $5, 1, 3, $6::bigint, 0, 'old', $6::bigint - 1000),
+            ($2, $4, 'pending', $5, 0, 3, $6::bigint + 1, 0, NULL, NULL),
+            ($3, $7, 'running', $5, 1, 3, $6::bigint, 0, 'old', $6::bigint + 600000)`,
+    [expired, late, live, thread, JSON.stringify(request(thread)), at, other],
+  );
+  assert.equal(await ledger.startStranded(), 1);
+  assert.deepEqual((await runStore.runs.get(expired))?.lastStop, { kind: "lease_expired" });
+  assert.equal(await pointer(thread), expired);
+  assert.equal((await runStore.runs.get(late))?.status, "queued");
+  assert.equal((await runStore.runs.get(live))?.status, "running", "a legacy run whose lease is live is left alone");
+});
 
 test("admission into a conversation with stranded queued turns starts the oldest first", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;

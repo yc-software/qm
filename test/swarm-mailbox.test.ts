@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn } from "./support/turns.ts";
 
 test("a message wakes its recipients unless sent with wake:false, which leaves it in their mailboxes", async () => {
   const f = await swarmFixture();
@@ -87,7 +88,7 @@ test("a running goal turn shows a mailbox message once and hands it over when it
     text: "north gate is closed",
   });
   const run = (await f.runs.list()).find((item) => item.request.swarm?.recipientId === busy!.id)!;
-  const claimed = (await f.runs.claimById(run.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, run.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,
