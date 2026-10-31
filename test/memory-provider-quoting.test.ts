@@ -8,6 +8,7 @@ import { buildApp } from "./support/build-app.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
+import { failedTurnError } from "./support/turns.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { quotedData } from "../src/util/text.ts";
 
@@ -44,7 +45,11 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
     { KNOWLEDGE_ID: "ro", KNOWLEDGE_SECRET: "x" },
   );
   const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "mem-quoted-")), memoryProviderConfig: memoryProviderConfig! }),
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "mem-quoted-")),
+      memoryProviderConfig: memoryProviderConfig!,
+      maxAttempts: 1,
+    }),
   );
   t.after(() => built.runtime.stop());
   const dm = (text: string, threadRef: string): TurnRequest => ({
@@ -91,8 +96,12 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   const entries = await built.sessions.getEntries(result.sessionId!);
   assert.deepEqual(outcomes(entries.find((entry) => entry.type === "user")), recalledBoth);
 
-  await assert.rejects(
-    built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", liveActor: true }),
+  assert.match(
+    await failedTurnError(built, {
+      ...dm("use the fancy model", "dm:U1:tB"),
+      model: "not-a-real-model",
+      liveActor: true,
+    }),
     /not approved/,
   );
   const failed = (await built.sessions.getEntries(result.sessionId!)).findLast((entry) => entry.type === "user");
