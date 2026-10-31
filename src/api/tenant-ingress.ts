@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
-import { isTenantId, withTenant } from "../tenants/context.ts";
+import { isTenantId, tenantReady, withTenant } from "../tenants/context.ts";
 import type { TenantResolver } from "../tenants/resolver.ts";
 import type { RowTenants } from "../tenants/row-tenant.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -64,7 +64,10 @@ export async function withRequestTenant(
     sendJson(res, 403, { error: "forbidden", message: "this credential belongs to another tenant" });
     return void req.resume();
   }
-  return withTenant(tenant, next);
+  return withTenant(tenant, async () => {
+    await tenantReady();
+    return next();
+  });
 }
 
 export async function withRowTenant(

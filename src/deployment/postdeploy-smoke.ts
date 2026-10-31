@@ -1,10 +1,11 @@
-import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { createPgPool, pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { TENANT_HEADER, signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
+import { createTenantSettingsStore, type TenantSettingsStore } from "../tenants/settings.ts";
 import { hostTenant } from "../../plugins/chassis/src/core-client.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
@@ -120,7 +121,7 @@ export async function stagingApiHeaders(
   );
 }
 
-type LiveSessionConfig = Pick<Config, "adminGrants" | "portalIdentitySecret" | "signingSecret">;
+type LiveSessionConfig = Pick<Config, "portalIdentitySecret" | "signingSecret"> & { adminGrants?: string };
 
 export async function checkLiveSession(
   config: LiveSessionConfig,
@@ -269,19 +270,19 @@ async function checkApi(
   if (!Array.isArray(parsed.sessions)) throw new Error("staging session API response has no sessions array");
 }
 
-type PostdeployConfig = Pick<
-  Config,
-  | "adminGrants"
-  | "databaseUrl"
-  | "databaseCaCert"
-  | "databaseCaCertFile"
-  | "flyAppName"
-  | "port"
-  | "portalIdentitySecret"
-  | "publicWebUrl"
-  | "signingSecret"
-  | "slack"
->;
+type PostdeployConfig = LiveSessionConfig &
+  Pick<
+    Config,
+    | "databaseUrl"
+    | "databaseCaCert"
+    | "databaseCaCertFile"
+    | "flyAppName"
+    | "port"
+    | "portalIdentitySecret"
+    | "publicWebUrl"
+    | "signingSecret"
+    | "slack"
+  >;
 
 async function checkDatabase(config: PostdeployConfig): Promise<void> {
   const { databaseUrl } = config;
@@ -322,8 +323,13 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");
 }
 
-export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string): Promise<void> {
-  await checkLiveSession(config, baseUrl, (input, init) => {
+export async function runSessionSmoke(
+  config: PostdeployConfig,
+  baseUrl: string,
+  settings?: Pick<TenantSettingsStore, "get">,
+): Promise<void> {
+  const adminGrants = settings ? (await settings.get()).values.ADMIN_GRANTS : config.adminGrants;
+  await checkLiveSession({ ...config, adminGrants }, baseUrl, (input, init) => {
     const timeout = AbortSignal.timeout(
       init?.method === "POST" && new URL(String(input)).pathname === "/v1/turns" ? 300_000 : 30_000,
     );
@@ -339,9 +345,14 @@ export async function withCoreTenant<T>(baseUrl: string, secret: string | undefi
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const config = loadConfig();
-  const baseUrl = process.argv[3] ?? `http://127.0.0.1:${config.port}`;
-  await withCoreTenant(baseUrl, config.signingSecret, async () => {
+  const loaded = loadConfig();
+  const baseUrl = process.argv[3] ?? `http://127.0.0.1:${loaded.port}`;
+  const settings = createTenantSettingsStore({
+    harness: loaded.harness,
+    ...(loaded.databaseUrl ? { db: createPgPool(loaded.databaseUrl), keyMaterial: loaded.connectorSecretKey } : {}),
+  });
+  await withCoreTenant(baseUrl, loaded.signingSecret, async () => {
+    const config = { ...loaded, adminGrants: (await settings.get()).values.ADMIN_GRANTS };
     if (process.argv[2] === "session") {
       await runSessionSmoke(config, baseUrl);
       console.log("database and live session smoke passed");

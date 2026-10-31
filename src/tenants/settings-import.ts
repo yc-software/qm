@@ -5,7 +5,7 @@ import { sanitizeBranding } from "../resolution/branding.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { parseSharingPosture } from "../resolution/sharing-posture.ts";
 import { parseSecurityPosture } from "../security/security-posture.ts";
-import type { ScopeId } from "../types.ts";
+import { tenantRootScope } from "./context.ts";
 import { isTenantSettingKey, TENANT_SETTING_KEYS, type TenantSettingsStore } from "./settings.ts";
 
 const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
@@ -70,7 +70,6 @@ export interface TenantSettingsImportDeps {
     | "getConnectorClientSecret"
     | "setConnectorClient"
   >;
-  rootScope: ScopeId;
   actor: string;
 }
 
@@ -113,9 +112,9 @@ async function importOAuthClients(
   for (const [name, provider] of Object.entries(PROVIDERS)) {
     const clientId = values[provider.clientIdEnv]?.trim();
     const clientSecret = values[provider.clientSecretEnv]?.trim();
-    if (!clientId || !clientSecret || (await deps.config.getConnectorClientSecret(deps.rootScope, name))) continue;
+    if (!clientId || !clientSecret || (await deps.config.getConnectorClientSecret(tenantRootScope(), name))) continue;
     const hostedDomain = name === "google" ? values.GOOGLE_WORKSPACE_DOMAIN?.trim() : undefined;
-    await deps.config.setConnectorClient(deps.rootScope, name, {
+    await deps.config.setConnectorClient(tenantRootScope(), name, {
       clientId,
       clientSecret,
       ...(hostedDomain ? { hostedDomain } : {}),
@@ -134,7 +133,7 @@ export async function importTenantSettings(
   const { securityPosture, sharingPosture } = parsedPostures(values);
   await deps.settings.update(Object.fromEntries(present.filter(isTenantSettingKey).map((key) => [key, values[key]!])));
   await importModelKeys(values, deps);
-  const { rootScope } = deps;
+  const rootScope = tenantRootScope();
   if (securityPosture && !(await deps.config.getSecurityPostureOwnDurable(rootScope)))
     await deps.config.setSecurityPosture(rootScope, securityPosture);
   if (sharingPosture && !(await deps.config.getSharingPostureOwnDurable(rootScope)))

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { withTenant } from "../src/tenants/context.ts";
+import { tenantReady, withTenant } from "../src/tenants/context.ts";
 import {
   createTenantSettingsStore,
   openTenantSecret,
@@ -67,4 +67,19 @@ test("a sealed secret opens only for the tenant and setting it was sealed for", 
   assert.throws(() => openTenantSecret(key, randomUUID(), "SPRITES_TOKEN", sealed));
   assert.throws(() => openTenantSecret(key, tenant, "E2B_API_KEY", sealed));
   assert.throws(() => openTenantSecret(tenantSettingsKey("x".repeat(32)), tenant, "SPRITES_TOKEN", sealed));
+});
+
+test("a tenant first bound after start has its settings loaded before its work runs", async () => {
+  const tenant = randomUUID();
+  const store = createTenantSettingsStore({ harness: "pi", initial: { [tenant]: { PI_MODEL: "claude-opus-5-5" } } });
+  store.start();
+  try {
+    const model = await withTenant(tenant, async () => {
+      await tenantReady();
+      return store.peek().piModel;
+    });
+    assert.equal(model, "claude-opus-5-5");
+  } finally {
+    await store.stop();
+  }
 });
