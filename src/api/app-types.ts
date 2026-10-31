@@ -47,10 +47,10 @@ import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { AclStore } from "../acl/acl-store.ts";
-import type { SkillStore, Skill, SkillListing, SkillResolution } from "../skills/skill-store.ts";
-import type { SkillPack, NewSkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
+import type { SkillStore, Skill } from "../skills/skill-store.ts";
+import type { SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
-import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
+import type { SkillMethods } from "./app-skill-types.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -278,7 +278,7 @@ export interface SessionSearchHit {
   archived?: boolean;
 }
 
-export interface App {
+export interface App extends SkillMethods {
   swarms?: SwarmService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
@@ -560,39 +560,6 @@ export interface App {
   listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
-  listSkills(only?: SkillListing): Promise<Skill[]>;
-  getSkill(id: string): Promise<Skill | null>;
-  archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
-  canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
-  updateOwnedSkill(
-    id: string,
-    principalId: string,
-    patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean },
-  ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | null>;
-  listSkillPacks(): Promise<SkillPack[]>;
-  getSkillPack(id: string): Promise<SkillPack | null>;
-  registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
-  updateSkillPack(id: string, patch: Partial<Omit<SkillPack, "id" | "createdAt">>): Promise<SkillPack>;
-  skillPackCatalog(id: string): Promise<IngestPlan & { bundlePaths: string[] }>;
-  importSkillPack(id: string, selected: "all" | string[], scopeIds?: ScopeId[]): Promise<ImportResult>;
-  syncSkillPack(id: string): Promise<ImportResult>;
-  removeSkillPack(id: string): Promise<{ removed: number }>;
-  createOwnedSkill(input: {
-    principalId: string;
-    homeScope?: ScopeId;
-    name: string;
-    description: string;
-    body: string;
-    requiredCapabilities?: string[];
-  }): Promise<Skill | null>;
-  deleteOwnedSkill(input: {
-    principalId: string;
-    id: string;
-    liveActor?: boolean;
-  }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackDeployment(id: string, version: number, actor?: string): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
   restoreDeployment(id: string, actorId?: string): Promise<Deployment>;

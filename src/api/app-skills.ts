@@ -10,7 +10,8 @@ import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { bundleFilePaths, persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
 import { triggerBlocksSharedSkill } from "./artifact-share.ts";
 
-import type { App, AppDeps } from "./app-types.ts";
+import type { AppDeps } from "./app-types.ts";
+import type { SkillMethods } from "./app-skill-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
@@ -209,29 +210,7 @@ async function reconcilePack(
   return withSkillMutationLock(deps, applyFetched);
 }
 
-export function createSkillMethods(
-  deps: AppDeps,
-  h: AppHelpers,
-): Pick<
-  App,
-  | "listSkills"
-  | "getSkill"
-  | "archiveSkill"
-  | "listVisibleSkills"
-  | "canManageSkill"
-  | "updateOwnedSkill"
-  | "restoreOwnedSkill"
-  | "listSkillPacks"
-  | "getSkillPack"
-  | "registerSkillPack"
-  | "updateSkillPack"
-  | "skillPackCatalog"
-  | "importSkillPack"
-  | "syncSkillPack"
-  | "removeSkillPack"
-  | "createOwnedSkill"
-  | "deleteOwnedSkill"
-> {
+export function createSkillMethods(deps: AppDeps, h: AppHelpers): SkillMethods {
   const { canManageSkill, republishIfShared } = h;
   return {
     async listSkills(only) {
