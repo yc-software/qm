@@ -43,7 +43,7 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number, orderedTargetLimit?: number): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -94,8 +94,6 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           else delete existing.provenance;
           existing.createdAt = Date.now();
           delete existing.expiredAt;
-          deliveries.delete(existing.id);
-          deliveries.set(existing.id, existing);
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
@@ -124,10 +122,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs, orderedTargetLimit) {
+    async claimPending(type, ttlMs) {
       const now = Date.now();
       expireOveraged(now);
-      let rows = [...deliveries.values()].filter(
+      const rows = [...deliveries.values()].filter(
         (d) =>
           d.deliveredAt === null &&
           d.expiredAt === undefined &&
@@ -135,14 +133,6 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           d.destination.type === type &&
           (claimedUntil.get(d.id) ?? 0) <= now,
       );
-      if (orderedTargetLimit !== undefined) {
-        const pending = [...deliveries.values()].filter(
-          (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
-        );
-        rows = rows
-          .filter((d) => pending.find((earlier) => earlier.destination.target === d.destination.target)?.id === d.id)
-          .slice(0, orderedTargetLimit);
-      }
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
     },

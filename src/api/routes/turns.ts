@@ -122,12 +122,8 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
   return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
 }
 
-function sanitizedTurnRequest(
-  body: TurnRequest,
-  deliveryWebhookEnabled = false,
-): { request: TurnRequest } | { error: string } {
+function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   if (body.deliveryWebhook !== undefined) {
-    if (!deliveryWebhookEnabled) return { error: "delivery webhook is not configured" };
     const parsed = z.object({ binding: z.uuid() }).strict().safeParse(body.deliveryWebhook);
     if (
       !parsed.success ||
@@ -184,7 +180,7 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
-  const sanitized = sanitizedTurnRequest(body, ctx.deps.deliveryWebhookEnabled);
+  const sanitized = sanitizedTurnRequest(body);
   if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
@@ -247,7 +243,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
       return sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
     }
-    const sanitized = sanitizedTurnRequest(body.request, ctx.deps.deliveryWebhookEnabled);
+    const sanitized = sanitizedTurnRequest(body.request);
     if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
     request = sanitized.request;
   }
@@ -331,6 +327,14 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
+async function failDelivery(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const reason = isObj(body) && typeof body.reason === "string" ? body.reason.trim() : "";
+  if (!reason) return sendJson(res, 400, { error: "bad_request", message: "reason required" });
+  const failed = await app.failDelivery(ctx.params.id!, reason);
+  return sendJson(res, failed ? 200 : 404, failed ? { ok: true } : { error: "not_found" });
+}
+
 async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const idempotencyKey = isObj(body) && typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
@@ -357,5 +361,6 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
+  { method: "POST", path: "/v1/deliveries/:id/fail", actor: "system", auth: "source", handle: failDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

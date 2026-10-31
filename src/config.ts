@@ -50,7 +50,6 @@ import {
 import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-settings.ts";
 
 export interface Config extends SandboxSettings, DeploySettings {
-  deliveryWebhook?: { url: string; secret: string };
   productAnalytics?: { apiKey: string; host?: string };
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
@@ -383,7 +382,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
       );
   }
-  const deliveryWebhook = deliveryWebhookFromEnv(env);
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
@@ -597,7 +595,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
     monitorHeartbeatMs:
       (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
-    ...(deliveryWebhook ? { deliveryWebhook } : {}),
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
@@ -678,16 +675,4 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...sandbox,
     ...deploy,
   };
-}
-
-function deliveryWebhookFromEnv(env: NodeJS.ProcessEnv): Config["deliveryWebhook"] {
-  if (!env.DELIVERY_WEBHOOK_URL && !env.DELIVERY_WEBHOOK_SECRET) return undefined;
-  if (!env.DELIVERY_WEBHOOK_URL || !isStrongSigningSecret(env.DELIVERY_WEBHOOK_SECRET))
-    throw new Error("DELIVERY_WEBHOOK_URL and a strong DELIVERY_WEBHOOK_SECRET must be configured together");
-  const url = new URL(env.DELIVERY_WEBHOOK_URL);
-  if (url.protocol !== "https:" || url.username || url.password || url.hash)
-    throw new Error("DELIVERY_WEBHOOK_URL must be an HTTPS URL without credentials or a fragment");
-  if ([env.CORE_SIGNING_SECRET, env.PORTAL_IDENTITY_SECRET].includes(env.DELIVERY_WEBHOOK_SECRET))
-    throw new Error("DELIVERY_WEBHOOK_SECRET must be distinct from core and identity secrets");
-  return { url: url.href, secret: env.DELIVERY_WEBHOOK_SECRET };
 }

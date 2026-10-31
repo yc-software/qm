@@ -148,7 +148,6 @@ import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.t
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
 import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
-import { createWebhookDeliveryWorker } from "./delivery/webhook-delivery.ts";
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
@@ -1784,9 +1783,6 @@ export function buildApp(
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
   const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
-  const webhookDeliveryWorker = config.deliveryWebhook
-    ? createWebhookDeliveryWorker(deliveries, sessions, config.deliveryWebhook)
-    : undefined;
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2847,7 +2843,6 @@ export function buildApp(
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
       runResultSweeper.start();
-      webhookDeliveryWorker?.start();
       approvalDeliverySweeper.start();
     };
     if (backgroundStopping)
@@ -2880,7 +2875,6 @@ export function buildApp(
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
-      webhookDeliveryWorker?.stop(),
       approvalDeliverySweeper.stop(),
       preemptionSweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
@@ -3083,7 +3077,6 @@ export function serverDeps(
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    deliveryWebhookEnabled: !!config.deliveryWebhook,
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
