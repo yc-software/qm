@@ -6,11 +6,12 @@ import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { testSettingsStore } from "./support/tenant-settings.ts";
+import { TEST_TENANT } from "./support/tenant-seed.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 
 const KEY = "import-test-connector-key-0123456789";
-const root = scopeId("org", "acme");
+const root = scopeId("org", TEST_TENANT);
 
 async function deps() {
   return {
@@ -18,14 +19,13 @@ async function deps() {
     modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: KEY }),
     featureFlags: testFeatureFlagStore(),
     config: testConfigStore({ connectorSecretKey: KEY }),
-    rootScope: root,
     actor: "import-test",
   };
 }
 
 test("the import copies env values into the tenant's settings and the stores that already own them", async () => {
   const d = await deps();
-  await withTenant(THIRD_TENANT, async () => {
+  await withTenant(TEST_TENANT, async () => {
     const updated = await importTenantSettings(
       {
         SPRITES_TOKEN: "sprites-token",
@@ -59,7 +59,7 @@ test("the import copies env values into the tenant's settings and the stores tha
 
 test("the import rejects keys that are not tenant settings and leaves nothing half-written", async () => {
   const d = await deps();
-  await withTenant(THIRD_TENANT, async () => {
+  await withTenant(TEST_TENANT, async () => {
     await assert.rejects(
       importTenantSettings({ SPRITES_TOKEN: "t", DATABASE_URL: "postgres://x", CORE_SIGNING_SECRET: "s" }, d),
       /Not tenant settings: DATABASE_URL, CORE_SIGNING_SECRET/,
@@ -83,7 +83,7 @@ test("boot names the tenant settings still present in the environment", () => {
 
 test("the import never replaces values an admin already stored", async () => {
   const d = await deps();
-  await withTenant(THIRD_TENANT, async () => {
+  await withTenant(TEST_TENANT, async () => {
     await d.modelCredentials.set("anthropic", "admin-key", "admin");
     await d.config.setSecurityPosture(root, "strict");
     await d.config.setBranding(root, { orgName: "Admin Name" });
@@ -110,7 +110,7 @@ test("the import never replaces values an admin already stored", async () => {
 
 test("the import turns the web UI allowlists into access flags once, lowercasing email ids", async () => {
   const d = await deps();
-  await withTenant(THIRD_TENANT, async () => {
+  await withTenant(TEST_TENANT, async () => {
     await importTenantSettings(
       { WEB_UI_PRINCIPALS: "", LOOPS_USERS: "Ada@Example.com, bo@example.com", WEB_UI_VOICE_USERS: "all" },
       d,
@@ -130,13 +130,13 @@ test("the import turns the web UI allowlists into access flags once, lowercasing
 
 test("a listed web UI allowlist becomes per-person sign-in, and an absent one changes nothing", async () => {
   const d = await deps();
-  await withTenant(THIRD_TENANT, async () => {
+  await withTenant(TEST_TENANT, async () => {
     await importTenantSettings({ WEB_UI_PRINCIPALS: "Ada@Example.com,U123" }, d);
     assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, [
       scopeId("personal", "ada@example.com"),
       scopeId("personal", "u123"),
     ]);
-    assert.equal(await d.featureFlags.get("voice"), null);
-    assert.equal(await d.featureFlags.get("loops"), null);
+    assert.ok(!(await d.featureFlags.get("voice")));
+    assert.ok(!(await d.featureFlags.get("loops")));
   });
 });

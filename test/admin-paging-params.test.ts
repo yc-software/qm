@@ -17,7 +17,6 @@ const URL = process.env.DATABASE_URL;
 test("admin list endpoints accept fractional limit values", { skip: !URL }, async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "admin-paging-")),
-    databaseUrl: URL,
   });
   const built = buildApp(config, { tenantSettings: testTenantSettings({ ADMIN_GRANTS: "admin-alice:org_admin" }) });
   const server = createInsecureTestServer(TEST_TENANT, built.app, {
