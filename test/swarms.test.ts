@@ -10,6 +10,7 @@ import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const sharedPool = testPgPool();
 
@@ -146,9 +147,9 @@ test("sweeps use bounded pages and advance past pending cleanup to later swarms"
       }),
     );
   for (const fixture of fixtures) await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
-  const page = await first.store.pending();
+  const page = await withoutTenant(() => first.store.pending());
   assert.equal(page.length, batchSize);
-  const later = (await first.store.pending(page.at(-1)!.id))[0]!;
+  const later = (await withoutTenant(() => first.store.pending(page.at(-1)!.id)))[0]!;
   await first.store.update(page[0]!.id, (swarm) => {
     Object.assign(swarm.members[1]!, { state: "failed", cleanupPending: true });
   });
@@ -745,7 +746,7 @@ test("restart between enqueue and outbox acknowledgement does not redeliver", as
   await Promise.all([service.sweep(), restarted.sweep()]);
   assert.equal((await runs.list()).length, before.length);
   assert.deepEqual((await runs.list()).map((run) => run.id).sort(), before.map((run) => run.id).sort());
-  assert.equal((await store.pending()).length, 0);
+  assert.equal((await withoutTenant(() => store.pending())).length, 0);
 });
 
 test("sandbox reservation survives a crash after provisioning without creating another disk", async () => {
@@ -798,7 +799,7 @@ test("provisioning failure is bounded and rolls back owned resources without que
   assert.equal((await records.get(forum.id))!.state, "ready");
   assert.equal(await sessions.getByThread(worker!.threadRef), null);
   assert.equal((await runs.list()).length, 1);
-  assert.equal((await store.pending()).length, 0);
+  assert.equal((await withoutTenant(() => store.pending())).length, 0);
 });
 
 test("explicit forum supplements private worker disks and remains scope-authorized", async () => {

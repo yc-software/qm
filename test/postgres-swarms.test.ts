@@ -10,6 +10,8 @@ import { createPostgresSwarmRows, type SwarmRows } from "../src/swarms/swarm-tab
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { bindTestTenant, seedTenant, testTenantsSeeded } from "./support/tenant.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
+import { ownedTestDatabase } from "./support/test-database.ts";
 
 bindTestTenant();
 
@@ -17,7 +19,7 @@ const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
 const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
 isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
-const databaseUrl = isolatedUrl?.toString();
+const databaseUrl = isolatedUrl && ownedTestDatabase(isolatedUrl.toString());
 const opened: SwarmRows[] = [];
 const swarmRows = (): SwarmRows => {
   const rows = createPostgresSwarmRows(databaseUrl!);
@@ -135,6 +137,7 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
   const store = createSwarmStore(backing);
   const { service } = await swarmFixture({ store });
   await backing.get("warm");
+  await withoutTenant(() => backing.pending(undefined, 1));
   const pool = await factory.sessionPool();
   const blocker = await pool.connect();
   const observer = await pool.connect();

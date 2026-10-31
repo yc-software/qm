@@ -47,6 +47,7 @@ function inspectableDeliveries() {
   };
 }
 import { TEST_TENANT } from "./support/tenant.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 async function world() {
   const sources = inspectableSources();
@@ -257,17 +258,18 @@ test("Gmail routes verified mailbox notifications and retains cursor across rene
     headers: { authorization: "Bearer trusted" },
   });
   assert.equal(
-    (await ingress.receive("gmail", { ...notification("alice@example.com", "20"), headers: {} })).status,
+    (await withoutTenant(() => ingress.receive("gmail", { ...notification("alice@example.com", "20"), headers: {} })))
+      .status,
     401,
   );
-  await ingress.receive("gmail", notification("other@example.com", "20"));
+  await withoutTenant(() => ingress.receive("gmail", notification("other@example.com", "20")));
   assert.equal((await w.deliveries.all()).length, 0);
-  await ingress.receive("gmail", notification("alice@example.com", "20"));
+  await withoutTenant(() => ingress.receive("gmail", notification("alice@example.com", "20")));
   await w.sources.merge(source.id, { nextWorkAt: 0 });
   await ingress.process(source.id);
   assert.equal(changes, 1);
   assert.equal((await w.sources.get(source.id))?.gmail?.historyId, "20");
-  await ingress.receive("gmail", notification("alice@example.com", "11"));
+  await withoutTenant(() => ingress.receive("gmail", notification("alice@example.com", "11")));
   await w.sources.merge(source.id, { nextWorkAt: 0 });
   await ingress.process(source.id);
   assert.equal(changes, 1);
