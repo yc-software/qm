@@ -4,7 +4,7 @@ import type { ScopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
-export type IndexedResourceKind = Exclude<ResourceKind, "skills">;
+type IndexedResourceKind = Exclude<ResourceKind, "skills">;
 export interface ResourceCandidate {
   id: string;
   title: string;

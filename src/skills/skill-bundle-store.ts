@@ -29,7 +29,7 @@ export interface SkillBundleStore {
   close?(): Promise<void>;
 }
 
-export const SKILL_BUNDLES_MIGRATION = typedTableMigration({
+const SKILL_BUNDLES_MIGRATION = typedTableMigration({
   table: "skill_bundles",
   columns: ["pack_id TEXT NOT NULL", "commit TEXT NOT NULL", "files JSONB NOT NULL", "hash TEXT NOT NULL"],
   primaryKey: ["pack_id"],

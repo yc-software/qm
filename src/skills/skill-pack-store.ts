@@ -51,7 +51,7 @@ export interface SkillPackStore {
 const IMPORT_COMPLETE =
   "json->'lastImport'->>'at' IS NOT NULL AND json->'lastImport'->>'commit' IS NOT NULL AND json->'lastImport'->>'status' IN ('ok', 'error')";
 
-export const SKILL_PACKS_MIGRATION = typedTableMigration({
+const SKILL_PACKS_MIGRATION = typedTableMigration({
   table: "skill_packs",
   columns: [
     "id TEXT NOT NULL",

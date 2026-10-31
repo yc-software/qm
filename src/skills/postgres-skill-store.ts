@@ -24,7 +24,7 @@ const PACK_COMPLETE = ["packId", "commit", "upstreamName"]
 const MILLIS = (field: string) => `round((json->>'${field}')::numeric)::bigint`;
 const SEARCH_VECTOR = `to_tsvector('simple', name || ' ' || description)`;
 
-export const SKILLS_MIGRATION = typedTableMigration({
+const SKILLS_MIGRATION = typedTableMigration({
   table: "skills",
   columns: [
     "id TEXT NOT NULL",

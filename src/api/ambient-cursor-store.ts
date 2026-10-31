@@ -2,7 +2,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 
-export interface AmbientCursor {
+interface AmbientCursor {
   lastJudgedTs: string;
   lastJudgedAt?: number;
 }

@@ -82,7 +82,7 @@ export interface SkillStoreOptions {
 
 export type SkillListing = { scope: ScopeId } | { packIds: readonly string[] } | { archivedFor: string };
 
-export interface SkillQueries {
+interface SkillQueries {
   get(id: string): Promise<Skill | null>;
   inScopes(scopes: readonly ScopeId[], name?: string): Promise<Skill[]>;
   publishedNamed(names: readonly string[]): Promise<Skill[]>;

@@ -34,7 +34,7 @@ export const FEATURES = {
 export type FeatureName = keyof typeof FEATURES;
 export const FEATURE_NAMES = Object.keys(FEATURES) as FeatureName[];
 
-export interface FeatureFlagRecord {
+interface FeatureFlagRecord {
   featureName: FeatureName;
   enabledScopes: ScopeId[];
   updatedAt: number;

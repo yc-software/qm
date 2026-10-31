@@ -361,7 +361,7 @@ const SLACK_LINK_COMPLETE = ["channelId", "channelName", "linkedBy", "linkedAt"]
   .map((field) => `json->'slackChannel'->>'${field}' IS NOT NULL`)
   .join(" AND ");
 
-export const PROJECTS_MIGRATION = typedTableMigration({
+const PROJECTS_MIGRATION = typedTableMigration({
   table: "projects",
   columns: [
     "id TEXT NOT NULL",
