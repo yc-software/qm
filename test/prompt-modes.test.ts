@@ -102,7 +102,7 @@ async function buildOrchestrator(
 
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,
     resolution,

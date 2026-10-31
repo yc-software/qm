@@ -251,9 +251,14 @@ cleans up after them in one call. It reads private inventory, so run it from a D
    still needs them; `archive_skill` handles a skill, and someone who manages the scope can
    archive an app. An admin grant is revoked under Admins in the dashboard.
 
+Applying marks the person offboarded: the response's `principal` record (also on `user` and in the
+`users` list as `offboarded`) holds when, by whom, and every change with its result. The dashboard
+hides offboarded people from Users unless "Show offboarded" is ticked.
+
 Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on, even
-for someone the directory sync had removed; it does not restore anything else (the owner or an
-admin restores apps, crons, loops and skills through their usual controls).
+for someone the directory sync had removed, and clears `offboarded` while keeping the record with
+`reactivatedAt`/`reactivatedBy`. It does not restore anything else (the owner or an admin restores
+apps, crons, loops and skills through their usual controls).
 
 ## Scheduling admin-reading work
 

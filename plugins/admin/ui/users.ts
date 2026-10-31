@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { table, card, renderer } from "./shared.ts";
+import { table, card, renderer, badge } from "./shared.ts";
 
 type Services = Record<string, any>;
 export class UsersView {
@@ -8,6 +8,7 @@ export class UsersView {
   services: Services;
   paint: (template: unknown) => void;
   filter = "";
+  showOffboarded = false;
   inviteOpen = false;
   email = "";
   role = "member";
@@ -199,8 +200,11 @@ export class UsersView {
   draw() {
     const s = this.services;
     const matches = (parts: unknown[]) => parts.join(" ").toLowerCase().includes(this.filter.trim().toLowerCase());
-    const users = (this.data.users || []).filter((u: any) =>
-      matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
+    const offboarded = (this.data.users || []).filter((u: any) => u.offboarded).length;
+    const users = (this.data.users || []).filter(
+      (u: any) =>
+        (this.showOffboarded || !u.offboarded) &&
+        matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
     );
     const externals = (this.data.externalUsers || []).filter((m: any) =>
       matches([m.email, m.role, m.invitedBy || "", m.status]),
@@ -270,7 +274,12 @@ export class UsersView {
     const roster = table(
       ["Principal", "Role", "Last seen", "Sessions", "Turns", "Credentials", "Grants", "", ""],
       users.map((u: any) => [
-        { text: u.principalId, cls: "mono" },
+        u.offboarded || u.deactivated
+          ? {
+              node: html`<span class="mono">${u.principalId}</span>
+                ${u.offboarded ? badge("Offboarded", "warn") : badge("Deactivated", "warn")}`,
+            }
+          : { text: u.principalId, cls: "mono" },
         { node: html`<span class="subline">${u.admin?.isAdmin ? s.labelRole(u.admin.role) : "member"}</span>` },
         u.lastSeenAt
           ? { node: html`<span title=${s.fmtTime(u.lastSeenAt)}>${s.relTime(u.lastSeenAt)}</span>`, cls: "num" }
@@ -309,20 +318,37 @@ export class UsersView {
           <section class="card users-roster">
             <div class="head">
               <h2>Users</h2>
-              <button
-                type="button"
-                class="primary"
-                title="Invite teammate"
-                aria-label="Invite teammate"
-                aria-expanded=${String(this.inviteOpen)}
-                @click=${() => {
-                  this.inviteOpen = !this.inviteOpen;
-                  this.draw();
-                  if (this.inviteOpen) this.root.querySelector<HTMLInputElement>("#users-email")?.focus();
-                }}
-              >
-                Invite teammate
-              </button>
+              <div class="users-head-actions">
+                ${
+                  offboarded
+                    ? html`<label class="users-offboarded-toggle">
+                        <input
+                          type="checkbox"
+                          .checked=${this.showOffboarded}
+                          @change=${(e: Event) => {
+                            this.showOffboarded = (e.target as HTMLInputElement).checked;
+                            this.draw();
+                          }}
+                        />
+                        Show offboarded (${offboarded})
+                      </label>`
+                    : ""
+                }
+                <button
+                  type="button"
+                  class="primary"
+                  title="Invite teammate"
+                  aria-label="Invite teammate"
+                  aria-expanded=${String(this.inviteOpen)}
+                  @click=${() => {
+                    this.inviteOpen = !this.inviteOpen;
+                    this.draw();
+                    if (this.inviteOpen) this.root.querySelector<HTMLInputElement>("#users-email")?.focus();
+                  }}
+                >
+                  Invite teammate
+                </button>
+              </div>
             </div>
             <div class="body">
               ${invite}${roster}

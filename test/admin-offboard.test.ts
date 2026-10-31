@@ -201,6 +201,19 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       );
     assert.ok(events.some((e) => e.action === "user.offboard" && e.principalId === "admin-alice"));
 
+    assert.equal(applied.principal.offboarded, true);
+    assert.equal(applied.principal.offboardedBy, "admin-alice");
+    assert.deepEqual(
+      applied.principal.offboardChanges.map((c: any) => [c.id, c.result]),
+      applied.changes.map((c: any) => [c.id, c.result]),
+      "the person's record keeps what changed",
+    );
+    const detail: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    assert.equal(detail.principal.offboarded, true);
+    const listed: any = await (await fetch(`${s.base}/v1/admin/users`, { headers: ADMIN })).json();
+    const row = listed.users.find((u: any) => u.principalId === "U1");
+    assert.deepEqual([row?.offboarded, row?.deactivated], [true, true], "the users list marks them");
+
     const again: any = await (await s.offboard("U1", {})).json();
     assert.deepEqual(
       again.changes.map((c: any) => c.id),
@@ -212,6 +225,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal(reactivated.status, 200);
     assert.equal(identity.classify("U1").type, "internal");
     assert.equal((await app.getCron(personalCron.id))!.archived, true, "reactivation restores only sign-in");
+    const history = ((await reactivated.json()) as any).principal;
+    assert.deepEqual(
+      [history.offboarded, history.offboardedBy, history.reactivatedBy, history.offboardChanges.length > 0],
+      [false, "admin-alice", "admin-alice", true],
+      "reactivation keeps the offboarding as history",
+    );
+    const relisted: any = await (await fetch(`${s.base}/v1/admin/users`, { headers: ADMIN })).json();
+    assert.notEqual(relisted.users.find((u: any) => u.principalId === "U1")?.offboarded, true);
   } finally {
     await s.close();
   }

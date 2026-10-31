@@ -48,7 +48,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
   const orch = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     resolution: createResolutionService("default-org", config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,

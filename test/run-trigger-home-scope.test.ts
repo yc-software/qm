@@ -36,7 +36,7 @@ function deps(
   return {
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
@@ -164,7 +164,7 @@ describe("runTrigger home-scope gate for group homes", () => {
     const d: TriggerDeps = {
       deliveries: createDeliveryStore(),
       idempotency: createIdempotencyStore(testMap()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
       run: async () => {
         ranTurn = true;
         return { status: "ok", reply: "posted" };

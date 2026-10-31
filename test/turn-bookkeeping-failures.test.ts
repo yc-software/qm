@@ -80,7 +80,7 @@ function buildScenario(turnResult?: Partial<AgentTurnResult>) {
   const deliveries = createDeliveryStore();
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     workspace,

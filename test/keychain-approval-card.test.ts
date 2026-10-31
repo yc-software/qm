@@ -47,7 +47,7 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     deliveries: {

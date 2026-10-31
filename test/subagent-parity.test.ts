@@ -144,7 +144,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,

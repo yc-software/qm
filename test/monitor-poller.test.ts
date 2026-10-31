@@ -113,7 +113,7 @@ async function agent(opts?: {
     await opts?.onRun?.();
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
   };
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const poller = createMonitorPoller({
     ...singleProcessDeps(),
     monitors,

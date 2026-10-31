@@ -53,6 +53,21 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         admin: adminStatusFromGrants(grants, member.email),
       });
   }
+  for (const record of (await deps.identity?.listPrincipals()) ?? []) {
+    if (record.offboarded && !users.some((u) => samePerson(u.principalId, record.principalId)))
+      users.push({
+        principalId: record.principalId,
+        sessionCount: 0,
+        turnCount: 0,
+        lastSeenAt: null,
+        admin: adminStatusFromGrants(grants, record.principalId),
+      });
+  }
+  const rows = users.map((u) => ({
+    ...u,
+    deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,
+    offboarded: deps.identity?.principal(u.principalId)?.offboarded === true,
+  }));
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
@@ -61,7 +76,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   };
   return sendJson(res, 200, {
     scopeId: scope,
-    users,
+    users: rows,
     grants,
     externalUsers,
     inviteEmail,
@@ -399,6 +414,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
     deactivated: deps.identity?.deactivationSource(principalId) === "manual",
+    principal: deps.identity?.principal(principalId) ?? null,
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

@@ -61,7 +61,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     acl,
     deployDir: join(dir, "deploy"),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const app = createApp({
     deploy,
     acl,

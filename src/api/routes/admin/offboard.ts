@@ -6,6 +6,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
+import type { OffboardedChange } from "../../../identity/identity-service.ts";
 import { followLoopState } from "../loops.ts";
 
 type Kind = "principal" | "cron" | "loop" | "webhook" | "keychain" | "deployment" | "skill" | "sandbox";
@@ -257,7 +258,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     audit(deps, { principalId: actor.id, action: "user.offboard.preview", resource: principalId, scopeLabel: org });
     return sendJson(res, 200, { principalId, applied: false, changes: steps.map(view), kept });
   }
-  const changes: Change[] = [];
+  const changes: OffboardedChange[] = [];
   for (const step of steps) {
     const change = view(step);
     try {
@@ -283,7 +284,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     resource: `${principalId}/done=${changes.length - failed}/failed=${failed}`,
     scopeLabel: org,
   });
-  return sendJson(res, 200, { principalId, applied: true, changes, kept });
+  const principal = (await deps.identity?.recordOffboarded(principalId, actor.id, changes)) ?? null;
+  return sendJson(res, 200, { principalId, applied: true, changes, kept, principal });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
@@ -292,12 +294,17 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  await deps.identity.reactivate(principalId);
+  await deps.identity.reactivate(principalId, actor.id);
   audit(deps, {
     principalId: actor.id,
     action: "principal.reactivate",
     resource: principalId,
     scopeLabel: orgScope(deps),
   });
-  return sendJson(res, 200, { ok: true, principalId, active: true });
+  return sendJson(res, 200, {
+    ok: true,
+    principalId,
+    active: true,
+    principal: deps.identity.principal(principalId) ?? null,
+  });
 }

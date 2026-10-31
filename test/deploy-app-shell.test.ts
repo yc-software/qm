@@ -49,7 +49,7 @@ function appServingUpstream(upstreamPort: number) {
     acl,
     directory,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };

@@ -83,6 +83,13 @@ test("offboarding previews, applies only after confirmation, and reports each re
               data: {
                 applied: true,
                 kept,
+                principal: {
+                  principalId: "alex@example.com",
+                  offboarded: true,
+                  offboardedAt: 1700000000000,
+                  offboardedBy: "admin-alice",
+                  offboardChanges: [{ ...signIn, result: "done" }],
+                },
                 changes: [
                   { ...signIn, result: "done" },
                   { ...change, result: "failed", error: "store unavailable" },
@@ -116,5 +123,6 @@ test("offboarding previews, applies only after confirmation, and reports each re
   assert.match(f.root.textContent!, /store unavailable/);
   assert.match(f.root.textContent!, /1 changes failed/);
   assert.ok(button("Reactivate sign-in"), "sign-in shows as deactivated");
+  assert.match(f.root.textContent!, /offboarded\s+Offboarded 1700000000000 by admin-alice \(1 changes\)/);
   f.dom.window.close();
 });

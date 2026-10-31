@@ -47,7 +47,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const deps: AskResolutionDeps = {
     deliveries,
     idempotency,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     getCron: (id) => crons.get(id),
     run,
   };

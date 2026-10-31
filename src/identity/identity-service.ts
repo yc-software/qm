@@ -17,6 +17,26 @@ export interface DeactivationRecord {
   at: number;
 }
 
+export interface OffboardedChange {
+  kind: string;
+  id: string;
+  label: string;
+  scopeId: string;
+  action: string;
+  result: "done" | "failed";
+  error?: string;
+}
+
+export interface PrincipalRecord {
+  principalId: string;
+  offboarded: boolean;
+  offboardedAt?: number;
+  offboardedBy?: string;
+  offboardChanges?: OffboardedChange[];
+  reactivatedAt?: number;
+  reactivatedBy?: string;
+}
+
 interface DirectorySyncOutcome {
   deactivated: string[];
   reactivated: string[];
@@ -27,7 +47,10 @@ export interface IdentityService extends IdentityProvider {
   audienceIsAllInternal(audience: Principal[]): boolean;
   deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
   deactivationSource(externalId: string): DeactivationSource | undefined;
-  reactivate(externalId: string): Promise<void>;
+  reactivate(externalId: string, by?: string): Promise<void>;
+  principal(externalId: string): PrincipalRecord | undefined;
+  listPrincipals(): Promise<PrincipalRecord[]>;
+  recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
   externalMember(principalId: string): ExternalMember | undefined;
@@ -48,12 +71,15 @@ export function createIdentityService(
   opts: {
     directorySyncProtected?: readonly string[];
     externalMembers: DurableMap<ExternalMember>;
+    principals: DurableMap<PrincipalRecord>;
     principalLinks?: { refresh(force?: boolean): Promise<void> };
   },
 ): IdentityService {
   const externalStore = opts.externalMembers;
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
+  const principalStore = opts.principals;
+  const principals = new Map<string, PrincipalRecord>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
 
   const keptByDirectorySync = (key: string): boolean =>
@@ -66,9 +92,15 @@ export function createIdentityService(
   const refresh = createTtlRefresh(10_000, () =>
     exclusive(async () => {
       await opts.principalLinks?.refresh(true);
-      const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
+      const [deactivations, members, records] = await Promise.all([
+        store.all(),
+        externalStore.all(),
+        principalStore.all(),
+      ]);
       deactivated.clear();
       externals.clear();
+      principals.clear();
+      for (const r of records) principals.set(personKey(r.principalId), r);
       for (const r of deactivations) {
         const key = personKey(r.principalId);
         if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
@@ -99,9 +131,23 @@ export function createIdentityService(
     await store.put(foldPrincipalId(externalId), record);
   }
 
-  async function reactivateNow(externalId: string): Promise<void> {
+  async function putPrincipal(record: PrincipalRecord): Promise<PrincipalRecord> {
+    principals.set(personKey(record.principalId), record);
+    await principalStore.put(foldPrincipalId(record.principalId), record);
+    return record;
+  }
+
+  async function reactivateNow(externalId: string, by?: string): Promise<void> {
     deactivated.delete(personKey(externalId));
     for (const key of storeKeys(externalId)) await store.delete(key);
+    const record = principals.get(personKey(externalId));
+    if (record?.offboarded)
+      await putPrincipal({
+        ...record,
+        offboarded: false,
+        reactivatedAt: Date.now(),
+        ...(by ? { reactivatedBy: by } : {}),
+      });
   }
 
   return {
@@ -110,7 +156,28 @@ export function createIdentityService(
     deactivationSource(externalId: string): DeactivationSource | undefined {
       return deactivated.get(personKey(externalId))?.source;
     },
-    reactivate: (externalId) => exclusive(() => reactivateNow(externalId)),
+    reactivate: (externalId, by) => exclusive(() => reactivateNow(externalId, by)),
+    principal(externalId: string): PrincipalRecord | undefined {
+      return principals.get(personKey(externalId));
+    },
+    async listPrincipals(): Promise<PrincipalRecord[]> {
+      await refresh();
+      return [...principals.values()];
+    },
+    recordOffboarded: (externalId, by, changes) =>
+      exclusive(() => {
+        const existing = principals.get(personKey(externalId));
+        if (existing?.offboarded)
+          return putPrincipal({ ...existing, offboardChanges: [...(existing.offboardChanges ?? []), ...changes] });
+        return putPrincipal({
+          ...existing,
+          principalId: existing?.principalId ?? externalId,
+          offboarded: true,
+          offboardedAt: Date.now(),
+          offboardedBy: by,
+          offboardChanges: changes,
+        });
+      }),
     recordDirectorySync: (removedIds, presentIds) =>
       exclusive(async () => {
         const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };

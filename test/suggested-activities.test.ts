@@ -33,7 +33,7 @@ function fixture() {
     now: () => time,
     crons,
     deliveries,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     idempotency: createIdempotencyStore(testMap()),
     run: async (request) => {
       calls.push(request);

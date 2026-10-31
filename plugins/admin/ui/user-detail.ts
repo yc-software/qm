@@ -80,7 +80,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
       draw();
     }
   }
-  const offboarding = offboardingCard(principal, s, !!d.deactivated, () => draw());
+  const offboarding = offboardingCard(principal, s, !!d.deactivated, d.principal, () => draw());
   async function showUsage(grant: any) {
     const request = ++usageRequest;
     selectedGrant = grant;

@@ -39,7 +39,7 @@ void _deliverStatusIsNot413;
 function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
   const webhooks = tracked(createWebhookStore(testMap(), testMap()));
   const deliveries = tracked(createDeliveryStore());
-  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
+  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }));
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);

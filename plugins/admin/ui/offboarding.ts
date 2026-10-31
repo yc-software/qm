@@ -15,12 +15,14 @@ export function offboardingCard(
   principal: string,
   s: Record<string, any>,
   deactivatedAtLoad: boolean,
+  recordAtLoad: any,
   draw: () => void,
 ) {
   let plan: any = null;
   let hint = "";
   let busy = false;
   let deactivated = deactivatedAtLoad;
+  let record = recordAtLoad;
   const path = (action: string) => "/api/users/" + encodeURIComponent(principal) + "/" + action;
 
   async function request(label: string, send: () => Promise<any>, done: (data: any) => void) {
@@ -42,6 +44,7 @@ export function offboardingCard(
         plan = data;
         const failed = plan.changes.filter((c: any) => c.result === "failed").length;
         if (plan.changes.some((c: any) => c.kind === "principal" && c.result === "done")) deactivated = true;
+        if (data.principal) record = data.principal;
         hint = "";
         if (apply) hint = failed ? s.plural(failed, "change") + " failed. Preview again to retry." : "Done.";
       },
@@ -61,8 +64,9 @@ export function offboardingCard(
     void request(
       "Reactivating…",
       () => s.api("POST", path("reactivate")),
-      () => {
+      (data) => {
         deactivated = false;
+        record = data.principal || record;
         plan = null;
         hint = "Sign-in is back on.";
       },
@@ -72,6 +76,24 @@ export function offboardingCard(
     if (!c.result) return muted("planned");
     return c.result === "done" ? badge("done", "ok") : stacked(badge("failed", "warn"), c.error);
   }
+  function history() {
+    if (!record?.offboardedAt) return nothing;
+    const when = (at: number, by?: string) => s.fmtTime(at) + (by ? " by " + by : "");
+    const changed = s.plural((record.offboardChanges || []).length, "change");
+    return html`<p class="obstatus">
+      ${record.offboarded ? badge("offboarded", "warn") : badge("reactivated", "ok")}
+      ${muted(
+        "Offboarded " +
+          when(record.offboardedAt, record.offboardedBy) +
+          " (" +
+          changed +
+          ")" +
+          (record.offboarded || !record.reactivatedAt
+            ? ""
+            : "; reactivated " + when(record.reactivatedAt, record.reactivatedBy)),
+      )}
+    </p>`;
+  }
   function render() {
     const changes = plan?.changes || [];
     const kept = plan?.kept || [];
@@ -80,6 +102,7 @@ export function offboardingCard(
       "Offboarding",
       "Turn off a departed person's sign-in and clean up what they own. Conversations, memory and files stay as the record.",
       html`<div class="offboard">
+        ${history()}
         ${
           deactivated
             ? html`<p class="obstatus">

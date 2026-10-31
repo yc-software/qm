@@ -40,7 +40,7 @@ function fixture() {
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     idempotency: createIdempotencyStore(testMap()),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {

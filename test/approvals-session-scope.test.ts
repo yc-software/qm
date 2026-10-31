@@ -49,7 +49,7 @@ test("session approvals are read by session id, never by scanning every approval
   const app = createApp({
     sessions,
     approvals,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");

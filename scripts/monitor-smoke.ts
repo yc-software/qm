@@ -109,6 +109,7 @@ const poller = createMonitorPoller({
   idempotency: createIdempotencyStore(smokeMap("idempotency")),
   identity: createIdentityService(smokeMap("deactivated_principals"), {
     externalMembers: smokeMap("external_members"),
+    principals: smokeMap("principals"),
   }),
   run: async (req: TurnRequest): Promise<TurnResult> => {
     wakes.push(req);

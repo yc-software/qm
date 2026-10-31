@@ -76,7 +76,7 @@ async function agent(log: AppPageViewLog) {
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

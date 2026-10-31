@@ -100,7 +100,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     acl,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const app = createApp({
     deploy,
     deploymentGitPrincipals: artifacts,

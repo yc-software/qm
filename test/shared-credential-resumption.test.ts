@@ -53,7 +53,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const deps: AskResolutionDeps = {
     deliveries,
     idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

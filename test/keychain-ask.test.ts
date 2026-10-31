@@ -312,7 +312,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     run: async () => ({ status: "ok" }) as TurnResult,
     sweepAsks: async (now) => void swept.push(now),
   });
@@ -381,7 +381,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
     {
       deliveries: createDeliveryStore(),
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -406,7 +406,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
     {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -442,7 +442,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     return {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
       run,
       getAsk: async () => current,
     };

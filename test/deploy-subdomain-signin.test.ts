@@ -193,7 +193,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
@@ -376,7 +376,7 @@ test("org-wide app access admits only signed-in org members", async () => {
   const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
   upstream.listen(0);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => false,
@@ -456,7 +456,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),

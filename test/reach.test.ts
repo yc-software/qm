@@ -320,7 +320,7 @@ function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDep
   return {
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     run,
     directory: fakeDirectory(),
   };

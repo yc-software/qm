@@ -33,7 +33,7 @@ async function fixture() {
   const deps: AskResolutionDeps = {
     deliveries,
     idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);
