@@ -17,7 +17,7 @@ import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
 import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
-import { ensureDevInstallTenant, prepareDurability } from "./durability.ts";
+import { prepareDevTenant, prepareDurability } from "./durability.ts";
 import { killTree } from "../lib/proc.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
@@ -392,7 +392,7 @@ async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedC
       return { ok: false, failedChild: spec.name, detail: res.detail };
     }
     phase(spec.name, "ok");
-    if (spec.name === "core" && inputs.databaseUrl) await ensureDevInstallTenant(inputs.databaseUrl, phase);
+    if (spec.name === "core" && inputs.databaseUrl) await prepareDevTenant(inputs, phase);
   }
   return { ok: true };
 }

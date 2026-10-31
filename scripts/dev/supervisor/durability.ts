@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { derivedLoginPassword } from "../../../cli/src/database-logins.ts";
+import { operatorInit } from "../../../cli/src/operator-request.ts";
+import { isTenantSetting } from "../../../cli/src/tenant-setting-names.ts";
 import { ensureInstallTenant } from "../../../src/tenants/install.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -62,10 +64,30 @@ export async function prepareDurability(opts: {
   return { databaseUrl, adminGrantsSeed, durableAdminPrincipal };
 }
 
-export async function ensureDevInstallTenant(databaseUrl: string, phase: Phase): Promise<void> {
+export async function prepareDevTenant(
+  inputs: { databaseUrl: string; adminGrantsSeed: string; baseEnv: Record<string, string>; ports: { core: number } },
+  phase: Phase,
+): Promise<void> {
   phase("tenant", "start");
-  const { tenant, created } = await ensureInstallTenant(databaseUrl);
+  const { tenant, created } = await ensureInstallTenant(inputs.databaseUrl);
   phase("tenant", "ok", `${created ? "created" : "using"} install tenant ${tenant}`);
+  const env = Object.fromEntries(
+    Object.entries(inputs.baseEnv).filter(([name, value]) => value.trim() && isTenantSetting(name)),
+  );
+  if (inputs.adminGrantsSeed) env.ADMIN_GRANTS = inputs.adminGrantsSeed;
+  if (!Object.keys(env).length) return;
+  const path = "/v1/tenant-settings";
+  const credentials = {
+    signing: inputs.baseEnv.CORE_SIGNING_SECRET ?? "",
+    control: inputs.baseEnv.DEPLOYMENT_CONTROL_SECRET ?? "",
+  };
+  const response = await fetch(
+    `http://127.0.0.1:${inputs.ports.core}${path}`,
+    operatorInit(credentials, "PUT", path, JSON.stringify({ env })),
+  );
+  if (response.status === 404) return phase("tenant", "warn", "this core has no tenant settings route yet");
+  if (!response.ok) throw new Error(`tenant settings: ${response.status} ${await response.text()}`);
+  phase("tenant", "ok", `wrote ${Object.keys(env).sort().join(", ")} to the install tenant`);
 }
 
 export function devDatabaseEnv(ownerUrl: string): Record<string, string> {

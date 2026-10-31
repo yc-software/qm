@@ -363,7 +363,8 @@ test("dev security secrets are stable, complete, and distinct", () => {
   completeDevSecuritySecrets(first, "postgres://dev");
   completeDevSecuritySecrets(second, "postgres://dev");
   assert.deepEqual(first, second);
-  assert.equal(new Set(Object.values(first)).size, 5);
+  assert.equal(new Set(Object.values(first)).size, 6);
+  assert.match(first.DEPLOYMENT_CONTROL_SECRET!, /^[0-9a-f]{64}$/);
   assert.throws(
     () => completeDevSecuritySecrets({ CORE_SIGNING_SECRET: "same", CAPABILITY_SECRET: "same" }, "postgres://dev"),
     /must be distinct/,
