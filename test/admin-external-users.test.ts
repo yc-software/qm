@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { signedHeaders as chassisSignedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -14,21 +14,13 @@ import { buildApp } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
 import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
-import {
-  coreEmailAdmission as emailAdmission,
-  coreEmailAllowed as emailAllowed,
-} from "../plugins/chassis/src/external-members.ts";
-import { inChassisTenant } from "./support/signed-core.ts";
+import { coreEmailAdmission, coreEmailAllowed, signedHeaders } from "./support/signed-core.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { OTHER_TENANT, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
-
-const coreEmailAdmission = inChassisTenant(emailAdmission);
-const coreEmailAllowed = inChassisTenant(emailAllowed);
-const signedHeaders = inChassisTenant(chassisSignedHeaders);
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
