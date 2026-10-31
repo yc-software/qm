@@ -8,7 +8,7 @@ import { withRowTenant } from "../src/api/tenant-ingress.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { currentTenant, withTenant } from "../src/tenants/context.ts";
+import { currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { memoryTenants, singleTenantResolver } from "../src/tenants/resolver.ts";
 import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -104,7 +104,7 @@ describe("core ingress binds the verified tenant", () => {
     const { status, body } = await call(
       "a.example",
       "/v1/surface-config",
-      signedRequestHeaders(SOURCE, "GET", "/v1/surface-config"),
+      withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/surface-config")),
     );
     assert.equal(status, 401);
     assert.match(body.message ?? "", /no verifiable tenant/);
