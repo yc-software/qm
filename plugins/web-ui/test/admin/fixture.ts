@@ -145,3 +145,8 @@ export async function mountPage(
     close: () => dom.window.close(),
   };
 }
+
+export function tabText(tab: Element) {
+  const count = tab.querySelector(".shell-tab-count")?.textContent ?? "";
+  return tab.textContent!.slice(0, tab.textContent!.length - count.length) + (count ? " " + count : "");
+}

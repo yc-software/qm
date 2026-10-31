@@ -33,7 +33,7 @@ export function searchPage(page: AdminPage, header: Header, body: (q: string) =>
 export async function mount(page: AdminPage) {
   const rows = await scopeRows(page);
   if (!page.current()) return;
-  const header: Header = { title: VIEW_TITLE[page.view], actions: scopeSelect(page, rows) };
+  const header: Header = { actions: scopeSelect(page, rows) };
   if (page.view === "memory") return memory(page);
   const id = page.view === "crons" ? page.params.get("cron") : null;
   const data = await load(page, scoped(page, page.view), id ? { back: back(page) } : header);
@@ -80,7 +80,7 @@ function files(page: AdminPage, data: Row, header: Header) {
   };
   const status = { text: "", tone: "muted" };
   const actions = html`${header.actions}<span class=${"status " + status.tone}>${status.text}</span
-    ><label class="primary upload-button"
+    ><label class="button primary"
       >Upload<input class="hidden" type="file" multiple @change=${(e: Event) => upload(page, e, status, paint)}
     /></label>`;
   const paint = searchPage(page, { ...header, count: all.length ? plural(all.length, "file") : "", actions }, (q) => {
@@ -451,7 +451,7 @@ async function memory(page: AdminPage) {
 }
 
 async function memoryIndex(page: AdminPage) {
-  const header = { title: "Memory" };
+  const header = {};
   const data = await load(page, "/api/memory/scopes", header);
   if (!data) return;
   const org = (s: Row) => s.scopeId.startsWith("org:");

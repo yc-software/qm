@@ -476,7 +476,7 @@ function view() {
   return html`<div id="view-governance">
     ${pageHeader(
       orgScope()
-        ? { title: "Governance" }
+        ? {}
         : { back: { label: "Governance", href: page.href("governance") }, title: scopeName() },
     )}
     ${

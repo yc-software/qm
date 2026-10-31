@@ -49,7 +49,7 @@ export async function mount(page: AdminPage) {
   const paint = (header: Header, body: unknown) =>
     page.current() && render(html`${pageHeader(header)}${body}`, page.host);
   const title = ack ? "Ack emoji" : "Judgments";
-  paint({ title }, html`<div class="loadingline">${ack ? "Loading ack-emoji picks…" : "Loading judgments…"}</div>`);
+  paint({}, html`<div class="loadingline">${ack ? "Loading ack-emoji picks…" : "Loading judgments…"}</div>`);
   containers ??= page.api("GET", "/api/slack-mirror").then((r) => (known = (r.ok && r.data?.containers) || []));
   await containers;
   const p = (key: string) => page.params.get(key);
@@ -71,7 +71,7 @@ export async function mount(page: AdminPage) {
       ? "Only an org admin can read ack-emoji picks."
       : "Only an org admin can read ambient judgments.";
     return paint(
-      { title },
+      {},
       empty(result.status === 403 ? denied : result.data?.message || `Failed to load (${result.status}).`),
     );
   }

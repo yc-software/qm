@@ -1,7 +1,7 @@
 import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-import { VIEW_TITLE, type AdminPage } from "./sections.ts";
+import type { AdminPage } from "./sections.ts";
 import { pageHeader } from "./shared.ts";
 import { saveButton, settingStatus, saveFooter, reviewChange } from "./setting-controls.ts";
 import { SettingState, putSetting } from "./setting-state.ts";
@@ -281,10 +281,7 @@ function template() {
     credentials: () => [credentialsCard(), keychainCard()],
     customize: () => [soulCard(s("soul")), brandingCard(s("branding")), flagsCard(), decisionsCard()],
   };
-  return html`${pageHeader({
-      title: VIEW_TITLE[view],
-      actions: view === "credentials" ? addCredential() : nothing,
-    })}
+  return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
     <div id="view-governance">
       <div class="governance-content">
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}

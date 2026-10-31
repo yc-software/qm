@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mountPage } from "./fixture.ts";
+import { mountPage, tabText } from "./fixture.ts";
 
 const SCOPE = "personal:alice@example.com";
 const scopes = { scopes: [{ scopeId: "org:acme" }, { scopeId: "channel:C1", label: "#eng" }, { scopeId: SCOPE }] };
@@ -26,9 +26,9 @@ test("the org-wide landing lists newest sessions with scope tags, a scope filter
     ],
   );
   const doc = page.document;
-  assert.equal(doc.querySelector(".shell-title")!.textContent, "Sessions");
+  assert.equal(doc.querySelector(".shell-title"), null);
   assert.deepEqual(
-    [...doc.querySelectorAll(".shell-tab")].map((a) => [a.textContent, a.getAttribute("href")]),
+    [...doc.querySelectorAll(".shell-tab")].map((a) => [tabText(a), a.getAttribute("href")]),
     [
       ["Conversations 12", "/settings/history"],
       ["Cron runs 3,400", "/settings/history?kind=cron"],

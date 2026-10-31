@@ -310,7 +310,9 @@ function printSuccess(result: BootResult, branch: string): void {
   );
   out(`   branch : ${branch}`);
   if (result.webEnabled !== false)
-    out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and settings at /settings`);
+    out(
+      `   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and settings at /settings`,
+    );
   out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   if (result.webEnabled !== false)

@@ -1,5 +1,5 @@
 import { cardClass, choiceGroup, settingStatus, saveFooter, textField, toggleField } from "./setting-controls.ts";
-import { badge, pageHeader } from "./shared.ts";
+import { badge } from "./shared.ts";
 import { html, nothing, render } from "lit";
 import type { AdminPage } from "./sections.ts";
 import { putSetting } from "./setting-state.ts";
@@ -67,10 +67,8 @@ async function save(s: SlackSetting) {
 
 function template() {
   return page.view === "connectors"
-    ? html`${pageHeader({ title: "Connectors" })}
-        <div id="view-connectors">${connectorsCard()}${builtIns()}</div>`
-    : html`${pageHeader({ title: "Slack" })}
-        <div id="view-governance">
+    ? html`<div id="view-connectors">${connectorsCard()}${builtIns()}</div>`
+    : html`<div id="view-governance">
           <div class="governance-content">
             ${failure ? html`<p class="hint" role="status">${failure}</p>` : nothing}${installationCard()}${externalCard()}${pinCard()}${ackCard()}
           </div>

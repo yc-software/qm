@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { badge, card, empty, stacked, table, type Header } from "./shared.ts";
-import { VIEW_TITLE, type AdminPage } from "./sections.ts";
+import type { AdminPage } from "./sections.ts";
 import { load, orgWide, plural, scopeName, scopeRows, scopeSelect } from "./activity.ts";
 import { searchPage } from "./artifacts.ts";
 
@@ -17,7 +17,7 @@ const enc = encodeURIComponent;
 export async function mount(page: AdminPage) {
   const rows = await scopeRows(page);
   if (!page.current()) return;
-  const header: Header = { title: VIEW_TITLE.skills, actions: scopeSelect(page, rows) };
+  const header: Header = { actions: scopeSelect(page, rows) };
   const data = await load(page, "/api/skills?scope=" + enc(page.scope), header);
   if (!data) return;
   const all = orgWide(page);

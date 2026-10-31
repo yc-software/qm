@@ -195,7 +195,7 @@ export interface Header {
 export const pageHeader = (h: Header) =>
   html`<div class="shellbar">
     ${h.back ? html`<div class="shell-back-row"><a class="back" href=${h.back.href}>← ${h.back.label}</a></div>` : nothing}
-    ${h.title ? html`<h2 class="shell-title">${h.title}</h2>` : nothing}
+    ${h.back && h.title ? html`<h2 class="shell-title">${h.title}</h2>` : nothing}
     ${h.context ? html`<span class="shell-context">${h.context}</span>` : nothing}
     ${
       h.tabs?.length
@@ -206,7 +206,11 @@ export const pageHeader = (h: Header) =>
                   class=${"shell-tab" + (tab.active ? " active" : "")}
                   href=${tab.href}
                   aria-current=${ifDefined(tab.active ? "page" : undefined)}
-                  >${tab.label}${tab.count != null ? " " + tab.count.toLocaleString() : ""}</a
+                  >${tab.label}${
+                    tab.count != null
+                      ? html`<span class="shell-tab-count">${tab.count.toLocaleString()}</span>`
+                      : nothing
+                  }</a
                 >`,
             )}
           </div>`

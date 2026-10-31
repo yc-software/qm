@@ -36,7 +36,7 @@ import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
 import { PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";

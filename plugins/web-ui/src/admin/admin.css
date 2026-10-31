@@ -193,6 +193,35 @@
 #app-view .shell-search {
   flex: 0 1 220px;
 }
+#app-view .shell-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+#app-view .shell-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: var(--font-13);
+  text-decoration: none;
+}
+#app-view .shell-tab:hover {
+  color: var(--text);
+}
+#app-view .shell-tab.active {
+  border-bottom-color: var(--text);
+  color: var(--text);
+}
+#app-view .shell-tab-count {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--subtle);
+  font-size: 10px;
+}
 #app-view section.card {
   margin: 0 0 22px;
   padding: 18px;
@@ -238,6 +267,7 @@
 #app-view input[type="email"],
 #app-view input[type="date"],
 #app-view input:not([type]),
+#app-view input[type="search"],
 #app-view input[type="password"],
 #app-view input[type="number"],
 #app-view textarea,
@@ -248,6 +278,14 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 7px 10px;
+}
+#app-view select:not([multiple]) {
+  appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
 }
 #app-view input[aria-invalid="true"] {
   border-color: var(--danger);
@@ -412,7 +450,7 @@
 }
 #app-view .rules td input,
 #app-view .rules td select {
-  padding: 6px 8px;
+  padding: 6px 28px 6px 8px;
 }
 #app-view .rules td.rule-action {
   width: 82px;
@@ -668,7 +706,7 @@
 #app-view .pack-adv select {
   flex: 0 0 auto;
   width: auto;
-  padding: 5px 8px;
+  padding: 5px 28px 5px 8px;
   font-size: 12px;
 }
 #app-view .pack-name .subline {
@@ -1278,9 +1316,6 @@
 #app-view[data-subview="governance"] #view-governance section.card:not(.sv-governance) {
   display: none !important;
 }
-#app-view select[data-dd-host] {
-  display: none !important;
-}
 #app-view .dd {
   position: relative;
   width: 100%;
@@ -1553,7 +1588,7 @@
 #app-view .custom-provider-form label:not(.custom-provider-validation) > input,
 #app-view .custom-provider-form label > select {
   height: 42px;
-  padding: 0 11px;
+  padding: 0 32px 0 11px;
 }
 #app-view .custom-provider-form label > textarea {
   min-height: 104px;
@@ -2323,6 +2358,7 @@
 #app-view #view-governance .runtime-row select.loadout-button {
   appearance: none;
   padding-right: 26px;
+  background-image: none;
   border-radius: 8px;
   font-weight: 500;
 }
@@ -3131,15 +3167,33 @@
     min-height: 44px;
   }
 }
-#app-view .admin-main .upload-button {
+#app-view .admin-main .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: var(--control-height);
+  box-sizing: border-box;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
-#app-view .admin-main .upload-button svg {
-  flex-shrink: 0;
+#app-view .admin-main .button:hover {
+  background: var(--subtle);
+}
+#app-view .admin-main .button.primary {
+  border-color: var(--cta);
+  background: var(--cta);
+  color: var(--cta-foreground);
+}
+#app-view .admin-main .button.primary:hover {
+  border-color: var(--cta-hover);
+  background: var(--cta-hover);
 }
 #app-view .spend-chart {
   --spend-live: var(--text);

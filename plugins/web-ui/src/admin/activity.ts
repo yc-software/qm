@@ -58,7 +58,7 @@ const ERRORS_PAGE = 50;
 export async function mount(page: AdminPage) {
   const rows = await scopeRows(page);
   if (!page.current()) return;
-  const header = { title: VIEW_TITLE[page.view], actions: scopeSelect(page, rows) };
+  const header = { actions: scopeSelect(page, rows) };
   const offset = (Math.max(1, Number(page.params.get("page")) || 1) - 1) * ERRORS_PAGE;
   const scope = "scope=" + encodeURIComponent(page.scope);
   const path =

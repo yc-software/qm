@@ -108,7 +108,7 @@ export async function mount(page: AdminPage) {
       page.host,
     );
   const data = result.data;
-  const session = { ...(data.session || {}), origin: data.hasMore ? null : data.origin };
+  const session = { ...data.session, origin: data.hasMore ? null : data.origin };
   session.first = (data.entries || []).find((e: Row) => e.type === "user");
   const scope = session.scopeId || page.scope;
   const list = units(data);

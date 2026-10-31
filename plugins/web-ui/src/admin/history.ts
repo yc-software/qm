@@ -109,7 +109,6 @@ export async function mount(page: AdminPage) {
           context: orgWide ? "" : shortName(page.scope),
         })
       : pageHeader({
-          title: orgWide ? "Sessions" : shortName(page.scope),
           tabs: Object.entries(KIND_LABEL).map(([key, label]) => ({
             label,
             count: d?.counts?.[key],
