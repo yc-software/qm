@@ -1,11 +1,10 @@
 import "./support/auto-fake-sprites.ts";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { claimTurn, finishTurn } from "./support/turns.ts";
-import { createTurnLedger, type TurnLedger } from "../src/turns/turn-ledger.ts";
+import { appLedger, claimTurn, finishTurn, retryTurn } from "./support/turns.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 
@@ -17,15 +16,10 @@ const request: TurnRequest = {
   idempotencyKey: "inline-retry",
 };
 
-const ledgers: TurnLedger[] = [];
-after(() => Promise.all(ledgers.splice(0).map((ledger) => ledger.close())));
-
 function build(overrides: Partial<Config>) {
   const config = testConfig(overrides);
   const built = buildApp(config);
-  const ledger = createTurnLedger(config.databaseUrl!);
-  ledgers.push(ledger);
-  return { built, ledger };
+  return { built, ledger: appLedger(built, config.databaseUrl!) };
 }
 
 const RETRY_DELAY_MS = 1_500;
@@ -36,10 +30,7 @@ for (const laterMessage of [false, true]) {
     const queued = await built.app.turn({ ...request, async: true });
     const claimed = await claimTurn(ledger, queued.runId!);
     assert.ok(claimed);
-    assert.equal(
-      await ledger.handBack(claimed.run, claimed.token, { delayMs: RETRY_DELAY_MS, countsAsError: true }),
-      true,
-    );
+    assert.equal(await retryTurn(claimed, { dueInMs: RETRY_DELAY_MS }), true);
     let settled = false;
     const started = Date.now();
     const pending = built.app.turn(laterMessage ? { ...request, text: "next", idempotencyKey: "next" } : request);
@@ -62,7 +53,7 @@ test("synchronous waiting respects its timeout without clearing a retry deadline
   const queued = await built.app.turn({ ...request, async: true });
   const claimed = await claimTurn(ledger, queued.runId!);
   assert.ok(claimed);
-  assert.equal(await ledger.handBack(claimed.run, claimed.token, { delayMs: 30_000, countsAsError: true }), true);
+  assert.equal(await ledger.retry(claimed.run, claimed.token, { kind: "error" }), true);
   await assert.rejects(built.app.turn(request), /did not finish within 100ms/);
   assert.equal(await claimTurn(ledger, claimed.run.id), null);
   const run = await built.runs.get(claimed.run.id);

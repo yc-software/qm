@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
-import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
+import { createSlackCoreClient, RUN_STALL_BUDGET_MS, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import type { TurnStream } from "../src/runs/turn-stream.ts";
+import { queueOf } from "../src/turns/turn-ledger.ts";
+import { eventually } from "./support/settle.ts";
 import { claimTurn, testRunStore } from "./support/turns.ts";
 
-const STALL_BUDGET_MS = 300_000;
+type Outcome = { error: unknown } | { result: unknown } | null;
 
 const quietStream = {
   subscribe: () => () => {},
@@ -39,26 +40,41 @@ test("a running turn whose claim is held is never declared stalled, however long
   const claimed = await claimTurn(store.ledger, run.id);
   assert.ok(claimed);
 
-  const client = createSlackCoreClient({ runs: store.runs, turnStream: quietStream } as unknown as SlackCoreClientDeps);
+  let livenessChecks = 0;
+  const runs = {
+    ...store.runs,
+    async leaseHeld(...args: Parameters<typeof store.runs.leaseHeld>) {
+      try {
+        return await store.runs.leaseHeld(...args);
+      } finally {
+        livenessChecks += 1;
+      }
+    },
+  };
+  const polledTwiceMore = async (): Promise<void> => {
+    const seen = livenessChecks;
+    await eventually(() => livenessChecks >= seen + 2, { label: "two more liveness polls" });
+  };
+  const client = createSlackCoreClient({ runs, turnStream: quietStream } as unknown as SlackCoreClientDeps);
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  let outcome: { error: unknown } | { result: unknown } | null = null;
+  let outcome: Outcome = null;
   void client.waitRun(run.id).then(
     (result) => (outcome = { result }),
     (error: unknown) => (outcome = { error }),
   );
 
-  await sleep(200);
-  t.mock.timers.tick(STALL_BUDGET_MS + 60_000);
-  await sleep(2_500);
+  await eventually(() => livenessChecks > 0, { label: "the first liveness poll" });
+  t.mock.timers.tick(RUN_STALL_BUDGET_MS + 60_000);
+  await polledTwiceMore();
   assert.equal(outcome, null, "a held claim counts as progress past the stall budget");
 
   await admin.query(
-    `UPDATE absurd.r_${claimed.run.absurdQueue} SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1`,
+    `UPDATE absurd.r_${queueOf(claimed.run)} SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1`,
     [claimed.run.absurdRunId],
   );
   assert.equal(await store.runs.leaseHeld(claimed.run, claimed.token), false);
-  t.mock.timers.tick(STALL_BUDGET_MS + 60_000);
-  for (let i = 0; i < 50 && outcome === null; i++) await sleep(100);
-  assert.ok(outcome && "error" in outcome, "a running turn with no held claim is declared stalled");
-  assert.equal((outcome.error as { code?: string }).code, "run_stalled");
+  t.mock.timers.tick(RUN_STALL_BUDGET_MS + 60_000);
+  const ended = await eventually<Outcome>(() => outcome, { label: "the stalled wait settling" });
+  assert.ok(ended && "error" in ended, "a running turn with no held claim is declared stalled");
+  assert.equal((ended.error as { code?: string }).code, "run_stalled");
 });

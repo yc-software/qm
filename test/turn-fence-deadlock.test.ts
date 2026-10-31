@@ -2,6 +2,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { queueOf } from "../src/turns/turn-ledger.ts";
 import { claimTurn, testRunStore } from "./support/turns.ts";
 
 test("an autocommit fence check takes no row locks, so it cannot deadlock against a turn being written", async () => {
@@ -16,7 +17,7 @@ test("an autocommit fence check takes no row locks, so it cannot deadlock agains
   };
   const { run } = await store.runs.enqueue({ sessionId: "fence", request });
   const claimed = await claimTurn(store.ledger, run.id);
-  assert.ok(claimed?.run.absurdQueue && claimed.run.absurdRunId);
+  assert.ok(claimed?.run.absurdRunId);
   const writer = new pg.Client({ connectionString: store.databaseUrl });
   await writer.connect();
   after(() => writer.end());
@@ -25,7 +26,7 @@ test("an autocommit fence check takes no row locks, so it cannot deadlock agains
   const held = store.runs.leaseHeld(claimed.run, claimed.token);
   await new Promise((resolve) => setTimeout(resolve, 200));
   await writer.query(
-    `UPDATE absurd.${pg.escapeIdentifier(`r_${claimed.run.absurdQueue}`)} SET state = state WHERE run_id = $1`,
+    `UPDATE absurd.${pg.escapeIdentifier(`r_${queueOf(claimed.run)}`)} SET state = state WHERE run_id = $1`,
     [claimed.run.absurdRunId],
   );
   await writer.query("COMMIT");

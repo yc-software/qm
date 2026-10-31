@@ -13,23 +13,23 @@ const request: OrchestratorInput = {
   text: "test",
 };
 
-test("retry deadline survives a restart, holds the conversation's queue, and frees other work", async (t) => {
+test("retry deadline survives a restart, holds the conversation's queue, and frees other work", async () => {
   let store: TestRunStore = testRunStore();
   const databaseUrl = store.databaseUrl;
   const sessionId = randomUUID();
   try {
     const first = (await store.runs.enqueue({ sessionId, request })).run;
-    const lease = (await claimTurn(store.ledger, first.id))!;
     const now = Date.now();
-    t.mock.timers.enable({ apis: ["Date"], now });
-    assert.equal(
-      await store.ledger.handBack(lease.run, lease.token, {
-        stop: { kind: "error", code: "transient", status: 503 },
-        delayMs: 30_000,
-        countsAsError: true,
-      }),
-      true,
-    );
+    const failing = turnLedgerAt(databaseUrl, now);
+    try {
+      const lease = (await claimTurn(failing, first.id))!;
+      assert.equal(
+        await failing.retry(lease.run, lease.token, { kind: "error", code: "transient", status: 503 }),
+        true,
+      );
+    } finally {
+      await failing.close();
+    }
     await store.close();
     store = testRunStore(databaseUrl);
     const { runs, ledger } = store;
@@ -42,13 +42,13 @@ test("retry deadline survives a restart, holds the conversation's queue, and fre
     assert.equal(unrelated?.run.id, other.id, "only the unrelated conversation is claimable");
     await finishTurn(unrelated!, { status: "ok", sessionId: other.sessionId });
 
-    const early = turnLedgerAt(databaseUrl, now + 29_999);
+    const early = turnLedgerAt(databaseUrl, now + 14_999);
     try {
       assert.equal(await claimTurn(early), null, "not claimable a millisecond before the deadline");
     } finally {
       await early.close();
     }
-    const due = turnLedgerAt(databaseUrl, now + 30_000);
+    const due = turnLedgerAt(databaseUrl, now + 15_000);
     try {
       const retried = await claimTurn(due);
       assert.equal(retried?.run.id, first.id, "the retry resumes before the newer turn");
@@ -64,7 +64,6 @@ test("retry deadline survives a restart, holds the conversation's queue, and fre
       await due.close();
     }
   } finally {
-    t.mock.timers.reset();
     await store.close();
   }
 });

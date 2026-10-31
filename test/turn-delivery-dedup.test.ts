@@ -10,9 +10,11 @@ import { testConfig } from "./support/test-config.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { eventually } from "./support/settle.ts";
+import { retryDue } from "./support/absurd-clock.ts";
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }), { turnRetryDelayMs: 300 });
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) });
+  return Object.assign(buildApp(config), { databaseUrl: config.databaseUrl! });
 }
 
 const actor = { externalId: "U1" };
@@ -22,6 +24,10 @@ async function awaitingRetry(built: ReturnType<typeof freshApp>): Promise<void> 
     until: (runs) => runs.some((run) => run.errorAttempts === 1 && run.status === "pending"),
     label: "the first attempt failed and was handed back for a retry",
   });
+}
+
+async function retryNow(built: ReturnType<typeof freshApp>): Promise<void> {
+  assert.equal(await retryDue(built.databaseUrl), 1, "exactly one retry was waiting out its backoff");
 }
 
 function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnRequest {
@@ -49,6 +55,7 @@ test(
     await awaitingRetry(built);
     const afterFirst = await built.deliveries.pending("slack");
     assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
+    await retryNow(built);
 
     const res = await turn;
     assert.equal(res.status, "silent", res.reason);
@@ -73,6 +80,7 @@ test(
 
     const turn = built.app.turn(req);
     await awaitingRetry(built);
+    await retryNow(built);
     const res = await turn;
     assert.equal(res.status, "silent", res.reason);
 
@@ -104,6 +112,7 @@ test(
 
     const turn = built.app.turn(req);
     await awaitingRetry(built);
+    await retryNow(built);
     const res = await turn;
     assert.equal(res.status, "silent", res.reason);
 

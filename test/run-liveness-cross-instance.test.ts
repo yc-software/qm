@@ -10,7 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { claimTurn } from "./support/turns.ts";
 import { eventually } from "./support/settle.ts";
-import { createTurnLedger } from "../src/turns/turn-ledger.ts";
+import { createTurnLedger, queueOf } from "../src/turns/turn-ledger.ts";
 
 function setup(threadRef: string) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "liveness-")), workers: 0 });
@@ -56,7 +56,7 @@ test("a run whose claim lapsed and was taken over fences the old holder out", as
     const lapsed = await claimTurn(otherInstance, run.id);
     assert.ok(lapsed);
     await admin.query(
-      `UPDATE absurd.r_${lapsed.run.absurdQueue} SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1`,
+      `UPDATE absurd.r_${queueOf(lapsed.run)} SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1`,
       [lapsed.run.absurdRunId],
     );
     const takeover = await eventually(() => claimTurn(otherInstance, run.id), {

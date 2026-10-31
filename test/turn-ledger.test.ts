@@ -14,6 +14,7 @@ import { createTurnRunner } from "../src/turns/turn-runner.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import { eventually } from "./support/settle.ts";
+import { retryDue, taskQueues } from "./support/absurd-clock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Absurd turn tests";
@@ -61,12 +62,12 @@ async function absurdRun(runId: string) {
 }
 
 async function claim(token = `test:${randomUUID()}`): Promise<{ run: Run; token: string }> {
-  for (let i = 0; i < 20; i++) {
-    const { run } = await ledger.claim("turns_people", token, "test");
-    if (run) return { run, token };
-    await sleep(25);
-  }
-  throw new Error("nothing claimable");
+  const { run } = await eventually(() => ledger.claim("turns_people", token, "test"), {
+    until: (claimed) => claimed.run !== null,
+    timeoutMs: 1_000,
+    label: "a claimable turn",
+  });
+  return { run: run!, token };
 }
 
 function note(text: string) {
@@ -285,7 +286,7 @@ test("the runner hands a turn back on shutdown and another runner resumes it fro
   } as unknown as Orchestrator;
   const outgoing = createTurnRunner({ ledger, orchestrator: slow, queues: TURN_QUEUES, slots: 2, pollMs: 50 });
   outgoing.start();
-  for (let i = 0; i < 100 && !started.length; i++) await sleep(20);
+  await eventually(() => started.length, { label: "the first runner started the turn" });
   assert.equal(started[0]?.runId, admitted.run.id);
   assert.ok(started[0]?.runLeaseToken);
   await outgoing.releaseInFlight();
@@ -300,52 +301,16 @@ test("the runner hands a turn back on shutdown and another runner resumes it fro
   } as unknown as Orchestrator;
   const incoming = createTurnRunner({ ledger, orchestrator: fast, queues: TURN_QUEUES, slots: 2, pollMs: 50 });
   incoming.start();
-  let finished: Run | null = null;
-  for (let i = 0; i < 100; i++) {
-    finished = await runStore.runs.get(admitted.run.id);
-    if (finished?.status === "done") break;
-    await sleep(20);
-  }
+  const finished = await eventually(() => runStore.runs.get(admitted.run.id), {
+    until: (found) => found?.status === "done",
+    label: "the second runner finished the turn",
+  });
   await incoming.stopClaims();
   assert.equal(finished?.status, "done");
   assert.equal(finished?.result?.reply, "resumed");
   assert.equal(started[1]?.attempt, 2);
   assert.deepEqual(started[1]?.resumeCause, { kind: "shutdown" });
   assert.equal((await absurdRun(finished!.absurdRunId!)).attempt, 1);
-});
-
-test("the runner retries a failed turn within QM's error budget and then records the failure", { skip }, async () => {
-  const thread = `web:alice:${randomUUID()}`;
-  const admitted = await admit(thread);
-  await admin.query("UPDATE runs SET max_attempts = 2 WHERE id = $1", [admitted.run.id]);
-  let calls = 0;
-  const failing = {
-    async handleTurn(): Promise<TurnResult> {
-      calls += 1;
-      throw new Error("model exploded");
-    },
-  } as unknown as Orchestrator;
-  const runner = createTurnRunner({
-    ledger,
-    orchestrator: failing,
-    queues: TURN_QUEUES,
-    slots: 1,
-    pollMs: 50,
-    retryDelayMs: () => 100,
-  });
-  runner.start();
-  let run: Run | null = null;
-  for (let i = 0; i < 300; i++) {
-    run = await runStore.runs.get(admitted.run.id);
-    if (run?.status === "failed") break;
-    await sleep(20);
-  }
-  await runner.stopClaims();
-  assert.equal(run?.status, "failed");
-  assert.equal(calls, 2);
-  assert.equal(run?.errorAttempts, 2);
-  assert.match(run?.result?.reason ?? "", /model exploded|failed/);
-  assert.equal(await pointer(thread), null);
 });
 
 for (const [label, rejection] of [
@@ -413,12 +378,10 @@ test("a turn over the crash-loop claim cap fails instead of running again", { sk
   } as unknown as Orchestrator;
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50, maxClaims: 3 });
   runner.start();
-  let run: Run | null = null;
-  for (let i = 0; i < 200; i++) {
-    run = await runStore.runs.get(admitted.run.id);
-    if (run?.status === "failed") break;
-    await sleep(20);
-  }
+  const run = await eventually(() => runStore.runs.get(admitted.run.id), {
+    until: (found) => found?.status === "failed",
+    label: "the crash-looping turn failed",
+  });
   await runner.stopClaims();
   assert.equal(calls, 0);
   assert.equal(run?.status, "failed");
@@ -445,9 +408,10 @@ test("admission routes each tier to its own queue and the runner prefers people"
   const background = await admit(`web:cron:${randomUUID()}`, "background", undefined, 2);
   const delegated = await admit(`web:child:${randomUUID()}`, "delegated", undefined, 1);
   const person = await admit(`web:alice:${randomUUID()}`, "person", undefined, 0);
-  assert.equal(background.run.absurdQueue, "turns_background");
-  assert.equal(delegated.run.absurdQueue, "turns_delegated");
-  assert.equal(person.run.absurdQueue, "turns_people");
+  assert.deepEqual(
+    await taskQueues(URL!, [background.run.absurdTaskId, delegated.run.absurdTaskId, person.run.absurdTaskId]),
+    ["turns_background", "turns_delegated", "turns_people"],
+  );
   const { started, releases, orchestrator } = gate();
   const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
   runner.start();
@@ -574,7 +538,8 @@ test("a person's message parks a background turn that is not running and starts 
   const token = `test:${randomUUID()}`;
   const { run } = await ledger.claim("turns_background", token, "test");
   assert.equal(run?.id, cron.run.id);
-  assert.equal(await ledger.handBack(run!, token, { delayMs: 1_500, countsAsError: true }), true);
+  assert.equal(await ledger.retry(run!, token, { kind: "error" }), true);
+  assert.equal(await retryDue(URL!, { taskId: run!.absurdTaskId!, inMs: 1_500 }), 1);
   const person = await admit(thread, "person", undefined, 0);
   assert.equal(person.run.status, "pending");
   assert.equal(await pointer(thread), person.run.id);
@@ -625,14 +590,14 @@ test(
       [running, waiting, thread, JSON.stringify(request(thread)), at],
     );
     const cutover = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0012-absurd-turns")!;
-    for (const statement of cutover.statements.filter((sql) => /^UPDATE runs/.test(sql.trim())))
+    for (const statement of cutover.statements.filter((sql) => sql.trim().startsWith("UPDATE runs")))
       await admin.query(statement);
     const resumed = await runStore.runs.get(running);
     assert.equal(resumed?.status, "queued");
     assert.deepEqual(resumed?.lastStop, { kind: "shutdown" });
     assert.equal(resumed?.leaseToken, null);
     assert.equal((await runStore.runs.get(waiting))?.status, "queued");
-    assert.equal(await ledger.startStranded(), 1);
+    assert.deepEqual(await ledger.startStranded(), [thread]);
     assert.equal(await pointer(thread), running);
     const { run, token } = await claim();
     assert.equal(run.id, running);
@@ -644,33 +609,12 @@ test(
   },
 );
 
-test("pointer repair adopts legacy rows written after the cutover migration ran", { skip }, async () => {
-  const thread = `web:alice:${randomUUID()}`;
-  const late = randomUUID();
-  const expired = randomUUID();
-  const live = randomUUID();
-  const other = `web:alice:${randomUUID()}`;
-  const at = Date.now();
-  await admin.query(
-    `INSERT INTO runs(id, session_id, status, request, attempts, max_attempts, created_at, claim_priority, lease_token, lease_expires_at)
-     VALUES ($1, $4, 'running', $5, 1, 3, $6::bigint, 0, 'old', $6::bigint - 1000),
-            ($2, $4, 'pending', $5, 0, 3, $6::bigint + 1, 0, NULL, NULL),
-            ($3, $7, 'running', $5, 1, 3, $6::bigint, 0, 'old', $6::bigint + 600000)`,
-    [expired, late, live, thread, JSON.stringify(request(thread)), at, other],
-  );
-  assert.equal(await ledger.startStranded(), 1);
-  assert.deepEqual((await runStore.runs.get(expired))?.lastStop, { kind: "lease_expired" });
-  assert.equal(await pointer(thread), expired);
-  assert.equal((await runStore.runs.get(late))?.status, "queued");
-  assert.equal((await runStore.runs.get(live))?.status, "running", "a legacy run whose lease is live is left alone");
-});
-
 test("admission into a conversation with stranded queued turns starts the oldest first", { skip }, async () => {
   const thread = `web:alice:${randomUUID()}`;
   const old = randomUUID();
   await admin.query(
-    `INSERT INTO runs(id, session_id, status, request, attempts, max_attempts, created_at, claim_priority, absurd_queue)
-     VALUES ($1, $2, 'queued', $3, 0, 3, $4, 0, 'turns_people')`,
+    `INSERT INTO runs(id, session_id, status, request, attempts, max_attempts, created_at, claim_priority)
+     VALUES ($1, $2, 'queued', $3, 0, 3, $4, 0)`,
     [old, thread, JSON.stringify(request(thread)), Date.now() - 1_000],
   );
   const fresh = await admit(thread, "new");

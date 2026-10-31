@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { isUnstarted } from "../src/runs/run-store.ts";
-import { claimTurn, finishTurn, testRunStore, type TestRunStore } from "./support/turns.ts";
+import { claimTurn, finishTurn, retryTurn, testRunStore, type TestRunStore } from "./support/turns.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {
@@ -314,7 +314,7 @@ test("a handed-back turn records why its last attempt stopped", () =>
     assert.deepEqual((await runs.get(r.id))?.lastStop, { kind: "shutdown" });
     const second = (await claimTurn(ledger, r.id))!;
     const stop = { kind: "error" as const, code: "transient", status: 503 };
-    await ledger.handBack(second.run, second.token, { stop, countsAsError: true });
+    await retryTurn(second, { stop });
     assert.deepEqual((await runs.get(r.id))?.lastStop, stop);
     const unstarted = (await claimTurn(ledger, r.id))!;
     await ledger.handBack(unstarted.run, unstarted.token, { unstarted: true });
@@ -370,7 +370,7 @@ test("onTerminal fires once per terminal transition, not for a retried attempt",
     await finishTurn((await claimTurn(ledger, ok.id))!, { status: "ok", reply: "x" });
     const retried = (await runs.enqueue({ sessionId: "sB", request: turn("b"), maxAttempts: 2 })).run;
     const first = (await claimTurn(ledger, retried.id))!;
-    await ledger.handBack(first.run, first.token, { stop: { kind: "error" }, countsAsError: true });
+    await retryTurn(first);
     assert.deepEqual(seen, [`${ok.id}:done`], "a requeued attempt is not terminal");
     const second = (await claimTurn(ledger, retried.id))!;
     await finishTurn(second, { status: "failed", reason: "boom again" }, "failed");
@@ -415,6 +415,6 @@ test("editing queued text preserves identity, order, attachments and rejects sta
     const claimed = (await claimTurn(ledger, first.id))!;
     assert.equal(claimed.run.request.text, "revised");
     assert.equal(await runs.editPendingText(first.id, "late", "revised"), false, "once claimed it is fixed");
-    await ledger.handBack(claimed.run, claimed.token, { stop: { kind: "error" }, countsAsError: true });
+    await retryTurn(claimed);
     assert.equal(await runs.editPendingText(first.id, "retry edit", "revised"), false);
   }));

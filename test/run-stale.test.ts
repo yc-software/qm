@@ -9,7 +9,7 @@ import pg from "pg";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { claimTurn, finishTurn } from "./support/turns.ts";
-import { createTurnLedger } from "../src/turns/turn-ledger.ts";
+import { createTurnLedger, queueOf } from "../src/turns/turn-ledger.ts";
 
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const config = testConfig({
@@ -40,11 +40,11 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
     assert.ok(claimed);
     assert.equal((await built.app.getRun(runId))?.stale, undefined, "running on a held claim — not stale");
 
-    await admin.query(`UPDATE absurd.r_${claimed.run.absurdQueue} SET state = 'failed' WHERE run_id = $1`, [
+    await admin.query(`UPDATE absurd.r_${queueOf(claimed.run)} SET state = 'failed' WHERE run_id = $1`, [
       claimed.run.absurdRunId,
     ]);
     assert.equal((await built.app.getRun(runId))?.stale, true, "running without a held claim — the worker is gone");
-    await admin.query(`UPDATE absurd.r_${claimed.run.absurdQueue} SET state = 'running' WHERE run_id = $1`, [
+    await admin.query(`UPDATE absurd.r_${queueOf(claimed.run)} SET state = 'running' WHERE run_id = $1`, [
       claimed.run.absurdRunId,
     ]);
     assert.equal((await built.app.getRun(runId))?.stale, undefined, "a held claim clears staleness");

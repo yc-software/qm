@@ -168,7 +168,7 @@ export interface SlackCoreClientDeps {
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
-const RUN_STALL_BUDGET_MS = 300_000;
+export const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;

@@ -41,7 +41,6 @@ function run(over: Partial<Run>): Run {
     priority: 2,
     preemptions: 0,
     leaseToken: null,
-    absurdQueue: null,
     absurdTaskId: null,
     absurdRunId: null,
     workerId: null,

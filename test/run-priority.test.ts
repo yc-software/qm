@@ -9,6 +9,7 @@ import type { Principal, TurnResult } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import { eventually } from "./support/settle.ts";
 import { claimTurn, finishTurn, testRunStore } from "./support/turns.ts";
+import { taskQueues } from "./support/absurd-clock.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const request = (text: string, over: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
@@ -42,7 +43,7 @@ test("run priority ranks people first, then subagents, then crons and swarms", (
 });
 
 test("people's turns run first, then their subagents, then background work", async () => {
-  const { runs, ledger, close } = testRunStore();
+  const { runs, ledger, databaseUrl, close } = testRunStore();
   try {
     const nightly = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
     const human = (await runs.enqueue({ sessionId: "dm", request: request("person") })).run;
@@ -57,7 +58,14 @@ test("people's turns run first, then their subagents, then background work", asy
     const person = (await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") }))
       .run;
     assert.deepEqual(
-      [nightly, human, child, grandchild, cronChild, worker, background, person].map((run) => run.absurdQueue),
+      await taskQueues(
+        databaseUrl,
+        await Promise.all(
+          [nightly, human, child, grandchild, cronChild, worker, background, person].map(
+            async (run) => (await runs.get(run.id))!.absurdTaskId,
+          ),
+        ),
+      ),
       [
         "turns_background",
         "turns_people",

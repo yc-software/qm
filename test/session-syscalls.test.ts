@@ -1474,7 +1474,7 @@ test("a completion wake that consumed mail and then retries retains its turn and
   const wake = (await r.runs.inFlightForThread(r.room.threadRef))[0]!;
   const running = await claimTurn(r.ledger, wake.id);
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${finished.id}`]);
-  await retryTurn(running!, 1000);
+  await retryTurn(running!, { dueInMs: 1000 });
   assert.equal(await deliverSubagentMail(deps, finished), true);
   await r.runs.markReturned(finished.id);
   assert.equal((await r.runs.get(wake.id))!.status, "pending");

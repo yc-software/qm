@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { runNowSettled } from "./support/settle.ts";
+import { eventually, runNowSettled } from "./support/settle.ts";
+import { retryDue } from "./support/absurd-clock.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -25,7 +26,7 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -372,7 +373,8 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
 });
 
 test("a turn whose setup fails is retried before the next turn in the conversation runs", async () => {
-  const built = freshApp({}, undefined, { turnRetryDelayMs: 300 });
+  const databaseUrl = testMigratedDatabaseUrl();
+  const built = freshApp({ databaseUrl });
   const { app, keychain } = built;
   assert.ok(keychain);
 
@@ -386,7 +388,9 @@ test("a turn whose setup fails is retried before the next turn in the conversati
     return realGrantsForScope(...args);
   };
 
-  const first = await app.turn(dm("hi"));
+  const firstTurn = app.turn(dm("hi"));
+  await eventually(() => retryDue(databaseUrl), { until: (moved) => moved === 1, label: "the failed setup's retry" });
+  const first = await firstTurn;
   assert.equal(first.status, "ok", first.reason);
 
   const res = await app.turn(dm("hi again"));
