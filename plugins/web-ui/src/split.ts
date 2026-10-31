@@ -57,7 +57,7 @@ import {
 import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
-import { attachTooltip, tip } from "./tooltip";
+import { tip } from "./tooltip";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
@@ -993,10 +993,6 @@ class PaneContent implements IContentRenderer {
     this.visible = p.api.isVisible;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
-    attachTooltip(this.element, (target) => {
-      const panel = dockApi?.getPanel(this.panelId);
-      return panel && target.closest(".split-canvas.single-pane") ? paneTitle(panel) : "";
-    });
     focusComposerOnPaneClick(this.element, () => p.api.isActive);
     paneContents.set(this.panelId, this);
     this.resize.observe(this.element);
@@ -1243,11 +1239,6 @@ class PaneTab implements ITabRenderer {
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
-    attachTooltip(this.element, (target) =>
-      target.closest(".split-canvas.single-pane")
-        ? [crumb, parent ? sessionTitle(parent) : null, title].filter(Boolean).join(" / ")
-        : "",
-    );
     render(
       html`
         ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
