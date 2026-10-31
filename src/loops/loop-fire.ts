@@ -51,6 +51,7 @@ import {
 } from "./triage.ts";
 import type { TriagePatch } from "./item-ledger.ts";
 import { adapterForItem } from "./sources/index.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 export interface LoopFireDeps {
   admittedWork?: AdmittedWork;
@@ -954,7 +955,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.staleGoverned(now)) await applyGovernor(loop.id, undefined, now);
+    for (const loop of await deps.loops.staleGoverned(now))
+      await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
   }
 
   async function itemTurn(

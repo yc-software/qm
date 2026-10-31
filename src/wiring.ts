@@ -580,12 +580,13 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const connectorSecretKey = config.connectorSecretKey;
   if (!connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
+  if (config.databaseUrl && !config.databaseOwnerUrl)
+    throw new Error("DATABASE_OWNER_URL is required with DATABASE_URL");
   configurePgPooling({
     ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
     ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databaseReaderUrl ? { readerUrl: config.databaseReaderUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
-    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
@@ -1434,7 +1435,6 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          tenants,
           enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
             if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
@@ -2433,7 +2433,7 @@ export function buildApp(
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  const ingressMaintenance = new Map<string, Promise<void>>();
+  let ingressMaintenance: Promise<void> | undefined;
   const suggestedActivityProfiles = config.databaseUrl
     ? createPostgresSuggestedActivityProfiles(config.databaseUrl)
     : createMemorySuggestedActivityProfiles();
@@ -2465,17 +2465,13 @@ export function buildApp(
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),
     tenants,
-    sweepAsks: async (now) => {
-      const tenant = currentTenant();
-      if (!ingressMaintenance.has(tenant))
-        ingressMaintenance.set(
-          tenant,
-          admittedWork
-            .run(() => loopIngress.maintain())
-            .catch(swallowAs("Loop ingress maintenance", undefined))
-            .finally(() => ingressMaintenance.delete(tenant)),
-        );
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
+    sweepAsks: async (now) => sweepAsks?.(now),
+    sweepLoops: async (now) => {
+      ingressMaintenance ??= admittedWork
+        .run(() => loopIngress.maintain())
+        .catch(swallowAs("Loop ingress maintenance", undefined))
+        .finally(() => (ingressMaintenance = undefined));
+      await loopFire.sweepStale(now);
     },
   });
   const suggestedActivities = createSuggestedActivityService({
@@ -2532,7 +2528,7 @@ export function buildApp(
           currentScopeMembers,
           sessions,
           resolveRecipient,
-          leaderLease: tenantLease,
+          leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
         })
@@ -2638,7 +2634,7 @@ export function buildApp(
       )
     : null;
   const monitorRetentionSweeper = createSweeper(
-    () => tenantLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
+    () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
     { label: "monitor-retention", immediate: true },
   );
@@ -2678,7 +2674,7 @@ export function buildApp(
   const deepIdleSweeper = sandbox.reapDeepIdle
     ? createSweeper(
         () =>
-          leaderLease.hold("sandbox:deep-idle-reaper", () =>
+          tenantLease.hold("sandbox:deep-idle-reaper", () =>
             sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
           ),
         SANDBOX_MAINTENANCE_INTERVAL_MS,

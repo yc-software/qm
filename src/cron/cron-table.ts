@@ -3,6 +3,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { currentTenant } from "../tenants/context.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type TenantCron = Cron & { tenantId: string };
@@ -158,7 +159,8 @@ export const CRONS_MIGRATION = typedTableMigration({
 });
 
 export function createPostgresCronRows(connectionString: string): CronRows & { close(): Promise<void> } {
-  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, CRONS_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, CRONS_MIGRATION]);
+  const { q, pool, close } = db;
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToCron);
   return {
     close,
@@ -204,10 +206,13 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
       await q(`DELETE FROM crons WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]);
     },
     async scheduled() {
-      return (await q(`${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`)).map(tenantRow);
+      return (
+        await claimAcrossTenants(db, `${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`)
+      ).map(tenantRow);
     },
     async dueCandidates(now) {
-      const rows = await q(
+      const rows = await claimAcrossTenants(
+        db,
         `${SELECT} WHERE enabled AND archived IS NOT TRUE
            AND (next_fire_at IS NULL OR next_fire_at <= $1)
            AND (defer_until IS NULL OR defer_until <= $1)

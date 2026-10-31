@@ -4,6 +4,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 export type TenantLoop = Loop & { tenantId: string };
 
@@ -220,7 +221,8 @@ function fromRow(r: Row): Loop {
 const tenantRow = (r: Row): TenantLoop => ({ ...fromRow(r), tenantId: r.tenant_id as string });
 
 export function createPostgresLoopRows(connectionString: string): LoopRows {
-  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOPS_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, LOOPS_MIGRATION]);
+  const { q, pool, close } = db;
   const first = async (where: string, values: unknown[]): Promise<Loop | null> => {
     const rows = await q(`${SELECT} WHERE ${MINE} AND ${where} ORDER BY id LIMIT 1`, values);
     return rows[0] ? fromRow(rows[0]) : null;
@@ -257,10 +259,13 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
       await q(`DELETE FROM loops WHERE ${MINE} AND id = $1`, [id]);
     },
     async inboxLoops() {
-      return (await q(`${SELECT} WHERE ${INBOX} AND state <> 'archived' ORDER BY tenant_id, id`)).map(tenantRow);
+      return (
+        await claimAcrossTenants(db, `${SELECT} WHERE ${INBOX} AND state <> 'archived' ORDER BY tenant_id, id`)
+      ).map(tenantRow);
     },
     async staleGoverned(now) {
-      const rows = await q(
+      const rows = await claimAcrossTenants(
+        db,
         `${SELECT} WHERE governor ? 'staleFireMs' AND state = 'enabled'
            AND $1 - COALESCE(last_fired_at, created_at) > (governor->>'staleFireMs')::numeric
          ORDER BY tenant_id, id`,

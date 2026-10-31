@@ -4,6 +4,7 @@ import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
 import { isResolved } from "./ledger-view.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export interface InboxRealtimeDeps {
   loops: Pick<LoopStore, "inboxLoops">;
@@ -33,7 +34,9 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
       if (!Number.isFinite(event.at)) return;
       const adapter = sourceAdapter(event.source);
       if (!adapter) return;
+      const tenant = currentTenant();
       for (const loop of await inboxLoops()) {
+        if (loop.tenantId !== tenant) continue;
         const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
         const matched = (await deps.items.byLoop(loop.id)).filter(
           (item) =>

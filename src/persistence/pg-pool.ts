@@ -42,6 +42,12 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 export const ownerDatabaseUrl = (connectionString: string): string =>
   connectionString === poolingConfig.databaseUrl && poolingConfig.ownerUrl ? poolingConfig.ownerUrl : connectionString;
 
+function ownerLogin(connectionString: string): string {
+  if (connectionString !== poolingConfig.databaseUrl || !poolingConfig.ownerUrl)
+    throw new Error("Cross-tenant claims need DATABASE_OWNER_URL for this database");
+  return poolingConfig.ownerUrl;
+}
+
 let loginPasswordsSet = false;
 
 async function setManagedLoginPasswords(connectionString: string, pool: Pool): Promise<void> {
@@ -519,13 +525,9 @@ export function createPgPool(
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
-  let ownerPoolP: Promise<Pool> | null = null;
+  let ownerPoolP: Promise<{ url: string; pool: Pool }> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
-  const ownerUrl =
-    poolingConfig.ownerUrl && connectionString === poolingConfig.databaseUrl
-      ? poolingConfig.ownerUrl
-      : connectionString;
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
     return migrationQueue(connectionString, async () => {
       const instance = await retainPool(ownerDatabaseUrl(connectionString), "migration");
@@ -562,7 +564,11 @@ export function createPgPool(
   async function ownerPool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (ownerPoolP ??= retainPool(ownerUrl, "owner"));
+    if (!ownerPoolP) {
+      const url = ownerLogin(connectionString);
+      ownerPoolP = retainPool(url, "owner").then((pool) => ({ url, pool }));
+    }
+    return (await ownerPoolP).pool;
   }
   async function query(
     text: string,
@@ -642,7 +648,7 @@ export function createPgPool(
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
-      ownerPoolP?.then((instance) => releasePool(ownerUrl, instance, "owner")),
+      ownerPoolP?.then(({ url, pool }) => releasePool(url, pool, "owner")).catch(() => undefined),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {

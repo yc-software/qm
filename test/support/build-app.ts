@@ -8,11 +8,11 @@ import {
 import { setProviderBaseUrls } from "../../src/model/provider-endpoints.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockHarness } from "./mock-harness.ts";
-import { bindTestTenant } from "./tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./tenant.ts";
 
 bindTestTenant();
 
-export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+export { TEST_TENANT };
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
   SECURITY_SCREEN: "enforce",
