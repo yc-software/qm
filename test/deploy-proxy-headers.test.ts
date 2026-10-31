@@ -50,7 +50,10 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
       res.write("data: ready\n\n");
       return;
     }
-    setTimeout(() => res.end(req.url), 30);
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(req.url);
+    }, 30);
   });
   upstream.on("session", (session) => {
     sessionCount++;
