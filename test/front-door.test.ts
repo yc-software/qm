@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
+import { join, normalize, resolve, sep } from "node:path";
 import { runUiPublish } from "../cli/src/commands/ui.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "qm-front-door-"));
@@ -26,8 +26,14 @@ const core = createServer((req, res) => {
 
 const bucket = createServer((req, res) => {
   const key = normalize(decodeURIComponent((req.url ?? "/").split("?")[0]!)).replace(/^\/+/, "");
+  const file = resolve(bucketDir, key);
+  if (!file.startsWith(bucketDir + sep)) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
   try {
-    const body = readFileSync(join(bucketDir, key));
+    const body = readFileSync(file);
     res.writeHead(200);
     res.end(body);
   } catch {
