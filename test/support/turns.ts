@@ -122,6 +122,24 @@ export async function failedTurnError(
     .join("\n");
 }
 
+export async function ownTurnError(
+  built: { app: Pick<App, "turn">; errors: Pick<ErrorLog, "flush" | "list"> },
+  request: TurnRequest,
+): Promise<string> {
+  const result = await built.app.turn(request);
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  await built.errors.flush();
+  return (await built.errors.list({ limit: 200 }))
+    .filter(
+      (event) =>
+        event.category === "turn" &&
+        ((result.sessionId !== undefined && event.sessionId === result.sessionId) ||
+          (result.runId !== undefined && event.message.startsWith(`run ${result.runId}:`))),
+    )
+    .map((event) => event.message)
+    .join("\n");
+}
+
 export async function endTurn(claimed: ClaimedTurn, result: TurnResult): Promise<boolean> {
   return finishTurn(claimed, result, result.status === "failed" ? "failed" : "done");
 }
