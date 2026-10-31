@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";

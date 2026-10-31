@@ -10,7 +10,6 @@ import {
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

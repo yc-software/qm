@@ -303,7 +303,7 @@ test(
 test("pg config store: settings written on one core reach another core through refreshScope", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
   const ch = scopeId("channel", "C4");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const a = testConfigStore(maps(f));
   const b = testConfigStore(maps(f));
   await a.hydrate?.();

@@ -9,6 +9,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const PID = "soul-read-portal-identity-secret-for-tests";
 
@@ -46,7 +47,7 @@ test("source-authenticated SOUL reads require the portal-verified principal to b
     assert.equal(channel.status, 200);
     assert.equal(((await channel.json()) as { soul: string }).soul, "Channel C instruction.");
 
-    assert.equal((await read("scopeId=org:default-org&principalId=alice", "alice")).status, 200);
+    assert.equal((await read(`scopeId=${TEST_ROOT_SCOPE}&principalId=alice`, "alice")).status, 200);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

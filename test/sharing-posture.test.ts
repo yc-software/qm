@@ -36,7 +36,7 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   const sharingPostures = testMap<PersistedSharingPosture>();
   const writer = testConfigStore({ sharingPostures });
   const reader = testConfigStore({ sharingPostures });
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
 
@@ -62,7 +62,7 @@ test("Open membership re-checks durable organization, person, room, and membersh
   const store = testMap<PersistedSharingPosture>();
   const writer = testConfigStore({ sharingPostures: store });
   const reader = testConfigStore({ sharingPostures: store });
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
   let member = true;

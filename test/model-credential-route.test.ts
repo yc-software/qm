@@ -414,8 +414,10 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
 test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
   const srv = start();
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-5" });
-    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { modelId: "claude-opus-5" });
+    const response = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
+      headers: ADMIN,
+    });
     assert.equal(response.status, 200);
     const data = (await response.json()) as {
       runtime: { modelId: string };
@@ -558,8 +560,8 @@ test("admin model credentials survive a second app instance on the same durable 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
     await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "claude-haiku-4-5" });
     const turn = (threadRef: string, model?: string) =>
       srv.built.app.turn({
@@ -588,8 +590,8 @@ test("a stored scope runtime remains usable outside the legacy configured picker
 test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
     const rejected = await srv.built.app.turn({
       surface: "loop",
       actor: { externalId: "alice" },

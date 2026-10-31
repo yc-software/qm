@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 

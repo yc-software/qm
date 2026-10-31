@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";

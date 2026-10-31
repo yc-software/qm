@@ -4,7 +4,6 @@ import { deploymentCredentialSlugs } from "../src/deploy/deployment-credentials.
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { scopeId } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";

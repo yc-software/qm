@@ -2754,7 +2754,7 @@ test("an admin-removed grant mode is refused, filters the offer, and leaves the 
 
 test("a grant mode disabled after an approval was issued is filtered from the re-presented card", async () => {
   const { app, config } = freshApp();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
 
   const first = await app.turn(dm("!run git push --force origin main"));
   assert.equal(first.status, "pending_approval");
