@@ -1,16 +1,16 @@
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
+import type { CronRows, TenantCron } from "./cron-table.ts";
+import type { BeginFireResult, CronFireRecord, CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
-  createDeduped,
   type CreateTriggerInput,
-  ownedBy,
+  withFields,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
@@ -52,6 +52,8 @@ export interface CronStore {
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
+  tiedTo(threadRefs: readonly string[]): Promise<Cron[]>;
+  scheduled(): Promise<TenantCron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -63,14 +65,13 @@ export interface CronStore {
   listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
-  backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
   markAttempted(id: string, at: number): Promise<void>;
   defer(id: string, until: number): Promise<void>;
   claimSlot(id: string, scheduledAt: number, at: number): Promise<boolean>;
   unclaimSlot(id: string, scheduledAt: number, at: number, priorLastFiredAt: number | undefined): Promise<void>;
-  due(now: number): Promise<Array<Cron & { scheduledAt: number }>>;
+  due(now: number): Promise<Array<TenantCron & { scheduledAt: number }>>;
 }
 
 export function cronIsActive(cron: Pick<Cron, "enabled" | "archived" | "schedule" | "lastFiredAt">): boolean {
@@ -93,79 +94,96 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
-export function createCronStore(
-  backing: DurableMap<Cron>,
-  opts: { staleRunningMs?: number; fires: CronFireStore },
-): CronStore {
+function editFields(before: Cron, patch: CronPatch): Partial<Cron> {
+  assertCronRuntime({ ...before, ...patch });
+  const fields: Partial<Cron> = {};
+  if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+  if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
+  if (patch.action !== undefined) fields.action = patch.action;
+  if (patch.message !== undefined) fields.message = patch.message;
+  if (patch.schedule !== undefined) {
+    const normalized = normalizeSchedule(patch.schedule, Date.now());
+    fields.schedule = normalized.schedule;
+    fields.nextFireAt = normalized.nextFireAt;
+  }
+  if (patch.enabled !== undefined) fields.enabled = patch.enabled;
+  if (patch.archived !== undefined) fields.archived = patch.archived;
+  if (patch.destination !== undefined) fields.destination = patch.destination;
+  if (patch.archived === true) fields.enabled = false;
+  if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
+  if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+  return fields;
+}
+
+function buildCron(input: CreateCronInput, now: number): Cron {
+  const title = normalizeTitle(input.title);
+  const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
+  const id = hashId([
+    contentPart(currentTenant()),
+    contentPart(input.owner),
+    contentPart(input.ownerScopeId),
+    contentPart(input.schedule),
+    contentPart(input.action),
+    contentPart(input.message),
+    contentPart(input.destination),
+    contentPart(input.unattendedGrants),
+    contentPart(title),
+    ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
+    ...(input.runtime ? [contentPart(input.runtime)] : []),
+  ]);
+  return {
+    ...buildTriggerBase(input, id, now),
+    enabled: input.enabled !== false,
+    schedule,
+    ...(nextFireAt !== undefined ? { nextFireAt } : {}),
+    ...(title ? { title } : {}),
+    ...(input.action !== undefined ? { action: input.action } : {}),
+    ...(input.message !== undefined ? { message: input.message } : {}),
+    ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
+    ...(input.loopId ? { loopId: input.loopId } : {}),
+    ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
+    ...(input.runtime ? { runtime: input.runtime } : {}),
+  };
+}
+
+function claimed(cron: Cron, scheduledAt: number, at: number): Cron | null {
+  if (cron.archived || !cron.enabled) return null;
+  if (recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== scheduledAt) return null;
+  const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
+  return withFields(cron, {
+    lastFiredAt: at,
+    nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
+    deferUntil: undefined,
+  });
+}
+
+export function createCronStore(rows: CronRows, opts: { staleRunningMs?: number; fires: CronFireStore }): CronStore {
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires;
+  const edit = async (id: string, fields: Partial<Cron>) => rows.update(id, (cron) => withFields(cron, fields));
   return {
     async create(input) {
       assertNoEscalation(input);
       assertCronRuntime(input);
-      const now = Date.now();
-      const title = normalizeTitle(input.title);
-      const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
-      const contentId = hashId([
-        contentPart(input.owner),
-        contentPart(input.ownerScopeId),
-        contentPart(input.schedule),
-        contentPart(input.action),
-        contentPart(input.message),
-        contentPart(input.destination),
-        contentPart(input.unattendedGrants),
-        contentPart(title),
-        ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
-        ...(input.runtime ? [contentPart(input.runtime)] : []),
-      ]);
-      return createDeduped(backing, contentId, (id) => ({
-        ...buildTriggerBase(input, id, now),
-        enabled: input.enabled !== false,
-        schedule,
-        ...(nextFireAt !== undefined ? { nextFireAt } : {}),
-        ...(title ? { title } : {}),
-        ...(input.action !== undefined ? { action: input.action } : {}),
-        ...(input.message !== undefined ? { message: input.message } : {}),
-        ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
-        ...(input.loopId ? { loopId: input.loopId } : {}),
-        ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
-        ...(input.runtime ? { runtime: input.runtime } : {}),
-      }));
+      return rows.insertIfAbsent(buildCron(input, Date.now()));
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    ownedBy: (scopeId) => ownedBy(backing, scopeId),
+    get: (id) => rows.get(id),
+    list: () => rows.list(),
+    ownedBy: (scopeId) => rows.ownedBy(scopeId),
+    tiedTo: (threadRefs) => rows.tiedTo(threadRefs),
+    scheduled: () => rows.scheduled(),
     async update(id, patch) {
-      const before = await backing.get(id);
-      if (!before) return null;
-      assertCronRuntime({ ...before, ...patch });
-      const fields: Partial<Cron> = {};
-      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
-      if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
-      if (patch.action !== undefined) fields.action = patch.action;
-      if (patch.message !== undefined) fields.message = patch.message;
-      if (patch.schedule !== undefined) {
-        const normalized = normalizeSchedule(patch.schedule, Date.now());
-        fields.schedule = normalized.schedule;
-        fields.nextFireAt = normalized.nextFireAt;
-      }
-      if (patch.enabled !== undefined) fields.enabled = patch.enabled;
-      if (patch.archived !== undefined) fields.archived = patch.archived;
-      if (patch.destination !== undefined) fields.destination = patch.destination;
-      if (patch.archived === true) fields.enabled = false;
-      if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
-      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      return backing.merge(id, fields);
+      return rows.update(id, (before) => withFields(before, editFields(before, patch)));
     },
-    delete: (id) => backing.delete(id),
+    delete: (id) => rows.delete(id),
     async setEnabled(id, enabled) {
-      await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+      await edit(id, { enabled, ...(enabled ? { archived: false } : {}) });
     },
     async setDestination(id, destination) {
-      await backing.merge(id, { destination });
+      await edit(id, { destination });
     },
     async beginFire(id, entry, opts) {
-      if ((await backing.get(id)) === null) return { begun: false };
+      if ((await rows.get(id)) === null) return { begun: false };
       if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs);
       await fires.record(id, entry);
       return { begun: true };
@@ -182,79 +200,49 @@ export function createCronStore(
     listFires: (id, opts) => fires.listByCron(id, opts),
     firesByThreadRefs: (threadRefs) => fires.listByThreadRefs(threadRefs),
     latestFireForThread: (id, threadRef) => fires.latestForThread(id, threadRef),
-    async backfillFires() {
-      let backfilled = 0;
-      for (const [id, cron] of await backing.entries()) {
-        const log = cron.fireLog;
-        if (log === undefined) continue;
-        if (log.length) {
-          await fires.backfill(id, log);
-          backfilled += log.length;
-        }
-        await backing.update(id, (current) => {
-          const { fireLog: _legacy, ...rest } = current;
-          return rest;
-        });
-      }
-      return backfilled;
-    },
     async setFireNote(id, note) {
       let applied = false;
-      const apply = (cron: Cron): Cron => {
+      const updated = await rows.update(id, (cron) => {
         applied = !(cron.lastFireNote && cron.lastFireNote.at > note.at);
         return applied ? { ...cron, lastFireNote: note } : cron;
-      };
-      if ((await backing.update(id, apply)) === null) return "missing";
+      });
+      if (updated === null) return "missing";
       return applied ? "applied" : "superseded";
     },
     async markFired(id, at, scheduledAt) {
-      const cron = await backing.get(id);
-      if (!cron) return;
-      const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-      await backing.merge(id, {
-        lastFiredAt: at,
-        nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
-        deferUntil: undefined,
+      await rows.update(id, (cron) => {
+        const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
+        return withFields(cron, {
+          lastFiredAt: at,
+          nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
+          deferUntil: undefined,
+        });
       });
     },
     async claimSlot(id, scheduledAt, at) {
-      let claimed = false;
-      const transform = (cron: Cron): Cron => {
-        claimed = false;
-        if (cron.archived || !cron.enabled) return cron;
-        if (recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== scheduledAt)
-          return cron;
-        claimed = true;
-        const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
-        const next = advanceNextFireAt(cron.schedule, advanceFrom);
-        const { nextFireAt: _dropped, deferUntil: _cleared, ...rest } = cron;
-        return { ...rest, lastFiredAt: at, ...(next !== undefined ? { nextFireAt: next } : {}) };
-      };
-      await backing.update(id, transform);
-      return claimed;
+      let won = false;
+      await rows.update(id, (cron) => {
+        const next = claimed(cron, scheduledAt, at);
+        won = next !== null;
+        return next ?? cron;
+      });
+      return won;
     },
     async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
-      const restore = (cron: Cron): Cron => {
-        if (cron.lastFiredAt !== at) return cron;
-        const { lastFiredAt: _dropped, ...rest } = cron;
-        return {
-          ...rest,
-          ...(priorLastFiredAt !== undefined ? { lastFiredAt: priorLastFiredAt } : {}),
-          nextFireAt: scheduledAt,
-        };
-      };
-      await backing.update(id, restore);
+      await rows.update(id, (cron) =>
+        cron.lastFiredAt === at ? withFields(cron, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt }) : cron,
+      );
     },
     async markAttempted(id, at) {
-      await backing.merge(id, { lastAttemptAt: at });
+      await edit(id, { lastAttemptAt: at });
     },
     async defer(id, until) {
-      await backing.merge(id, { deferUntil: until });
+      await edit(id, { deferUntil: until });
     },
     async due(now) {
-      const due: Array<Cron & { scheduledAt: number }> = [];
-      for (const c of await backing.all()) {
-        if (c.archived || !c.enabled || isDeferred(c, now)) continue;
+      const due: Array<TenantCron & { scheduledAt: number }> = [];
+      for (const c of await rows.dueCandidates(now)) {
+        if (isDeferred(c, now)) continue;
         const scheduledAt = recoverNextFireAt(c.schedule, c.createdAt, c.lastFiredAt, c.nextFireAt);
         if (scheduledAt !== undefined && now >= scheduledAt) due.push({ ...c, nextFireAt: scheduledAt, scheduledAt });
       }
@@ -262,15 +250,3 @@ export function createCronStore(
     },
   };
 }
-
-export const DROP_RUN_AS_MIGRATION = {
-  id: "durable-map/crons/0001-drop-run-as",
-  statements: [
-    ...["crons", "loops"].map(
-      (table) => `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-    ),
-    `UPDATE crons SET json = jsonb_set(json, '{owner}', to_jsonb('system:' || (json ->> 'ownerScopeId'))) WHERE json ->> 'runAs' = 'scopeFloor' AND json ->> 'loopId' IS NULL AND json ->> 'ownerScopeId' NOT LIKE 'personal:%'`,
-    "UPDATE crons SET json = json - 'runAs' - 'ownerResourcesRequireOpen' - 'members' WHERE json ?| array['runAs', 'ownerResourcesRequireOpen', 'members']",
-    "UPDATE loops SET json = json - 'runAs' WHERE json ? 'runAs'",
-  ],
-};

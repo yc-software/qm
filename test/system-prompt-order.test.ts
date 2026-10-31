@@ -42,6 +42,7 @@ import {
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testCronRows } from "./support/typed-stores.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -525,7 +526,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,
@@ -1239,7 +1240,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: AgentTurnInput[] = [];
   const agent = createMockAgent();

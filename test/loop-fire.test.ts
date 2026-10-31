@@ -20,6 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
 
 function fakeIdentity() {
   return {
@@ -56,11 +57,11 @@ function service(
     resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
-  const loops = createLoopStore(testMap());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const items = createLoopItemLedger(testMap());
-  const outputs = createLoopOutputStore(testMap());
-  const grants = overrides?.grants ?? createShipGrantStore(testMap());
+  const loops = createLoopStore(testLoopRows());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const items = createLoopItemLedger(testItemRows());
+  const outputs = createLoopOutputStore(testOutputRows());
+  const grants = overrides?.grants ?? createShipGrantStore(testShipGrantRows());
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore(testMap());
@@ -441,7 +442,7 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
 });
 
 test("an auto grant ships the matching slice without a person", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(
@@ -460,7 +461,7 @@ test("an auto grant ships the matching slice without a person", async () => {
 });
 
 test("revoking an auto grant during work leaves the output held", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   let grantId = "";
   const s = service(
     (req) => {
@@ -487,7 +488,7 @@ test("revoking an auto grant during work leaves the output held", async () => {
 });
 
 test("a policy version bump during work leaves the output held", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   let loopId = "";
   const s = service(
     (req) => {
@@ -514,7 +515,7 @@ test("a policy version bump during work leaves the output held", async () => {
 });
 
 test("a stale grant does not auto-ship after a semantic policy change", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(

@@ -11,8 +11,9 @@ import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { scopeId } from "../src/types.ts";
 import type { Loop, ShipGrant } from "../src/loops/types.ts";
-import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -33,11 +34,11 @@ function fakeRes() {
 
 function services(): LoopServiceDeps {
   return {
-    store: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
-    grants: createShipGrantStore(testMap()),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    store: createLoopStore(testLoopRows()),
+    items: createLoopItemLedger(testItemRows()),
+    outputs: createLoopOutputStore(testOutputRows()),
+    grants: createShipGrantStore(testShipGrantRows()),
+    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore(),
   };
 }

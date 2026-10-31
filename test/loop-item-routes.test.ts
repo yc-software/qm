@@ -15,8 +15,9 @@ import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
-import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -51,11 +52,11 @@ let cronSeq = 0;
 function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
   const w: World = {
     loops: {
-      store: createLoopStore(testMap()),
-      items: createLoopItemLedger(testMap()),
-      outputs: createLoopOutputStore(testMap()),
-      grants: createShipGrantStore(testMap()),
-      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      store: createLoopStore(testLoopRows()),
+      items: createLoopItemLedger(testItemRows()),
+      outputs: createLoopOutputStore(testOutputRows()),
+      grants: createShipGrantStore(testShipGrantRows()),
+      crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
       config: testConfigStore(),
     },
     crons: new Map(),

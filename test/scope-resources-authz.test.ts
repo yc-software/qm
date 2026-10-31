@@ -13,6 +13,7 @@ import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testCronRows, testWebhookRows } from "./support/typed-stores.ts";
 
 const U1 = "U1";
 const C1 = "C1";
@@ -21,8 +22,8 @@ const orgScope = TEST_ROOT_SCOPE;
 
 function makeDeps() {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const webhooks = createWebhookStore(testMap(), testMap());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const webhooks = createWebhookStore(testWebhookRows());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
     resolveFiles: (refs) => files.resolveByIds(refs),
   });

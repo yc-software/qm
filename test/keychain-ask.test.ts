@@ -40,7 +40,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testKeychainRows } from "./support/typed-stores.ts";
+import { testKeychainRows, testCronRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -308,7 +308,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),

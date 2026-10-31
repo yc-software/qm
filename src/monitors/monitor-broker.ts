@@ -132,9 +132,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
           throw new Error(`invalid pattern: ${e instanceof Error ? e.message : "unsafe regex"}`, { cause: e });
         }
       }
-      const existing = (await deps.store.list()).find(
-        (m) => m.enabled && m.processId === processId && m.threadRef === deps.threadRef,
-      );
+      const existing = (await deps.store.watching([deps.threadRef])).find((m) => m.processId === processId);
       if (existing) {
         await deps.store.update(existing.id, {
           ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
