@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { canonicalPayload, signRequest, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
-import { withTenant as withChassisTenant } from "../plugins/chassis/src/tenant.ts";
+import { tenantStore, withTenant as withChassisTenant } from "../plugins/chassis/src/tenant.ts";
 import { signRequest as legacySignRequest } from "../src/auth/source-auth.ts";
 import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
@@ -24,24 +24,25 @@ test("source-auth.signRequest delegates to the single-sourced HMAC", () => {
   assert.equal(legacySignRequest("k", 42, body), signRequest("k", 42, body));
 });
 
-test("signedRequestHeaders: no secret → just the base; secret → x-timestamp + x-signature", () => {
-  assert.deepEqual(signedRequestHeaders(undefined, "GET", "/p", "", { "content-type": "application/json" }), {
-    "content-type": "application/json",
-  });
+test("signedRequestHeaders: no secret → just the base; secret → x-timestamp + x-signature", () =>
+  tenantStore.exit(() => {
+    assert.deepEqual(signedRequestHeaders(undefined, "GET", "/p", "", { "content-type": "application/json" }), {
+      "content-type": "application/json",
+    });
 
-  const headers = signedRequestHeaders(
-    "s",
-    "POST",
-    "/v1/blobs",
-    "deadbeef",
-    { "content-type": "application/json" },
-    1000,
-  );
-  assert.equal(headers["x-timestamp"], "1000");
-  assert.equal(headers["x-signature"], signRequest("s", 1000, canonicalPayload("POST", "/v1/blobs", "deadbeef")));
-  assert.equal(headers["content-type"], "application/json");
-  assert.equal(headers["x-qm-tenant"], undefined);
-});
+    const headers = signedRequestHeaders(
+      "s",
+      "POST",
+      "/v1/blobs",
+      "deadbeef",
+      { "content-type": "application/json" },
+      1000,
+    );
+    assert.equal(headers["x-timestamp"], "1000");
+    assert.equal(headers["x-signature"], signRequest("s", 1000, canonicalPayload("POST", "/v1/blobs", "deadbeef")));
+    assert.equal(headers["content-type"], "application/json");
+    assert.equal(headers["x-qm-tenant"], undefined);
+  }));
 
 test("signedRequestHeaders signs and sends the tenant from the base headers or the bound chassis tenant", () => {
   const fromBase = signedRequestHeaders("s", "GET", "/p", "", { ...TENANT_HEADERS }, 1000);
