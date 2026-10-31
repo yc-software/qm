@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import { boundTenant, currentTenant, withTenant, withoutTenant } from "../tenants/context.ts";
 import { reportFailureAs } from "../util/errors.ts";
@@ -190,7 +191,7 @@ export function createSlackTenants(deps: {
   }
 
   const inTenants = <T>(rows: readonly T[], tenantOf: (row: T) => string, fn: (row: T) => Promise<unknown>) =>
-    Promise.allSettled(rows.map((row) => withTenant(tenantOf(row), () => fn(row)).catch(report)));
+    Promise.allSettled(rows.map((row) => inTenantOf(tenantOf(row), () => fn(row)).catch(report)));
 
   async function sweep(at: number): Promise<void> {
     const staged = [...entries.keys()].flatMap((tenantId) =>

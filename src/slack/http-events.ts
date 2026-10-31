@@ -1,10 +1,10 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import bolt from "@slack/bolt";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { errMessage } from "../util/errors.ts";
-import { withTenant } from "../tenants/context.ts";
 import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
 const { isValidSlackRequest } = bolt;
@@ -73,7 +73,7 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
     const tenant = await opts.tenantFor(body).catch(() => null);
     if (!tenant) return respond(res, 403, { error: "unknown_team" });
-    await withTenant(tenant, () => dispatch(req, res, body));
+    await inTenantOf(tenant, () => dispatch(req, res, body));
   }
 
   async function dispatch(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>): Promise<void> {

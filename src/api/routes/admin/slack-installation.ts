@@ -1,4 +1,4 @@
-import { withTenant } from "../../../tenants/context.ts";
+import { inTenantOf } from "../../../tenants/claim.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
@@ -186,5 +186,5 @@ export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   const team = slackTeamOf(ctx.body);
   const tenant = team && ctx.deps.tenants ? await ctx.deps.tenants.forSlackTeam(team) : null;
   if (!tenant) return sendJson(ctx.res, 404, { error: "unknown_workspace" });
-  await withTenant(tenant, () => managed.handle(ctx.req, ctx.res, ctx.body));
+  await inTenantOf(tenant, () => managed.handle(ctx.req, ctx.res, ctx.body));
 }
