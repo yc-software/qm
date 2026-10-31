@@ -5,7 +5,8 @@ import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/m
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { testMonitorRows } from "./support/typed-stores.ts";
 
 const SCOPE = "personal:U1";
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
@@ -16,7 +17,7 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
 }
 
 async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
-  const store = createMonitorStore(testMap());
+  const store = createMonitorStore(testMonitorRows());
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const rec = await registry.register({
     processId: "p-1",
@@ -64,7 +65,7 @@ test("watching the same job in the same thread twice reattaches instead of doubl
   const second = armed(await broker.watch("p-1"));
   assert.equal(second.reattached, true);
   assert.equal(second.monitorId, first.monitorId);
-  assert.equal((await store.list()).length, 1);
+  assert.equal((await store.watching(["thread-1"])).length, 1);
 });
 
 test("a repeat watch re-arms with the new settings instead of silently keeping stale ones", async () => {
@@ -119,7 +120,7 @@ test("watch on an exited job with output returns its final tail without arming a
     cursor: 8192,
   });
   assert.deepEqual(calls, [{ processId: "p-1", maxBytes: 4096 }]);
-  assert.equal((await store.list()).length, 0);
+  assert.equal((await store.watching(["thread-1"])).length, 0);
 });
 
 test("watch on an exited job with no output returns success without arming a monitor", async () => {
@@ -135,7 +136,7 @@ test("watch on an exited job with no output returns success without arming a mon
     outputTail: "",
     cursor: 0,
   });
-  assert.equal((await store.list()).length, 0);
+  assert.equal((await store.watching(["thread-1"])).length, 0);
 });
 
 test("readBackgroundOutputTail scans output and keeps the final bytes", async () => {

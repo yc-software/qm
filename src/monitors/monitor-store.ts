@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../triggers/types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
-  setTriggerEnabled,
   type CreateTriggerInput,
-  ownedBy,
+  withFields,
 } from "../triggers/trigger-store.ts";
+import { type MonitorRows, type TenantMonitor } from "./monitor-table.ts";
 
 interface CreateMonitorInput extends CreateTriggerInput {
   processId: string;
@@ -23,9 +22,9 @@ interface CreateMonitorInput extends CreateTriggerInput {
 export interface MonitorStore {
   create(input: CreateMonitorInput): Promise<Monitor>;
   get(id: string): Promise<Monitor | null>;
-  list(): Promise<Monitor[]>;
   ownedBy(scopeId: string): Promise<Monitor[]>;
-  enabled(): Promise<Monitor[]>;
+  watching(threadRefs: readonly string[]): Promise<Monitor[]>;
+  enabled(): Promise<TenantMonitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
@@ -36,15 +35,10 @@ export interface MonitorStore {
 
 const DEFUNCT_MONITOR_GRACE_MS = 7 * 24 * 60 * 60_000;
 
-function lastActivityAt(m: Monitor): number {
-  return Math.max(m.expiresAt ?? 0, m.lastFiredAt ?? 0, m.createdAt);
-}
-
-function defunctBefore(cutoff: number): (m: Monitor) => boolean {
-  return (m) => !m.enabled && lastActivityAt(m) <= cutoff;
-}
-
-export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
+export function createMonitorStore(rows: MonitorRows): MonitorStore {
+  const edit = async (id: string, fields: Partial<Monitor>) => {
+    await rows.update(id, (monitor) => withFields(monitor, fields));
+  };
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -59,29 +53,18 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
         cursor: input.cursor ?? 0,
         expiresAt: input.expiresAt,
       };
-      await backing.put(monitor.id, monitor);
+      await rows.insert(monitor);
       return monitor;
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    ownedBy: (scopeId) => ownedBy(backing, scopeId),
-    async enabled() {
-      return (await backing.all()).filter((m) => m.enabled);
-    },
-    setEnabled(id, enabled) {
-      return setTriggerEnabled(backing, id, enabled);
-    },
-    delete: (id) => backing.delete(id),
-    async deleteDefunct(now) {
-      const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
-      let deleted = 0;
-      for (const m of (await backing.all()).filter(isDefunct)) {
-        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
-      }
-      return deleted;
-    },
+    get: (id) => rows.get(id),
+    ownedBy: (scopeId) => rows.ownedBy(scopeId),
+    watching: (threadRefs) => rows.watching(threadRefs),
+    enabled: () => rows.enabled(),
+    setEnabled: (id, enabled) => edit(id, { enabled }),
+    delete: (id) => rows.delete(id),
+    deleteDefunct: (now) => rows.deleteDisabledBefore(now - DEFUNCT_MONITOR_GRACE_MS),
     async advance(id, fields) {
-      await backing.merge(id, {
+      await edit(id, {
         cursor: fields.cursor,
         tail: fields.tail,
         ...(fields.firedAt !== undefined ? { lastFiredAt: fields.firedAt } : {}),
@@ -93,10 +76,8 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
         ...(fields.pattern !== undefined ? { pattern: fields.pattern } : {}),
         ...(fields.cursor !== undefined ? { cursor: fields.cursor, tail: undefined } : {}),
       };
-      if (Object.keys(patch).length) await backing.merge(id, patch);
+      if (Object.keys(patch).length) await edit(id, patch);
     },
-    async recordError(id, error) {
-      await backing.merge(id, { lastError: error });
-    },
+    recordError: (id, error) => edit(id, { lastError: error }),
   };
 }

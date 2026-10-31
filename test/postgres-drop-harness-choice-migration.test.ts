@@ -65,10 +65,18 @@ test("stored harness choices are dropped while their runtime selections stay rec
     await insert("base_model_configs", "personal:b", { scopeId: "personal:b", modelId: "legacy-only" });
     await insert("approved_harness_configs", "org:o", { scopeId: "org:o", ids: ["pi", "claude"] });
     await insert("auto_flagger_configs", "org:o", { scopeId: "org:o", harnessId: "claude", modelId: "m", rubric: "r" });
-    await insert("crons", "c1", { id: "c1", runtime: { harnessId: "claude", modelId: "m" } });
-    await insert("crons", "c2", { id: "c2", runtime: null });
-    await insert("swarms", "s1", { id: "s1", template: { harness: "claude", model: "m" } });
-    await insert("swarms", "s2", { id: "s2", template: { model: "m" } });
+    const cron = {
+      owner: "a",
+      createdBy: "a",
+      ownerScopeId: "personal:a",
+      schedule: { everyMs: 60_000 },
+      enabled: true,
+    };
+    await insert("crons", "c1", { ...cron, id: "c1", runtime: { harnessId: "claude", modelId: "m" } });
+    await insert("crons", "c2", { ...cron, id: "c2", runtime: null });
+    const swarm = { scopeId: "personal:a", ownerId: "a", backend: "modal", settings: {} };
+    await insert("swarms", "s1", { ...swarm, id: "s1", template: { harness: "claude", model: "m" } });
+    await insert("swarms", "s2", { ...swarm, id: "s2", template: { model: "m" } });
 
     await migrate(url);
 
@@ -90,11 +98,15 @@ test("stored harness choices are dropped while their runtime selections stay rec
       modelId: "m",
       rubric: "r",
     });
-    const crons = await rows(admin, "crons");
-    assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
-    assert.equal(crons.c2?.runtime, null);
-    const swarms = await rows(admin, "swarms");
-    assert.deepEqual(swarms.s1?.template, { model: "m" });
-    assert.deepEqual(swarms.s2?.template, { model: "m" });
+    const column = async (table: string, name: string) =>
+      Object.fromEntries(
+        (await admin.query(`SELECT id, ${name} AS value FROM ${table}`)).rows.map((row) => [row.id, row.value]),
+      );
+    const crons = await column("crons", "runtime");
+    assert.deepEqual(crons.c1, { modelId: "m" });
+    assert.equal(crons.c2, null);
+    const swarms = await column("swarms", "template");
+    assert.deepEqual(swarms.s1, { model: "m" });
+    assert.deepEqual(swarms.s2, { model: "m" });
   });
 });

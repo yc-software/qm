@@ -8,6 +8,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { testWebhookRows } from "./support/typed-stores.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -37,7 +38,7 @@ const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
 function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
-  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const webhooks = tracked(createWebhookStore(testWebhookRows()));
   const deliveries = tracked(createDeliveryStore());
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
