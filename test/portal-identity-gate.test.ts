@@ -16,6 +16,8 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { completeTurn } from "./support/turns.ts";
+import { createTurnLedger, type TurnLedger } from "../src/turns/turn-ledger.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -25,11 +27,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   let server: Server;
   let base: string;
   let built: BuiltApp;
+  let ledger: TurnLedger;
 
   const token = async (p: string, secret = PID) => mintSignedPayload({ p, exp: Date.now() + 60_000 }, secret);
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
+    const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) });
+    built = buildApp(config);
+    ledger = createTurnLedger(config.databaseUrl!);
     server = createInsecureTestServer(built.app, {
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
@@ -44,6 +49,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await ledger.close();
   });
 
   const get = (headers: Record<string, string> = {}) => fetch(`${base}/v1/sessions/nope?viewer=U1`, { headers });
@@ -75,9 +81,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
         text: "test request",
       },
     });
-    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
-    assert.ok(claimed?.leaseToken);
-    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+    await completeTurn(ledger, run.id, { status: "ok", sessionId: run.sessionId, reply: "owner-only result" });
     const strictServer = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,

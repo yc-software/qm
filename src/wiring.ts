@@ -544,6 +544,7 @@ export function buildApp(
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
+    turnRetryDelayMs?: number | ((priorErrors: number) => number);
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
@@ -2669,6 +2670,7 @@ export function buildApp(
   const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
   const turnReady = createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn ready");
   const turnYields = createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields");
+  const { turnRetryDelayMs } = overrides;
   const turnRunner = createTurnRunner({
     ledger: turnLedger,
     orchestrator,
@@ -2679,6 +2681,9 @@ export function buildApp(
     canClaim: canClaimRuns,
     errors,
     ...(Number.isFinite(config.maxClaims) ? { maxClaims: config.maxClaims } : {}),
+    ...(turnRetryDelayMs !== undefined
+      ? { retryDelayMs: typeof turnRetryDelayMs === "number" ? () => turnRetryDelayMs : turnRetryDelayMs }
+      : {}),
   });
   jobs.every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {
     immediate: true,
