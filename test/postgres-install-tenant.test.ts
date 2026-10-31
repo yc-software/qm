@@ -37,7 +37,7 @@ test("an install gets exactly one tenant row, even when provisioning races", { s
 });
 
 test(
-  "an existing install keeps its carried-over tenant id and a dev instance writes its settings to it",
+  "an existing install keeps its carried-over tenant id and a dev instance writes its settings to it or stops",
   { skip },
   async () => {
     const schema = `install_${randomUUID().replaceAll("-", "")}`;
@@ -80,7 +80,7 @@ test(
       try {
         await prepareDevTenant(inputs, record);
         status = 404;
-        await prepareDevTenant(inputs, record);
+        await assert.rejects(prepareDevTenant(inputs, record), /this core has no PUT \/v1\/tenant-settings route/);
       } finally {
         await new Promise<void>((resolve) => core.close(() => resolve()));
       }
@@ -90,7 +90,6 @@ test(
         "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY to the install tenant",
         "tenant start ",
         `tenant ok using install tenant ${carried}`,
-        "tenant warn this core has no tenant settings route yet",
       ]);
       assert.equal(requests[0]!.path, "/v1/tenant-settings");
       assert.equal(requests[0]!.authorization, `Bearer ${"c".repeat(64)}`);

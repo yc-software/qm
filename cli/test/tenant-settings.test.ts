@@ -192,6 +192,56 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
   }
 });
 
+test("deployed tenant values fill gaps in the import and leave the service env only after core accepts them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
+  try {
+    writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
+    const events: string[] = [];
+    const deployed = async () => {
+      events.push("read");
+      return {
+        values: { PI_MODEL: "deployed-model", OPENAI_API_KEY: "sk-deployed", CORE_SIGNING_SECRET: "not-tenant" },
+        remove: async () => {
+          events.push("remove");
+          return ["OPENAI_API_KEY", "PI_MODEL"];
+        },
+      };
+    };
+    let settingsStatus = 400;
+    const link = async (): Promise<CoreLink> => ({
+      request: async (path, init) => {
+        events.push(`${path} ${String(init.body)}`);
+        return { status: path === "/v1/tenant-settings" ? settingsStatus : 200, body: "{}" };
+      },
+      close: () => {},
+    });
+    await assert.rejects(
+      seedTenantSettings({ config: config(), configDir: dir }, link, undefined, "push", deployed),
+      /\/v1\/tenant-settings failed \(400\)/,
+    );
+    assert.ok(!events.includes("remove"), "a rejected import leaves the deployed values in place");
+    events.length = 0;
+    settingsStatus = 200;
+    await quietly(async (lines) => {
+      await seedTenantSettings({ config: config(), configDir: dir }, link, undefined, "up", deployed);
+      assert.match(lines.join("\n"), /removed OPENAI_API_KEY, PI_MODEL from the deployed service env/);
+      assert.ok(!lines.join("\n").includes("sk-deployed"), "values are never printed");
+    });
+    assert.equal(events[0], "read");
+    assert.equal(events.at(-1), "remove");
+    const env = JSON.parse(events[2]!.slice("/v1/tenant-settings ".length)).env;
+    assert.equal(env.OPENAI_API_KEY, "sk-deployed");
+    assert.equal(env.PI_MODEL, "claude-opus-4-8", "local config wins over the deployed value");
+    assert.equal(env.CORE_SIGNING_SECRET, undefined);
+    events.length = 0;
+    writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\n`);
+    await quietly(() => seedTenantSettings({ config: config(), configDir: dir }, link, undefined, "up", deployed));
+    assert.deepEqual(events, [], "a skipped seed neither reads nor removes deployed values");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Fly reaches core through a private fly proxy and closes it afterwards", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-proxy-"));
   const prior = process.env.FLY_BIN;

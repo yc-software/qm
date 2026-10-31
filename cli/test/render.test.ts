@@ -24,6 +24,7 @@ import { renderInternalUrl } from "../src/render-domains.ts";
 import { renderMinioCommand } from "../src/render-minio.ts";
 import { renderClient, streamRenderLogs } from "../src/render-api.ts";
 import { runChecks } from "../src/commands/check.ts";
+import { isTenantSetting } from "../src/tenant-setting-names.ts";
 
 function deployment(t: TestContext, portal = false) {
   const dir = mkdtempSync(join(tmpdir(), "qm-render-api-"));
@@ -340,7 +341,11 @@ function cloud(t: TestContext, d: Deployment) {
         return Response.json(domain);
       }
       if (path.startsWith(`/services/${id}/env-vars/`)) {
-        state.envs.get(id)![decodeURIComponent(path.split("/").at(-1)!)] = body.value;
+        const key = decodeURIComponent(path.split("/").at(-1)!);
+        if (method === "DELETE") {
+          if (!(key in state.envs.get(id)!)) return missing();
+          delete state.envs.get(id)![key];
+        } else state.envs.get(id)![key] = body.value;
         return empty();
       }
       if (path === `/services/${id}/rollback`) {
@@ -1269,6 +1274,34 @@ test("Render updates retain stored operator secrets for the core", async (t) => 
   await d.backend.up({ dryRun: false });
   assert.equal(c.envs.get("srv-acme-core")!.RESEND_API_KEY, "re_stored_only");
   assert.equal(c.envs.get("srv-acme-web-ui")!.RESEND_API_KEY, undefined);
+});
+
+test("Render upgrades keep deployed tenant settings until they are imported, then remove them", async (t) => {
+  const d = deployment(t, true);
+  const c = cloud(t, d);
+  await d.backend.up({ dryRun: false });
+  const tenantKeys = () => [...c.envs.values()].flatMap((env) => Object.keys(env).filter(isTenantSetting));
+  assert.deepEqual(tenantKeys(), []);
+  Object.assign(c.envs.get("srv-acme-core")!, { ANTHROPIC_API_KEY: "sk-deployed", PI_MODEL: "core-model" });
+  Object.assign(c.envs.get("srv-acme-portal")!, {
+    OIDC_CLIENT_ID: "client",
+    PI_MODEL: "portal-model",
+    OIDC_PROMPT: "",
+  });
+  await d.backend.up({ dryRun: false });
+  assert.equal(c.envs.get("srv-acme-core")!.ANTHROPIC_API_KEY, "sk-deployed");
+  assert.equal(c.envs.get("srv-acme-portal")!.OIDC_CLIENT_ID, "client");
+  const deployed = await hostingProvider("render").deployedTenantEnv!(d.ctx);
+  assert.deepEqual(deployed.values, {
+    ANTHROPIC_API_KEY: "sk-deployed",
+    PI_MODEL: "core-model",
+    OIDC_CLIENT_ID: "client",
+  });
+  assert.deepEqual(await deployed.remove(), ["ANTHROPIC_API_KEY", "OIDC_CLIENT_ID", "OIDC_PROMPT", "PI_MODEL"]);
+  assert.deepEqual(tenantKeys(), []);
+  await d.backend.up({ dryRun: false });
+  assert.deepEqual(tenantKeys(), []);
+  assert.deepEqual((await hostingProvider("render").deployedTenantEnv!(d.ctx)).values, {});
 });
 
 test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async (t) => {

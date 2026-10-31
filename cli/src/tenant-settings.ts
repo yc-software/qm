@@ -79,11 +79,17 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
   return Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name)));
 }
 
+export interface DeployedTenantEnv {
+  values: Record<string, string>;
+  remove(): Promise<string[]>;
+}
+
 export async function seedTenantSettings(
   opts: { config: QmConfig; configDir: string; envFile?: string },
   link: () => Promise<CoreLink>,
   fallback?: (name: string) => string | undefined,
   mode: "up" | "push" = "push",
+  deployed?: () => Promise<DeployedTenantEnv>,
 ): Promise<void> {
   const envPath = opts.envFile ?? join(opts.configDir, ".env");
   const values = new Map(existsSync(envPath) ? readEnvFile(envPath) : []);
@@ -106,6 +112,9 @@ export async function seedTenantSettings(
     return;
   }
   const settings = tenantSettingsEnv(opts.config, values);
+  const carried = deployed ? await deployed() : undefined;
+  for (const [name, value] of Object.entries(carried?.values ?? {}))
+    if (isTenantSetting(name) && !settings[name]?.trim()) settings[name] = value;
   let core: CoreLink;
   try {
     core = await link();
@@ -128,4 +137,6 @@ export async function seedTenantSettings(
     core.close();
   }
   step(`tenant settings: ${Object.keys(settings).sort().join(", ") || "nothing to seed"}`);
+  const removed = carried ? await carried.remove() : [];
+  if (removed.length) step(`tenant settings: removed ${removed.join(", ")} from the deployed service env`);
 }

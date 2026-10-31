@@ -9,6 +9,7 @@ import {
 import { CliError, errMessage, note, ok, step } from "../log.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import {
+  envVars,
   list,
   RenderApiError,
   renderClient,
@@ -54,6 +55,7 @@ import {
   runtimeSecretNames,
 } from "../secrets.ts";
 import { githubRepoUrl } from "../render-source.ts";
+import { tenantEnvIn } from "../render-tenant-env.ts";
 import { runnableServices, serviceDef, serviceHost } from "../services.ts";
 import { capture, deploymentSecretValue, isInvalidSecret, sleep } from "../util.ts";
 import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
@@ -124,7 +126,7 @@ function apiKey(ctx: DeployContext, envFile?: string): string {
   if (!key || isInvalidSecret("RENDER_API_KEY", key)) throw new CliError("RENDER_API_KEY is required; run qm setup");
   return key;
 }
-function api(ctx: DeployContext, envFile?: string): RenderRequest {
+export function api(ctx: DeployContext, envFile?: string): RenderRequest {
   return renderClient(apiKey(ctx, envFile));
 }
 function requireSecrets(ctx: DeployContext, values: ReadonlyMap<string, string>): void {
@@ -134,14 +136,6 @@ function requireSecrets(ctx: DeployContext, values: ReadonlyMap<string, string>)
   );
   if (missing.length) throw new CliError(`Required secrets are missing: ${missing.join(", ")}; run qm setup`);
   step("required operator secret values: ok");
-}
-async function envVars(request: RenderRequest, id: string): Promise<Record<string, string>> {
-  return Object.fromEntries(
-    (await list<{ key: string; value: string }>(request, `/services/${id}/env-vars`, "envVar")).map((item) => [
-      item.key,
-      item.value,
-    ]),
-  );
 }
 function pairs(values: Record<string, string>): Array<{ key: string; value: string }> {
   return Object.entries(values)
@@ -759,7 +753,10 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           const existing = envs.get(workload.name)!;
           service = await prepareBootstrap(request, workload, service);
           services.set(workload.name, service);
-          const env = serviceEnv(ctx, workload, values, connections, state, services, existing);
+          const env = {
+            ...serviceEnv(ctx, workload, values, connections, state, services, existing),
+            ...tenantEnvIn(existing),
+          };
           const changed = await reconcileService(
             request,
             state,

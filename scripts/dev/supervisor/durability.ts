@@ -85,7 +85,7 @@ export async function prepareDevTenant(
     `http://127.0.0.1:${inputs.ports.core}${path}`,
     operatorInit(credentials, "PUT", path, JSON.stringify({ env })),
   );
-  if (response.status === 404) return phase("tenant", "warn", "this core has no tenant settings route yet");
+  if (response.status === 404) throw new Error("tenant settings: this core has no PUT /v1/tenant-settings route");
   if (!response.ok) throw new Error(`tenant settings: ${response.status} ${await response.text()}`);
   phase("tenant", "ok", `wrote ${Object.keys(env).sort().join(", ")} to the install tenant`);
 }

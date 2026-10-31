@@ -51,7 +51,10 @@ import {
   flyDeploymentLayerTransport,
 } from "./fly.ts";
 import type { Backend, BackendUpOptions } from "./types.ts";
-import { createRenderBackend, renderConfigErrors, renderDeploymentLayerTransport } from "./render.ts";
+import { api as renderApi, createRenderBackend, renderConfigErrors, renderDeploymentLayerTransport } from "./render.ts";
+import { readState as readRenderState } from "../render-state.ts";
+import { renderDeployedTenantEnv } from "../render-tenant-env.ts";
+import type { DeployedTenantEnv } from "../tenant-settings.ts";
 
 export interface DeployContext {
   config: QmConfig;
@@ -70,6 +73,7 @@ export interface HostingProvider {
   deploymentLayerTransport: DeploymentLayerTransport;
   coreLink(ctx: DeployContext): Promise<CoreLink>;
   operatorSecret?: (config: QmConfig, name: string) => string | undefined;
+  deployedTenantEnv?: (ctx: DeployContext) => Promise<DeployedTenantEnv>;
   /** Per-target env defaults applied when a service env var is not set explicitly. */
   envDefaults: TargetEnvDefaults;
   /** Optional `qm infra` operations; targets without managed infra omit this. */
@@ -393,6 +397,7 @@ const render: HostingProvider = {
     if (!origin) throw new CliError("Render requires an HTTPS apiUrl to reach core");
     return { request: fetchCoreAt(origin), close: () => {} };
   },
+  deployedTenantEnv: (ctx) => renderDeployedTenantEnv(renderApi(ctx), readRenderState(ctx, true).services),
   envDefaults: TARGET_ENV_DEFAULTS.render,
   scaffold: renderScaffold,
   upFlags: ["upgrade-minio"],

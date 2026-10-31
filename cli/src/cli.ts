@@ -213,6 +213,8 @@ function configDeploymentId(path: string): string | undefined {
 
 const operatorSecretOf = (provider: HostingProvider, ctx: DeployContext) =>
   provider.operatorSecret && ((name: string) => provider.operatorSecret!(ctx.config, name));
+const deployedTenantEnvOf = (provider: HostingProvider, ctx: DeployContext) =>
+  provider.deployedTenantEnv && (() => provider.deployedTenantEnv!(ctx));
 
 function deployContext(flags: Flags, dir?: string): DeployContext {
   const explicit = strFlag(flags, "config");
@@ -533,7 +535,13 @@ async function dispatch(argv: string[]): Promise<void> {
       if (positionals[0] !== "push") throw new CliError(`usage: ${CLI_NAME} settings push`);
       const ctx = deployContext(flags);
       const provider = hostingProvider(ctx.target);
-      await seedTenantSettings(ctx, () => provider.coreLink(ctx), operatorSecretOf(provider, ctx));
+      await seedTenantSettings(
+        ctx,
+        () => provider.coreLink(ctx),
+        operatorSecretOf(provider, ctx),
+        "push",
+        deployedTenantEnvOf(provider, ctx),
+      );
       return;
     }
 
@@ -551,7 +559,13 @@ async function dispatch(argv: string[]): Promise<void> {
       await provider.createBackend(ctx).up(upOptions);
       const deploysCore = !upOptions.only || upOptions.only.includes("core");
       if (!dryRun && !upOptions.buildOnly && !upOptions.candidate && !upOptions.inactive && deploysCore)
-        await seedTenantSettings(ctx, () => provider.coreLink(ctx), operatorSecretOf(provider, ctx), "up");
+        await seedTenantSettings(
+          ctx,
+          () => provider.coreLink(ctx),
+          operatorSecretOf(provider, ctx),
+          "up",
+          deployedTenantEnvOf(provider, ctx),
+        );
       return;
     }
 
