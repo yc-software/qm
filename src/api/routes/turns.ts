@@ -123,6 +123,18 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
+  if (body.deliveryWebhook !== undefined) {
+    const parsed = z.object({ binding: z.uuid() }).strict().safeParse(body.deliveryWebhook);
+    if (
+      !parsed.success ||
+      body.surfaceTools ||
+      body.surface !== "web" ||
+      body.conversation.kind !== "dm" ||
+      body.deliveryCandidates?.length ||
+      body.deliveryTarget !== body.conversation.threadRef
+    )
+      return { error: "invalid delivery webhook" };
+  }
   const {
     slackSource: _slackSource,
     externalSlack: _externalSlack,
@@ -315,6 +327,14 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
+async function failDelivery(ctx: ApiCtx): Promise<void> {
+  const { res, app, body } = ctx;
+  const reason = isObj(body) && typeof body.reason === "string" ? body.reason.trim() : "";
+  if (!reason) return sendJson(res, 400, { error: "bad_request", message: "reason required" });
+  const failed = await app.failDelivery(ctx.params.id!, reason);
+  return sendJson(res, failed ? 200 : 404, failed ? { ok: true } : { error: "not_found" });
+}
+
 async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const idempotencyKey = isObj(body) && typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
@@ -341,5 +361,6 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
+  { method: "POST", path: "/v1/deliveries/:id/fail", actor: "system", auth: "source", handle: failDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

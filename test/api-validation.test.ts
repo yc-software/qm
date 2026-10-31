@@ -47,3 +47,31 @@ test("unknown resources are 404, not silent 200 or 500", async () => {
     await s.close();
   }
 });
+
+test("webhook options are validated consistently on turns and steer requests", async () => {
+  const request = {
+    text: "hello",
+    surface: "web",
+    actor: { externalId: "alice@example.test" },
+    conversation: { kind: "dm", threadRef: "web:alice@example.test:conversation" },
+    deliveryTarget: "web:alice@example.test:conversation",
+    deliveryWebhook: { binding: "00000000-0000-4000-8000-000000000001" },
+  };
+  const s = start();
+  try {
+    for (const body of [
+      { ...request, deliveryWebhook: { binding: "bad" } },
+      { ...request, deliveryTarget: "different" },
+      { ...request, surfaceTools: true },
+    ]) {
+      assert.equal((await post(s.base, "/v1/turns", JSON.stringify(body))).status, 400);
+      assert.equal(
+        (await post(s.base, "/v1/runs/missing/signal", JSON.stringify({ kind: "steer", text: "hello", request: body })))
+          .status,
+        400,
+      );
+    }
+  } finally {
+    await s.close();
+  }
+});

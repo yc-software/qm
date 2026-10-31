@@ -95,3 +95,29 @@ test("an expired claim re-surfaces the row to a later poll (drainer died mid-pos
     await srv.close();
   }
 });
+
+test("a receiver claims webhook deliveries and can refuse one permanently", async () => {
+  const srv = start();
+  try {
+    await srv.app.enqueueDelivery({
+      destination: { type: "webhook", target: "web:owner:thread", webhook: { binding: "binding-1" } },
+      text: "scheduled update",
+      idempotencyKey: "cron:c1:fire-1",
+    });
+    const [claimed] = await fetchPending(srv.base, "type=webhook&claimMs=15000");
+    assert.ok(claimed);
+    const path = `/v1/deliveries/${claimed.id}/fail`;
+    const body = JSON.stringify({ reason: "payload too large" });
+    const res = await fetch(`${srv.base}${path}`, { method: "POST", headers: sign("POST", path, body), body });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await fetchPending(srv.base, "type=webhook"), []);
+    await srv.app.enqueueDelivery({
+      destination: { type: "webhook", target: "web:owner:thread", webhook: { binding: "binding-1" } },
+      text: "scheduled update",
+      idempotencyKey: "cron:c1:fire-1",
+    });
+    assert.deepEqual(await fetchPending(srv.base, "type=webhook"), [], "a refused delivery is not revived");
+  } finally {
+    await srv.close();
+  }
+});

@@ -28,6 +28,11 @@ export function turnRecordedFailure(
 type Disposition = "deliver" | "record" | "settle";
 
 function classify(d: Delivery): Disposition {
+  if (d.destination.type === "webhook") {
+    const recorded =
+      d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined;
+    return d.text.trim() && !recorded ? "record" : "deliver";
+  }
   if (d.destination.type !== "web") return "deliver";
   if (d.destination.webTranscript && d.text.trim()) return "record";
   if (!d.provenance) return "deliver";
@@ -35,6 +40,8 @@ function classify(d: Delivery): Disposition {
   if (d.provenance.sourceAssistantEntrySeq === undefined || d.attachments?.length) return "deliver";
   return "settle";
 }
+
+const transcribed = (type: string): boolean => type === "web" || type === "webhook";
 
 export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebTranscriptSessions): DeliveryStore {
   const recorded = new Set<string>();
@@ -165,11 +172,11 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
     },
     async pending(type) {
       const rows = await store.pending(type);
-      return type === "web" ? drained(rows) : rows;
+      return transcribed(type) ? drained(rows) : rows;
     },
     async claimPending(type, ttlMs) {
       const rows = await store.claimPending(type, ttlMs);
-      return type === "web" ? drained(rows) : rows;
+      return transcribed(type) ? drained(rows) : rows;
     },
   };
 }

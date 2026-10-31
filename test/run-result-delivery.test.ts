@@ -498,3 +498,94 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("webhook run delivery correlates with the original caller request", () => {
+  const request = {
+    ...turn("hi", "web:alice:conversation"),
+    surface: "web",
+    origin: { kind: "human" as const },
+    idempotencyKey: "external-request-123",
+    deliveryWebhook: { binding: "binding" },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
+  assert.equal(delivery?.destination.type, "webhook");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
+  assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
+});
+
+test("bound webhook results identify every terminal outcome for native receiver handling", () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
+    },
+    { status: "react", reactions: ["thumbsup"] },
+    { status: "silent" },
+    { status: "refused", reason: "not permitted" },
+    { status: "failed", reason: "connection failed" },
+    { status: "ok", reply: "" },
+  ];
+  for (const result of results) {
+    const request = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding" },
+    };
+    const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
+    assert.equal(delivery?.provenance.sourceRunId, "r-1");
+    assert.equal(delivery?.text, "");
+    assert.equal(delivery?.destination.type, "webhook");
+  }
+  const failed = runResultDelivery(
+    run({
+      status: "failed",
+      request: { ...turn("hi", "web:alice:conversation"), surface: "web", deliveryWebhook: { binding: "binding" } },
+      result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
+    }),
+    () => "https://portal.example.com/admin",
+  );
+  assert.match(failed?.text ?? "", /couldn't finish that turn.*portal\.example\.com/);
+  assert.equal(failed?.provenance.sourceRunId, "r-1");
+});
+
+test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const deliveries = createDeliveryStore();
+  const target = "web:alice:conversation";
+  const request: OrchestratorInput = {
+    ...turn("scheduled update", target),
+    surface: "cron",
+    origin: { kind: "automation", destination: { type: "webhook", target, webhook: { binding: "binding" } } },
+  };
+  const submitted = (await runs.enqueue({ sessionId: "scheduled", request })).run;
+  const claim = await runs.claim("worker", 5_000);
+  await runs.complete(submitted.id, claim!.leaseToken!, { status: "ok", reply: "Recovered update" });
+  assert.deepEqual(await deliveries.pending("webhook"), []);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 1);
+  const delivered = (await deliveries.pending("webhook"))[0]!;
+  assert.equal(delivered.idempotencyKey, `run:${submitted.id}`);
+  assert.equal(delivered.provenance?.sourceRunId, submitted.id);
+  assert.equal(delivered.provenance?.sourceRequestId, undefined);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 0);
+  const { deliveryTarget: _, ...withoutAuthorization } = request;
+  assert.equal(runResultDelivery(run({ request: withoutAuthorization })), null);
+});
+
+test("a scheduled approval continuation correlates with the receiver's action request", () => {
+  const request = {
+    ...turn("scheduled update"),
+    surface: "cron",
+    origin: {
+      kind: "automation" as const,
+      destination: { type: "webhook" as const, target: "web:alice:conversation", webhook: { binding: "binding" } },
+    },
+    idempotencyKey: "receiver-approval-1",
+    approval: { requestId: "approval-1", approved: true },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
+  assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
+  assert.equal(delivery?.provenance.sourceRunId, "r-1");
+  assert.equal(delivery?.destination.target, "web:alice:conversation");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
+});

@@ -96,6 +96,7 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
+  deliveryWebhook?: { binding: string };
   timezone?: string;
   readOnly?: boolean;
   model?: string;
@@ -197,6 +198,7 @@ export interface GrantedHandle {
 }
 
 export interface Destination {
+  webhook?: { binding: string };
   slackAccountId?: string;
   slackTeamId?: string;
   slackPolicyNamespace?: string;
@@ -230,6 +232,8 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
+  sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -379,6 +383,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
+  deliveryWebhook?: { binding: string };
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {

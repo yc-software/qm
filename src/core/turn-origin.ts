@@ -133,3 +133,18 @@ export function desktopClientForTurn(
     ? input.desktopClientId
     : undefined;
 }
+
+export function boundWebhook(
+  request: Pick<
+    Partial<TurnRequest>,
+    "deliveryWebhook" | "deliveryTarget" | "approval" | "origin" | keyof LegacyTurnOrigin
+  >,
+): { webhook: { binding: string }; target: string } | undefined {
+  if (request.deliveryWebhook && request.deliveryTarget)
+    return { webhook: request.deliveryWebhook, target: request.deliveryTarget };
+  const origin = resolveTurnOrigin(request);
+  const destination = origin.kind === "automation" ? origin.destination : undefined;
+  if (destination?.type !== "webhook" || !destination.webhook) return undefined;
+  if (!request.approval && request.deliveryTarget !== destination.target) return undefined;
+  return { webhook: destination.webhook, target: destination.target };
+}
