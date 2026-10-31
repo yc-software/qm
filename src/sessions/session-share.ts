@@ -3,7 +3,7 @@ import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgJsonText } from "../util/text.ts";
 
 export interface SharedAttachment {
   id: string;
@@ -72,8 +72,6 @@ const SESSION_SHARES_MIGRATION = typedTableMigration({
     AND jsonb_typeof(json->'messages') = 'array' AND jsonb_typeof(json->'files') = 'array'`,
 });
 
-const pgSafe = (_key: string, value: unknown) => (typeof value === "string" ? pgTextSafe(value) : value);
-
 export function createSessionShareStore(): SessionShareStore {
   const tenants = new Map<string, Map<string, SessionShare>>();
   const rows = () => {
@@ -108,8 +106,8 @@ export function createPostgresSessionShareStore(connectionString: string): Sessi
           visibility.maxSeq,
           visibility.minCreatedAt,
           visibility.maxCreatedAt,
-          JSON.stringify(share.messages, pgSafe),
-          JSON.stringify(share.files, pgSafe),
+          pgJsonText(share.messages),
+          pgJsonText(share.files),
         ],
       );
     },

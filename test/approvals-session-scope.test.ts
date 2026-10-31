@@ -23,7 +23,7 @@ const approval = (sessionId: string, actor: string, command: string, blocksInput
   },
 });
 
-test("session approvals are read by session id, never by scanning every approval", async () => {
+test("session approvals list only the session's own records and respect viewer visibility", async () => {
   const sessions = createMemorySessionStore();
   const mine = await sessions.getOrCreateByThread("dm:alice:t1", "dm", "personal:alice");
   const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");

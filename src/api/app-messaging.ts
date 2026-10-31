@@ -5,7 +5,7 @@ import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from 
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { contextOutcome, createContextRequestStore } from "./context-request-store.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -126,7 +126,7 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests ?? createContextRequestStore();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
-  const tokenKey = (id: string) => `${boundTenant() ?? ""}\u0000${id}`;
+  const tokenKey = (id: string) => `${currentTenant()}\u0000${id}`;
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
   // deployment these are the only members there are.

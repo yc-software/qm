@@ -1,4 +1,4 @@
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -552,7 +552,7 @@ export async function startSlackPlugin(
   const contextRequestsInFlight = new Set<string>();
 
   const serviceContextRequest = (r: SurfaceContextRequest): void => {
-    const key = `${boundTenant() ?? ""}\u0000${r?.id}`;
+    const key = `${currentTenant()}\u0000${r?.id}`;
     if (stopped || !r?.id || contextRequestsInFlight.has(key)) return;
     contextRequestsInFlight.add(key);
     void surfaceContext

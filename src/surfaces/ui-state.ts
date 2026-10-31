@@ -2,7 +2,7 @@ import { currentTenant } from "../tenants/context.ts";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgJsonText } from "../util/text.ts";
 
 export interface PersistedUiState {
   value: unknown;
@@ -47,8 +47,7 @@ const INSERT = `INSERT INTO web_ui_state(principal_id, key, value, updated_at) V
   ON CONFLICT (tenant_id, principal_id, key)`;
 const UPSERT = `${INSERT} DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`;
 
-const pgSafe = (_key: string, value: unknown) => (typeof value === "string" ? pgTextSafe(value) : value);
-const jsonValue = (state: PersistedUiState) => JSON.stringify(state.value ?? null, pgSafe);
+const jsonValue = (state: PersistedUiState) => pgJsonText(state.value ?? null);
 
 function uiState(rows: Rows): PersistedUiState | null {
   const row = rows[0];

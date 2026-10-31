@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createMemoryMap, jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { PackConfig } from "./normalize.ts";
 
 type PackKind = "git";
@@ -145,7 +145,7 @@ const PACK_COLUMNS: { [K in keyof SkillPack]-?: (pack: Partial<SkillPack>) => Re
   ref: (p) => ({ ref: safeText(p.ref) }),
   syncMode: (p) => ({ sync_mode: p.syncMode }),
   trustTier: (p) => ({ trust_tier: p.trustTier }),
-  config: (p) => ({ config: p.config ? jsonbStringify(p.config) : null }),
+  config: (p) => ({ config: p.config ? pgJsonText(p.config) : null }),
   targetScopeId: (p) => ({ target_scope_id: safeText(p.targetScopeId) }),
   subset: (p) => ({ subset: p.subset === "all" || p.subset === undefined ? null : p.subset.map(pgTextSafe) }),
   authCredentialSlug: (p) => ({ auth_credential_slug: safeText(p.authCredentialSlug) }),
@@ -156,7 +156,7 @@ const PACK_COLUMNS: { [K in keyof SkillPack]-?: (pack: Partial<SkillPack>) => Re
     last_import_commit: safeText(i?.commit),
     last_import_status: i?.status ?? null,
     last_import_error: safeText(i?.error),
-    last_import_counts: i?.counts ? jsonbStringify(i.counts) : null,
+    last_import_counts: i?.counts ? pgJsonText(i.counts) : null,
   }),
   updateAvailable: (p) => ({ update_available: p.updateAvailable ?? null }),
   available: (p) => ({ available: p.available ?? null }),

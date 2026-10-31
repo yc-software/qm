@@ -1,10 +1,9 @@
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { tsPrefixQuery } from "../sessions/entry-search.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import { createPostgresSkillBundleStore, createSkillBundleStore, type SkillBundleStore } from "./skill-bundle-store.ts";
 import { createPostgresSkillPackStore, createSkillPackStore, type SkillPackStore } from "./skill-pack-store.ts";
 import {
@@ -153,7 +152,7 @@ function toRow(skill: Skill): unknown[] {
     pgTextSafe(manifest.description),
     manifest.requiredCapabilities.map(pgTextSafe),
     pgTextSafe(manifest.body),
-    manifest.files ? jsonbStringify(manifest.files) : null,
+    manifest.files ? pgJsonText(manifest.files) : null,
     pgTextSafe(skill.signature),
     skill.status,
     pgTextSafe(skill.createdBy),

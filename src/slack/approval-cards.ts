@@ -1,4 +1,4 @@
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
@@ -309,7 +309,7 @@ export interface ApprovalRegistry<T> {
 
 export function createApprovalRegistry<T>(): ApprovalRegistry<T> {
   const pending = new Map<string, { ctx: T; inFlight: boolean }>();
-  const key = (id: string) => `${boundTenant() ?? ""}\u0000${id}`;
+  const key = (id: string) => `${currentTenant()}\u0000${id}`;
   return {
     remember(id, ctx) {
       pending.set(key(id), { ctx, inFlight: false });
