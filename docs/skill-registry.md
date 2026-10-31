@@ -17,8 +17,8 @@ git pack ──fetch(pinned ref)──▶ general normalizer ──▶ planInges
 - **One general normalizer** (`src/skills/normalize.ts`) maps any repo's frontmatter dialect onto the
   canonical manifest via an alias table + ignore-unknowns + safe defaults. **No per-repo code** — a
   repo's specifics are declarative `config` on the pack (`skillGlobs` / `exclude` / `fieldOverrides`).
-- **Eligibility** (org import): a skill is imported only if its scope hint is org-shareable
-  (`company` / `both` / `org` / `shared` / …). Excluded with a visible reason: `scope` (personal/missing),
+- **Eligibility** (org import): a skill is imported unless its scope hint is personal
+  (`personal` / `private` / `owner` / `me` / …); a skill with no scope hint is eligible. Excluded with a visible reason: `scope` (personal),
   `private` (owner-only flags or a `THE-AGENT-ONLY` body), `collision` (name already owned by a
   different pack / native seed), `binary-asset`, `malformed`.
 - **Pinned** in Phase A: an install is frozen at the pack's `ref`. "Update" = bump the ref + re-import
@@ -59,7 +59,7 @@ commit.
    }
    ```
 
-   Personal/missing-scope/private skills and any name colliding with a native skill are excluded
+   Personal-scope/private skills and any name colliding with a native skill are excluded
    automatically and shown with their reason in the catalog.
 
 3. **Browse + import**: open the pack, review the candidate list (≈ the company/both skills, minus

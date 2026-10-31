@@ -59,9 +59,17 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
+import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import {
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+  type MemoryWrite,
+  type OutcomeReport,
+} from "../memory/provider-outcome.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
@@ -236,9 +244,13 @@ export interface ToolContext extends SurfaceToolDeps {
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
-  memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null>;
+  memorySearch(
+    q: string,
+    limit?: number,
+    scope?: ScopeId,
+  ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
-  memoryAdd(facts: string[]): Promise<number | null>;
+  memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
@@ -1108,10 +1120,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
-    async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
-      if (deps.context) return deps.context.searchMemory(q, limit, scope);
-      if (!memory) return null;
-      return searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy);
+    async memorySearch(q: string, limit?: number, scope?: ScopeId) {
+      const context = deps.context;
+      const search = context
+        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
+        : memory &&
+          ((report: OutcomeReport) =>
+            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
+      if (!search) return null;
+      const { value: hits, problems } = await withProviders("search", search);
+      return hits === null ? null : { hits: hits ?? [], problems };
     },
 
     async memoryRead(scope?: ScopeId): Promise<string | null> {
@@ -1121,19 +1139,26 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         deps.context && deps.memoryAccess?.read.includes(target)
           ? await deps.context.readMemory(target)
           : await readNotebook(memory, target);
-      if (body === null) return null;
-      return scope !== undefined ? `### ${target}\n${body}` : body;
+      if (body === null || !body.trim()) return body;
+      return scope !== undefined ? `### ${target}\n${quotedData(body)}` : quotedData(body);
     },
 
-    async memoryAdd(facts: string[]): Promise<number | null> {
+    async memoryAdd(facts: string[]) {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return memory.capture(write, facts, Date.now(), deps.createdBy, {
-        ...deps.memoryCaptureMetadata?.(),
-        mode: "explicit",
-        actorId: deps.createdBy,
-        conversationScopeId: writableScopeId ?? write,
-      });
+      return writeFacts(
+        memory,
+        write,
+        facts,
+        deps.createdBy,
+        {
+          ...deps.memoryCaptureMetadata?.(),
+          mode: "explicit",
+          actorId: deps.createdBy,
+          conversationScopeId: writableScopeId ?? write,
+        },
+        deps.runId,
+      );
     },
 
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {

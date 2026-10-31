@@ -76,11 +76,17 @@ export function factHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+export interface MemorySource {
+  provider: string;
+  label: string;
+}
+
 export interface MemoryCandidate {
   id?: string;
   text: string;
   score: number;
   at?: number;
+  source?: MemorySource;
 }
 
 export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {

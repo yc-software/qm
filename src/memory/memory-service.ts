@@ -16,7 +16,20 @@ import {
 
 export const MEMORY_FILE = "memory/MEMORY.md";
 
-export interface MemoryRecallContext {
+export interface MemoryProviderOutcome {
+  provider: string;
+  scope: ScopeId;
+  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed";
+  ms: number;
+  code?: string;
+  added?: number;
+}
+
+interface MemoryOutcomeSink {
+  report?: (outcome: MemoryProviderOutcome) => void;
+}
+
+export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
   disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
@@ -25,7 +38,7 @@ export interface MemoryRecallContext {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext extends MemoryCaptureMetadata {
+export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
   actorId?: string;
   input?: string;
