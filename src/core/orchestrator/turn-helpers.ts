@@ -9,7 +9,7 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
+import { boundWebhook, turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -282,17 +282,12 @@ export function replaceThreadSegment(target: string, threadTs: string): string {
 export function deliveryCandidatesFor(
   request: Pick<
     Partial<TurnRequest>,
-    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin"
+    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin" | "approval"
   >,
   sessionScopeId: ScopeId,
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
   const { surface, deliveryTarget, deliveryCandidates: surfaceCandidates } = request;
-  const automationDestination = request.origin?.kind === "automation" ? request.origin.destination : undefined;
-  const deliveryWebhook =
-    request.deliveryWebhook ??
-    (automationDestination?.type === "webhook" && automationDestination.target === deliveryTarget
-      ? automationDestination.webhook
-      : undefined);
+  const deliveryWebhook = boundWebhook(request)?.webhook;
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
   if (surfaceCandidates && surfaceCandidates.length > 0) raw = surfaceCandidates;

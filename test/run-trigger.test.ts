@@ -347,37 +347,31 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
   });
 });
 
-it("delivers scheduled approval, silent, reaction and failure outcomes by their authenticated run", async () => {
+it("leaves a bound scheduled run's outcome to its own run delivery and keeps the failure note", async () => {
   const results: TurnResult[] = [
     {
       status: "pending_approval",
       pendingApprovals: [{ requestId: "approve", command: "send", reason: "approval required" }],
     },
-    { status: "silent" },
-    { status: "react", reactions: ["thumbsup"] },
-    { status: "failed", reason: "failed" },
-    { status: "refused", reason: "refused" },
+    { status: "ok", reply: "Update" },
+    { status: "failed", reason: "boom" },
   ];
-  for (const surface of ["cron", "monitor"]) {
-    for (const result of results) {
-      const d = deps(async (request) => {
-        assert.equal(request.deliveryTarget, "web:U1:bound");
-        return { ...result, runId: "scheduled-run" };
-      });
-      await runTrigger(d, {
-        owner: "U1",
-        ownerScopeId: scopeId("personal", "U1"),
-        input: "scheduled task",
-        fireKey: "cron:1:fire:1",
-        surface,
-        destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
-        errorNotice: () => "failed",
-      });
-      const pending = await d.deliveries.pending("webhook");
-      assert.equal(pending.length, 1);
-      assert.equal(pending[0]?.provenance?.sourceRunId, "scheduled-run");
-      assert.equal(pending[0]?.idempotencyKey, "run:scheduled-run");
-    }
+  for (const result of results) {
+    const d = deps(async (request) => {
+      assert.equal(request.deliveryTarget, "web:U1:bound");
+      return { ...result, runId: "scheduled-run" };
+    });
+    const outcome = await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+      input: "scheduled task",
+      fireKey: "cron:1:fire:1",
+      surface: "cron",
+      destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+      errorNotice: () => "failed",
+    });
+    assert.deepEqual(await d.deliveries.pending("webhook"), []);
+    if (result.status === "failed") assert.match(outcome.note ?? "", /boom/);
   }
 });
 

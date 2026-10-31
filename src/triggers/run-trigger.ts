@@ -91,7 +91,6 @@ function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResu
     sourceThreadRef: threadRef,
     ...(spec.title ? { sourceTitle: spec.title } : {}),
     ...(res?.sessionId ? { sourceSessionId: res.sessionId } : {}),
-    ...(spec.destination?.type === "webhook" && res?.runId ? { sourceRunId: res.runId } : {}),
     ...(res?.sourceUserSeq !== undefined ? { sourceUserSeq: res.sourceUserSeq } : {}),
     ...(res?.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: res.sourceAssistantEntrySeq } : {}),
   };
@@ -255,7 +254,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let reply: string | undefined;
   let sessionId: string | undefined;
   let deferred = false;
-  let deliveredNativeResult = false;
+  let runDelivers = false;
   const ran = await deps.idempotency
     .once(spec.fireKey, async () => {
       await spec.onClaimed?.();
@@ -315,14 +314,16 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       errorCode = res.errorCode;
       reply = res.reply;
       sessionId = res.sessionId;
-      const nativeResult = spec.destination?.type === "webhook" && Boolean(res.runId);
-      if (res.status === "silent" && !nativeResult) return;
-      if (res.status === "pending_approval" && !nativeResult) {
+      runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
+      if (res.status === "silent") return;
+      if (res.status === "pending_approval") {
+        if (runDelivers) return;
         note = "hit a require_approval command — failed closed (no human at fire/event time)";
         console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
         return;
       }
-      if (nativeResult || (res.status === "ok" && (res.reply || res.attachments?.length))) {
+      if (res.status === "ok" && (res.reply || res.attachments?.length)) {
+        if (runDelivers) return;
         if (!spec.destination) return;
         if (liveDelivery) return;
         if (!deliverable) {
@@ -335,11 +336,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           destination: spec.destination,
           text: res.reply ?? "",
           ...(res.attachments?.length ? { attachments: res.attachments } : {}),
-          idempotencyKey: nativeResult ? `run:${res.runId}` : spec.fireKey,
+          idempotencyKey: spec.fireKey,
           provenance: deliveryProvenance(spec, threadRef, res),
           ...(spec.shadow ? { shadow: true } : {}),
         });
-        deliveredNativeResult = nativeResult;
         return;
       }
       if (res.status === "ok") note = "produced no reply";
@@ -366,7 +366,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (spec.errorNotice && spec.destination && deliverable && !deliveredNativeResult && isTriggerFailure(outcome)) {
+  if (spec.errorNotice && spec.destination && deliverable && !runDelivers && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
       text: spec.errorNotice(userNote ?? note ?? status!),

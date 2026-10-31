@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -31,14 +31,9 @@ export type AdminUrlFor = (sessionId: string) => string | undefined;
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const origin = resolveTurnOrigin(run.request);
-  const automationDestination =
-    (run.request.approval || run.request.deliveryTarget) &&
-    origin.kind === "automation" &&
-    origin.destination?.type === "webhook"
-      ? origin.destination
-      : undefined;
-  const webhook = automationDestination?.webhook ?? run.request.deliveryWebhook;
-  const target = automationDestination?.target ?? run.request.deliveryTarget;
+  const bound = boundWebhook(run.request);
+  const webhook = bound?.webhook;
+  const target = bound?.target ?? run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
@@ -76,15 +71,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     (run.request.approval || (origin.kind === "human" && !isSessionTurn(run.request)))
   )
     provenance.sourceRequestId = run.request.idempotencyKey;
-  if (webhook && run.result) {
-    return {
-      destination,
-      text: run.result.reply ?? "",
-      ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
-      provenance: { ...provenance, sourceRunId: run.id },
-      idempotencyKey,
-    };
-  }
+  if (webhook) provenance.sourceRunId = run.id;
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&
@@ -110,6 +97,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       idempotencyKey,
     };
   }
+  if (webhook && run.result)
+    return { destination, text: standaloneFailureText(run.result) ?? "", provenance, idempotencyKey };
   return null;
 }
 

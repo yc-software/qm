@@ -536,6 +536,16 @@ test("bound webhook results identify every terminal outcome for native receiver 
     assert.equal(delivery?.text, "");
     assert.equal(delivery?.destination.type, "webhook");
   }
+  const failed = runResultDelivery(
+    run({
+      status: "failed",
+      request: { ...turn("hi", "web:alice:conversation"), surface: "web", deliveryWebhook: { binding: "binding" } },
+      result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
+    }),
+    () => "https://portal.example.com/admin",
+  );
+  assert.match(failed?.text ?? "", /couldn't finish that turn.*portal\.example\.com/);
+  assert.equal(failed?.provenance.sourceRunId, "r-1");
 });
 
 test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
