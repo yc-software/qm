@@ -1,4 +1,4 @@
-import { validTenantSlug } from "../../tenants/install.ts";
+import { UnknownTenant, validTenantSlug } from "../../tenants/install.ts";
 import { sendJson } from "../http.ts";
 import { requireOperatorControl } from "./background-work.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -13,7 +13,17 @@ async function installTenant(ctx: ApiCtx): Promise<void> {
       error: "invalid_tenant",
       message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
     });
-  return sendJson(ctx.res, 200, await install(slug));
+  try {
+    return sendJson(ctx.res, 200, await install(slug));
+  } catch (error) {
+    if (!(error instanceof UnknownTenant)) throw error;
+    return sendJson(ctx.res, 404, {
+      error: "unknown_tenant",
+      message: error.message,
+      tenant: error.slug,
+      tenants: error.existing,
+    });
+  }
 }
 
 export const installTenantRoutes: ReadonlyArray<Route<ApiCtx>> = [

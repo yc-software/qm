@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { ensureInstallTenant } from "../src/tenants/install.ts";
+import { ensureInstallTenant, UnknownTenant } from "../src/tenants/install.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { prepareDevTenant } from "../scripts/dev/supervisor/durability.ts";
@@ -11,7 +11,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the install tenant test";
 
 test(
-  "the install tenant is the named slug, created once even when provisioning races, beside other tenants",
+  "a fresh install creates the named tenant once, and a populated one only finds existing slugs",
   { skip },
   async () => {
     const schema = `install_${randomUUID().replaceAll("-", "")}`;
@@ -26,19 +26,23 @@ test(
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
     try {
-      const other = randomUUID();
-      await admin.query(`INSERT INTO ${schema}.tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [other]);
-      const results = await Promise.all(Array.from({ length: 6 }, () => ensureInstallTenant(url.toString(), "main")));
+      const results = await Promise.all(Array.from({ length: 6 }, () => ensureInstallTenant(url.toString(), "acme")));
       assert.equal(new Set(results.map((result) => result.tenant)).size, 1);
       assert.equal(results.filter((result) => result.created).length, 1);
-      assert.notEqual(results[0]!.tenant, other);
-      assert.deepEqual(await ensureInstallTenant(url.toString(), "main"), {
+      assert.deepEqual(await ensureInstallTenant(url.toString(), "acme"), {
         tenant: results[0]!.tenant,
         created: false,
       });
+      const other = randomUUID();
+      await admin.query(`INSERT INTO ${schema}.tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [other]);
       assert.deepEqual(await ensureInstallTenant(url.toString(), "other"), { tenant: other, created: false });
+      await assert.rejects(ensureInstallTenant(url.toString(), "main"), (error: unknown) => {
+        assert.ok(error instanceof UnknownTenant);
+        assert.equal(error.message, "No tenant has the slug main; this database has acme, other");
+        return true;
+      });
       const { rows } = await admin.query(`SELECT slug FROM ${schema}.tenants ORDER BY slug`);
-      assert.deepEqual(rows, [{ slug: "main" }, { slug: "other" }]);
+      assert.deepEqual(rows, [{ slug: "acme" }, { slug: "other" }]);
     } finally {
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();

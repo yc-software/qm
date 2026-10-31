@@ -8,6 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { UnknownTenant } from "../src/tenants/install.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "operator-only-secret".repeat(3);
@@ -83,5 +84,23 @@ test("the install tenant route is unavailable without a distinct operator creden
     assert.equal((await unavailable.request()).status, 503);
   } finally {
     await unavailable.close();
+  }
+});
+
+test("the install tenant route reports an unknown slug with the existing ones", async () => {
+  const srv = await fixture(controlSecret, async (slug) => {
+    throw new UnknownTenant(slug, ["acme", "other"]);
+  });
+  try {
+    const response = await srv.request();
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: "unknown_tenant",
+      message: "No tenant has the slug main; this database has acme, other",
+      tenant: "main",
+      tenants: ["acme", "other"],
+    });
+  } finally {
+    await srv.close();
   }
 });

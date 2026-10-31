@@ -60,8 +60,9 @@ service's environment: `ADMIN_GRANTS`, `AUTH_ALLOWED_EMAILS` or
 `AUTH_ALLOWED_EMAIL_DOMAIN`, the portal's `OIDC_*` values and
 `PORTAL_EXPECTED_TEAM_ID`. The chart refuses them in `env`, `secretEnv` or
 `services.<name>.env`. After each install or upgrade, a hook Job running the core
-image creates the tenant named by `tenant` (default `main`) if it is missing
-(`PUT /v1/install/tenant`) and writes these settings to it (`PUT /v1/tenant-settings`), signed with `CORE_SIGNING_SECRET` and
+image creates the tenant named by `tenant` (default `main`) on a fresh install
+(`PUT /v1/install/tenant`; once tenants exist the slug must be one of them, or the
+Job fails with `unknown_tenant`) and writes these settings to it (`PUT /v1/tenant-settings`), signed with `CORE_SIGNING_SECRET` and
 authorized by `DEPLOYMENT_CONTROL_SECRET`. With the embedded auth broker, the chart
 derives the portal's OIDC endpoints and copies `AUTH_CLIENT_ID`/`AUTH_CLIENT_SECRET`
 from `secretEnv` and the auth allowlist into the matching `OIDC_*` settings; an
