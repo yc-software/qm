@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { onFirstBind, perTenant, tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
+import {
+  onFirstBind,
+  perTenant,
+  tenantReady,
+  whenTenantReady,
+  withTenant,
+  withoutTenant,
+} from "../src/tenants/context.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
@@ -29,7 +36,7 @@ test("perTenant fails closed when no tenant is bound", () => {
   assert.throws(() => withoutTenant(() => cache()), /No tenant is bound/);
 });
 
-test("tenantReady runs every hook the bound tenant has not finished, including hooks registered after its first bind", async () => {
+test("tenantReady runs every hook the bound tenant has not finished, including hooks registered after its first bind, and a ready tenant runs work at once", async () => {
   const C = "00000000-0000-4000-8000-00000000000c";
   const runs: string[] = [];
   const stopFirst = onFirstBind(async (tenant) => void runs.push(`first:${tenant}`));
@@ -47,6 +54,11 @@ test("tenantReady runs every hook the bound tenant has not finished, including h
     await withTenant(C, () => tenantReady());
     await withTenant(C, () => tenantReady());
     assert.deepEqual(runs, [`first:${C}`, `late:${C}`]);
+    let ranAt = "";
+    const ran = withTenant(C, () => whenTenantReady(() => (ranAt = "sync")));
+    ranAt ||= "later";
+    assert.equal(await ran, "sync");
+    assert.equal(ranAt, "sync");
   } finally {
     stopFirst();
     stopLate();

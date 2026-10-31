@@ -11,7 +11,7 @@ export function onFirstBind(hook: BindHook): () => void {
   return () => bindHooks.delete(hook);
 }
 
-function prepare(tenant: string): Promise<void> {
+function prepare(tenant: string): Promise<void> | undefined {
   const pending: Array<Promise<void>> = [];
   for (const [hook, done] of bindHooks) {
     const existing = done.get(tenant);
@@ -27,16 +27,21 @@ function prepare(tenant: string): Promise<void> {
     run.catch(() => done.get(tenant) === run && done.delete(tenant));
     pending.push(run);
   }
-  return pending.length ? Promise.all(pending).then(() => undefined) : Promise.resolve();
+  return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
 }
 
 function firstBind(tenant: string): string {
-  if (bindHooks.size) prepare(tenant).catch(() => undefined);
+  if (bindHooks.size) prepare(tenant)?.catch(() => undefined);
   return tenant;
 }
 
 export function tenantReady(): Promise<void> {
-  return prepare(currentTenant());
+  return prepare(currentTenant()) ?? Promise.resolve();
+}
+
+export function whenTenantReady<T>(fn: () => T | Promise<T>): Promise<T> {
+  const pending = prepare(currentTenant());
+  return pending ? pending.then(fn) : new Promise<T>((resolve) => resolve(fn()));
 }
 
 export function withTenant<T>(id: string, fn: () => T): T {
