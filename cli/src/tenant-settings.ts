@@ -1,4 +1,4 @@
-import { sandboxCoreEnv, securityScreenEnv, type QmConfig } from "./config.ts";
+import { sandboxCoreEnv, securityScreenEnv, tenantOf, type QmConfig } from "./config.ts";
 import { CoreUnreachableError } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
@@ -133,8 +133,8 @@ export async function seedTenantSettings(
   }
   try {
     for (const [path, body] of [
-      ["/v1/install/tenant", {}],
-      ["/v1/tenant-settings", { env: settings }],
+      ["/v1/install/tenant", { tenant: tenantOf(opts.config) }],
+      ["/v1/tenant-settings", { tenant: tenantOf(opts.config), env: settings }],
     ] as const) {
       const text = JSON.stringify(body);
       const response = await core.request(path, operatorInit(credentials, "PUT", path, text));

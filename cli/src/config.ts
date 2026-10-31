@@ -171,6 +171,7 @@ export interface QmConfig {
   botName?: string;
   orgName?: string;
   appPrefix?: string;
+  tenant?: string;
   region?: string;
   flyOrg?: string;
   imageFrom?: string;
@@ -216,6 +217,7 @@ export function loadConfigInDir(dir: string, overrides?: { target?: Target }): {
 }
 
 export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.deploymentId;
+export const tenantOf = (config: QmConfig): string => config.tenant ?? "main";
 
 export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT", config.basePort ?? 8080);
 
@@ -528,6 +530,7 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "botName",
   "orgName",
   "appPrefix",
+  "tenant",
   "region",
   "flyOrg",
   "imageFrom",
@@ -778,6 +781,11 @@ function validate(raw: unknown, path: string): QmConfig {
   const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
   if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
+  if (o["tenant"] !== undefined) {
+    if (typeof o["tenant"] !== "string" || !validDeploymentId(o["tenant"]))
+      throw new CliError(`${path}: "tenant" must be a tenant slug (a-z, 0-9, and hyphens between)`);
+    out.tenant = o["tenant"];
+  }
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];
   if (typeof o["imageFrom"] === "string") out.imageFrom = o["imageFrom"];

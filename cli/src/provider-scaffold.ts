@@ -46,6 +46,9 @@ function renderConfig(deploymentId: string, values: ConfigValues): string {
   // The one public address of the deployment; the service URLs derive from it.
   "publicUrl": ${JSON.stringify(values.publicUrl)},
 
+  // The slug of the tenant this deployment's settings belong to; qm creates it on first deploy.
+  "tenant": "main",
+
   // Optional bot identity. "botName" is what the bot is called everywhere users
   // see it — the Slack app, the prompt identity, sign-in pages — and "orgName"
   // is how the bot refers to your organization. Both default to neutral values

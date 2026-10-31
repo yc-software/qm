@@ -58,6 +58,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     }
     const { config } = loadConfigInDir(dir);
     assert.equal(config.deploymentId, "acme");
+    assert.equal(config.tenant, "main");
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.sandbox, undefined);

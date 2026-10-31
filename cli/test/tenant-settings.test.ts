@@ -126,11 +126,13 @@ test("seeding creates the install tenant, then pushes its settings with the oper
       ["/v1/install/tenant", "/v1/tenant-settings"],
     );
     assert.ok(closed);
+    assert.deepEqual(JSON.parse(String(seen[0]!.init.body)), { tenant: "main" });
     const settings = seen[1]!;
     const headers = settings.init.headers as Record<string, string>;
     assert.equal(headers.authorization, `Bearer ${control}`);
     const body = String(settings.init.body);
     assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, "sk-ant");
+    assert.equal(JSON.parse(body).tenant, "main");
     const expected = createHmac("sha256", signing)
       .update(`v0:${headers["x-timestamp"]}:PUT\n/v1/tenant-settings\n${body}`)
       .digest("hex");
@@ -225,10 +227,11 @@ test("deployed tenant values fill gaps in the import and leave the service env o
       close: () => {},
     });
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, link, undefined, "push", deployed),
+      seedTenantSettings({ config: config({ tenant: "acme" }), configDir: dir }, link, undefined, "push", deployed),
       /\/v1\/tenant-settings failed \(400\)/,
     );
     assert.ok(!events.includes("remove"), "a rejected import leaves the deployed values in place");
+    assert.ok(events.includes('/v1/install/tenant {"tenant":"acme"}'), "the configured tenant slug is sent");
     events.length = 0;
     settingsStatus = 200;
     await quietly(async (lines) => {

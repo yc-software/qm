@@ -3080,7 +3080,7 @@ export function serverDeps(
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    installTenant: () => ensureInstallTenant(config.databaseUrl!),
+    installTenant: (slug) => ensureInstallTenant(config.databaseUrl!, slug),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,

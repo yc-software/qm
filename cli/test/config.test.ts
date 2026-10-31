@@ -14,6 +14,7 @@ import {
   localSandboxActive,
   sandboxCoreEnv,
   securityScreenEnv,
+  tenantOf,
   updateConfigImageOverrides,
 } from "../src/config.ts";
 
@@ -62,6 +63,10 @@ test("required fields: deploymentId, target, services (must include core), valid
     );
   }
   withConfig({ target: "k8s" }, ({ path }) => assert.throws(() => loadConfigAt(path), /"target" must be/));
+  withConfig({}, ({ path }) => assert.equal(tenantOf(loadConfigAt(path).config), "main"));
+  withConfig({ tenant: "acme" }, ({ path }) => assert.equal(tenantOf(loadConfigAt(path).config), "acme"));
+  for (const tenant of ["", "Acme", "acme-", 7])
+    withConfig({ tenant }, ({ path }) => assert.throws(() => loadConfigAt(path), /"tenant" must be a tenant slug/));
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );

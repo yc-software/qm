@@ -77,8 +77,9 @@ any other way.
    prefer in-cluster Postgres when in doubt.
 5. **Name the administrator at first boot.** `ADMIN_GRANTS=<email>:org_admin` and the
    sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>`) are tenant settings, not app
-   environment: once core is up, create the install tenant with `PUT /v1/install/tenant`
-   and write both with `PUT /v1/tenant-settings` (source-signed, with
+   environment: once core is up, create the deployment's tenant with
+   `PUT /v1/install/tenant {"tenant":"main"}` and write both with
+   `PUT /v1/tenant-settings {"tenant":"main","env":{…}}` (source-signed, with
    `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
    this from `tenantSettings`. This is the step the old docs
    never mentioned: with Postgres and no `ADMIN_GRANTS`, the instance boots, everyone

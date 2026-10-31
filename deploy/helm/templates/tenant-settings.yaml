@@ -35,6 +35,9 @@
 {{- end }}
 {{- end }}
 {{- $settings = mergeOverwrite $settings (deepCopy (.Values.tenantSettings | default dict)) }}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" (toString .Values.tenant)) }}
+{{- fail "tenant must be a tenant slug: lowercase letters, digits and inner hyphens" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
@@ -48,7 +51,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 type: Opaque
 stringData:
-  settings.json: {{ dict "env" $settings | toJson | quote }}
+  settings.json: {{ dict "tenant" .Values.tenant "env" $settings | toJson | quote }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -113,6 +116,7 @@ spec:
                 const response = await fetch(`${process.env.QM_CORE_URL}${path}`, { method: "PUT", headers, body });
                 if (!response.ok) throw new Error(`${path} returned ${response.status}: ${await response.text()}`);
               }
-              await put("/v1/install/tenant", "{}");
-              await put("/v1/tenant-settings", readFileSync("/tenant/settings.json", "utf8"));
+              const settings = readFileSync("/tenant/settings.json", "utf8");
+              await put("/v1/install/tenant", JSON.stringify({ tenant: JSON.parse(settings).tenant }));
+              await put("/v1/tenant-settings", settings);
 {{- end }}

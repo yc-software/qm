@@ -209,11 +209,19 @@ test("Helm ingress rejects embedded, missing, worker and disabled targets", opti
   assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
 });
 
-function tenantSettings(resources: Resource[]): Record<string, string> {
+function tenantImport(resources: Resource[]): { tenant: string; env: Record<string, string> } {
   const secret = resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-tenant-settings");
   assert.ok(secret?.stringData?.["settings.json"], "missing tenant settings secret");
-  return (JSON.parse(secret.stringData["settings.json"]) as { env: Record<string, string> }).env;
+  return JSON.parse(secret.stringData["settings.json"]) as { tenant: string; env: Record<string, string> };
 }
+
+const tenantSettings = (resources: Resource[]): Record<string, string> => tenantImport(resources).env;
+
+test("Helm sends the configured tenant slug and refuses an invalid one", options, () => {
+  assert.equal(tenantImport(render()).tenant, "main");
+  assert.equal(tenantImport(render({ tenant: "acme" })).tenant, "acme");
+  assert.throws(() => render({ tenant: "Acme" }), /tenant must be a tenant slug/);
+});
 
 test("Helm pushes sign-in and admin settings to the install tenant instead of any service env", options, () => {
   const resources = render({

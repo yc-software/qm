@@ -69,7 +69,7 @@ export async function prepareDevTenant(
   phase: Phase,
 ): Promise<void> {
   phase("tenant", "start");
-  const { tenant, created } = await ensureInstallTenant(inputs.databaseUrl);
+  const { tenant, created } = await ensureInstallTenant(inputs.databaseUrl, "main");
   phase("tenant", "ok", `${created ? "created" : "using"} install tenant ${tenant}`);
   const env = Object.fromEntries(
     Object.entries(inputs.baseEnv).filter(([name, value]) => value.trim() && isTenantSetting(name)),
@@ -84,7 +84,7 @@ export async function prepareDevTenant(
   };
   const response = await fetch(
     `http://127.0.0.1:${inputs.ports.core}${path}`,
-    operatorInit(credentials, "PUT", path, JSON.stringify({ env })),
+    operatorInit(credentials, "PUT", path, JSON.stringify({ tenant: "main", env })),
   );
   if (response.status === 404) throw new Error("tenant settings: this core has no PUT /v1/tenant-settings route");
   if (!response.ok) throw new Error(`tenant settings: ${response.status} ${await response.text()}`);
