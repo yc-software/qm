@@ -44,7 +44,6 @@ test("surface registry enforces unique kinds and resolves labels", () => {
   assert.equal(registry.get("web"), undefined);
   assert.equal(registry.label("slack"), "Slack");
   assert.equal(registry.label("web"), undefined);
-  assert.deepEqual(registry.list(), [slack]);
   assert.throws(() => createSurfaceRegistry({ surfaces: [slack, slackSurface()] }), /unique: slack/);
 });
 

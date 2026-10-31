@@ -88,6 +88,5 @@ export interface Surface {
   followUpPrivately?(ref: SurfaceRef, user: SurfaceUser, message: OutboundMessage): Promise<MessageRef | void>;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
-  promptHints(): { surfaceLabel: string; mentionSyntax?: string };
   native<K extends keyof SurfaceNatives>(kind: K): SurfaceNatives[K] | null;
 }
