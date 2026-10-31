@@ -63,7 +63,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "turn-idempotency-test";
 process.env.WEB_UI_PRINCIPALS = "alice";
-process.env.INBOX_USERS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => {
@@ -256,26 +255,6 @@ test("inbox context failures do not start a context-free turn", async () => {
     assert.equal(turns.length, count);
   } finally {
     inboxAvailable = true;
-  }
-});
-
-test("inbox turn and steering enforce the same allowlist as the inbox page", async () => {
-  process.env.INBOX_USERS = "bob";
-  const count = inboxRequests.length;
-  const submitted = turns.length;
-  try {
-    for (const path of ["/api/turn", "/api/runs/run-1/signal"]) {
-      const response = await fetch(`${base}${path}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ kind: "steer", text: "Summarize", threadRef: "web:alice:inbox" }),
-      });
-      assert.equal(response.status, 403);
-    }
-    assert.equal(inboxRequests.length, count);
-    assert.equal(turns.length, submitted);
-  } finally {
-    process.env.INBOX_USERS = "alice";
   }
 });
 

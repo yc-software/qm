@@ -29,7 +29,11 @@ const core = createServer((req: IncomingMessage, res) => {
     calls.push({ method: req.method ?? "GET", url: req.url ?? "", body });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
-      JSON.stringify(corePath(req.url ?? "") === "/v1/inbox/access" ? { enabled: previewEnabled } : { ok: true }),
+      JSON.stringify(
+        corePath(req.url ?? "") === "/v1/inbox/access"
+          ? { enabled: previewEnabled && coreQuery(req.url ?? "", "principalId") === "alice" }
+          : { ok: true },
+      ),
     );
   });
 });
@@ -38,7 +42,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "inbox-web-route-test";
 process.env.WEB_UI_PRINCIPALS = "alice,mallory";
-process.env.INBOX_USERS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -175,7 +178,7 @@ test("inbox routes refuse anonymous callers", async () => {
   assert.equal(r.status, 401);
 });
 
-test("feature flag denial blocks Inbox and Loop API access despite the environment allowlist", async () => {
+test("feature flag denial blocks Inbox and Loop API access", async () => {
   previewEnabled = false;
   try {
     for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {

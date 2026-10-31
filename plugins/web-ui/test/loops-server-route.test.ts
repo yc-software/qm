@@ -68,7 +68,7 @@ test("allowlisted user gets loops permission and loop routes pass through", asyn
   const headers = identity("Alice@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member", "loops"]);
+  assert.deepEqual((await me.json()).permissions, ["member", "loops", "inbox"]);
 
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 200);
@@ -84,11 +84,11 @@ test("allowlisted user gets loops permission and loop routes pass through", asyn
   assert.deepEqual(autopilotBody, { enabled: true });
 });
 
-test("user outside the allowlist lacks permission and loop routes return 403", async () => {
+test("user outside the allowlist lacks the loops permission and loop routes return 403", async () => {
   const headers = identity("bob@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member"]);
+  assert.deepEqual((await me.json()).permissions, ["member", "inbox"]);
 
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 403);

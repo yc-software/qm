@@ -40,7 +40,6 @@ import { currentTenant, perTenant } from "../../../src/tenants/context.ts";
 import { activeRuns, forgetRun, rememberRun } from "./active-runs.ts";
 import { addDeliveryClient, connectedUsers, deliveryClientsOf, everyDeliveryClient } from "./delivery-clients.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
@@ -63,10 +62,6 @@ const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-export function isInboxUser(principalId: string, configuredUsers = process.env.INBOX_USERS): boolean {
-  return principalInAllowlist(principalId, configuredUsers);
-}
-
 export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
   const normalizedPrincipalId = principalId.trim().toLowerCase();
   if (!normalizedPrincipalId) return false;
@@ -328,8 +323,6 @@ async function resolveWebConversation(
   if (/^web:.+:inbox$/.test(threadRef) && threadRef !== `web:${user}:inbox`) {
     return { error: "forbidden_thread", message: "this conversation can only be continued from its own context" };
   }
-  if (threadRef === `web:${user}:inbox` && !isInboxUser(user))
-    return { error: "forbidden", message: "inbox access is not enabled for this user" };
   const conversation = conversationForScope(threadRef, scope, channelName);
   if (!conversation || (threadRef === `web:${user}:inbox` && conversation.kind !== "dm")) {
     return {
@@ -1440,7 +1433,7 @@ const apiRoutes: readonly WebRoute[] = [
       const permissions = who.permissions.filter((permission) => permission !== "loops" && permission !== "inbox");
       if (await hasInboxLoopPreview(user)) {
         if (isLoopsUser(user)) permissions.push("loops");
-        if (isInboxUser(user)) permissions.push("inbox");
+        permissions.push("inbox");
       }
       return json(res, 200, {
         user,
@@ -1791,8 +1784,7 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "POST",
     path: "/api/inbox/sent-chat",
-    handle: async ({ req, res, user }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    handle: async ({ req, res }) => {
       res.setHeader("Cache-Control", "no-store");
       return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
     },
@@ -2907,8 +2899,7 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/inbox/sent/:messageId",
-    handle: async ({ res, user, params, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    handle: async ({ res, params, url }) => {
       const query = new URLSearchParams();
       const accountType = url.searchParams.get("accountType");
       if (accountType) query.set("accountType", accountType);
@@ -2923,8 +2914,7 @@ const apiRoutes: readonly WebRoute[] = [
   {
     method: "GET",
     path: "/api/inbox/sent",
-    handle: async ({ res, user, url }) => {
-      if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
+    handle: async ({ res, url }) => {
       const params = new URLSearchParams();
       for (const key of ["pageToken", "accountType"]) {
         const value = url.searchParams.get(key);
@@ -3465,10 +3455,9 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
     if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
       return json(res, 403, { error: "feature_disabled" });
-    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
     const ledgerPath =
       /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
-    if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
+    if (loopsPath && !isLoopsUser(user) && !ledgerPath) {
       return json(res, 403, { error: "forbidden" });
     }
     const found = findRoute(apiRoutes, method, path);

@@ -12,6 +12,11 @@ const TENANT = "00000000-0000-4000-8000-000000000001";
 let transientWhoamiFailures = 0;
 let whoamiRequests = 0;
 const core = createServer((req: IncomingMessage, res) => {
+  if ((req.url ?? "").startsWith("/v1/inbox/access?")) {
+    const principal = new URL(req.url ?? "", "http://core").searchParams.get("principalId");
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ enabled: principal === "U-admin" }));
+  }
   if (req.method === "GET" && (req.url ?? "").startsWith("/v1/admin/whoami")) {
     whoamiRequests++;
     if (transientWhoamiFailures > 0) {
@@ -37,7 +42,6 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = "admin-whoami-test-secret";
-process.env.INBOX_USERS = "U-admin";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
