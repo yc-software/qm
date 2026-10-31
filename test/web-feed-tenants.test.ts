@@ -14,8 +14,10 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { canonicalPayload, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
+import pg from "pg";
 import { testConfig } from "./support/test-config.ts";
-import { OTHER_TENANT, seedTestTenants, TEST_TENANT } from "./support/tenant.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 const A = TEST_TENANT;
@@ -23,40 +25,49 @@ const B = OTHER_TENANT;
 const EMAIL = "same@example.com";
 const TARGET = `web:${EMAIL}:t1`;
 
-const DATABASE_URL = process.env.DATABASE_URL;
-
-for (const backend of ["memory", "postgres"] as const) {
-  describe(`${backend} web feeds`, { skip: backend === "postgres" && !DATABASE_URL }, () => {
-    let built: BuiltApp;
-    let server: Server;
-    before(async () => {
-      if (backend === "postgres") await seedTestTenants(DATABASE_URL!);
-      built = buildApp(
-        testConfig({
-          dataDir: mkdtempSync(join(tmpdir(), "web-feed-tenants-")),
-          ...(backend === "postgres" ? { databaseUrl: appLogin(DATABASE_URL!), databaseOwnerUrl: DATABASE_URL! } : {}),
-        }),
-      );
-      server = withoutTenant(() => createServer(built.app, { signingSecret: SECRET }));
-      await new Promise<void>((resolve) => withoutTenant(() => server.listen(0, resolve)));
-      base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    });
-    after(async () => {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-      await built.runtime.stop();
-    });
-    feedTests(() => built);
+describe("web feeds", () => {
+  let built: BuiltApp;
+  let server: Server;
+  let role = "";
+  before(async () => {
+    const owner = testMigratedDatabaseUrl();
+    role = `web_feed_${randomUUID().replaceAll("-", "")}`;
+    await withOwner(owner, (admin) =>
+      admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`),
+    );
+    const app = new URL(owner);
+    app.username = role;
+    app.password = "app";
+    built = buildApp(
+      testConfig({
+        dataDir: mkdtempSync(join(tmpdir(), "web-feed-tenants-")),
+        databaseUrl: app.toString(),
+        databaseOwnerUrl: owner,
+      }),
+    );
+    server = withoutTenant(() => createServer(built.app, { signingSecret: SECRET, replayDedupe: built.replayDedupe }));
+    await new Promise<void>((resolve) => withoutTenant(() => server.listen(0, resolve)));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
-}
+  after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await built.runtime.stop();
+    await withOwner(testDatabaseUrl(), (admin) => admin.query(`DROP ROLE IF EXISTS ${role}`));
+  });
+  feedTests(() => built);
+});
 
 let base = "";
 
-function appLogin(url: string): string {
-  const app = new URL(url);
-  app.username = "qm_app";
-  app.password = "qm-app-test";
-  return app.toString();
+async function withOwner(url: string, fn: (admin: pg.Client) => Promise<unknown>): Promise<void> {
+  const admin = new pg.Client({ connectionString: url });
+  await admin.connect();
+  try {
+    await fn(admin);
+  } finally {
+    await admin.end();
+  }
 }
 
 function sign(method: string, path: string, body = "", tenant?: string): Record<string, string> {
