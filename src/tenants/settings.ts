@@ -151,6 +151,7 @@ export function openTenantSecret(sealKey: Buffer, tenant: string, key: TenantSet
 
 interface TenantSettingsBacking {
   tenants(): Promise<string[]>;
+  tenantForSlug(slug: string): Promise<string | null>;
   read(tenant: string): Promise<TenantSettingValues>;
   write(tenant: string, changes: TenantSettingChanges): Promise<void>;
 }
@@ -158,12 +159,28 @@ interface TenantSettingsBacking {
 function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
   db.registerMigration(TENANCY_BASE);
   db.registerMigration(TENANT_SETTINGS_MIGRATION);
+  let migrated: Promise<void> | null = null;
+  const q = async (text: string, params?: unknown[]) => {
+    migrated ??= db
+      .migrate(TENANCY_BASE)
+      .then(() => db.migrate(TENANT_SETTINGS_MIGRATION))
+      .catch((error: unknown) => {
+        migrated = null;
+        throw error;
+      });
+    await migrated;
+    return db.q(text, params);
+  };
   const sealKey = tenantSettingsKey(keyMaterial);
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
-    tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
+    tenants: async () => (await q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
+    tenantForSlug: async (slug) => {
+      const [row] = await q("SELECT id::text AS id FROM tenants WHERE slug = $1", [slug]);
+      return row ? String(row.id) : null;
+    },
     async read(tenant) {
-      const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = ${TENANT}`);
+      const [row] = await q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = ${TENANT}`);
       const values: TenantSettingValues = {};
       if (!row) return values;
       for (const key of TENANT_SETTING_KEYS) {
@@ -182,7 +199,7 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
         return TENANT_SECRET_KEYS.has(key) ? sealTenantSecret(sealKey, tenant, key, value) : value;
       });
       const names = keys.map(tenantSettingColumn);
-      await db.q(
+      await q(
         `INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (${TENANT}, ${names.map((_, i) => `$${i + 1}`).join(", ")})
          ON CONFLICT (tenant_id) DO UPDATE SET ${names.map((name) => `${name} = EXCLUDED.${name}`).join(", ")}, updated_at = now()`,
         params,
@@ -209,6 +226,7 @@ export interface TenantSettingsStore {
   start(): void;
   stop(): Promise<void>;
   onlyTenant(): Promise<string | null>;
+  tenantForSlug(slug: string): Promise<string | null>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
 
@@ -270,6 +288,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       stopPreload = undefined;
       await refresher.stop();
     },
+    tenantForSlug: (slug) => backing.tenantForSlug(slug),
     async onlyTenant() {
       const tenants = await backing.tenants();
       return tenants.length === 1 ? tenants[0]! : null;

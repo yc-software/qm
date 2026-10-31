@@ -9,6 +9,8 @@ import { requireOperatorControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
+const TENANT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
 async function putTenantSettings(ctx: ApiCtx): Promise<void> {
   if (!requireOperatorControl(ctx)) return;
   const { deps, body, res } = ctx;
@@ -20,9 +22,15 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
   const unknown = unknownTenantImportKeys(env);
   if (unknown.length)
     return sendJson(res, 400, { error: "not_tenant_settings", message: `Not tenant settings: ${unknown.join(", ")}` });
-  const tenant = await deps.tenantSettings.onlyTenant();
+  const slug = isObj(body) ? body.tenant : undefined;
+  if (typeof slug !== "string" || !TENANT_SLUG.test(slug))
+    return sendJson(res, 400, {
+      error: "invalid_tenant",
+      message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
+    });
+  const tenant = await deps.tenantSettings.tenantForSlug(slug);
   if (!tenant)
-    return sendJson(res, 409, { error: "no_install_tenant", message: "This install needs exactly one tenant" });
+    return sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the slug ${slug}`, tenant: slug });
   try {
     const updated = await withTenant(tenant, () =>
       importTenantSettings(env as Record<string, string>, {
