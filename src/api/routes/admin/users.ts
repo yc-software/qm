@@ -65,8 +65,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   }
   const rows = users.map((u) => ({
     ...u,
-    deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,
-    offboarded: deps.identity?.principal(u.principalId)?.offboarded === true,
+    deactivated: deps.identity?.deactivated(u.principalId) === true,
+    offboarded: deps.identity?.offboarded(u.principalId) === true,
   }));
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
@@ -413,8 +413,8 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
-    deactivated: deps.identity?.deactivationSource(principalId) === "manual",
-    principal: deps.identity?.principal(principalId) ?? null,
+    deactivated: deps.identity?.deactivated(principalId) === true,
+    principal: (await deps.identity?.principal(principalId)) ?? null,
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

@@ -27,6 +27,8 @@ export interface OffboardedChange {
   error?: string;
 }
 
+export type PrincipalSummary = Omit<PrincipalRecord, "offboardChanges">;
+
 export interface PrincipalRecord {
   principalId: string;
   offboarded: boolean;
@@ -48,8 +50,10 @@ export interface IdentityService extends IdentityProvider {
   deactivate(externalId: string, source?: DeactivationSource): Promise<void>;
   deactivationSource(externalId: string): DeactivationSource | undefined;
   reactivate(externalId: string, by?: string): Promise<void>;
-  principal(externalId: string): PrincipalRecord | undefined;
-  listPrincipals(): Promise<PrincipalRecord[]>;
+  deactivated(externalId: string): boolean;
+  offboarded(externalId: string): boolean;
+  principal(externalId: string): Promise<PrincipalRecord | null>;
+  listPrincipals(): Promise<PrincipalSummary[]>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -79,7 +83,7 @@ export function createIdentityService(
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
   const principalStore = opts.principals;
-  const principals = new Map<string, PrincipalRecord>();
+  const principals = new Map<string, PrincipalSummary>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
 
   const keptByDirectorySync = (key: string): boolean =>
@@ -95,7 +99,7 @@ export function createIdentityService(
       const [deactivations, members, records] = await Promise.all([
         store.all(),
         externalStore.all(),
-        principalStore.all(),
+        principalStore.select({ omit: ["offboardChanges"] }),
       ]);
       deactivated.clear();
       externals.clear();
@@ -112,12 +116,8 @@ export function createIdentityService(
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
-    const record = deactivated.get(key);
     const external = externals.get(key);
-    const inactive =
-      record?.source === "manual" ||
-      (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
-      (external !== undefined && !externalMemberActive(external));
+    const inactive = deactivatedNow(externalId) || (external !== undefined && !externalMemberActive(external));
     const type: Principal["type"] = inactive || isExternalGuest ? "guest" : "internal";
     return { id, type };
   }
@@ -131,23 +131,28 @@ export function createIdentityService(
     await store.put(foldPrincipalId(externalId), record);
   }
 
-  async function putPrincipal(record: PrincipalRecord): Promise<PrincipalRecord> {
-    principals.set(personKey(record.principalId), record);
-    await principalStore.put(foldPrincipalId(record.principalId), record);
-    return record;
-  }
+  const remember = ({ offboardChanges: _changes, ...summary }: PrincipalRecord): PrincipalRecord => {
+    principals.set(personKey(summary.principalId), summary);
+    return { offboardChanges: _changes, ...summary };
+  };
+  const principalKey = (externalId: string): string =>
+    foldPrincipalId(principals.get(personKey(externalId))?.principalId ?? externalId);
 
   async function reactivateNow(externalId: string, by?: string): Promise<void> {
     deactivated.delete(personKey(externalId));
     for (const key of storeKeys(externalId)) await store.delete(key);
-    const record = principals.get(personKey(externalId));
-    if (record?.offboarded)
-      await putPrincipal({
-        ...record,
-        offboarded: false,
-        reactivatedAt: Date.now(),
-        ...(by ? { reactivatedBy: by } : {}),
-      });
+    for (const key of new Set([principalKey(externalId), ...storeKeys(externalId)])) {
+      const record = await principalStore.update(key, (r) =>
+        r.offboarded ? { ...r, offboarded: false, reactivatedAt: Date.now(), ...(by ? { reactivatedBy: by } : {}) } : r,
+      );
+      if (record) remember(record);
+    }
+  }
+
+  function deactivatedNow(externalId: string): boolean {
+    const key = personKey(externalId);
+    const record = deactivated.get(key);
+    return record?.source === "manual" || (record?.source === "directory-sync" && !keptByDirectorySync(key));
   }
 
   return {
@@ -157,26 +162,40 @@ export function createIdentityService(
       return deactivated.get(personKey(externalId))?.source;
     },
     reactivate: (externalId, by) => exclusive(() => reactivateNow(externalId, by)),
-    principal(externalId: string): PrincipalRecord | undefined {
-      return principals.get(personKey(externalId));
+    deactivated: deactivatedNow,
+    offboarded(externalId: string): boolean {
+      return principals.get(personKey(externalId))?.offboarded === true;
     },
-    async listPrincipals(): Promise<PrincipalRecord[]> {
+    async principal(externalId: string): Promise<PrincipalRecord | null> {
+      for (const key of new Set([principalKey(externalId), ...storeKeys(externalId)])) {
+        const record = await principalStore.get(key);
+        if (record) return record;
+      }
+      return null;
+    },
+    async listPrincipals(): Promise<PrincipalSummary[]> {
       await refresh();
       return [...principals.values()];
     },
     recordOffboarded: (externalId, by, changes) =>
-      exclusive(() => {
-        const existing = principals.get(personKey(externalId));
-        if (existing?.offboarded)
-          return putPrincipal({ ...existing, offboardChanges: [...(existing.offboardChanges ?? []), ...changes] });
-        return putPrincipal({
-          ...existing,
-          principalId: existing?.principalId ?? externalId,
-          offboarded: true,
-          offboardedAt: Date.now(),
-          offboardedBy: by,
-          offboardChanges: changes,
-        });
+      exclusive(async () => {
+        const [record] = await principalStore.mutateMany([
+          {
+            id: principalKey(externalId),
+            apply: (existing) =>
+              existing?.offboarded
+                ? { ...existing, offboardChanges: [...(existing.offboardChanges ?? []), ...changes] }
+                : {
+                    ...existing,
+                    principalId: existing?.principalId ?? externalId,
+                    offboarded: true,
+                    offboardedAt: Date.now(),
+                    offboardedBy: by,
+                    offboardChanges: [...(existing?.offboardChanges ?? []), ...changes],
+                  },
+          },
+        ]);
+        return remember(record!);
       }),
     recordDirectorySync: (removedIds, presentIds) =>
       exclusive(async () => {

@@ -227,10 +227,12 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal((await app.getCron(personalCron.id))!.archived, true, "reactivation restores only sign-in");
     const history = ((await reactivated.json()) as any).principal;
     assert.deepEqual(
-      [history.offboarded, history.offboardedBy, history.reactivatedBy, history.offboardChanges.length > 0],
-      [false, "admin-alice", "admin-alice", true],
-      "reactivation keeps the offboarding as history",
+      [history.offboarded, history.offboardedBy, history.reactivatedBy, "offboardChanges" in history],
+      [false, "admin-alice", "admin-alice", false],
+      "reactivation answers with the record's flags and times, not the person's item labels",
     );
+    const kept: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    assert.ok(kept.principal.offboardChanges.length > 0, "the full history stays on the record");
     const relisted: any = await (await fetch(`${s.base}/v1/admin/users`, { headers: ADMIN })).json();
     assert.notEqual(relisted.users.find((u: any) => u.principalId === "U1")?.offboarded, true);
   } finally {

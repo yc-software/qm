@@ -6,7 +6,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
-import type { OffboardedChange } from "../../../identity/identity-service.ts";
+import type { OffboardedChange, PrincipalRecord, PrincipalSummary } from "../../../identity/identity-service.ts";
 import { followLoopState } from "../loops.ts";
 
 type Kind = "principal" | "cron" | "loop" | "webhook" | "keychain" | "deployment" | "skill" | "sandbox";
@@ -284,9 +284,16 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     resource: `${principalId}/done=${changes.length - failed}/failed=${failed}`,
     scopeLabel: org,
   });
-  const principal = (await deps.identity?.recordOffboarded(principalId, actor.id, changes)) ?? null;
+  const signedOut = deps.identity?.deactivationSource(principalId) === "manual";
+  const principal = signedOut ? await deps.identity!.recordOffboarded(principalId, actor.id, changes) : null;
   return sendJson(res, 200, { principalId, applied: true, changes, kept, principal });
 }
+
+const summary = (record: PrincipalRecord | null): PrincipalSummary | null => {
+  if (!record) return null;
+  const { offboardChanges: _changes, ...rest } = record;
+  return rest;
+};
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
@@ -305,6 +312,6 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
     ok: true,
     principalId,
     active: true,
-    principal: deps.identity.principal(principalId) ?? null,
+    principal: summary(await deps.identity.principal(principalId)),
   });
 }

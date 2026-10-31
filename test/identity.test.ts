@@ -189,6 +189,7 @@ test("an offboarding is recorded on the person, survives reactivation as history
   const principals = testMap<PrincipalRecord>();
   const writer = createIdentityService(testMap(), { externalMembers: testMap(), principals });
   const reader = createIdentityService(testMap(), { externalMembers: testMap(), principals });
+  await reader.refresh();
   const change = (id: string): OffboardedChange => ({
     kind: "cron",
     id,
@@ -198,10 +199,10 @@ test("an offboarding is recorded on the person, survives reactivation as history
     result: "done",
   });
   const first = await writer.recordOffboarded("Leaver@example.com", "admin-alice", [change("c1")]);
-  assert.equal(first.offboarded, true);
-  assert.equal(first.offboardedBy, "admin-alice");
+  assert.deepEqual([first.offboarded, first.offboardedBy], [true, "admin-alice"]);
+  assert.equal(writer.offboarded("leaver@example.com"), true);
   await writer.recordOffboarded("leaver@example.com", "admin-bob", [change("c2")]);
-  const again = writer.principal("leaver@example.com")!;
+  const again = (await writer.principal("leaver@example.com"))!;
   assert.equal(again.offboardedAt, first.offboardedAt, "a retry keeps the first offboarding time");
   assert.equal(again.offboardedBy, "admin-alice");
   assert.deepEqual(
@@ -209,23 +210,49 @@ test("an offboarding is recorded on the person, survives reactivation as history
     ["c1", "c2"],
   );
 
-  assert.equal(reader.principal("leaver@example.com"), undefined);
-  assert.deepEqual(
-    (await reader.listPrincipals()).map((r) => [r.principalId, r.offboarded]),
-    [["Leaver@example.com", true]],
-  );
-
-  await writer.reactivate("leaver@example.com", "admin-bob");
-  const back = writer.principal("leaver@example.com")!;
-  assert.equal(back.offboarded, false);
+  await reader.reactivate("leaver@example.com", "admin-bob");
+  const back = (await writer.principal("leaver@example.com"))!;
+  assert.equal(back.offboarded, false, "another instance clears the flag from the store, not its stale cache");
   assert.equal(back.reactivatedBy, "admin-bob");
   assert.equal(back.offboardedBy, "admin-alice", "reactivation keeps who offboarded them and when");
   assert.equal(back.offboardChanges!.length, 2);
+  await writer.refresh(true);
+  assert.equal(writer.offboarded("leaver@example.com"), false);
+  assert.deepEqual(
+    (await reader.listPrincipals()).map((r) => [r.principalId, r.offboarded, "offboardChanges" in r]),
+    [["Leaver@example.com", false, false]],
+    "the cached list carries the flags, not the change history",
+  );
+
+  await writer.recordOffboarded("leaver@example.com", "admin-carol", [change("c3")]);
+  const second = (await writer.principal("leaver@example.com"))!;
+  assert.deepEqual(
+    [second.offboarded, second.offboardedBy, second.offboardChanges!.map((c) => c.id)],
+    [true, "admin-carol", ["c1", "c2", "c3"]],
+    "a later offboarding keeps the earlier rounds' changes",
+  );
 
   await writer.reactivate("someone-else@example.com", "admin-bob");
   assert.equal(
-    writer.principal("someone-else@example.com"),
-    undefined,
+    await writer.principal("someone-else@example.com"),
+    null,
     "reactivating a non-offboarded person adds no record",
+  );
+});
+
+test("deactivated means signed out: manual, or removed by directory sync and not kept", async () => {
+  const svc = createIdentityService(testMap(), {
+    externalMembers: testMap(),
+    principals: testMap(),
+    directorySyncProtected: ["kept@example.com"],
+  });
+  await svc.deactivate("manual@example.com");
+  await svc.recordDirectorySync(["synced@example.com"], []);
+  await svc.deactivate("kept@example.com", "directory-sync");
+  assert.deepEqual(
+    ["manual@example.com", "synced@example.com", "kept@example.com", "active@example.com"].map((id) =>
+      svc.deactivated(id),
+    ),
+    [true, true, false, false],
   );
 });

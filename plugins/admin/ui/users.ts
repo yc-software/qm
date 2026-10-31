@@ -203,7 +203,7 @@ export class UsersView {
     const offboarded = (this.data.users || []).filter((u: any) => u.offboarded).length;
     const users = (this.data.users || []).filter(
       (u: any) =>
-        (this.showOffboarded || !u.offboarded) &&
+        (this.showOffboarded || !u.offboarded || u.admin?.isAdmin) &&
         matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
     );
     const externals = (this.data.externalUsers || []).filter((m: any) =>
