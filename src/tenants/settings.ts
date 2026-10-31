@@ -77,9 +77,9 @@ export const PLUGIN_SETTING_KEYS: readonly TenantSettingKey[] = [
 
 export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
 export type TenantSettingValues = Partial<Record<TenantSettingKey, string>>;
-export type TenantSettingChanges = Partial<Record<TenantSettingKey, string | null>>;
+type TenantSettingChanges = Partial<Record<TenantSettingKey, string | null>>;
 
-export const TENANT_SECRET_KEYS: ReadonlySet<TenantSettingKey> = new Set<TenantSettingKey>([
+const TENANT_SECRET_KEYS: ReadonlySet<TenantSettingKey> = new Set<TenantSettingKey>([
   "MODEL_GATEWAY_API_KEY",
   "SPRITES_TOKEN",
   "E2B_API_KEY",
@@ -98,7 +98,7 @@ export function isTenantSettingKey(key: string): key is TenantSettingKey {
   return (TENANT_SETTING_KEYS as readonly string[]).includes(key);
 }
 
-export function tenantSettingColumn(key: TenantSettingKey): string {
+function tenantSettingColumn(key: TenantSettingKey): string {
   return key.toLowerCase();
 }
 

@@ -14,7 +14,7 @@ export interface TenantOidc {
   problems: string[];
 }
 
-export function originOf(raw: string): string {
+function originOf(raw: string): string {
   try {
     return new URL(raw).origin;
   } catch {

@@ -14,7 +14,7 @@ import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import { SECURITY_SCREEN_MODES, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { TenantSettingValues } from "./settings.ts";
 
-export interface SecurityScreenProxySettings {
+interface SecurityScreenProxySettings {
   provider: string;
   endpoint: string;
   token: string;
@@ -41,7 +41,7 @@ export interface TenantSettings {
   readonly suggestedActivitiesContext?: string;
 }
 
-export const SANDBOX_BACKEND_NAMES = [
+const SANDBOX_BACKEND_NAMES = [
   "aws",
   "local",
   "sprites",
@@ -63,7 +63,7 @@ export function parseSandboxBackend(name: string, value: string): SandboxBackend
   );
 }
 
-export function parseChoice<T extends string>(name: string, value: string | undefined, choices: readonly T[]): T {
+function parseChoice<T extends string>(name: string, value: string | undefined, choices: readonly T[]): T {
   if (value === undefined || value.trim() === "") return choices[0]!;
   const choice = value.trim().toLowerCase();
   if ((choices as readonly string[]).includes(choice)) return choice as T;
