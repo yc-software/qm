@@ -11,6 +11,6 @@ export function testLinkTables() {
   return createPostgresLinkTables(testMigratedDatabaseUrl());
 }
 
-export function testModelTables() {
-  return createPostgresModelTables(testMigratedDatabaseUrl());
+export function testModelTables(url = testMigratedDatabaseUrl()) {
+  return createPostgresModelTables(url);
 }
