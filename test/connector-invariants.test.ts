@@ -123,7 +123,6 @@ test("empty-token guard — an adapter returning no access token fails the conne
         provider: "google",
         principalId: "U1",
         redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        tenant: TEST_TENANT,
       },
       { secret: SECRET },
     );

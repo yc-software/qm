@@ -4,6 +4,7 @@ import { createEnvSecretSource, type SecretSource } from "../credentials/secret-
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 
@@ -617,7 +618,7 @@ function isOAuthState(v: unknown): v is OAuthState {
 }
 
 export function sealOAuthState(
-  state: Omit<OAuthState, "issuedAt" | "nonce"> & { issuedAt?: number; nonce?: string },
+  state: Omit<OAuthState, "issuedAt" | "nonce" | "tenant"> & { issuedAt?: number; nonce?: string },
   opts: { secret: string; now?: () => number } = { secret: "" },
 ): Promise<string> {
   if (!opts.secret) throw new Error("OAuth state secret required");
@@ -626,6 +627,7 @@ export function sealOAuthState(
       ...state,
       issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
       nonce: state.nonce ?? randomUUID(),
+      tenant: currentTenant(),
     },
     opts.secret,
   );

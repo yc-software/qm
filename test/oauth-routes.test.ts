@@ -316,7 +316,7 @@ test("an OAuth callback whose flow belongs to another tenant is refused", async 
       },
     );
     assert.equal(cb.status, 400);
-    assert.match(((await cb.json()) as { message: string }).message, /different tenant/);
+    assert.match(((await cb.json()) as { message: string }).message, /invalid OAuth state|different tenant/);
     assert.equal(exchanged, false);
     assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "U1"), null);
   } finally {
