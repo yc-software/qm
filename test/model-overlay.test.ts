@@ -30,8 +30,8 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({
-        principalId: "admin-alice@default-org",
-        scopeId: "personal:admin-alice@default-org",
+        principalId: "admin-alice",
+        scopeId: "personal:admin-alice",
         modelId: MODEL_ID,
       }),
     });
@@ -218,8 +218,8 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     });
   const path = `/v1/admin/model-registry/${MODEL_ID}`;
   const runtime = {
-    principalId: "admin-alice@default-org",
-    scopeId: "personal:admin-alice@default-org",
+    principalId: "admin-alice",
+    scopeId: "personal:admin-alice",
     modelId: MODEL_ID,
   };
   try {

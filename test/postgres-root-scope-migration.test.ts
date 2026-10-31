@@ -46,6 +46,7 @@ test(
         raw,
         migrations.filter((migration) => migration.id < "sessions/store/0051"),
       );
+      await raw.query("INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main')");
       for (const table of KV_TABLES) await raw.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await raw.query(`CREATE TABLE org_rows(org_id TEXT NOT NULL, scope_label TEXT, scopes TEXT[], note TEXT)`);
       const oldBroker = hashId(["org:acme", "openai", "broker"]);
@@ -164,7 +165,7 @@ test("pg upgrade with no tenant drops the deployment identity and moves nothing"
   }
 });
 
-test("pg fresh install without a deployment identity just gains the namespace column", { skip }, async () => {
+test("pg fresh install creates no tenant and later tenants start without a Composio namespace", { skip }, async () => {
   const schema = `root_scope_${randomUUID().replaceAll("-", "")}`;
   const schemaUrl = new globalThis.URL(URL!);
   schemaUrl.searchParams.set("options", `-c search_path=${schema}`);
@@ -174,8 +175,9 @@ test("pg fresh install without a deployment identity just gains the namespace co
     await raw.query(`CREATE SCHEMA ${schema}`);
     createPostgresSessionStore(url);
     await applyPgMigrations(raw, registeredPgMigrations(url));
-    const row = (await raw.query("SELECT id::text AS id, composio_namespace FROM tenants")).rows[0];
-    assert.equal(row.composio_namespace, null);
+    assert.equal((await raw.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
+    await raw.query("INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main')");
+    assert.equal((await raw.query("SELECT composio_namespace FROM tenants")).rows[0].composio_namespace, null);
   } finally {
     await raw.query(`DROP SCHEMA ${schema} CASCADE`).catch(() => undefined);
     await raw.end();
