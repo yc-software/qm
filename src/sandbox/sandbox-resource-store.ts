@@ -143,7 +143,13 @@ export function createSandboxResourceStores(databaseUrl: string): {
       jobComputers: async () =>
         (await records.db.q(`${records.select} WHERE ${records.scoped("job_only")} ORDER BY id`)).map(records.row),
     },
-    defaults: { get: defaults.get, put: defaults.put },
+    defaults: {
+      get: async (scopeId) => {
+        const row = await defaults.get(scopeId);
+        return row && { sandboxId: row.sandboxId ?? null };
+      },
+      put: defaults.put,
+    },
     close: async () => {
       await Promise.all([records.db.close(), defaults.db.close()]);
     },

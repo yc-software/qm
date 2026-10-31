@@ -114,9 +114,15 @@ test(
         });
         const { rows } = await admin.query(
           `SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv,
-                (SELECT count(*)::int FROM app_page_views) AS views`,
+                (SELECT count(*)::int FROM app_page_views) AS views,
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'app_page_views_deployment_fkey') AS fk`,
         );
-        assert.deepEqual(rows[0], { access: null, kv: null, views: 1 });
+        assert.deepEqual(rows[0], {
+          access: null,
+          kv: null,
+          views: 1,
+          fk: "FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id) ON DELETE CASCADE",
+        });
       },
       async (admin) => {
         await seedKeyValueTable(admin, "deployments", {
@@ -129,9 +135,13 @@ test(
         );
         await admin.query("INSERT INTO deployment_access VALUES ('dep-a', 4242)");
         await admin.query(
-          `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id))`,
+          `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id),
+           version INTEGER, viewer TEXT, auth_mode TEXT NOT NULL, at BIGINT NOT NULL, path TEXT NOT NULL, ip TEXT,
+           user_agent TEXT)`,
         );
-        await admin.query("INSERT INTO app_page_views(deployment_id) VALUES ('dep-a')");
+        await admin.query(
+          "INSERT INTO app_page_views(deployment_id, auth_mode, at, path) VALUES ('dep-a', 'public', 1, '/')",
+        );
       },
     );
   },
