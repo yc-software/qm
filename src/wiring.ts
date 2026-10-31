@@ -599,6 +599,7 @@ export function buildApp(
   configurePgPooling({
     ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
