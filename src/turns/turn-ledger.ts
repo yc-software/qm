@@ -357,7 +357,11 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
       const run = await begin(ctx, queue, claimed.runId, params.turnId, token, workerId);
       if (run === "suspended") return { claimed: true, run: null };
       if (!run) {
-        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" });
+        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" }).catch(
+          (error: unknown) => {
+            if (!(error instanceof TaskCancelled)) throw error;
+          },
+        );
         return { claimed: true, run: null };
       }
       await db.query(
