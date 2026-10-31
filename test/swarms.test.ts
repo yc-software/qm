@@ -5,9 +5,11 @@ import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-servic
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { createTurnRunner } from "../src/turns/turn-runner.ts";
+import { TURN_QUEUES } from "../src/turns/absurd-schema.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn, settledRun } from "./support/turns.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -63,7 +65,7 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
     const delivered = (await fixture.store.get(fixture.root.id))!;
     const notification = delivered.messages[0]!.notifications[worker!.id]!;
     assert.equal(notification.state, "queued");
-    const run = await fixture.runs.claimById(notification.runId!, "delayed-ready-worker", 60_000);
+    const run = (await claimTurn(fixture.ledger, notification.runId!))?.run;
     assert.ok(run);
     assert.ok(await second.binding({ ...run.request, runId: run.id }));
     context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
@@ -90,15 +92,24 @@ test("delayed ready acknowledgment cannot roll back a delivered worker across ph
 });
 
 test("every agent swarm operation requires a running persisted run with a live lease", async () => {
-  for (const status of ["pending", "done", "failed", "expired"] as const) {
-    const { service, caller, runs } = await swarmFixture();
+  for (const status of ["pending", "done", "failed", "reclaimed"] as const) {
+    const { service, caller, runs, ledger } = await swarmFixture();
     if (caller.kind !== "agent") throw new Error("wrong caller");
     await service.spawn(caller, { requestId: "initial", text: "Work" });
     const run = (await runs.get(caller.claims.runId!))!;
-    if (status === "pending") await runs.releaseLease(run.id, run.leaseToken!);
-    if (status === "done") await runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" });
-    if (status === "failed") await runs.fail(run.id, run.leaseToken!, "Failed", { retry: false });
-    if (status === "expired") await runs.heartbeat(run.id, run.leaseToken!, -1);
+    const token = run.leaseToken!;
+    if (status === "pending") assert.equal(await ledger.handBack(run, token, {}), true);
+    if (status === "done")
+      assert.equal(await ledger.finish(run, token, { status: "done", result: { status: "ok", reply: "Done" } }), true);
+    if (status === "failed")
+      assert.equal(
+        await ledger.finish(run, token, { status: "failed", result: { status: "failed", reason: "Failed" } }),
+        true,
+      );
+    if (status === "reclaimed") {
+      assert.equal(await ledger.handBack(run, token, {}), true);
+      assert.equal((await claimTurn(ledger, run.id))!.run.status, "running");
+    }
     for (const operation of [
       () => service.inspect(caller),
       () => service.context(caller, {}),
@@ -142,6 +153,7 @@ test("sweeps use bounded pages and advance past pending cleanup to later swarms"
         store: first.store,
         sessions: first.sessions,
         runs: first.runs,
+        ledger: first.ledger,
         lock: first.serviceOptions.lock,
       }),
     );
@@ -168,6 +180,7 @@ test("provisioning deadlines isolate healthy swarms and retire late private reso
     store: first.store,
     sessions: first.sessions,
     runs: first.runs,
+    ledger: first.ledger,
     lock: first.serviceOptions.lock,
   });
   const forum = await first.sandboxes.create("alice", first.root.scopeId, "modal", "Forum");
@@ -241,6 +254,7 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
         store: first.store,
         sessions: first.sessions,
         runs: first.runs,
+        ledger: first.ledger,
         lock: first.serviceOptions.lock,
       }),
     );
@@ -295,7 +309,7 @@ test("ready notifications progress while every provider slot remains fenced afte
   const first = await swarmFixture();
   const fixtures = [first];
   for (let index = 0; index < SWARM_LIMITS.sweepConcurrency; index++)
-    fixtures.push(await swarmFixture(first.serviceOptions));
+    fixtures.push(await swarmFixture({ ...first.serviceOptions, ledger: first.ledger }));
   fixtures.sort((left, right) => left.root.id.localeCompare(right.root.id));
   const healthy = fixtures.at(-1)!;
   const [worker] = await healthy.service.spawn(healthy.caller, { requestId: "ready", text: "Work" });
@@ -855,18 +869,18 @@ test("correlated bounded waits observe wake:false replies without waking anyone 
 });
 
 test("active recipients receive durable queued unattended work rather than human steer signals", async () => {
-  const { service, caller, runs } = await swarmFixture();
+  const { service, caller, runs, ledger } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const initial = (await runs.list()).find((run) => run.request.swarm)!;
-  const claimed = await runs.claimById(initial.id, "worker", 60_000);
+  const claimed = (await claimTurn(ledger, initial.id))?.run;
   assert.equal(claimed!.status, "running");
   await service.send(caller, { requestId: "queue", text: "More work", audience: "all", wake: true });
   await service.sweep();
   const pending = (await runs.inFlightForThread(initial.sessionId)).find((run) => run.id !== initial.id)!;
-  assert.equal(pending.status, "pending");
+  assert.equal(pending.status, "queued", "admitted behind the conversation's active turn");
   assert.equal(pending.request.origin.kind, "automation");
-  assert.equal(await runs.claimById(pending.id, "second", 60_000), null);
+  assert.equal(await claimTurn(ledger, pending.id), null);
 });
 
 test("swarm provenance is bound to the durable run, content, actor, and recipient", async () => {
@@ -986,12 +1000,16 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 
-test("durable worker rejects excessive swarm claims before calling the agent", async () => {
-  const { service, caller, runs } = await swarmFixture();
+test("the turn runner rejects excessive swarm claims before calling the agent", async () => {
+  const { service, caller, runs, ledger } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const pending = (await runs.list()).find((item) => item.request.swarm)!;
-  const claimed = (await runs.claimById(pending.id, "test", 60_000))!;
+  for (let claim = 1; claim <= 3; claim++) {
+    const claimed = (await claimTurn(ledger, pending.id))!;
+    assert.equal(claimed.run.attempts, claim);
+    assert.equal(await ledger.handBack(claimed.run, claimed.token, {}), true);
+  }
   let called = false;
   const orchestrator = {
     handleTurn: async () => {
@@ -999,12 +1017,17 @@ test("durable worker rejects excessive swarm claims before calling the agent", a
       return { status: "silent" as const };
     },
   } as unknown as Orchestrator;
-  await assert.rejects(
-    processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, { ...claimed, attempts: 4 }),
-    /claim budget/,
-  );
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50 });
+  runner.start();
+  try {
+    const run = await settledRun(runs, pending.id);
+    assert.equal(run.status, "failed");
+    assert.equal(run.attempts, 4);
+    assert.match(JSON.stringify(run.result), /swarm claim budget exhausted/);
+  } finally {
+    await runner.stopClaims();
+  }
   assert.equal(called, false);
-  assert.equal((await runs.get(claimed.id))!.status, "failed");
 });
 
 for (const action of ["spawn", "send", "context"] as const) {
@@ -1016,8 +1039,8 @@ for (const action of ["spawn", "send", "context"] as const) {
     const run = (await fixture.runs.get(fixture.caller.claims.runId!))!;
     const update = fixture.store.update.bind(fixture.store);
     fixture.store.update = async (id, mutate, fence) => {
-      await fixture.runs.releaseLease(run.id, run.leaseToken!);
-      await fixture.runs.claimById(run.id, "replacement", 60_000);
+      await fixture.ledger.handBack(run, run.leaseToken!, {});
+      assert.ok(await claimTurn(fixture.ledger, run.id));
       return update(id, mutate, fence);
     };
     const operations = {
