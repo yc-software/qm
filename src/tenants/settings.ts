@@ -147,6 +147,7 @@ export function openTenantSecret(sealKey: Buffer, tenant: string, key: TenantSet
 
 interface TenantSettingsBacking {
   tenants(): Promise<string[]>;
+  tenantForSlug(slug: string): Promise<string | null>;
   read(tenant: string): Promise<TenantSettingValues>;
   write(tenant: string, changes: TenantSettingChanges): Promise<void>;
 }
@@ -158,6 +159,10 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
     tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
+    tenantForSlug: async (slug) => {
+      const [row] = await db.q("SELECT id::text AS id FROM tenants WHERE slug = $1", [slug]);
+      return row ? String(row.id) : null;
+    },
     async read(tenant) {
       const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = ${TENANT}`);
       const values: TenantSettingValues = {};
@@ -204,7 +209,7 @@ export interface TenantSettingsStore {
   refreshAll(): Promise<void>;
   start(): void;
   stop(): Promise<void>;
-  onlyTenant(): Promise<string | null>;
+  tenantForSlug(slug: string): Promise<string | null>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
 
@@ -266,10 +271,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       stopPreload = undefined;
       await refresher.stop();
     },
-    async onlyTenant() {
-      const tenants = await backing.tenants();
-      return tenants.length === 1 ? tenants[0]! : null;
-    },
+    tenantForSlug: (slug) => backing.tenantForSlug(slug),
     async refreshAll() {
       for (const tenant of await backing.tenants()) {
         await withTenant(tenant, () => load(tenant)).catch(reportFailureAs("tenant settings: refresh", undefined));

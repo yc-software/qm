@@ -6,22 +6,19 @@ import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import pg from "pg";
 import { buildApp } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/tenant-settings";
+const SLUG = `t-${TEST_TENANT.slice(-12)}`;
 
 async function fixture(secret: string | undefined = controlSecret) {
   const config = testConfig({ signingSecret: sourceSecret });
   const built = buildApp(config);
   await built.tenantSettings.get();
-  const owner = new pg.Pool({ connectionString: config.databaseUrl });
-  await owner.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
-  await owner.end();
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
@@ -58,10 +55,10 @@ test("tenant settings are written only with both the source signature and the op
   const srv = await fixture();
   try {
     for (const credentials of [{ authorization: "" }, { authorization: `Bearer ${sourceSecret}` }]) {
-      assert.equal((await srv.put({ env: { PI_MODEL: "x" } }, credentials)).status, 401);
+      assert.equal((await srv.put({ tenant: SLUG, env: { PI_MODEL: "x" } }, credentials)).status, 401);
     }
-    assert.equal((await srv.put({ env: { PI_MODEL: "x" } }, { "x-signature": "invalid" })).status, 401);
-    const response = await srv.put({ env: { PI_MODEL: "claude-opus-5-5", ANTHROPIC_API_KEY: "key-a" } });
+    assert.equal((await srv.put({ tenant: SLUG, env: { PI_MODEL: "x" } }, { "x-signature": "invalid" })).status, 401);
+    const response = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5", ANTHROPIC_API_KEY: "key-a" } });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       tenant: TEST_TENANT,
@@ -79,22 +76,48 @@ test("tenant settings are written only with both the source signature and the op
 test("the settings route refuses operator keys and is unavailable without a distinct control secret", async () => {
   const srv = await fixture();
   try {
-    const refused = await srv.put({ env: { DATABASE_URL: "postgres://x", PI_MODEL: "x" } });
+    const refused = await srv.put({ tenant: SLUG, env: { DATABASE_URL: "postgres://x", PI_MODEL: "x" } });
     assert.equal(refused.status, 400);
     assert.deepEqual(await refused.json(), {
       error: "not_tenant_settings",
       message: "Not tenant settings: DATABASE_URL",
     });
-    assert.equal((await srv.put({ env: { SANDBOX_BACKEND: "nope" } })).status, 400);
+    assert.equal((await srv.put({ tenant: SLUG, env: { SANDBOX_BACKEND: "nope" } })).status, 400);
   } finally {
     await srv.close();
   }
   for (const secret of ["", sourceSecret, "short"]) {
     const unavailable = await fixture(secret);
     try {
-      assert.equal((await unavailable.put({ env: { PI_MODEL: "x" } })).status, 503);
+      assert.equal((await unavailable.put({ tenant: SLUG, env: { PI_MODEL: "x" } })).status, 503);
     } finally {
       await unavailable.close();
     }
+  }
+});
+
+test("the settings route writes to the named tenant beside others and refuses a missing or unknown slug", async () => {
+  const srv = await fixture();
+  try {
+    const written = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5" } });
+    assert.equal(written.status, 200);
+    assert.equal(((await written.json()) as { tenant: string }).tenant, TEST_TENANT);
+    await withTenant(OTHER_TENANT, async () => {
+      assert.notEqual((await srv.built.tenantSettings.get()).piModel, "claude-opus-5-5");
+    });
+    for (const body of [{ env: { PI_MODEL: "x" } }, { tenant: "Main", env: { PI_MODEL: "x" } }]) {
+      const refused = await srv.put(body);
+      assert.equal(refused.status, 400);
+      assert.equal(((await refused.json()) as { error: string }).error, "invalid_tenant");
+    }
+    const unknown = await srv.put({ tenant: "nobody", env: { PI_MODEL: "x" } });
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(await unknown.json(), {
+      error: "unknown_tenant",
+      message: "No tenant has the slug nobody",
+      tenant: "nobody",
+    });
+  } finally {
+    await srv.close();
   }
 });
