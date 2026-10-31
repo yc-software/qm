@@ -8,22 +8,8 @@ import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { SessionEntry } from "../types.ts";
 
-function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
-  return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth }, fetch }),
-    tool: spec.tool,
-    timeoutMs,
-    ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),
-    ...(spec.contentArg ? { contentArg: spec.contentArg } : {}),
-    ...(spec.actorArg ? { actorArg: spec.actorArg } : {}),
-    ...(spec.scopeArg ? { scopeArg: spec.scopeArg } : {}),
-    ...(spec.maxCharsArg ? { maxCharsArg: spec.maxCharsArg } : {}),
-    ...(spec.inputArg ? { inputArg: spec.inputArg } : {}),
-    ...(spec.replyArg ? { replyArg: spec.replyArg } : {}),
-    ...(spec.capturedAtArg ? { capturedAtArg: spec.capturedAtArg } : {}),
-    ...(spec.sourceArg ? { sourceArg: spec.sourceArg } : {}),
-    ...(spec.idempotencyArg ? { idempotencyArg: spec.idempotencyArg } : {}),
-  };
+function operation(url: string, { auth, ...spec }: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
+  return { client: createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch }), timeoutMs, ...spec };
 }
 
 export function createConfiguredMemoryService(opts: {

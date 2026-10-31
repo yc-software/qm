@@ -89,35 +89,35 @@ Capture policies are:
 - `explicit`: writes only through deliberate memory actions;
 - `automatic`: explicit writes plus post-turn capture.
 
-MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas.
+MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `factsArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas. A write with `factsArg` sends the facts under that name as a list of `{ "fact": "…", "provenance": "…" }` objects instead of `content`, where `provenance` is the scope ID of the conversation the facts came from, such as `personal:U0JORDAN`.
 
 Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Provider calls time out after `timeoutMs` (3 seconds by default). QM continues to decide readable/writable scopes and passes the acting user to the provider.
 
 External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall or search for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure the same way on either kind of route, as described under [Provider outcomes](#provider-outcomes), because the other routes may already have stored the facts.
 
-Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `idempotencyArg`, when it is mapped, a UUID (RFC 9562 version 8) derived from the tenant, the turn, the notebook scope and the fact text, so a retry of the same facts to the same notebook in the same turn carries the same key. A write made outside a turn, such as one with a portal token, carries no key. Automatic capture keeps sending its own per-turn key. A result whose `structuredContent.status` is `"pending"` is recorded as pending and any other success as committed. A timed-out write is recorded as unknown and is not retried, because the provider may still have stored the facts.
+Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `idempotencyArg`, when it is mapped, a UUID (RFC 9562 version 8) derived from the tenant, the turn, the notebook scope and the fact text, so a retry of the same facts to the same notebook in the same turn carries the same key. A write made outside a turn, such as one with a portal token, carries a key of its own, so only a retry within a turn is deduplicated. Automatic capture keeps sending its own per-turn key. A result whose `structuredContent.status` is `"pending"` is recorded as pending and any other success as committed. A timed-out write is recorded as unknown and is not retried, because the provider may still have stored the facts.
 
 ### Attesting the member (`attestActor`)
 
 By default an MCP provider learns who is asking only from the actor argument (`acting_user`), which it cannot tell apart from any other argument. Set `"attestActor": true` on an `mcp` provider to also send the member's canonical QM person id in the `x-qm-actor` HTTP header on every request of each call; linked principals fold into one id, as described in [principal-links.md](./principal-links.md). The model cannot set this header. The actor argument is still sent, with the same value. The field defaults to `false`, applies to reads and writes, and is rejected on `memorable` providers or when it is not a boolean. A provider should honour the header only from OAuth clients it has granted an attest right.
 
-QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the same rule the credential broker and attested MCP connectors apply. When the member's canonical id breaks it, QM makes no call and records the outcome as `denied` with code `invalid_actor`; link the member to a conforming principal id with `POST /v1/admin/principal-links`. On a strict route that denial fails every recall the route serves for that member, so keep attested routes fail-open until every member is linked. A write that carries no member at all, such as QM's own note about missing channel history, is not sent to an attested provider.
+QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the same rule the credential broker and attested MCP connectors apply. When the member's canonical id breaks it, QM makes no call and records the outcome as `denied` with code `invalid_actor`; link the member to a conforming principal id with `POST /v1/admin/principal-links`. On a strict route that denial fails every recall the route serves for that member, so keep attested routes fail-open until every member is linked. QM attests only the member whose turn made the call. A write made outside a member's turn, such as an admin's edit to someone's notebook, QM's onboarding marker or its own note about missing channel history, is not sent to an attested provider and records no outcome for it. An attested provider also cannot manage a notebook (`manage: true`), because notebook reads for admin views carry no member.
 
 ## Provider outcomes
 
 Every recall and search, and every explicit write through the memory tool or `POST /v1/memory/facts`, records one outcome per provider and scope. A `memorable` provider reports a CLI failure or timeout as `empty`, because its CLI returns nothing in both cases.
 
-| Outcome                | Meaning                                                                                                                                                                                                   |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`                   | The provider returned rows.                                                                                                                                                                               |
-| `empty`                | It returned nothing. A `code` in its structured result is kept; a read coded `actor_unlinked` is empty, and its text is ignored.                                                                          |
-| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                                       |
-| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                                    |
-| `denied`               | HTTP 401 or 403, an OAuth credential error, any result coded `actor_not_attested` or `argument_mismatch`, an error or write result coded `actor_unlinked`, or an actor QM can't attest (`invalid_actor`). |
-| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                                      |
-| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                             |
+| Outcome                | Meaning                                                                                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`                   | The provider returned rows.                                                                                                                                                                                                                     |
+| `empty`                | It returned nothing. A `code` in its structured result is kept; a read coded `actor_unlinked` is empty, and its text is ignored.                                                                                                                |
+| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                                                                             |
+| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                                                                          |
+| `denied`               | HTTP 401 or 403, an OAuth credential error, any result coded `actor_not_attested`, `argument_mismatch`, `scope_denied` or `insufficient_scope`, an error or write result coded `actor_unlinked`, or an actor QM can't attest (`invalid_actor`). |
+| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                                                                            |
+| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                                                                   |
 
-QM reads `code` and `status` on a successful result only from `structuredContent`, never from its text, which is memory. An error result's code may sit in `structuredContent` or in a JSON text block, at `code` or `error.code`. A code is kept only when it is 1 to 64 letters, digits, `_`, `.`, `:` or `-`. A provider this conversation may not read is not called and records no outcome.
+QM reads `code` and `status` on a successful result only from `structuredContent`, never from its text, which is memory. A result's text blocks are its memory even when they are empty; QM reads `structuredContent` as memory only from a result with no text block. An error result's code may sit in `structuredContent` or in a JSON text block, at `code` or `error.code`. A code is kept only when it is 1 to 64 letters, digits, `_`, `.`, `:` or `-`. A provider this conversation may not read is not called and records no outcome.
 
 Where to read them:
 
@@ -131,20 +131,109 @@ Problem codes are `memory_provider_denied` (a refused write stored nothing), `me
 
 Post-turn capture waits for a conversation to go quiet. QM buffers consecutive turns from the same member in the same conversation and extracts facts once no new turn arrives for `MEMORY_CAPTURE_QUIET_MS` (180000, three minutes, by default) or after `MEMORY_CAPTURE_MAX_TURNS` turns (10). Set `MEMORY_CAPTURE_QUIET_MS=0` to capture after every turn. A fact stated in one turn can therefore take three minutes to reach a provider, and the buffer lives in the instance's memory, so a restart or deploy during the quiet period drops the buffered turns.
 
+## gbrain
+
+[gbrain](https://github.com/garrytan/gbrain) keeps each member's facts in a brain their other agents share. This recipe sends personal recall and explicit writes to it and keeps QM's notebook as the first route for every scope.
+
+Pinned versions:
+
+- **gbrain:** the `qm-memory-provider` v1 contract, still a **candidate** from branch `capy/gbra218-qm-memory-tools` at `bc27793b`, not a tagged release. QM vendors it at [`test/fixtures/gbrain/qm-memory-provider-v1.json`](../test/fixtures/gbrain/README.md).
+- **QM:** the commit that added `factsArg` or later.
+
+The examples follow one invented member, Jordan. Jordan's Slack user id is `U0JORDAN`, and their web sign-in `jordan@acme.example` is linked to it with `POST /v1/admin/principal-links`, so QM sends `U0JORDAN` from both surfaces. On the brain host, register a recall client and a write client, grant both the attest right for QM, and link Jordan's canonical id to their member:
+
+```bash
+gbrain auth register-client qm-recall --grant-types client_credentials --scopes read
+gbrain auth register-client qm-write --grant-types client_credentials --scopes write
+gbrain auth rescope --client <qm-recall client id> --attest-actor qm
+gbrain auth rescope --client <qm-write client id> --attest-actor qm
+gbrain access member add jordan
+gbrain access member link jordan --qm U0JORDAN
+```
+
+Set the four client values as `GBRAIN_RO_CLIENT_ID`, `GBRAIN_RO_CLIENT_SECRET`, `GBRAIN_RW_CLIENT_ID` and `GBRAIN_RW_CLIENT_SECRET`, and this document as `MEMORY_PROVIDER_CONFIG`:
+
+```json
+{
+  "providers": [
+    {
+      "id": "gbrain",
+      "type": "mcp",
+      "url": "https://gbrain.acme.example",
+      "attestActor": true,
+      "timeoutMs": 3000,
+      "read": {
+        "tool": "memory_recall",
+        "clientIdEnv": "GBRAIN_RO_CLIENT_ID",
+        "clientSecretEnv": "GBRAIN_RO_CLIENT_SECRET",
+        "maxCharsArg": "max_chars"
+      },
+      "write": {
+        "tool": "memory_write",
+        "clientIdEnv": "GBRAIN_RW_CLIENT_ID",
+        "clientSecretEnv": "GBRAIN_RW_CLIENT_SECRET",
+        "factsArg": "facts",
+        "idempotencyArg": "idempotency_key"
+      }
+    }
+  ],
+  "routes": [
+    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "gbrain",
+      "scopes": ["personal"],
+      "capture": "explicit",
+      "manage": false,
+      "failOpen": true,
+      "label": "gbrain"
+    }
+  ]
+}
+```
+
+What this does:
+
+- Every scope keeps QM's notebook first, with automatic capture, so nothing QM remembers today moves.
+- In Jordan's DM, QM calls `memory_recall` with `query`, `max_chars: 6000` and `acting_user: "U0JORDAN"`, and sends `x-qm-actor: U0JORDAN` on every request. gbrain answers with Jordan's own recent facts and the facts Jordan may read, one per line, which appear under a `### … · gbrain` heading. Channel, group, team and org turns never call gbrain: its first release serves one member at a time and refuses a channel audience.
+- The `memory` tool's add and `POST /v1/memory/facts` in Jordan's DM write to the notebook and to `memory_write` as `{ "facts": [{ "fact": "…", "provenance": "personal:U0JORDAN" }], "idempotency_key": "<UUID>", "acting_user": "U0JORDAN" }`. gbrain saves them on Jordan's own page, readable by Jordan alone, and answers a repeated key with its first receipt. Automatic capture stays with the notebook.
+- `failOpen: true` keeps turns answering from the notebook when gbrain is down or slow, and records the failure as an outcome. `timeoutMs: 3000` is generous: recall's p95 was 49 ms on a local Postgres brain, OAuth token and MCP session included.
+- No gbrain MCP connector is registered. A connector would let the model call gbrain's other tools outside the attested route.
+
+### Verify
+
+1. **The tools match.** With the recall client's credentials, list gbrain's tools:
+
+   ```bash
+   TOKEN=$(curl -s https://gbrain.acme.example/token -d grant_type=client_credentials \
+     --data-urlencode "client_id=$GBRAIN_RO_CLIENT_ID" --data-urlencode "client_secret=$GBRAIN_RO_CLIENT_SECRET" | jq -r .access_token)
+   curl -s https://gbrain.acme.example/mcp -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' |
+     sed -n 's/^data: //p' | jq -c '.result.tools[] | select(.name == "memory_recall") | {name, args: (.inputSchema.properties | keys)}'
+   ```
+
+   Expected: `{"name":"memory_recall","args":["acting_user","max_chars","query"]}`. The same with the write client and `memory_write` prints `{"name":"memory_write","args":["acting_user","facts","idempotency_key"]}`.
+
+2. **A fact Jordan states in a DM reaches gbrain.** In Jordan's DM, say "Remember that I prefer aisle seats." The `memory` tool answers `Remembered 1 fact.`, and in the admin transcript (`GET /v1/admin/sessions/:id`) its result's `outcomes` include `{ "provider": "gbrain", "outcome": "committed" }`.
+3. **A new conversation recalls it.** Start a new DM thread and ask "Which seat do I prefer?". The turn's user entry carries `payload.memoryRecallOutcomes` with `{ "provider": "gbrain", "scope": "personal:U0JORDAN", "outcome": "ok" }`, and the reply mentions the aisle seat.
+4. **No recall failures.** `grep -c '\[memory\] gbrain recall failed'` over core's log prints `0`.
+5. **Channels don't call gbrain.** Ask the same question in a channel Jordan is in. That turn's `memoryRecallOutcomes` has no `gbrain` entry.
+
 ## Troubleshooting
 
-| Symptom                                                                                | Cause                                                                                   | Fix                                                                                                                        |
-| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Startup fails with `… url (https://host) must not carry credentials or a #fragment`    | The provider URL has `user:pass@` or a `#fragment`.                                     | Move credentials to the `clientIdEnv`/`clientSecretEnv` variables and drop the fragment.                                   |
-| Startup fails with `… must use HTTPS or a recognized private HTTP host`                | Plain HTTP to a public host.                                                            | Use `https://`, or HTTP only on `localhost`, `127.0.0.1`, `*.internal`, `*.flycast` or `*.local`.                          |
-| Startup fails with `… is not a valid URL (value not shown)`                            | The URL does not parse; QM never echoes it, since it may hold secrets.                  | Check the value of `url` in `MEMORY_PROVIDER_CONFIG`.                                                                      |
-| Outcome `denied` with `http_401`, `http_403` or an OAuth code such as `invalid_client` | The provider rejected QM's OAuth client.                                                | Check the client id and secret variables and the client's grant on the provider.                                           |
-| Outcome `denied` with `actor_not_attested`                                             | `attestActor` is set but the provider has not granted QM's client the attest right.     | Grant that client the attest right on the provider.                                                                        |
-| Outcome `denied` with `invalid_actor`                                                  | The member's canonical id is not 1 to 256 visible ASCII characters, so QM made no call. | Link the member to a conforming principal id with `POST /v1/admin/principal-links`.                                        |
-| Outcome `empty` or `denied` with `actor_unlinked`                                      | The provider has no member linked to this QM person id.                                 | Link the QM person id to their member on the provider.                                                                     |
-| Outcome `timed_out` or write `unknown`                                                 | The provider took longer than `timeoutMs`.                                              | Raise `timeoutMs` (up to 30000) or fix the provider's latency; check whether a timed-out write landed before repeating it. |
-| Outcome `failed`, including `server_error` from the provider's token endpoint          | Wrong tool name, schema mismatch, a provider error, or its OAuth server failing.        | Check the provider's logs and the `tool` and `*Arg` mappings.                                                              |
-| New facts reach the provider minutes late                                              | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                      | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                   |
+| Symptom                                                                                          | Cause                                                                                   | Fix                                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails with `… url (https://host) must not carry credentials or a #fragment`              | The provider URL has `user:pass@` or a `#fragment`.                                     | Move credentials to the `clientIdEnv`/`clientSecretEnv` variables and drop the fragment.                                   |
+| Startup fails with `… must use HTTPS or a recognized private HTTP host`                          | Plain HTTP to a public host.                                                            | Use `https://`, or HTTP only on `localhost`, `127.0.0.1`, `*.internal`, `*.flycast` or `*.local`.                          |
+| Startup fails with `… is not a valid URL (value not shown)`                                      | The URL does not parse; QM never echoes it, since it may hold secrets.                  | Check the value of `url` in `MEMORY_PROVIDER_CONFIG`.                                                                      |
+| Outcome `denied` with `http_401`, `http_403` or an OAuth code such as `invalid_client`           | The provider rejected QM's OAuth client.                                                | Check the client id and secret variables and the client's grant on the provider.                                           |
+| Outcome `denied` with `actor_not_attested`                                                       | `attestActor` is set but the provider has not granted QM's client the attest right.     | Grant that client the attest right on the provider.                                                                        |
+| Outcome `denied` with `scope_denied` or `insufficient_scope`                                     | QM's OAuth client lacks the scope the provider's tool needs.                            | Grant that client the scope on the provider, such as `write` for a write tool.                                             |
+| Startup fails with `memory route N: provider P sets attestActor, so it cannot manage a notebook` | Notebook reads carry no member, so an attested provider cannot serve them.              | Set `"manage": false` on that route and keep the `default` route first.                                                    |
+| Outcome `denied` with `invalid_actor`                                                            | The member's canonical id is not 1 to 256 visible ASCII characters, so QM made no call. | Link the member to a conforming principal id with `POST /v1/admin/principal-links`.                                        |
+| Outcome `empty` or `denied` with `actor_unlinked`                                                | The provider has no member linked to this QM person id.                                 | Link the QM person id to their member on the provider.                                                                     |
+| Outcome `timed_out` or write `unknown`                                                           | The provider took longer than `timeoutMs`.                                              | Raise `timeoutMs` (up to 30000) or fix the provider's latency; check whether a timed-out write landed before repeating it. |
+| Outcome `failed`, including `server_error` from the provider's token endpoint                    | Wrong tool name, schema mismatch, a provider error, or its OAuth server failing.        | Check the provider's logs and the `tool` and `*Arg` mappings.                                                              |
+| New facts reach the provider minutes late                                                        | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                      | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                   |
 
 ## Migrating from the retired `BRAIN_*` variables
 

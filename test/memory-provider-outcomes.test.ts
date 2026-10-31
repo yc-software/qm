@@ -304,7 +304,8 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.equal(second, first);
   assert.notEqual(third, first);
   assert.notEqual(otherTurn, first);
-  assert.equal(none, undefined);
+  assert.match(String(none), uuid);
+  assert.notEqual(none, first);
   assert.notEqual(otherNotebook, first);
   assert.match(String(slow), uuid);
 });

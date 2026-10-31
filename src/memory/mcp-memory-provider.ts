@@ -4,27 +4,13 @@ import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
+import type { McpMemoryOperationConfig } from "./provider-config.ts";
 
-export interface McpMemoryOperation {
-  client: McpClient;
-  tool: string;
-  queryArg?: string;
-  contentArg?: string;
-  actorArg?: string;
-  scopeArg?: string;
-  maxCharsArg?: string;
-  inputArg?: string;
-  replyArg?: string;
-  capturedAtArg?: string;
-  sourceArg?: string;
-  idempotencyArg?: string;
-  timeoutMs: number;
-}
+export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
 
 function resultText(result: CallToolResult): string {
   if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return "";
-  const text = mcpResultText(result);
-  if (text) return text;
+  if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
 
@@ -57,6 +43,7 @@ export function createMcpMemoryProvider(opts: {
   };
 
   return {
+    attestActor: opts.attestActor ?? false,
     async recall(scopeId, context) {
       const text = await read(scopeId, context?.query ?? "", context);
       return text
@@ -68,9 +55,12 @@ export function createMcpMemoryProvider(opts: {
     async capture(scopeId, facts, at, author, context) {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
-      const actor = context?.actorId ?? author;
+      const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
       if (opts.attestActor && actor === undefined) return 0;
-      const args: Record<string, unknown> = { [op.contentArg ?? "content"]: facts.join("\n") };
+      const provenance = context?.conversationScopeId ?? scopeId;
+      const args: Record<string, unknown> = op.factsArg
+        ? { [op.factsArg]: facts.map((fact) => ({ fact, provenance })) }
+        : { [op.contentArg ?? "content"]: facts.join("\n") };
       if (context?.input && op.inputArg) args[op.inputArg] = context.input;
       if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;
       if (op.capturedAtArg) args[op.capturedAtArg] = at;

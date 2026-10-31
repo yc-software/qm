@@ -19,6 +19,7 @@ interface McpRequest {
   rpc?: string;
   authorization?: string;
   actor?: string;
+  audience?: string;
   approval?: string;
 }
 
@@ -63,6 +64,7 @@ export async function startMcpTestServer(
       name: string,
       args: Record<string, unknown>,
       authorization?: string,
+      actor?: string,
     ) => CallToolResult | Promise<CallToolResult>;
     description?: string;
     instructions?: string;
@@ -93,10 +95,15 @@ export async function startMcpTestServer(
       const { name } = req.params;
       if (!tools.some((tool) => tool.name === name))
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
-      const authorization = extra.requestInfo?.headers.authorization;
+      const { authorization, "x-qm-actor": actor } = extra.requestInfo?.headers ?? {};
       const args = req.params.arguments ?? {};
       return (
-        opts.call?.(name, args, typeof authorization === "string" ? authorization : undefined) ?? {
+        opts.call?.(
+          name,
+          args,
+          typeof authorization === "string" ? authorization : undefined,
+          typeof actor === "string" ? actor : undefined,
+        ) ?? {
           content: [{ type: "text", text: `ran ${name}` }],
         }
       );
@@ -141,6 +148,7 @@ export async function startMcpTestServer(
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
       ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
+      ...(typeof req.headers["x-qm-audience"] === "string" ? { audience: req.headers["x-qm-audience"] } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
     if (!authorized(authorization)) {
