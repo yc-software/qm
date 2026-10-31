@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createThreadTracker } from "../src/slack/message-gating.ts";
 
@@ -54,7 +54,7 @@ function agent() {
   const undeliverable: Array<{ id: string; reason: string }> = [];
   const failed: Array<{ id: string; reason: string }> = [];
   const makePoller = (opts: { slowDrainMs?: number } = {}) =>
-    createDeliveryPoller({
+    testDeliveryPoller({
       core: {
         claimDeliveries: (type: string, ms: number) => store.claimPending(type, ms),
         ackDelivery: async (id: string) => {
@@ -137,7 +137,7 @@ test("a transient claim failure at re-claim time does not strand an owned row", 
       return store.claimPending(type, ms);
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: {
       claimDeliveries: (type: string, ms: number) => flakyStore.claimPending(type, ms),
       ackDelivery: async (id: string) => {
@@ -184,7 +184,7 @@ test("with a shared dispatch lease, a second relay never posts at all (single di
     }
   };
   const makeLeaderPoller = () =>
-    createDeliveryPoller({
+    testDeliveryPoller({
       core: {
         claimDeliveries: (type: string, ms: number) => store.claimPending(type, ms),
         ackDelivery: async (id: string) => {
@@ -221,7 +221,7 @@ test("lease loss mid-drain stops posting; rows recover via the claim TTL", async
   const { store, posted, makeClient } = agent();
   let notifyLost!: () => void;
   const lostPromise = new Promise<void>((r) => (notifyLost = r));
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: {
       claimDeliveries: (type: string, ms: number) => store.claimPending(type, ms),
       ackDelivery: async (id: string) => {

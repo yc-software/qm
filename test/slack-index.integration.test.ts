@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+
+enterTenant(TEST_TENANT);
+const resolver = { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT };
 
 type Handler = (args: any) => Promise<void>;
 
@@ -411,6 +416,7 @@ async function fixture(
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
     },
     core,
+    resolver,
   );
   const app = FakeApp.instances.at(-1)!;
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;
@@ -442,7 +448,7 @@ async function fixture(
   }
   const plugin = await started;
   await new Promise((resolve) => setImmediate(resolve));
-  return { app, client: app.client, core, stop: () => plugin.stop() };
+  return { app, client: app.client, core, plugin, stop: () => plugin.stop() };
 }
 
 test("config is all-or-nothing and numeric tuning fails closed", () => {
@@ -895,9 +901,8 @@ test("joining a channel with the toggle off (the default) posts only the welcome
 test("flipping the toggle on creates the pinned header; flipping it off removes it", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
-    assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
     f.core.headerPinScopes.add("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    f.plugin.channelHeaderPinChanged("channel:C1");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(
       f.client.pinnedByChannel.get("C1")?.map((m) => m.text),
@@ -905,7 +910,7 @@ test("flipping the toggle on creates the pinned header; flipping it off removes 
       "toggle-on posts and pins the header",
     );
     f.core.headerPinScopes.delete("channel:C1");
-    for (const listener of f.core.headerPinChangeListeners) listener("channel:C1");
+    f.plugin.channelHeaderPinChanged("channel:C1");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.pinnedByChannel.get("C1"), [], "toggle-off unpins the header");
     assert.equal(f.client.deletes.length, 1, "and deletes the bot's header message");
@@ -931,7 +936,6 @@ test("a mention in a channel with no pinned header never creates one", async () 
 test("a scope's model change rewrites its channel's pinned header without waiting for a message", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
-    assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
     f.core.headerPinScopes.add("channel:C1");
     f.client.pinnedByChannel.set("C1", [
       {
@@ -940,7 +944,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
         text: "Using Claude Sonnet 5 here. <https://claw.example.dev/projects/channel/C1|More settings>",
       },
     ]);
-    for (const listener of f.core.modelChangeListeners) listener("channel:C1");
+    f.plugin.scopeModelChanged("channel:C1");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(
       f.client.updates.map((u) => ({ channel: u.channel, ts: u.ts, text: u.text })),
@@ -952,7 +956,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
         },
       ],
     );
-    for (const listener of f.core.modelChangeListeners) listener("personal:alice@example.com");
+    f.plugin.scopeModelChanged("personal:alice@example.com");
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
@@ -1629,10 +1633,8 @@ test("a non-singleton account still serves turns but runs no core-singleton subs
 test("the default account keeps every core-singleton subsystem", async () => {
   const f = await fixture();
   try {
-    assert.equal(f.core.deliverySubscriptions, 1);
-    assert.equal(f.core.contextSubscriptions, 1);
-    assert.equal(f.core.modelChangeListeners.length, 1);
-    assert.equal(f.core.headerPinChangeListeners.length, 1);
+    assert.equal(f.plugin.coreSingleton, true);
+    assert.ok(f.plugin.delivery, "the default account drains deliveries for its tenant");
     await waitFor(() => f.core.publishedEmojiCatalogs.length === 1);
   } finally {
     await f.stop();

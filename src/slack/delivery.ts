@@ -1,3 +1,4 @@
+import { boundTenant, currentTenant } from "../tenants/context.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -28,13 +29,15 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-let defaultIdentity: BotIdentityOverride = {};
+const tenantIdentities = new Map<string, BotIdentityOverride>();
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity = identity ?? {};
+  if (identity && Object.keys(identity).length) tenantIdentities.set(currentTenant(), identity);
+  else tenantIdentities.delete(currentTenant());
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity;
+  const tenant = boundTenant();
+  const id = (tenant && tenantIdentities.get(tenant)) || {};
   return {
     ...(id.username ? { username: id.username } : {}),
     ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),
