@@ -7,7 +7,9 @@ export async function runNowSettled(scheduler: Scheduler, cronId: string): Promi
 }
 
 export async function settle(check: () => Promise<boolean>): Promise<void> {
-  await eventually(check);
+  await eventually(check).catch((err: unknown) =>
+    console.error("[settle] condition never held; last error:", (err as Error).cause ?? err),
+  );
 }
 
 export async function eventually<T>(
