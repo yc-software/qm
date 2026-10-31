@@ -31,16 +31,12 @@ const RECENT_NOTICE =
   "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";
 const SAVED_SUMMARY = "\n\nLast saved summary (not updated):\n";
 
-function savedSummaryOf(trimmed: string): string | undefined {
-  const at = trimmed.indexOf(SAVED_SUMMARY);
-  return at < 0 ? undefined : trimmed.slice(at + SAVED_SUMMARY.length);
-}
-
 interface Summarized {
   text: string;
   summaryLabel: ScopeId;
   throughSeq: number;
   mode?: "recent";
+  savedSummary?: string;
 }
 
 interface CompactionInput {
@@ -147,12 +143,13 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     lease: Lease;
     summarized: Summarized;
   }): Promise<SessionEntry> {
-    const { text, summaryLabel, throughSeq, mode } = input.summarized;
+    const { text, summaryLabel, throughSeq, mode, savedSummary } = input.summarized;
     const summary = await deps.sessions.append(input.lease, {
       type: "system",
       payload: {
         ...createContextSummaryPayload(throughSeq, text),
         ...(mode ? { mode } : {}),
+        ...(savedSummary ? { savedSummary } : {}),
       },
       scopeLabel: summaryLabel,
     });
@@ -217,8 +214,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const recent = rest.slice(start);
     remaining = budget - estimateEntryTokens(marker) - estimateHistoryTokens(recent);
     const includedPrior = prior && estimateEntryTokens(prior) <= remaining ? prior : undefined;
-    const priorText = includedPrior ? contextSummaryPayload(includedPrior)!.text : undefined;
-    const savedSummary = priorText?.startsWith(RECENT_NOTICE) ? savedSummaryOf(priorText) : priorText;
+    const priorTrim = includedPrior?.payload as { mode?: string; savedSummary?: string } | undefined;
+    const savedSummary =
+      priorTrim?.mode === "recent"
+        ? priorTrim.savedSummary
+        : includedPrior && contextSummaryPayload(includedPrior)!.text;
     const text = savedSummary ? `${header}${SAVED_SUMMARY}${savedSummary}` : header;
     const window = await deps.sessions.getContextWindow(input.session.id);
     const boundary = window.entries.reduce(
@@ -234,6 +234,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         summaryLabel: (includedPrior?.scopeLabel ?? input.scopeId) as ScopeId,
         throughSeq,
         mode: "recent",
+        ...(savedSummary ? { savedSummary } : {}),
       },
     });
     return [summary, ...recent];

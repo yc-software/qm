@@ -2880,32 +2880,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const initialRuntimeAuth = loadRuntimeAuth({});
         const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
         const sessionModel = sessionAuth?.userModelOverride ?? input.model;
-        const preTurnRoute: SessionRoute = {
+        compactionRoute = sessionAuth && {
           ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
-          ...(sessionAuth?.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
+          ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
           ...(runtimePurpose ? { runtimePurpose } : {}),
         };
-        compactionRoute = preTurnRoute;
+        const preTurnRoute = compactionRoute;
         const documentBudget = documentTokenBudget(sessionModel);
-        const history = await withManagedRosterVersion(() =>
-          compactContextIfNeeded({
-            cancel: turnAbort.signal,
-            session,
-            lease,
-            visibleHistory,
-            scopeId,
-            actorId: actor.id,
-            route: preTurnRoute,
-            reservedTokens:
-              countTokens(sideDiscussions) +
-              (strictReadOnly
-                ? 0
-                : inbound.metas.reduce(
-                    (sum, meta) => sum + (isDocumentAttachment(meta) ? estimateDocumentTokens(meta) : 0),
-                    0,
-                  )),
-          }),
-        );
+        const history = !preTurnRoute
+          ? visibleHistory
+          : await withManagedRosterVersion(() =>
+              compactContextIfNeeded({
+                cancel: turnAbort.signal,
+                session,
+                lease,
+                visibleHistory,
+                scopeId,
+                actorId: actor.id,
+                route: preTurnRoute,
+                reservedTokens:
+                  countTokens(sideDiscussions) +
+                  (strictReadOnly
+                    ? 0
+                    : inbound.metas.reduce(
+                        (sum, meta) => sum + (isDocumentAttachment(meta) ? estimateDocumentTokens(meta) : 0),
+                        0,
+                      )),
+              }),
+            );
         contextRecovered =
           history !== visibleHistory &&
           history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
@@ -3606,11 +3608,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   visibleHistory: resumedHistory,
                   scopeId,
                   actorId: actor.id,
-                  route: {
-                    ...(requestedRuntime.modelId ? { runtime: { modelId: requestedRuntime.modelId } } : {}),
-                    ...(userProviderKeys ? { providerKeys: userProviderKeys, runtimePinned: true } : {}),
-                    ...(runtimePurpose ? { runtimePurpose } : {}),
-                  },
+                  ...(compactionRoute ? { route: compactionRoute } : {}),
                   cancel: turnAbort.signal,
                 }),
               );
@@ -3943,13 +3941,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);
         }
-        if (!contextRecovered && !turnAbort.signal.aborted)
-          scheduleBackgroundCompaction({
-            sessionId: session.id,
-            scopeId,
-            actorId: actor.id,
-            ...(compactionRoute ? { route: compactionRoute } : {}),
-          });
+        if (compactionRoute && !contextRecovered && !turnAbort.signal.aborted)
+          scheduleBackgroundCompaction({ sessionId: session.id, scopeId, actorId: actor.id, route: compactionRoute });
       }
     },
   };

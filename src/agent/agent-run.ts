@@ -61,6 +61,8 @@ import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
+  CODEX_SUBSCRIPTION_PROVIDER,
+  codexSubscriptionModelId,
   defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
@@ -879,13 +881,14 @@ export function createAgent(opts?: AgentOptions): Agent {
     const model = requiredModel(modelId, !personalKeys);
     const keys = personalKeys ?? (await resolveProviderKeys());
     const gateway = personalKeys ? undefined : modelGateway;
-    if (!(modelGatewayRequest(gateway, model)?.apiKey ?? keys[String(model.provider)])) return undefined;
+    const viaGateway = !!modelGatewayRequest(gateway, model);
+    if (!viaGateway && !keys[String(model.provider)]) return undefined;
     return {
       modelId,
       model,
       keys,
       ...(gateway ? { gateway } : {}),
-      billing: modelBilling(model.id, gateway, !!personalKeys),
+      billing: modelBilling(viaGateway, !!personalKeys),
     };
   };
   const sessionRoute = (session: Pick<CompactInput, "runtime" | "providerKeys">) =>
@@ -897,10 +900,12 @@ export function createAgent(opts?: AgentOptions): Agent {
   ): Promise<(ModelRoute & { runtime: RuntimeChoice }) | undefined> => {
     const runtime = opts?.resolveFallbackRuntime?.();
     if (!runtime) return undefined;
-    const served = providerKeys ? runtime.modelId : companyServedId(runtime.modelId);
-    if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
-      return undefined;
-    const route = await routeFor(runtime.modelId, providerKeys);
+    const modelId = providerKeys?.[CODEX_SUBSCRIPTION_PROVIDER]
+      ? codexSubscriptionModelId(runtime.modelId)
+      : runtime.modelId;
+    const served = providerKeys ? modelId : companyServedId(modelId);
+    if (fromModelIds.has(modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys)) return undefined;
+    const route = await routeFor(modelId, providerKeys);
     return route && { ...route, runtime };
   };
   const captureRequests = opts?.captureRequests ?? true;
@@ -1348,7 +1353,10 @@ export function createAgent(opts?: AgentOptions): Agent {
           refusedModelIds.add(fromId);
           const fallback = await fallbackRoute(refusedModelIds, turn.providerKeys);
           if (!fallback || !roomToReprompt()) return false;
-          const from = { modelId: fromId, billing: modelBilling(fromId, turnModelGateway, !!turn.providerKeys) };
+          const from = {
+            modelId: fromId,
+            billing: modelBilling(!!turnModelGateway?.models[fromId], !!turn.providerKeys),
+          };
           console.error(
             `[pi] provider ${failure.code} — retrying on fallback model ${fromId} -> ${fallback.modelId} session=${turn.session.id}: ${failure.message}`,
           );
@@ -1373,7 +1381,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             if (failed) throw failed;
             return true;
           } catch (e) {
-            if (userAborted) return false;
+            if (userAborted || turn.cancel?.aborted) return false;
             fallbackFailure = fallbackFailed(failure, fallback, errMessage(e));
             throw fallbackFailure;
           }

@@ -226,7 +226,7 @@ export async function buildModelRuntime(
     };
   };
   const observed = <S extends { result(): Promise<AssistantMessage> }>(stream: S, gateway: boolean): S => {
-    if (gateway) void stream.result().then(noteGatewayOutcome, swallowAs("model: gateway outcome", undefined));
+    if (gateway) void stream.result().then(noteGatewayOutcome).catch(swallowAs("model: gateway outcome", undefined));
     return stream;
   };
   const stream = runtime.stream.bind(runtime);

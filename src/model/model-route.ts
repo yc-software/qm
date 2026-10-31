@@ -20,13 +20,9 @@ const BILLING_LABELS: Record<ModelBilling, string> = {
   personal_account: "the person's own account",
 };
 
-export function modelBilling(
-  modelId: string,
-  gateway: ModelGatewayTransportConfig | undefined,
-  personal: boolean,
-): ModelBilling {
+export function modelBilling(viaGateway: boolean, personal: boolean): ModelBilling {
   if (personal) return "personal_account";
-  return gateway?.models[modelId] ? "model_gateway" : "org_key";
+  return viaGateway ? "model_gateway" : "org_key";
 }
 
 export function routeLabel(route: Pick<ModelRoute, "modelId" | "billing">): string {
