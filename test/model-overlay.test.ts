@@ -6,7 +6,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
@@ -124,7 +124,7 @@ test("strict overlay validation rejects malformed fields, prices, bounds, reserv
 });
 
 test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", async () => {
-  const backing = testMap<StoredModelOverlay>();
+  const backing = testModelTables().registry;
   const writer = createModelOverlayStore(backing);
   const reader = createModelOverlayStore(backing);
   await writer.upsert(spec, "admin");
@@ -408,14 +408,14 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
 });
 
 test("hydration isolates promoted builtins, incompatible providers, missing templates and malformed rows", async () => {
-  const backing = testMap<StoredModelOverlay>();
+  const backing = testModelTables().registry;
   const store = createModelOverlayStore(backing);
   const builtin = getRequiredModel("gpt-5.5");
   const row = (value: unknown) =>
     ({ spec: value, disabled: false, updatedAt: 1, updatedBy: "admin" }) as StoredModelOverlay;
   await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5" }));
   await backing.put("missing-template", row({ ...spec, id: "missing-template", template: "removed-sdk-template" }));
-  await backing.put("corrupt-model", row(null));
+  await backing.put("corrupt-model", row({ id: "corrupt-model", provider: 42 }));
   await store.refresh();
   assert.equal(getRequiredModel("gpt-5.5").contextWindow, builtin.contextWindow);
   assert.deepEqual(getRequiredModel("gpt-5.5").cost, builtin.cost);
@@ -439,7 +439,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const backing = testMap<StoredModelOverlay>();
+  const backing = testModelTables().registry;
   await backing.put("stale", {
     spec: { ...spec, id: "stale", template: "missing" },
     disabled: false,
@@ -498,6 +498,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");

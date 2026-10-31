@@ -9,12 +9,8 @@ import {
   EMOJI_UPLOAD_SESSION_EXPIRED,
   type EmojiUploadDeps,
 } from "../src/connectors/emoji-upload-service.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "../src/connectors/browser-session-store.ts";
-import { testMap } from "./support/test-database.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
+import { testLinkTables } from "./support/typed-stores.ts";
 
 const ACTOR = "U_ACTOR";
 const FALLBACK = "U_FALLBACK";
@@ -35,7 +31,7 @@ const STATE = (v: string) =>
 
 function sessionStore(): BrowserSessionStore {
   return createBrowserSessionStore({
-    sessions: testMap<StoredBrowserSession>(),
+    sessions: testLinkTables().browserSessions,
     key: deriveConnectorKey(Buffer.alloc(32, 1)),
   });
 }

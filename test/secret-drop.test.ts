@@ -30,6 +30,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testLinkTables } from "./support/typed-stores.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -37,7 +38,7 @@ const execFileAsync = promisify(execFile);
 describe("SecretDropStore", () => {
   it("mint → peek (non-consuming) → redeem (single-use)", async () => {
     const t = 1_000_000;
-    const store = createSecretDropStore(testMap(), { now: () => t });
+    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
     const { dropId } = await store.mint({
       ownerId: "U_A",
       service: "stripe",
@@ -58,7 +59,7 @@ describe("SecretDropStore", () => {
 
   it("expires after the TTL, on both peek and redeem", async () => {
     let t = 1_000_000;
-    const store = createSecretDropStore(testMap(), { now: () => t });
+    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
     const { dropId } = await store.mint({ ownerId: "U_A", service: "x", purpose: "p", requestedBy: "U_A" });
     t += SECRET_DROP_TTL_MS + 1;
     assert.deepEqual(await store.peek(dropId), { ok: false, reason: "expired" });
@@ -67,7 +68,7 @@ describe("SecretDropStore", () => {
 
   it("siblings: pending drops for the same conversation only — other threads, expired links, and same-service twins excluded", async () => {
     let t = 1_000_000;
-    const store = createSecretDropStore(testMap(), { now: () => t });
+    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
     const base = {
       ownerId: "U_A",
       purpose: "p",

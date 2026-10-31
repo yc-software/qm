@@ -6,7 +6,8 @@ import { createUserModelCredentialStore } from "../src/model/user-model-credenti
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -31,9 +32,7 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 function testStore() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
   });
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
@@ -103,9 +102,7 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   let refreshCalls = 0;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
     refreshConnector: async (host, token) => {
       refreshCalls += 1;
