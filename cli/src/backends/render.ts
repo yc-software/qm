@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { appPrefixOf, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
+import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
 import {
   deploymentLayerRequest,
   httpDeploymentLayerTransport,
@@ -7,6 +7,7 @@ import {
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
 import { CliError, errMessage, note, ok, step } from "../log.ts";
+import { isPlaceholderRef } from "../manifest.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import {
   list,
@@ -601,7 +602,21 @@ export function renderConfigErrors(
   if (config.skills.length) add("Place extra Render deployment skills in sandbox/skills instead of skills[]");
   if (config.vms && Object.keys(config.vms).length)
     add("Use render.corePlan and render.servicePlan instead of vms for Render");
-  const managed = config.render ? renderManagedCoreEnv(config.render) : {};
+  const managed = config.render ? renderManagedCoreEnv(config.render, config.sandbox?.baseImage) : {};
+  if (managed.RENDER_SANDBOX_IMAGE && isPlaceholderRef(managed.RENDER_SANDBOX_IMAGE))
+    add(
+      "This qm build pins no published sandbox base image; set sandbox.baseImage to <repository>:<commit>@sha256:<digest>",
+    );
+  const sandbox = config.sandbox ?? {};
+  const ignored = (["app", "env", "secretEnv"] as const).filter((key) => sandbox[key] !== undefined);
+  if (ignored.length) add(`Render sandboxes ignore ${ignored.map((key) => `sandbox.${key}`).join(", ")}; remove them`);
+  const base = sandbox.baseImage;
+  if (base) {
+    const source = base.slice(0, base.lastIndexOf("@"));
+    const colon = source.lastIndexOf(":");
+    if (colon <= source.lastIndexOf("/") || colon === source.length - 1 || !isDigestPinned(base))
+      add("Render sandbox.baseImage must be <repository>:<tag>@sha256:<64 hex digits>");
+  }
   for (const [key, value] of Object.entries(managed)) {
     if (config.env.core?.[key] !== undefined && config.env.core[key] !== value)
       add(`Render requires env.core.${key}=${value}`);

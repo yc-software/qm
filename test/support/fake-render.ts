@@ -1,5 +1,4 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
-import { AWS_CLI_ENSURE } from "../../src/sandbox/aws-cli.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -10,10 +9,10 @@ import type { TestContext } from "node:test";
 import {
   RENDER_SCRIPT_DIR,
   type RenderClient,
+  type RenderImage,
   type RenderSandboxInfo,
   type RenderSnapshot,
 } from "../../src/sandbox/render-client.ts";
-import { RENDER_SANDBOX_TTL_SEC } from "../../src/sandbox/render-limits.ts";
 import type { RenderApi } from "../../src/deploy/render-api.ts";
 import type { Deployment } from "../../src/deploy/deploy-store.ts";
 import { scopeId } from "../../src/types.ts";
@@ -58,6 +57,12 @@ export function createFakeRender() {
   const sandboxes = new Map<string, RenderSandboxInfo>();
   const snapshots = new Map<string, RenderSnapshot>();
   const snapshotSources = new Map<string, { sandboxId: string; name: string; requestedAtMs: number }>();
+  const images = new Map<string, RenderImage & { name: string; source: string }>();
+  const goldens = new Map<string, RenderSnapshot>();
+  const registry = new Map<string, string>();
+  const imports: Array<{ source: string; name: string }> = [];
+  let importFailure: string | undefined;
+  let slowImports = false;
   const createdFrom: Array<string | undefined> = [];
   const commands: string[] = [];
   const deleted: string[] = [];
@@ -78,7 +83,6 @@ export function createFakeRender() {
     return path.replace(/^\/tmp\//, `${home(id)}/tmp/`).replace(/^\/root(?![A-Za-z0-9_-])/, home(id));
   };
   const execute = async (id: string, script: string) => {
-    if (script.endsWith(AWS_CLI_ENSURE)) return { stdout: "", stderr: "", exitCode: 0 };
     mkdirSync(join(home(id), "tmp"), { recursive: true });
     const file = join(root, `run-${randomUUID()}.sh`);
     writeFileSync(
@@ -113,19 +117,61 @@ export function createFakeRender() {
     if (!existsSync(script)) return { stdout: "", stderr: `sh: cannot open ${spooled[1]}`, exitCode: 2 };
     return execute(id, readFileSync(script, "utf8"));
   };
+  const startImport = (source: string, name: string) => {
+    imports.push({ source, name });
+    const digest = registry.get(source);
+    if (!digest) throw new Error(`no image published at ${source}`);
+    const existing = [...images.values()].find(
+      (image) => image.name === name && image.sourceDigest === digest && image.status !== "failed",
+    );
+    if (existing) return existing;
+    const id = `sbb-${String(images.size + 1).padStart(20, "0")}`;
+    const ready: RenderImage["status"] = slowImports ? "running" : "succeeded";
+    const image: RenderImage & { name: string; source: string } = {
+      id,
+      status: importFailure ? "failed" : ready,
+      sourceDigest: digest,
+      name,
+      source,
+    };
+    mkdirSync(join(root, id), { recursive: true });
+    writeFileSync(join(root, id, ".base-image"), `${source}@${digest}\n`);
+    images.set(id, image);
+    return image;
+  };
   const client: RenderClient = {
-    async create(snapshotId) {
+    async create({ snapshotId, image, lifetimeSec, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
-      const info = { id, status: "running", expiresAtMs: Date.now() + RENDER_SANDBOX_TTL_SEC * 1000 };
+      const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
       if (snapshotId) {
-        if (snapshots.get(snapshotId)?.status !== "available") throw new Error("checkpoint unavailable");
+        if ((snapshots.get(snapshotId) ?? goldens.get(snapshotId))?.status !== "available")
+          throw new Error("checkpoint unavailable");
         cpSync(join(root, snapshotId), home(id), { recursive: true });
+      } else if (image) {
+        if (images.get(image)?.status !== "succeeded") throw new Error(`image ${image} is not ready`);
+        cpSync(join(root, image), home(id), { recursive: true });
       } else {
         mkdirSync(home(id), { recursive: true });
       }
       sandboxes.set(id, info);
-      createdFrom.push(snapshotId);
+      createdFrom.push(snapshotId ?? image);
+      try {
+        await onCreated?.(id);
+      } catch (error) {
+        info.status = "terminated";
+        terminated.push(id);
+        throw error;
+      }
       return { ...info };
+    },
+    async importImage(source, name) {
+      const image = startImport(source, name);
+      return {
+        id: image.id,
+        status: image.status,
+        sourceDigest: image.sourceDigest,
+        ...(image.status === "failed" ? { failureReason: importFailure } : {}),
+      };
     },
     async get(id) {
       return sandboxes.get(id) ?? null;
@@ -198,11 +244,31 @@ export function createFakeRender() {
     sandboxes,
     snapshots,
     createdFrom,
+    images,
+    imports,
+    startImport,
     commands,
     deleted,
     terminated,
     home,
     runProxyCommand,
+    seedGolden(ref: string) {
+      const id = `snp-golden-${goldens.size + 1}`;
+      mkdirSync(join(root, id), { recursive: true });
+      writeFileSync(join(root, id, ".base-image"), `${ref}\n`);
+      goldens.set(id, { id, sandboxGroupId: "sbg-test", status: "available", expiresAtMs: Date.now() + 86400_000 });
+      return id;
+    },
+    publishImage(source: string, digest: string) {
+      registry.set(source, digest);
+    },
+    failImport(reason?: string) {
+      importFailure = reason;
+    },
+    slowImports(on = true) {
+      slowImports = on;
+      if (!on) for (const image of images.values()) if (image.status === "running") image.status = "succeeded";
+    },
     failCheckpoint(error?: Error) {
       checkpointError = error;
     },
@@ -238,18 +304,17 @@ export function serveFakeRenderApi(
   const tokenRequests: FakeRenderTokenRequest[] = [];
   const proxyCommands: string[] = [];
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
-  const sandboxJson = (id: string) => {
-    const info = fake.sandboxes.get(id)!;
-    return {
-      id,
-      status: info.status,
-      plan: "starter",
-      region: "oregon",
-      networkPolicy: { type: "allow-all" },
-      timeoutSeconds: RENDER_SANDBOX_TTL_SEC,
-      createdAt: new Date(info.expiresAtMs - RENDER_SANDBOX_TTL_SEC * 1000).toISOString(),
-    };
-  };
+  const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
+  const sandboxJson = (id: string) => ({
+    id,
+    status: fake.sandboxes.get(id)!.status,
+    plan: "starter",
+    region: "oregon",
+    networkPolicy: { type: "allow-all" },
+    timeoutSeconds: 86400,
+    createdAt: new Date().toISOString(),
+    ...lifetimes.get(id),
+  });
   const snapshotJson = (snapshot: RenderSnapshot) => ({
     id: snapshot.id,
     name: fake.snapshotSource(snapshot.id)?.name ?? null,
@@ -262,12 +327,33 @@ export function serveFakeRenderApi(
     ...(snapshot.capturedAtMs ? { capturedAt: new Date(snapshot.capturedAtMs).toISOString() } : {}),
     expiresAt: new Date(snapshot.expiresAtMs).toISOString(),
   });
+  const imageJson = (id: string) => {
+    const stored = fake.images.get(id)!;
+    const colon = stored.source.lastIndexOf(":");
+    const [repository, reference] = [stored.source.slice(0, colon), stored.source.slice(colon + 1)];
+    return {
+      id,
+      sandboxGroupId: "sbg-test",
+      name: stored.name,
+      source: { repository, image: repository.split("/").pop(), reference },
+      sourceDigest: stored.sourceDigest,
+      status: stored.status,
+      ...(stored.status === "failed" ? { failureReason: "import failed" } : {}),
+      createdAt: new Date().toISOString(),
+    };
+  };
   const missing = () => Response.json({ message: "not found" }, { status: 404 });
   const api = async (request: Request, path: string, query: URLSearchParams): Promise<Response> => {
     let match: RegExpExecArray | null;
     if (request.method === "POST" && path === "/sandboxes") {
-      const body = (await request.json()) as { snapshotId?: string };
-      return Response.json(sandboxJson((await fake.client.create(body.snapshotId)).id), { status: 201 });
+      const body = (await request.json()) as { snapshotId?: string; buildId?: string; timeoutSeconds?: number };
+      const { id } = await fake.client.create({
+        ...(body.snapshotId ? { snapshotId: body.snapshotId } : {}),
+        ...(body.buildId ? { image: body.buildId } : {}),
+        lifetimeSec: body.timeoutSeconds ?? 86400,
+      });
+      lifetimes.set(id, { timeoutSeconds: body.timeoutSeconds ?? 86400, createdAt: new Date().toISOString() });
+      return Response.json(sandboxJson(id), { status: 201 });
     }
     if ((match = /^\/sandboxes\/([^/]+)$/.exec(path)))
       return fake.sandboxes.has(match[1]!) ? Response.json(sandboxJson(match[1]!)) : missing();
@@ -312,6 +398,13 @@ export function serveFakeRenderApi(
           cursor: "sbg-test",
         },
       ]);
+    if (path === "/sandbox-groups/sbg-test/builds" && request.method === "POST") {
+      const body = (await request.json()) as { name: string; sourceImage: string };
+      return Response.json(imageJson(fake.startImport(body.sourceImage, body.name).id), { status: 201 });
+    }
+    if ((match = /^\/sandbox-groups\/sbg-test\/builds\/([^/]+)$/.exec(path))) {
+      return fake.images.has(match[1]!) ? Response.json(imageJson(match[1]!)) : missing();
+    }
     if (path === "/sandbox-groups/sbg-test/snapshots" && request.method === "GET")
       return Response.json(
         [...fake.snapshots.values()]

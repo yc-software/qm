@@ -45,6 +45,10 @@ function deployment(t: TestContext, portal = false) {
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
   raw.services = portal ? ["core", "web-ui", "portal", "auth", "admin"] : ["core", "web-ui"];
+  raw.sandbox = {
+    ...raw.sandbox,
+    baseImage: `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`,
+  };
   raw.env = {
     ...(portal ? { auth: { ...raw.env.auth, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } : {}),
     core: { ...raw.env.core },

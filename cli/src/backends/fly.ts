@@ -46,7 +46,7 @@ import {
   secretDestinations,
   secretsForService,
 } from "../secrets.ts";
-import { manifestRef } from "../manifest.ts";
+import { isPlaceholderRef, manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
 const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
@@ -1615,7 +1615,7 @@ export async function flyCheckLive(
     if (firstParty.has(workload)) {
       const configured = config.imageOverrides[workload as ServiceName];
       const packaged = configured ? undefined : manifestRef(workload as ServiceName);
-      const expected = configured ?? (packaged?.includes("registry.invalid") ? undefined : packaged);
+      const expected = configured ?? (packaged && isPlaceholderRef(packaged) ? undefined : packaged);
       const expectedDigest = expected?.match(/@(?<digest>sha256:[a-f0-9]{64})$/)?.groups?.["digest"];
       let imageDetails: FlyImageDetail[] = [];
       if (expectedDigest && machines.some((machine) => !machine.config?.image?.includes("@sha256:"))) {
