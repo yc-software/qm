@@ -49,8 +49,9 @@ test("eager hydration failures are contained while explicit startup hydration re
   try {
     const logged = (context: string) =>
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
-    await settle(async () => logged("startup: hydrate identity"));
+    await settle(async () => logged("startup: hydrate identity") && logged("startup: hydrate configuration"));
     assert.ok(logged("startup: hydrate identity"));
+    assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);

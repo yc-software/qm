@@ -98,6 +98,7 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
+import { boundTenant } from "./tenants/context.ts";
 import { createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createPostgresConfigTables } from "./resolution/config-tables-pg.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
@@ -636,6 +637,7 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
+  if (boundTenant()) void configStore.hydrate().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
