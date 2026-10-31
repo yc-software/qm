@@ -39,9 +39,10 @@ function classify(d: Delivery): Disposition {
 
 export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebTranscriptSessions): DeliveryStore {
   const recorded = new Set<string>();
-  const remember = (key: string): void => {
+  const recordKey = (d: Delivery): string => `${d.tenantId ?? ""}:${d.idempotencyKey}`;
+  const remember = (d: Delivery): void => {
     if (recorded.size >= RECORDED_CACHE_CAP) recorded.clear();
-    recorded.add(key);
+    recorded.add(recordKey(d));
   };
   const overdue = (d: Delivery): boolean =>
     d.destination.webTranscript?.kind !== "slack_reply" && Date.now() - d.createdAt > WRITE_GIVEUP_MS;
@@ -97,12 +98,12 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
   };
 
   const recordedForDelivery = async (d: Delivery): Promise<boolean> => {
-    if (recorded.has(d.idempotencyKey)) return true;
+    if (recorded.has(recordKey(d))) return true;
     if (overdue(d)) {
       console.error(
         `[delivery] web delivery ${d.idempotencyKey} was not recorded in ${d.destination.target} within ${WRITE_GIVEUP_MS}ms — delivering as a nudge only`,
       );
-      remember(d.idempotencyKey);
+      remember(d);
       return true;
     }
     const note = d.destination.webTranscript;
@@ -114,11 +115,11 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
       console.error(
         `[delivery] web delivery ${d.idempotencyKey} targets ${d.destination.target}, which has no session — delivering as a nudge only`,
       );
-      remember(d.idempotencyKey);
+      remember(d);
       return true;
     }
     if (await appendTranscriptEntry(d, session)) {
-      remember(d.idempotencyKey);
+      remember(d);
       return true;
     }
     return false;
@@ -143,7 +144,7 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
             err,
             `delivery=${d.idempotencyKey} target=${d.destination.target} after=${WRITE_GIVEUP_MS}ms`,
           );
-          remember(d.idempotencyKey);
+          remember(d);
           out.push(d);
         } else {
           swallow(`web delivery ${d.idempotencyKey} transcript write (will retry)`, err);

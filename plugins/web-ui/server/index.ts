@@ -34,7 +34,7 @@ import {
   serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
-import { boundTenant } from "../../chassis/src/tenant.ts";
+import { boundTenant, isTenantId, withTenant } from "../../chassis/src/tenant.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { currentTenant, perTenant } from "../../../src/tenants/context.ts";
 import { activeRuns, forgetRun, rememberRun } from "./active-runs.ts";
@@ -480,6 +480,7 @@ let deliveriesPollFailing = false;
 
 interface PendingWebDelivery {
   id: string;
+  tenantId?: string;
   createdAt: number;
   destination?: { target?: string };
 }
@@ -509,22 +510,25 @@ function noteDeliveriesPoll(failure: unknown): void {
 async function pollWebDeliveries(): Promise<unknown> {
   const r = await coreFetch("GET", "/v1/deliveries?type=web");
   if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const { tenant, deliveries: pending = [] } = JSON.parse(r.text) as {
-    tenant?: string;
-    deliveries?: PendingWebDelivery[];
-  };
+  const { deliveries: pending = [] } = JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] };
   const now = Date.now();
   let failure: unknown;
   for (const d of pending) {
+    if (!isTenantId(d.tenantId)) {
+      failure ??= new Error(`web delivery ${d.id} carries no tenant`);
+      continue;
+    }
     const target = d.destination?.target ?? "";
-    const conns = deliveryClientsOf(tenant, ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
+    const conns = deliveryClientsOf(d.tenantId, ownerOfWebThread(target) ?? "");
+    if (conns.size) {
       for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
     } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
       continue;
     }
     try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
+      const ack = await withTenant(d.tenantId, () =>
+        coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`),
+      );
       if (ack.status !== 200)
         failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
     } catch (e) {
@@ -545,7 +549,7 @@ interface SessionStateFrame {
   [k: string]: unknown;
 }
 
-function forwardSessionState(frame: SessionStateFrame): void {
+export function forwardSessionState(frame: SessionStateFrame): void {
   const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
   if (!threadRef) return;
   const targets = new Set<string>(
@@ -637,12 +641,18 @@ function resyncInbox(): void {
   for (const res of everyDeliveryClient()) sseEvent(res, "inbox_resync", {});
 }
 
-async function forwardInboxItem(ev: { tenant?: string; loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  const candidates = connectedUsers(ev.tenant);
+export async function forwardInboxItem(ev: {
+  tenant?: string;
+  loopId?: string;
+  itemId?: string;
+  op?: string;
+}): Promise<void> {
+  const tenant = ev.tenant;
+  if (!isTenantId(tenant)) return;
+  const candidates = connectedUsers(tenant);
   if (!ev.loopId || !ev.itemId || !candidates.length) return;
-  const r = await coreFetch("POST", "/v1/inbox/viewers", JSON.stringify({ loopId: ev.loopId, candidates })).catch(
-    () => null,
-  );
+  const body = JSON.stringify({ loopId: ev.loopId, candidates });
+  const r = await withTenant(tenant, () => coreFetch("POST", "/v1/inbox/viewers", body)).catch(() => null);
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
   try {
@@ -652,7 +662,7 @@ async function forwardInboxItem(ev: { tenant?: string; loopId?: string; itemId?:
   }
   if (!viewers) return resyncInbox();
   const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClientsOf(ev.tenant, user)) sseEvent(res, "inbox_item", frame);
+  for (const user of viewers) for (const res of deliveryClientsOf(tenant, user)) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(

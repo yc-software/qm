@@ -628,10 +628,10 @@ export function createTurnMethods(
         tail = tail.then(step).catch(swallowAs("session-state: subscriber", undefined));
       };
       const onResync = opts?.onResync;
-      return deps.sessionStateBus.subscribe(
-        (event) => queue(async () => cb(await rehydrate(event))),
-        onResync ? { onResync: () => queue(onResync) } : undefined,
-      );
+      return deps.sessionStateBus.subscribe((event) => queue(async () => cb(await rehydrate(event))), {
+        ...(opts?.allTenants ? { allTenants: true } : {}),
+        ...(onResync ? { onResync: () => queue(onResync) } : {}),
+      });
     },
 
     subscribeLedgerEvents(cb, opts) {

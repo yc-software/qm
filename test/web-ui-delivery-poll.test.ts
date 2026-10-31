@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 let deliveriesStatus = 503;
+const TENANT = "00000000-0000-4000-8000-00000000000a";
 const acked: string[] = [];
 const core = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://core");
@@ -11,13 +12,15 @@ const core = createServer((req, res) => {
     res.writeHead(deliveriesStatus, { "content-type": "application/json" });
     res.end(
       deliveriesStatus === 200
-        ? JSON.stringify({ deliveries: [{ id: "d1", createdAt: 0, destination: { target: "web:nobody:t1" } }] })
+        ? JSON.stringify({
+            deliveries: [{ id: "d1", tenantId: TENANT, createdAt: 0, destination: { target: "web:nobody:t1" } }],
+          })
         : JSON.stringify({ error: "unavailable" }),
     );
     return;
   }
   if (req.method === "POST" && url.pathname.startsWith("/v1/deliveries/")) {
-    acked.push(url.pathname);
+    acked.push(`${String(req.headers["x-qm-tenant"])} ${url.pathname}`);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -47,7 +50,7 @@ test("web delivery poll warns once per outage and logs recovery", async (t) => {
   await drainWebDeliveries();
   await drainWebDeliveries();
   assert.deepEqual(pollLines().slice(1), ["[web-ui] web delivery poll recovered"]);
-  assert.deepEqual(acked, ["/v1/deliveries/d1/ack", "/v1/deliveries/d1/ack"]);
+  assert.deepEqual(acked, [`${TENANT} /v1/deliveries/d1/ack`, `${TENANT} /v1/deliveries/d1/ack`]);
 
   deliveriesStatus = 500;
   await drainWebDeliveries();
