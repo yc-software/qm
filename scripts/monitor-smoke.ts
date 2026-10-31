@@ -17,7 +17,10 @@ import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
 
+enterTenant(randomUUID());
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const maps = createPostgresMapFactory(databaseUrl);

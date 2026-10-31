@@ -27,6 +27,7 @@ import {
   S3_PART_BYTES,
   type BlobTransferStore,
 } from "../src/persistence/blob-transfer.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => void } = {}) {
   const objects = new Map<string, { body: Buffer; lastModified: Date }>();
@@ -195,7 +196,7 @@ test("local-fs: a failed put (over cap) leaves no orphan blob file behind", asyn
     () => store.put(Buffer.alloc(1000), { maxBytes: 100 }),
     (e) => e instanceof BlobTooLargeError,
   );
-  const leftover = readdirSync(dir);
+  const leftover = readdirSync(join(dir, TEST_TENANT));
   assert.deepEqual(leftover, []);
 });
 
@@ -203,15 +204,15 @@ test("local-fs: a finalized blob is named by its id (no .part suffix lingering)"
   const dir = localDir();
   const store = createLocalBlobTransferStore(dir);
   const { blobId } = await store.put(Buffer.from("done"));
-  const names = readdirSync(dir);
-  assert.deepEqual(names, [blobId]);
+  assert.deepEqual(readdirSync(dir), [TEST_TENANT]);
+  assert.deepEqual(readdirSync(join(dir, TEST_TENANT)), [blobId]);
 });
 
-test("s3: blobs are keyed under '<prefix>transfer/<id>' (snapshot-bucket coexistence)", async () => {
+test("s3: blobs are keyed under '<prefix>transfer/<tenant>/<id>' (snapshot-bucket coexistence)", async () => {
   const { objects, client } = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", prefix: "core/", _client: client });
   const { blobId } = await store.put(Buffer.from("payload"));
-  assert.deepEqual([...objects.keys()], [`core/transfer/${blobId}`]);
+  assert.deepEqual([...objects.keys()], [`core/transfer/${TEST_TENANT}/${blobId}`]);
 });
 
 test("s3: open returns null for a missing object (NoSuchKey is not an error)", async () => {
@@ -261,7 +262,7 @@ test("s3: sweep deletes only blobs older than the cutoff, by LastModified", asyn
   assert.equal(removed, 1);
   assert.equal(await store.open(old.blobId), null);
   assert.ok(await store.open(fresh.blobId));
-  assert.deepEqual([...objects.keys()], [`transfer/${fresh.blobId}`]);
+  assert.deepEqual([...objects.keys()], [`transfer/${TEST_TENANT}/${fresh.blobId}`]);
 });
 
 test("s3 ensureExpiry installs a transfer-prefix lifecycle rule on a bucket with no existing config", async () => {

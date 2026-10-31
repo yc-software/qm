@@ -15,6 +15,7 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const REGION = "us-west-2";
 
@@ -751,7 +752,7 @@ test("profile: scale-to-zero is platform-managed and reconcile is in place", () 
 test("app data: a fresh body hydrates /data from the S3 snapshot before the app starts", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
-  const { s3, objects } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TARBYTES")]]));
+  const { s3, objects } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TARBYTES")]]));
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
 
@@ -789,7 +790,7 @@ test("app data: rotating a body past the 8h window snapshots /data to S3 before 
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
   assert.equal(counts.terminate, 1, "stale body terminated");
   assert.deepEqual(
-    Buffer.from(objects.get(`deploy-data/${ID}.tar`)!).toString(),
+    Buffer.from(objects.get(`deploy-data/${TEST_TENANT}/${ID}.tar`)!).toString(),
     "NEWTAR",
     "its /data landed in S3 first",
   );
@@ -798,7 +799,7 @@ test("app data: rotating a body past the 8h window snapshots /data to S3 before 
 test("app data: an empty /data is never uploaded — a fresh body can't clobber a good snapshot", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("exit 3") ? 3 : 0) });
-  const { s3, calls } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("PRECIOUS")]]));
+  const { s3, calls } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("PRECIOUS")]]));
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
@@ -832,7 +833,7 @@ test("app data: a warm reach past the snapshot interval snapshots /data and stam
     (await store.get(ID))!.lastSnapshotMs! > before,
     "pointer stamped so concurrent reaches don't stack snapshots",
   );
-  assert.ok(objects.has(`deploy-data/${ID}.tar`), "the reach-path snapshot landed in S3");
+  assert.ok(objects.has(`deploy-data/${TEST_TENANT}/${ID}.tar`), "the reach-path snapshot landed in S3");
 });
 
 test("app data: a failed rotate snapshot defers the rotation — the stale body keeps serving instead of losing its /data", async () => {
@@ -859,7 +860,7 @@ test("app data: a failed rotate snapshot defers the rotation — the stale body 
 test("app data: a failed hydrate terminates the fresh body instead of leaking it", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("tar -xf") ? 1 : 0) });
-  const { s3 } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TAR")]]));
+  const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TAR")]]));
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
   await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /hydrate extract failed/);
   assert.equal(counts.terminate, 1, "the un-pointered body is terminated, not leaked to the 8h cap");
@@ -911,7 +912,7 @@ test("litestream: shadow-WAL dir is excluded from both snapshot and hydrate", as
   const { fetchImpl, execs } = fakeDaemon({
     readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from("T").toString("base64") : ""),
   });
-  const { s3 } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("TAR")]]));
+  const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TAR")]]));
   const { sts } = fakeSts();
   const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
@@ -1015,8 +1016,8 @@ test("app data: destroy tears down the runtime but preserves durable data — ar
   const { fetchImpl } = fakeDaemon();
   const { s3, objects } = fakeS3(
     new Map([
-      [`deploy-data/${ID}.tar`, Buffer.from("X")],
-      [`deploy-data/${ID}/litestream/generations/x/wal/0.wal.lz4`, Buffer.from("W")],
+      [`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("X")],
+      [`deploy-data/${TEST_TENANT}/${ID}/litestream/generations/x/wal/0.wal.lz4`, Buffer.from("W")],
     ]),
   );
   const { sts } = fakeSts();
@@ -1042,13 +1043,13 @@ test("litestream: apply stages prefix-scoped creds + config, restores before the
   assert.equal(assumes.length, 1);
   assert.equal(assumes[0]!.role, "arn:aws:iam::1:role/data");
   assert.ok(
-    assumes[0]!.policy.includes(`deploy-data/${ID}/litestream/*`),
+    assumes[0]!.policy.includes(`deploy-data/${TEST_TENANT}/${ID}/litestream/*`),
     "session policy pinned to this app's replica prefix",
   );
   assert.ok(written(writes, "/etc/qm-litestream.env"), "creds staged");
   const cfg = writes.find((w) => w.path === "/etc/qm-litestream.yml");
   assert.ok(
-    Buffer.from(cfg!.b64, "base64").toString().includes(`path: deploy-data/${ID}/litestream`),
+    Buffer.from(cfg!.b64, "base64").toString().includes(`path: deploy-data/${TEST_TENANT}/${ID}/litestream`),
     "replica path in config",
   );
   const restoreAt = execs.findIndex((c) => c.includes("litestream restore"));
@@ -1107,7 +1108,7 @@ test("litestream: the tar snapshot excludes app.db so the replica owns the datab
 test("litestream: hydrate never extracts a legacy tar'd app.db — a stale db would bury the replica generation", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs } = fakeDaemon();
-  const { s3 } = fakeS3(new Map([[`deploy-data/${ID}.tar`, Buffer.from("LEGACY-TAR-WITH-DB")]]));
+  const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("LEGACY-TAR-WITH-DB")]]));
   const { sts } = fakeSts();
   const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",

@@ -30,7 +30,13 @@ import type {
   TeardownOptions,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  createS3SnapshotStore,
+  HOME_SNAPSHOT_PRUNE,
+  homeSnapshotKey,
+  snapshotDue,
+} from "./home-snapshot.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
@@ -138,7 +144,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   }
 
-  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(scope)}.tar`;
+  const s3KeyFor = (scope: string): string => homeSnapshotKey(s3Prefix, scope, scopeStorageKey);
 
   const client = createMicrovmClient(api, {
     agentPort,
@@ -180,7 +186,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
     prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
-    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
+    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, scopeKey: scopeStorageKey }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
         const r = await execRaw(id, script, Math.ceil(timeoutMs / 1000));

@@ -851,47 +851,22 @@ test("AWS rejects coordinates that its Terraform-derived resources cannot accept
   );
 });
 
-test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_ENV_<KEY>", () => {
-  withConfig(
-    {
-      sandbox: {
-        app: "acme-sandboxes",
-        env: { TZ: "America/Los_Angeles" },
-        secretEnv: ["COMPANY_API_TOKEN"],
-      },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      const resolved = sandboxCoreEnv(config, (n) => (n === "COMPANY_API_TOKEN" ? "sek-ret" : undefined));
-      assert.equal(resolved.env.FLY_RESIDENT_ENV_TZ, "America/Los_Angeles");
-      assert.equal(resolved.env.FLY_RESIDENT_ENV_COMPANY_API_TOKEN, "sek-ret");
-      assert.deepEqual(resolved.missingSecrets, []);
-      const missing = sandboxCoreEnv(config);
-      assert.deepEqual(missing.missingSecrets, ["COMPANY_API_TOKEN"]);
-      assert.equal(missing.env.FLY_RESIDENT_ENV_COMPANY_API_TOKEN, undefined);
-      assert.equal(missing.env.FLY_RESIDENT_ENV_TZ, "America/Los_Angeles");
-    },
-  );
-});
-
 test("no sandbox block → no injected env, lenient undefined app", () => {
   withConfig({}, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.equal(config.sandbox, undefined);
-    assert.deepEqual(sandboxCoreEnv(config), { env: {}, missingSecrets: [] });
+    assert.deepEqual(sandboxCoreEnv(config), { env: {} });
   });
 });
 
-test("sandbox shape errors: object, app non-empty string, env string-map, secretEnv valid names", () => {
+test("sandbox shape errors: object, app non-empty string, no deployment-wide sandbox env", () => {
   const cases: Array<{ sandbox: unknown; rx: RegExp }> = [
     { sandbox: "x", rx: /"sandbox" must be an object/ },
     { sandbox: ["x"], rx: /"sandbox" must be an object/ },
     { sandbox: { app: "" }, rx: /"sandbox.app" must be a non-empty string/ },
     { sandbox: { app: 5 }, rx: /"sandbox.app" must be a non-empty string/ },
-    { sandbox: { env: { TZ: 5 } }, rx: /"sandbox.env.TZ" must be a string/ },
-    { sandbox: { env: { "1BAD": "x" } }, rx: /"sandbox.env" key .* is not a valid env var name/ },
-    { sandbox: { secretEnv: "X" }, rx: /"sandbox.secretEnv" must be an array of strings/ },
-    { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
+    { sandbox: { env: { TZ: "UTC" } }, rx: /"sandbox.env" would reach every tenant's computers/ },
+    { sandbox: { secretEnv: ["TOKEN"] }, rx: /"sandbox.secretEnv" would reach every tenant's computers/ },
     {
       sandbox: { backend: "k8s", app: "acme-sandboxes" },
       rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*"e2b".*or "render"/,
@@ -917,7 +892,6 @@ test("docker accepts an explicit local sandbox image without Fly coordinates", (
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
       env: { SANDBOX_BACKEND: "local", LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
-      missingSecrets: [],
     });
   });
 });
@@ -937,7 +911,6 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
       const { config } = loadConfigAt(path);
       assert.deepEqual(sandboxCoreEnv(config), {
         env: { SANDBOX_BACKEND: "agent37" },
-        missingSecrets: [],
       });
     });
   }
@@ -952,7 +925,6 @@ test("e2b is a deployment backend on every target and rejects unused Fly setting
       const { config } = loadConfigAt(path);
       assert.deepEqual(sandboxCoreEnv(config), {
         env: { SANDBOX_BACKEND: "e2b" },
-        missingSecrets: [],
       });
     });
   }
@@ -975,7 +947,7 @@ test("superserve backend requires the agent template in env.core", () => {
     { sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
     ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] });
+      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" } });
     },
   );
   withConfig(
@@ -1004,14 +976,14 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   withConfig(
     {
       target: "fly",
-      sandbox: { backend: "sprites", app: "acme-sandboxes", secretEnv: ["COMPANY_API_TOKEN"] },
+      sandbox: { backend: "sprites", app: "acme-sandboxes" },
       env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
     },
     ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.deepEqual(
         sandboxCoreEnv(config),
-        { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] },
+        { env: { SANDBOX_BACKEND: "superserve" } },
         "the overridden backend's settings are not demanded or injected",
       );
     },

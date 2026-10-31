@@ -11,6 +11,9 @@ import { createConfiguredMemoryService } from "../../src/memory/provider-factory
 import { scopeId, type SessionEntry } from "../../src/types.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 const DB = process.env.MEMORABLE_E2E_DB_URL;
 const CLI = process.env.MEMORABLE_E2E_BIN;

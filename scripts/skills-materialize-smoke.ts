@@ -10,7 +10,10 @@ import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
 
+enterTenant(randomUUID());
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const maps = createPostgresMapFactory(databaseUrl);

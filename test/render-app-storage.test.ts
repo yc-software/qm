@@ -16,6 +16,7 @@ import {
 } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 type StorageOptions = Parameters<typeof createRenderAppStorage>[0];
 
@@ -102,7 +103,7 @@ test("Render app storage keeps one set of credentials per app and only changes i
   );
   const id = randomUUID();
   const first = await f.storage.ensure(id);
-  assert.equal(first.S3_PREFIX, `app-data/${id}/`);
+  assert.equal(first.S3_PREFIX, `app-data/${TEST_TENANT}/${id}/`);
   assert.equal(first.AWS_REQUEST_CHECKSUM_CALCULATION, "WHEN_REQUIRED");
   assert.equal(JSON.stringify(await f.store.get(id)).includes(first.AWS_SECRET_ACCESS_KEY!), false);
   assert.deepEqual(await f.restart().ensure(id), first);
@@ -111,6 +112,10 @@ test("Render app storage keeps one set of credentials per app and only changes i
   assert.deepEqual(await f.restart().ensure(id, true), first);
   assert.equal(jobs, 2);
   assert.equal((await f.store.get(id))!.enabled, true);
+  await f.store.put(id, { ...(await f.store.get(id))!, prefix: `app-data/${id}/` });
+  assert.deepEqual(await f.restart().ensure(id), first, "a policy for an older prefix is re-provisioned");
+  assert.equal(jobs, 3);
+  assert.equal((await f.store.get(id))!.prefix, first.S3_PREFIX);
   assert.ok(f.api.calls.every((call) => call.path.startsWith("/services/srv-minio")));
   const another = await f.storage.ensure(randomUUID());
   assert.notEqual(another.AWS_ACCESS_KEY_ID, first.AWS_ACCESS_KEY_ID);
