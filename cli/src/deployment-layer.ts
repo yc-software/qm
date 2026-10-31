@@ -210,13 +210,12 @@ export function httpDeploymentLayerTransport(
     const secret = read("CORE_SIGNING_SECRET");
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const control = read("DEPLOYMENT_CONTROL_SECRET");
-    if (!control) throw new CliError(`DEPLOYMENT_CONTROL_SECRET is required locally to access the deployment layer`);
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
     const init: RequestInit = {
       method: opts.method,
       headers: {
         ...signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
-        authorization: `Bearer ${control}`,
+        ...(control ? { authorization: `Bearer ${control}` } : {}),
       },
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
