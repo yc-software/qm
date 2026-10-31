@@ -19,6 +19,15 @@ export async function seedSettingsTenants(url: string): Promise<void> {
   for (const tenant of [THIRD_TENANT, FOURTH_TENANT, FIFTH_TENANT]) await seedTenant(url, tenant);
 }
 
+export async function migrateSettings(url: string): Promise<void> {
+  const owner = createPgPool(url, [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
+  try {
+    await owner.q("SELECT 1");
+  } finally {
+    await owner.close();
+  }
+}
+
 export function settingsDatabase(): { url: string; ready: Promise<void> } {
   const base = process.env.DATABASE_URL;
   if (!base) throw new Error("Set DATABASE_URL to the Postgres database the test runner gave this file");
@@ -32,12 +41,7 @@ export function settingsDatabase(): { url: string; ready: Promise<void> } {
     } finally {
       await owner.close();
     }
-    const migrated = createPgPool(url.toString(), [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
-    try {
-      await migrated.q("SELECT 1");
-    } finally {
-      await migrated.close();
-    }
+    await migrateSettings(url.toString());
     await seedTestTenants(url.toString());
     await seedSettingsTenants(url.toString());
   })();
