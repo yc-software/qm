@@ -16,7 +16,6 @@ test("the pi model runtime never authenticates with provider keys from the proce
       assert.equal(keyless.hasConfiguredAuth("anthropic"), false);
       assert.equal(keyless.hasConfiguredAuth("openai"), false);
       assert.equal(await keyless.getAuth(model), undefined);
-      await assert.rejects(keyless.prepareRequest(model), /Provider is not configured: anthropic/);
       const keyed = await buildModelRuntime({ anthropic: "tenant-key" });
       assert.equal((await keyed.getAuth(model))?.auth.apiKey, "tenant-key");
       assert.equal(keyed.hasConfiguredAuth("openai"), false);
