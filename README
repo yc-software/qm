@@ -1,0 +1,2 @@
+git rerere cache for #2772 pre-rebases (ws6-on-ws11).
+Restore: cp -r rr-cache/* "$(git rev-parse --git-common-dir)/rr-cache/" and set rerere.enabled=true.
