@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { seedTenant } from "./support/tenant.ts";
+import { OTHER_TENANT } from "./support/tenant.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 
 test(
-  "migration command closes runtime listeners, is a no-op on a fresh database, moves pre-tenant storage once and exits naturally",
+  "migration command closes runtime listeners, is a no-op without legacy data, refuses an ambiguous owner, moves pre-tenant storage once and exits naturally",
   { skip: !databaseUrl, timeout: 150_000 },
   async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "qm-migrate-test-"));
@@ -35,12 +35,13 @@ test(
       const { stdout } = await migrate();
       assert.match(stdout, /\[qm:migrate\] database migrations applied/);
       assert.match(stdout, /tenant storage layout applied \(0 moved\)/);
-      await seedTenant(databaseUrl!);
       const db = createPgPool(databaseUrl!);
       await db.q("DELETE FROM qm_schema_migrations WHERE id = 'tenants/storage-layout'");
-      await db.close();
       await mkdir(join(dataDir, "workspaces", "personal__legacy"), { recursive: true });
       await writeFile(join(dataDir, "workspaces", "personal__legacy", "notes.md"), "kept");
+      await assert.rejects(migrate(), /predates tenant storage and this database has 2 tenants/);
+      await db.q("DELETE FROM tenants WHERE id = $1", [OTHER_TENANT]);
+      await db.close();
       assert.match((await migrate()).stdout, /tenant storage layout applied \(1 moved\)/);
       const [tenant] = await readdir(join(dataDir, "workspaces"));
       assert.equal(

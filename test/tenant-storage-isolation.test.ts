@@ -15,7 +15,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import {
   collectBlob,
   createLocalBlobTransferStore,
@@ -124,7 +124,7 @@ for (const [label, make] of [
     assert.equal(await withTenant(B, () => text(store, blobId)), null);
     await withTenant(B, () => store.delete(blobId));
     assert.equal(await withTenant(A, () => text(store, blobId)), "tenant a");
-    await assert.rejects(() => store.put(Buffer.from("unbound")), /No tenant is bound/);
+    await assert.rejects(() => withoutTenant(() => store.put(Buffer.from("unbound"))), /No tenant is bound/);
   });
 }
 
@@ -149,7 +149,7 @@ for (const [label, make] of [
     await withTenant(B, () => store.put(Buffer.from("shared share bytes")));
     await withTenant(B, () => store.delete(put.blobKey));
     assert.equal(await withTenant(A, () => bytes(store, put.blobKey)), "shared share bytes");
-    await assert.rejects(() => store.open(put.blobKey), /No tenant is bound/);
+    await assert.rejects(() => withoutTenant(() => store.open(put.blobKey)), /No tenant is bound/);
   });
 }
 
@@ -184,7 +184,7 @@ test("provider names differ per tenant for the same scope and keep the deploymen
       assert.ok(name.startsWith(prefix.slice(0, 20)));
     }
   }
-  assert.throws(() => sandboxScopeName("qm", "x"), /No tenant is bound/);
+  assert.throws(() => withoutTenant(() => sandboxScopeName("qm", "x")), /No tenant is bound/);
 });
 
 test("workspace directories are tenant-scoped", async () => {
