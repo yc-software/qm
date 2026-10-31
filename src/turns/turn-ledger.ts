@@ -439,7 +439,8 @@ function claims(ctx: LedgerContext): Pick<TurnLedger, "extend" | "handBack" | "f
       return applied;
     },
 
-    fenceHeld: async (turnId, token, client) => turnFenceHeld(client ?? ctx.db, turnId, token),
+    fenceHeld: async (turnId, token, client) =>
+      client ? turnFenceHeld(client, turnId, token) : turnFenceHeld(ctx.db, turnId, token, { lock: false }),
 
     async yieldTo(run, token) {
       const queue = queueOf(run);

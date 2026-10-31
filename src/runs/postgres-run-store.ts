@@ -148,7 +148,7 @@ END $base_schema$`,
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
-      if (leaseToken !== null && !(await turnFenceHeld({ query: q }, runId, leaseToken))) return false;
+      if (leaseToken !== null && !(await turnFenceHeld({ query: q }, runId, leaseToken, { lock: false }))) return false;
       const { rowCount } = await q(
         "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND ($3::text IS NULL OR lease_token=$3)",
         [JSON.stringify(state), runId, leaseToken],

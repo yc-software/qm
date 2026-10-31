@@ -10,7 +10,7 @@ import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testRunStore } from "./support/turns.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 const alice: Principal = { id: "alice@example.com", type: "internal" };
@@ -38,7 +38,7 @@ test("session search reuses indexed search with participant intersection, tenure
     scopeLabel: source.scopeId,
   });
   await sessions.releaseLease(lease);
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({
     sessions,

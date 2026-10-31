@@ -11,11 +11,14 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn, pauseTurns, resumeTurns } from "./support/turns.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
-  return buildApp(testConfig({ dataDir, orgId: "acme" }));
+  const config = testConfig({ dataDir, orgId: "acme" });
+  const built = buildApp(config);
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 const actor = { externalId: "U1", orgId: "acme" };
@@ -243,6 +246,7 @@ test("a terminal run with another run still queued on the thread emits no settle
   await built.app.turn(dm("hello", thread));
   await settledStates(got, thread, 2);
   got.length = 0;
+  await pauseTurns(built);
   const { run: a } = await built.runs.enqueue({
     sessionId: thread,
     request: resolvedDm("first", thread),
@@ -253,18 +257,18 @@ test("a terminal run with another run still queued on the thread emits no settle
     request: resolvedDm("second", thread),
     maxAttempts: 3,
   });
-  const leasedA = await built.runs.claimById(a.id, "w1", 30_000);
+  const leasedA = await claimTurn(built.ledger, a.id);
   assert.ok(leasedA);
-  await built.runs.complete(a.id, leasedA!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(leasedA!, { status: "ok", reply: "done" });
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(
     statesFor(got, thread).filter((s) => s !== "working"),
     [],
     "no settle while a run is still queued",
   );
-  const leasedB = await built.runs.claimById(b.id, "w1", 30_000);
+  const leasedB = await claimTurn(built.ledger, b.id);
   assert.ok(leasedB);
-  await built.runs.complete(b.id, leasedB!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(leasedB!, { status: "ok", reply: "done" });
   assert.ok(await waitFor(() => statesFor(got, thread).includes("idle")), "the last run's terminal settles idle");
 });
 
@@ -272,14 +276,15 @@ test("a FAILED (parked) run still settles from durable truth: leftover blocking 
   const built = freshApp();
   const thread = "web:U1:failed";
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, thread));
-  assert.equal(parked.status, "pending_approval");
+  assert.equal(parked.status, "pending_approval", parked.reason);
   const uuid = parked.sessionId;
   assert.ok(uuid && uuid !== thread);
   const got = record(built.sessionStateBus);
+  await pauseTurns(built);
   const { run } = await built.runs.enqueue({ sessionId: thread, request: resolvedDm("boom", thread), maxAttempts: 3 });
-  const leased = await built.runs.claimById(run.id, "w1", 30_000);
+  const leased = await claimTurn(built.ledger, run.id);
   assert.ok(leased);
-  await built.runs.fail(run.id, leased!.leaseToken!, "kaboom", { retry: false });
+  await endTurn(leased!, { status: "failed", sessionId: thread, reason: "kaboom" });
   assert.ok(
     await waitFor(() => statesFor(got, thread).some((state) => state !== "working")),
     "terminal emitted a settle",
@@ -297,10 +302,11 @@ test("a settle frame is stamped with the run's durable finishedAt — a later en
   await settledStates(got, thread, 2);
   const settle = got.find((e) => e.threadRef === thread && e.state === "idle");
   assert.ok(settle);
+  await pauseTurns(built);
   const { run } = await built.runs.enqueue({ sessionId: thread, request: resolvedDm("next", thread), maxAttempts: 3 });
-  const leased = await built.runs.claimById(run.id, "w1", 30_000);
+  const leased = await claimTurn(built.ledger, run.id);
   assert.ok(leased);
-  await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(leased!, { status: "ok", reply: "done" });
   assert.ok(await waitFor(() => statesFor(got, thread).filter((s) => s === "idle").length >= 2));
   const second = [...got].reverse().find((e) => e.threadRef === thread && e.state === "idle");
   const row = await built.runs.get(run.id);
@@ -320,6 +326,7 @@ test("a parent stays working while a subagent runs after its own turn ends — p
   );
   got.length = 0;
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await pauseTurns(built);
   const { run: parentRun } = await built.runs.enqueue({
     sessionId: parentThread,
     request: resolvedDm("delegate", parentThread),
@@ -330,15 +337,15 @@ test("a parent stays working while a subagent runs after its own turn ends — p
     request: resolvedDm("work", childThread),
     maxAttempts: 3,
   });
-  const leasedParent = await built.runs.claimById(parentRun.id, "w1", 30_000);
-  await built.runs.complete(parentRun.id, leasedParent!.leaseToken!, { status: "ok", reply: "delegated" });
+  const leasedParent = await claimTurn(built.ledger, parentRun.id);
+  await endTurn(leasedParent!, { status: "ok", reply: "delegated" });
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(statesFor(got, parentThread), ["working", "working"], "the subagent keeps its parent working");
   const working = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
   assert.equal(working?.working, true, "the sidebar snapshot shows the parent working too");
 
-  const leasedChild = await built.runs.claimById(childRun.id, "w1", 30_000);
-  await built.runs.complete(childRun.id, leasedChild!.leaseToken!, { status: "ok", reply: "done" });
+  const leasedChild = await claimTurn(built.ledger, childRun.id);
+  await endTurn(leasedChild!, { status: "ok", reply: "done" });
   assert.ok(
     await waitFor(() => statesFor(got, parentThread).includes("idle")),
     "the last subagent run settles the parent",
@@ -357,13 +364,14 @@ test("a parent parked on a blocking approval keeps awaiting while its subagent r
   const parent = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
   assert.equal(parent.status, "pending_approval");
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await pauseTurns(built);
   const { run } = await built.runs.enqueue({
     sessionId: childThread,
     request: resolvedDm("work", childThread),
     maxAttempts: 3,
   });
-  const leased = await built.runs.claimById(run.id, "w1", 30_000);
-  await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
+  const leased = await claimTurn(built.ledger, run.id);
+  await endTurn(leased!, { status: "ok", reply: "done" });
   assert.ok(await waitFor(() => statesFor(got, childThread).includes("idle")));
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(statesFor(got, parentThread), ["working", "awaiting_approval", "awaiting_approval"]);
@@ -376,18 +384,21 @@ test("a parent whose own turn parks on an approval while its subagent runs settl
   const parent = await built.app.turn(dm("hello", parentThread));
   const child = await built.app.turn(dm("hello", childThread));
   await built.sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  await pauseTurns(built);
   const { run } = await built.runs.enqueue({
     sessionId: childThread,
     request: resolvedDm("work", childThread),
     maxAttempts: 3,
   });
+  const leased = await claimTurn(built.ledger, run.id);
+  assert.ok(leased, "the subagent's turn is running");
+  resumeTurns(built);
   const got = record(built.sessionStateBus);
   const parked = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, parentThread));
-  assert.equal(parked.status, "pending_approval");
+  assert.equal(parked.status, "pending_approval", parked.reason);
   assert.ok(await waitFor(() => statesFor(got, parentThread).includes("awaiting_approval")));
   const row = (await built.app.listSessions("U1")).find((s) => s.id === parent.sessionId);
   assert.equal(row?.awaitingInput, true);
   assert.ok(!row?.working, "the snapshot ranks the pending approval above subagent work, like the push");
-  const leased = await built.runs.claimById(run.id, "w1", 30_000);
-  await built.runs.complete(run.id, leased!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(leased, { status: "ok", reply: "done" });
 });

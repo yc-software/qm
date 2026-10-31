@@ -24,7 +24,8 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { claimTurn, endTurn, retryTurn, testRunStore } from "./support/turns.ts";
+import type { TurnLedger } from "../src/turns/turn-ledger.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
@@ -38,6 +39,7 @@ interface Rig {
   signals: ReturnType<typeof createPostgresRunSignalStore>;
   advisoryLock: AdvisoryLock;
   room: Session;
+  ledger: TurnLedger;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
@@ -46,7 +48,7 @@ async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs, ledger } = testRunStore();
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
@@ -78,6 +80,7 @@ async function rig(opts?: {
     mailbox,
     sessions,
     runs,
+    ledger,
     signals,
     advisoryLock,
     room,
@@ -137,9 +140,9 @@ for (const explicit of [
       assert.equal(Object.hasOwn(child.spawnMeta!, key), Object.hasOwn(explicit, key));
       assert.equal(first.request[key], { ...defaults, ...explicit }[key]);
     }
-    const claimed = await r.runs.claimById(first.id, "worker", 60_000);
+    const claimed = await claimTurn(r.ledger, first.id);
     assert.ok(claimed);
-    await r.runs.complete(first.id, claimed.leaseToken!, { status: "ok", reply: "done" });
+    await endTurn(claimed!, { status: "ok", reply: "done" });
     defaults = { model: "new-default", thinkingLevel: "medium", fastMode: false };
     const followup = await syscalls.write({ wake: true, target: child.id, text: "next task" });
     assert.ok(followup.ok);
@@ -187,15 +190,15 @@ test("a wake starts an idle child's turn or queues one behind busy work; wake:fa
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [first] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(first!.id, "worker", 60_000);
+  const claimed = await claimTurn(r.ledger, first!.id);
   const busy = await r.syscallsFor(r.room).write({ wake: true, target: child.id, text: "review again" });
   assert.ok(busy.ok);
   assert.deepEqual([busy.delivered, busy.busy], ["queued_turn", true]);
   assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 2);
-  await r.runs.complete(first!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const [second] = await r.runs.inFlightForThread(child.threadRef);
-  const next = await r.runs.claimById(second!.id, "worker", 60_000);
-  await r.runs.complete(second!.id, next!.leaseToken!, { status: "ok", reply: "reviewed" });
+  const next = await claimTurn(r.ledger, second!.id);
+  await endTurn(next!, { status: "ok", reply: "reviewed" });
   const quiet = await r.syscallsFor(r.room).write({ wake: false, target: child.id, text: "fyi" });
   assert.ok(quiet.ok);
   assert.deepEqual([quiet.delivered, quiet.busy], ["queued_message", false]);
@@ -235,7 +238,7 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  const claimed = await claimTurn(r.ledger, queued.id);
   assert.ok(claimed);
 
   const steered = await syscalls.write({ wake: true, target: opened.sessionId, text: "focus on the canary" });
@@ -252,7 +255,7 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.equal(interrupted.delivered, "interrupted");
   assert.equal((await r.signals.takePending(queued.id))[0]!.kind, "abort");
 
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const retask = await syscalls.write({ wake: true, target: "watch_deploy", text: "check it again" });
   assert.ok(retask.ok);
   assert.equal(retask.delivered, "queued_turn");
@@ -310,8 +313,8 @@ test("a finished child durably wakes its Slack parent exactly once and leaves th
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "logs are clean" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "logs are clean" });
   const finished = await r.runs.get(queued.id);
 
   await deliverSubagentMail(
@@ -347,8 +350,8 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
   await r.sessions.releaseLease(lease!);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "silent" });
   const finished = await r.runs.get(queued.id);
 
   await deliverSubagentMail(
@@ -368,8 +371,8 @@ test("a detached child sends no mail; any in-scope session can still be read", a
   const child = await freshSession(r.sessions, opened.sessionId);
   await r.sessions.setParentSession(child.id, null);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done alone" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done alone" });
   const finished = await r.runs.get(queued.id);
 
   await deliverSubagentMail(
@@ -407,8 +410,8 @@ test("concurrent opens and wakes share one admission limit; a wake past it sends
   assert.ok(first.ok);
   const child = await freshSession(r.sessions, first.sessionId);
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued!.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const second = await r.syscallsFor(r.room).open({ task: "another" });
   assert.ok(second.ok);
   const rewritten = await r.syscallsFor(r.room).write({ wake: true, target: child.id, text: "again" });
@@ -471,8 +474,8 @@ test("terminal children remain recoverable until their return is acknowledged", 
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued!.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const [pending] = await r.runs.pendingReturns();
   assert.equal(pending!.id, queued!.id);
   let failed = false;
@@ -530,8 +533,8 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
   const destination = await r.sessions.getOrCreateByThread("web:U1:new-parent", "dm", scope, undefined, "slack");
   await r.sessions.setParentSession(child.id, destination.id);
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
-  await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "ready" });
+  const claimed = await claimTurn(r.ledger, queued!.id);
+  await endTurn(claimed!, { status: "ok", reply: "ready" });
   const finished = (await r.runs.get(queued!.id))!;
   await assert.rejects(
     deliverSubagentMail(
@@ -568,8 +571,8 @@ test("return pagination reaches later children while earlier returns remain bloc
       maxAttempts: 3,
       request: { actor, conversation, text: "finish", origin: { kind: "direct" } },
     });
-    const claimed = await r.runs.claimById(run.id, "worker", 30_000);
-    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+    const claimed = await claimTurn(r.ledger, run.id);
+    await endTurn(claimed!, { status: "ok", reply: "done" });
   }
   const first = await r.runs.pendingReturns(100);
   const next = await r.runs.pendingReturns(100, first.at(-1)!.id);
@@ -596,7 +599,7 @@ test("ordinary-session messages queue privately without steering an externally d
       text: "original task",
     },
   });
-  await r.runs.claimById(run.id, "worker", 60_000);
+  await claimTurn(r.ledger, run.id);
   const result = await r.syscallsFor(r.room).write({ target: target.id, text: "an intermediate update" });
   assert.ok(result.ok);
   assert.equal(result.delivered, "queued_message");
@@ -618,7 +621,7 @@ test("read-only callers cannot steer writable children and preserve the floor wh
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
+  const claimed = await claimTurn(r.ledger, run!.id);
   const api = createSessionSyscalls({
     mailbox: r.mailbox,
     sessions: r.sessions,
@@ -634,7 +637,7 @@ test("read-only callers cannot steer writable children and preserve the floor wh
   const refused = await api.write({ wake: true, target: child.id, text: "change things" });
   assert.ok(refused.ok);
   assert.deepEqual(await r.signals.takePending(run!.id), []);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "finished" });
+  await endTurn(claimed!, { status: "ok", reply: "finished" });
   const queued = await api.write({ wake: true, target: child.id, text: "inspect only" });
   assert.ok(queued.ok);
   assert.equal((await r.runs.inFlightForThread(child.threadRef))[0]!.request.readOnly, true);
@@ -646,7 +649,7 @@ test("writes revalidate access even while a target is running", async () => {
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  await r.runs.claimById(run!.id, "worker", 60_000);
+  await claimTurn(r.ledger, run!.id);
   const api = createSessionSyscalls({
     mailbox: r.mailbox,
     sessions: r.sessions,
@@ -666,8 +669,8 @@ test("completion cannot expand the finished run's audience and retries after its
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
+  const claimed = await claimTurn(r.ledger, run!.id);
+  await endTurn(claimed!, { status: "ok", reply: "private result" });
   let expanded = true;
   let attempts = 0;
   const recover = async () => {
@@ -723,7 +726,7 @@ test("private session replies stay read-only, queue behind running work, and do 
   const child = await freshSession(r.sessions, opened.sessionId);
   const initial = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.equal(initial.request.origin.kind, "automation");
-  await r.runs.claimById(initial.id, "worker", 30_000);
+  await claimTurn(r.ledger, initial.id);
   const factory = createSessionSyscalls({
     mailbox: r.mailbox,
     sessions: r.sessions,
@@ -854,8 +857,8 @@ test("siblings and children send durable deduplicated messages without new turns
     sessionId: r.room.threadRef,
     request: { actor, conversation, origin: { kind: "direct" }, text: "parent task" },
   });
-  const claimed = await r.runs.claimById(run.id, "parent-worker", 30_000);
-  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "ready" });
+  const claimed = await claimTurn(r.ledger, run.id);
+  await endTurn(claimed!, { status: "ok", reply: "ready" });
   assert.equal((await sender.write({ target: "parent", text: "progress" })).ok, true);
   assert.equal((await parent.receive!()).length, 1);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
@@ -977,8 +980,8 @@ test("queued results recheck source-entry visibility after participant tenure ch
   });
   await r.sessions.releaseLease(lease!);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, {
+  const claimed = await claimTurn(r.ledger, run!.id);
+  await endTurn(claimed!, {
     status: "ok",
     reply: "OLD_PRIVATE_RESULT",
     sourceAssistantEntrySeq: entry.seq,
@@ -1039,12 +1042,12 @@ test("completion wakes preserve a spine trigger's delivery destination", async (
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
+    const parentTurn = await claimTurn(r.ledger, pending.id);
     assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    await endTurn(parentTurn!, { status: "silent" });
   }
   await deliverSubagentMail(
     { ...r, maxAttempts: 3, delegationEnabled: async () => true },
@@ -1079,8 +1082,8 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", wake: true })).ok);
   const followup = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
@@ -1106,8 +1109,8 @@ test("follow-up tasks cannot inherit a prior caller's automation authority", asy
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   assert.ok((await r.syscallsFor(r.room).write({ target: child.id, text: "unprivileged follow-up", wake: true })).ok);
   const next = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   assert.equal(next.request.unattendedGrants, undefined);
@@ -1141,8 +1144,8 @@ async function webChildRig() {
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const deliver = async () =>
     deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => false }, (await r.runs.get(queued.id))!);
   return { ...r, room, api, deliver, wakeKey: `subagent-return:${queued.id}` };
@@ -1176,8 +1179,8 @@ test("a busy parent collects completion mail at its next tool boundary without a
   assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
   const mail = await r.api.receive!(0);
   await r.api.acknowledge!(mail.map((message) => message.id));
-  const claimed = await r.runs.claimById(busy.run.id, "w1", 60000);
-  await r.runs.complete(busy.run.id, claimed!.leaseToken!, { status: "ok", reply: "hello" });
+  const claimed = await claimTurn(r.ledger, busy.run.id);
+  await endTurn(claimed!, { status: "ok", reply: "hello" });
   assert.equal(await r.deliver(), true);
   assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
 });
@@ -1239,8 +1242,8 @@ test("delegated human origin retains live authority boundaries", async () => {
 
 test("unrelated automated follow-ups cannot borrow earlier human authority", async () => {
   const r = await delegatedHumanRig();
-  const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
-  await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, r.run.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const parent = await r.runs.enqueue({
     sessionId: r.room.threadRef,
     request: { actor, conversation, surface: "slack", origin: { kind: "automation" }, text: "scheduled work" },
@@ -1302,12 +1305,12 @@ test("a later participant cannot change a completion's actor, rollout, destinati
       text: "unrelated",
     },
   });
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, queued.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   for (const pending of await r.runs.inFlightForThread(room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
+    const parentTurn = await claimTurn(r.ledger, pending.id);
     assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    await endTurn(parentTurn!, { status: "silent" });
   }
   await deliverSubagentMail(
     { ...r, maxAttempts: 3, delegationEnabled: async (id) => id === actor.id },
@@ -1324,12 +1327,12 @@ test("a later participant cannot change a completion's actor, rollout, destinati
 for (const surface of ["slack", "web"] as const) {
   test(`${surface} completion wakes preserve live authorization for subsequent delegated steps`, async () => {
     const r = await delegatedHumanRig({ surface });
-    const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
-    await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "step one" });
+    const claimed = await claimTurn(r.ledger, r.run.id);
+    await endTurn(claimed!, { status: "ok", reply: "step one" });
     for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
-      const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
+      const parentTurn = await claimTurn(r.ledger, pending.id);
       assert.ok(parentTurn);
-      await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+      await endTurn(parentTurn!, { status: "silent" });
     }
     await deliverSubagentMail(
       { ...r, maxAttempts: 3, delegationEnabled: async () => true },
@@ -1360,15 +1363,15 @@ test("completed children do not fill a working parent's run slots and consumed r
     sessionId: r.room.threadRef,
     request: { actor, conversation, surface: "slack", origin: { kind: "human" }, text: "work" },
   });
-  await r.runs.claimById(parent.run.id, "parent", 60_000);
+  await claimTurn(r.ledger, parent.run.id);
   const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
   for (let i = 0; i < 12; i++) {
     const opened = await r.syscallsFor(r.room).open({ task: `work ${i}` });
     assert.ok(opened.ok);
     const child = await freshSession(r.sessions, opened.sessionId);
     const [run] = await r.runs.inFlightForThread(child.threadRef);
-    const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-    await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `result ${i}` });
+    const claimed = await claimTurn(r.ledger, run!.id);
+    await endTurn(claimed!, { status: "ok", reply: `result ${i}` });
     const finished = (await r.runs.get(run!.id))!;
     assert.equal(await deliverSubagentMail(deps, finished), false);
     assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
@@ -1398,22 +1401,22 @@ test("unread completions survive parent shutdown and share one pending wakeup", 
     sessionId: r.room.threadRef,
     request: { actor, conversation, surface: "slack", origin: { kind: "human" }, text: "work" },
   });
-  const active = await r.runs.claimById(parent.run.id, "parent", 60_000);
+  const active = await claimTurn(r.ledger, parent.run.id);
   assert.deepEqual(await r.syscallsFor(r.room).receive!(), []);
   for (let i = 0; i < 3; i++) {
     const opened = await r.syscallsFor(r.room).open({ task: `late result ${i}` });
     assert.ok(opened.ok);
     const child = await freshSession(r.sessions, opened.sessionId);
     const [run] = await r.runs.inFlightForThread(child.threadRef);
-    const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-    await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `late ${i}` });
+    const claimed = await claimTurn(r.ledger, run!.id);
+    await endTurn(claimed!, { status: "ok", reply: `late ${i}` });
     assert.equal(await deliverSubagentMail(deps, (await r.runs.get(run!.id))!), false);
   }
-  await r.runs.complete(parent.run.id, active!.leaseToken!, { status: "silent" });
+  await endTurn(active!, { status: "silent" });
   for (const run of await r.runs.pendingReturns()) assert.equal(await deliverSubagentMail(deps, run), false);
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
-  const wake = await r.runs.claimById(wakes[0]!.id, "parent-restarted", 60_000);
+  const wake = await claimTurn(r.ledger, wakes[0]!.id);
   const mail = await r.syscallsFor(r.room).receive!();
   assert.equal(mail.length, 3);
   await r.syscallsFor(r.room).acknowledge!(mail.map((message) => message.id));
@@ -1421,8 +1424,8 @@ test("unread completions survive parent shutdown and share one pending wakeup", 
     assert.equal(await deliverSubagentMail(deps, run), true);
     await r.runs.markReturned(run.id);
   }
-  assert.equal((await r.runs.get(wake!.id))!.status, "running");
-  await r.runs.complete(wake!.id, wake!.leaseToken!, { status: "silent" });
+  assert.equal((await r.runs.get(wake!.run.id))!.status, "running");
+  await endTurn(wake!, { status: "silent" });
   assert.deepEqual(await r.runs.pendingReturns(), []);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
 });
@@ -1434,8 +1437,8 @@ test("legacy returned children with consumed mail release queued wakeups without
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, run!.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const finished = (await r.runs.get(run!.id))!;
   assert.equal(await deliverSubagentMail(deps, finished), false);
   await r.runs.markReturned(finished.id);
@@ -1464,14 +1467,14 @@ test("a completion wake that consumed mail and then retries retains its turn and
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(r.ledger, run!.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const finished = (await r.runs.get(run!.id))!;
   await deliverSubagentMail(deps, finished);
   const wake = (await r.runs.inFlightForThread(r.room.threadRef))[0]!;
-  const running = await r.runs.claimById(wake.id, "parent", 60_000);
+  const running = await claimTurn(r.ledger, wake.id);
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${finished.id}`]);
-  await r.runs.fail(wake.id, running!.leaseToken!, "transient failure", { retryAfterMs: 1000 });
+  await retryTurn(running!, 1000);
   assert.equal(await deliverSubagentMail(deps, finished), true);
   await r.runs.markReturned(finished.id);
   assert.equal((await r.runs.get(wake.id))!.status, "pending");
@@ -1513,10 +1516,10 @@ for (const addressed of [true, false]) {
       conversationHeader: "old header",
     };
     const r = await delegatedHumanRig({ ...inherited, ...transient });
-    const parent = await r.runs.claimById(r.parent.id, "parent", 60000);
-    await r.runs.complete(r.parent.id, parent!.leaseToken!, { status: "silent" });
-    const child = await r.runs.claimById(r.run.id, "child", 60000);
-    await r.runs.complete(r.run.id, child!.leaseToken!, { status: "ok", reply: "verified result" });
+    const parent = await claimTurn(r.ledger, r.parent.id);
+    await endTurn(parent!, { status: "silent" });
+    const child = await claimTurn(r.ledger, r.run.id);
+    await endTurn(child!, { status: "ok", reply: "verified result" });
     const result = (await r.runs.get(r.run.id))!;
     await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, result);
     const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
@@ -1583,9 +1586,9 @@ for (const status of ["ok", "pending_approval"] as const) {
     assert.ok(out.ok);
     const child = await freshSession(r.sessions, out.sessionId);
     const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-    const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+    const claimed = await claimTurn(r.ledger, run.id);
     const attachment = { name: "report.pdf", blobId: "report", mimetype: "application/pdf", sizeBytes: 42 };
-    await r.runs.complete(run.id, claimed!.leaseToken!, {
+    await endTurn(claimed!, {
       status,
       attachments: [attachment],
       pendingApprovals: [{ requestId: "approve-report", command: "publish", reason: "needs consent" }],
@@ -1611,8 +1614,8 @@ test("file-only child completion is a result", async () => {
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
-  await r.runs.complete(run.id, claimed!.leaseToken!, {
+  const claimed = await claimTurn(r.ledger, run.id);
+  await endTurn(claimed!, {
     status: "ok",
     attachments: [{ name: "chart.png", blobId: "chart", mimetype: "image/png", sizeBytes: 1 }],
   });
@@ -1626,7 +1629,7 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const claimed = await claimTurn(r.ledger, run.id);
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const childApi = factory.forTurn({ session: child, scopeId: scope, request: { ...run.request, runId: run.id } });
   const grandchild = await childApi.open({ task: "more work" });
@@ -1641,7 +1644,7 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
   assert.equal(late.ok, false);
   const followup = await childApi.write({ target: grandchild.sessionId, wake: true, text: "late followup" });
   assert.equal(followup.ok, false);
-  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "late result" });
+  await endTurn(claimed!, { status: "ok", reply: "late result" });
   assert.equal(
     await deliverSubagentMail(
       { ...r, maxAttempts: 3, delegationEnabled: async () => true },
@@ -1662,7 +1665,7 @@ test("stop still signals a queued child claimed during withdrawal", async () => 
   const runs = {
     ...r.runs,
     withdraw: async (id: string) => {
-      await r.runs.claimById(id, "racer", 60_000);
+      await claimTurn(r.ledger, id);
       return false;
     },
   };
@@ -1698,11 +1701,11 @@ for (const surface of ["slack", "web"] as const) {
       const child = await open(parent);
       const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
       assert.equal(queued.request.deliveryTarget, "D1");
-      const first = await r.runs.claimById(queued.id, "worker", 60_000);
-      await r.runs.fail(queued.id, first!.leaseToken!, "transient", { retry: true });
-      const claimed = await r.runs.claimById(queued.id, "worker", 60_000);
+      const first = await claimTurn(r.ledger, queued.id);
+      await retryTurn(first!);
+      const claimed = await claimTurn(r.ledger, queued.id);
       const attachment = { name: "report.txt", blobId: "report", mimetype: "text/plain", sizeBytes: 42 };
-      await r.runs.complete(queued.id, claimed!.leaseToken!, {
+      await endTurn(claimed!, {
         status: "ok",
         reply: "INTERNAL_CHILD_REPORT: suggested answer for parent",
         attachments: [attachment],
@@ -1733,8 +1736,8 @@ for (const surface of ["slack", "web"] as const) {
       assert.deepEqual(files[0]!.attachments, [attachment]);
       assert.equal(files[0]!.destination.target, "D1");
       const parentRun = (await r.runs.enqueue({ sessionId: r.room.threadRef, request })).run;
-      const parentClaim = await r.runs.claimById(parentRun.id, "parent", 60_000);
-      await r.runs.complete(parentRun.id, parentClaim!.leaseToken!, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
+      const parentClaim = await claimTurn(r.ledger, parentRun.id);
+      await endTurn(parentClaim!, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
       await new Promise<void>((resolve) => setImmediate(resolve));
       const publicResults = await deliveries.pending(surface);
       assert.deepEqual(publicResults.map((item) => item.text).filter(Boolean), ["PUBLIC_PARENT_ANSWER"]);
@@ -1751,7 +1754,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
@@ -1795,7 +1798,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");

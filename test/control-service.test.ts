@@ -47,7 +47,7 @@ function claims(
   };
 }
 
-function setup(): { built: BuiltApp; control: ControlService } {
+function setup(): { built: ReturnType<typeof buildApp>; control: ControlService } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }));
   const control = createControlService(built.app, built.scheduler, built.admin);
   return { built, control };

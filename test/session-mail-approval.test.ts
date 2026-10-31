@@ -34,8 +34,8 @@ import {
   testMap,
   testDeployBackings,
 } from "./support/test-database.ts";
+import { testRunStore } from "./support/turns.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 function fakeSandbox(): Sandbox {
@@ -64,7 +64,7 @@ let callSeq = 0;
 
 async function scenario() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");

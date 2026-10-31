@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import type { ErrorLog } from "../../src/admin/error-log.ts";
 import { randomUUID } from "node:crypto";
+import { after } from "node:test";
 import { isTerminal, type Run, type RunStore } from "../../src/runs/run-store.ts";
 import type { TurnRequest, TurnResult } from "../../src/types.ts";
 import type { App } from "../../src/api/app-types.ts";
 import { createTurnLedger, type TurnLedger } from "../../src/turns/turn-ledger.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
 import { bindTurnLedger } from "../../src/turns/turn-engine.ts";
+import { createTurnRunner, type TurnRunner, type TurnRunnerDeps } from "../../src/turns/turn-runner.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { testMigratedDatabaseUrl } from "./test-database.ts";
 import { CONFIG_DEFAULTS } from "../../src/config.ts";
+import type { Runtime } from "../../src/wiring.ts";
 
 type Runs = Pick<RunStore, "get" | "activeForThread" | "list">;
 
@@ -121,4 +124,63 @@ export async function failedTurnError(
     .filter((event) => event.category === "turn")
     .map((event) => event.message)
     .join("\n");
+}
+
+/** Ends a claimed turn the way the runner records a turn result: failed results finish failed, the rest done. */
+export async function endTurn(claimed: ClaimedTurn, result: TurnResult): Promise<boolean> {
+  return finishTurn(claimed, result, result.status === "failed" ? "failed" : "done");
+}
+
+/**
+ * A ledger on a built app's database for claiming its turns by hand, reporting terminal turns to the app's run
+ * store. Call after the app's turn runner is stopped (`pauseTurns`) or before anything starts it.
+ */
+export function appLedger(built: { runs: Pick<RunStore, "emitTerminal"> }, databaseUrl: string): TurnLedger {
+  const ledger = createTurnLedger(databaseUrl, { onTerminal: (run) => built.runs.emitTerminal(run) });
+  after(() => ledger.close());
+  return ledger;
+}
+
+/**
+ * Stops a built app's turn runner from starting turns, so a test can claim and end them by hand. A claim already in
+ * flight is handed straight back; the short wait lets it land. Sync turns hang while paused: `resumeTurns` first.
+ */
+export async function pauseTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): Promise<void> {
+  built.runtime.setBackgroundAdmission(
+    () => false,
+    () => false,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+export function resumeTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): void {
+  built.runtime.setBackgroundAdmission(
+    () => true,
+    () => false,
+  );
+}
+
+/** A started turn runner over `ledger` that retries at once; stops claiming at the end of the file. */
+export function startTurnRunner(
+  ledger: TurnLedger,
+  orchestrator: TurnRunnerDeps["orchestrator"],
+  opts: Partial<Omit<TurnRunnerDeps, "ledger" | "orchestrator">> = {},
+): TurnRunner {
+  const runner = createTurnRunner({
+    ledger,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: 1,
+    pollMs: 20,
+    retryDelayMs: () => 0,
+    ...opts,
+  });
+  runner.start();
+  after(() => runner.stopClaims());
+  return runner;
+}
+
+/** Hands a claimed turn back after an error, as the runner does before a retry. */
+export async function retryTurn(claimed: ClaimedTurn, delayMs = 0): Promise<boolean> {
+  return claimed.ledger.handBack(claimed.run, claimed.token, { stop: { kind: "error" }, delayMs, countsAsError: true });
 }

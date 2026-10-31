@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settledRun } from "./support/turns.ts";
 
 const actor = { externalId: "U1" };
 function dm(text: string): TurnRequest {
@@ -23,13 +24,8 @@ function dm(text: string): TurnRequest {
   };
 }
 
-async function settled(built: ReturnType<typeof buildApp>, runId: string) {
-  for (let i = 0; i < 300; i++) {
-    const run = await built.runs.get(runId);
-    if (run && (run.status === "done" || run.status === "failed")) return run;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`run ${runId} did not settle`);
+function settled(built: ReturnType<typeof buildApp>, runId: string) {
+  return settledRun(built.runs, runId);
 }
 
 test("a run's tool entries are read from the session, bounded by its turn and its viewer", async () => {
