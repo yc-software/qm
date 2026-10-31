@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const started: string[][] = [];
 const pending: Array<() => void> = [];
@@ -25,7 +26,7 @@ test("notification publication preserves order without concurrent pool queries a
   bus.emit(1);
   bus.emit(2);
   await tick();
-  assert.deepEqual(started, [["\n1", "\n2"]]);
+  assert.deepEqual(started, [[`${TEST_TENANT}\n1`, `${TEST_TENANT}\n2`]]);
   bus.emit(3);
   bus.emit(4);
   const closing = bus.close!();
@@ -33,8 +34,8 @@ test("notification publication preserves order without concurrent pool queries a
   pending.shift()!();
   await tick();
   assert.deepEqual(started, [
-    ["\n1", "\n2"],
-    ["\n3", "\n4"],
+    [`${TEST_TENANT}\n1`, `${TEST_TENANT}\n2`],
+    [`${TEST_TENANT}\n3`, `${TEST_TENANT}\n4`],
   ]);
   assert.equal(closed, false);
   pending.shift()!();

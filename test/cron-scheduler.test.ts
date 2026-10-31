@@ -15,6 +15,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
@@ -897,7 +898,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -942,7 +943,7 @@ for (const queued of [false, true]) {
     let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
     const jobQueue: CronJobQueue = {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1008,7 +1009,12 @@ for (const queued of [false, true]) {
       assert.equal(pending.nextFireAt, owedSlot, "the unstarted slot remains owed");
       assert.equal(pending.deferUntil, 32_000, "the retry is durable and delayed");
       if (queued) {
-        assert.deepEqual(enqueued.at(-1), { cronId: cron.id, scheduledAt: owedSlot, notBefore: 32_000 });
+        assert.deepEqual(enqueued.at(-1), {
+          tenantId: TEST_TENANT,
+          cronId: cron.id,
+          scheduledAt: owedSlot,
+          notBefore: 32_000,
+        });
         await onFire!({ cronId: other.id, scheduledAt: 2000 });
       }
       assert.equal((await crons.get(other.id))!.enabled, false, "an unrelated cron can finish while this one runs");
@@ -1075,7 +1081,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1170,7 +1176,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       async enqueueFire() {},
       healthy: () => true,
@@ -1484,7 +1490,7 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
     now: () => clock,
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1511,14 +1517,14 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   assert.equal(stored.deferUntil, 35_000);
   assert.deepEqual(
     enqueued.pop(),
-    { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 },
+    { tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1, notBefore: 35_000 },
     "same slot, held until the deferral",
   );
 
   clock = 10_000;
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "a job arriving early is re-queued, not run");
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 });
+  assert.deepEqual(enqueued.pop(), { tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 1, notBefore: 35_000 });
 
   clock = 35_000;
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
@@ -1526,7 +1532,11 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   stored = (await crons.get(cron.id))!;
   assert.equal(stored.lastFiredAt, 35_000);
   assert.equal(stored.deferUntil, undefined);
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
+  assert.deepEqual(
+    enqueued.pop(),
+    { tenantId: TEST_TENANT, cronId: cron.id, scheduledAt: 36_000 },
+    "the next slot is chained without a hold",
+  );
   scheduler.stop();
 });
 
@@ -1622,7 +1632,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
     },
     jobQueue: {
       start: async (handlers) => {
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       enqueueFire: async () => {},
       healthy: () => true,
@@ -1710,7 +1720,7 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
     jobQueue: {
       start: async (handlers) => {
         starts++;
-        onFire = handlers.onFire;
+        onFire = (job) => handlers.onFire({ tenantId: TEST_TENANT, ...job });
       },
       enqueueFire: async () => {},
       healthy: () => true,

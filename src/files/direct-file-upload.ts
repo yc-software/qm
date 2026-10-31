@@ -22,6 +22,7 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-u
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { inTenantOf } from "../tenants/claim.ts";
+import { withoutTenant } from "../tenants/context.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
@@ -130,7 +131,10 @@ export function createDirectFileUploads(options: {
       throw new FileUploadError("upload parts are incomplete or do not match the manifest", 409);
     return parts;
   }
-  const sweeper = createSweeper(() => service.sweep(), 60_000, { label: "file uploads", immediate: true });
+  const sweeper = createSweeper(() => withoutTenant(() => service.sweep()), 60_000, {
+    label: "file uploads",
+    immediate: true,
+  });
   const service: DirectFileUploads = {
     async begin(input) {
       if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0 || input.sizeBytes > MAX_DIRECT_FILE_BYTES)

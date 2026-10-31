@@ -48,7 +48,10 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
     ["ch:C1:1", "ch:C2:2"],
   );
   reg.settle("ch:C1:1");
-  assert.deepEqual(reg.list(), [{ threadRef: "ch:C2:2" }]);
+  assert.deepEqual(
+    reg.list().map(({ threadRef }) => threadRef),
+    ["ch:C2:2"],
+  );
 });
 
 test("nothing engaged ⇒ a pass does no work", async () => {

@@ -11,6 +11,8 @@ import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { eachTenant } from "../src/tenants/claim.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -436,7 +438,12 @@ test("background MCP refresh contains registry failures on change and on its tim
     throw new Error("registry unavailable");
   });
   const errors = t.mock.method(console, "error", () => {});
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 100 });
+  const service = createMcpToolService({
+    fetch: loopbackFetch,
+    servers: store,
+    refreshIntervalMs: 100,
+    tenants: eachTenant(async () => [TEST_TENANT]),
+  });
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
   await tick();

@@ -4,6 +4,7 @@ import { startSignalPoll, waitForClientResult, type RunSignalStore } from "../sr
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 bindTestTenant();
 
@@ -70,7 +71,7 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
     "terminal completion consumes the stop",
   );
   assert.deepEqual(
-    (await store.pendingRuns()).map((run) => run.runId),
+    (await withoutTenant(() => store.pendingRuns())).map((run) => run.runId),
     [],
     "the stop does not outlive the run's terminal completion",
   );
@@ -112,7 +113,7 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
   }
   await store.takePending("r1");
   assert.deepEqual(
-    (await store.pendingRuns()).map((run) => run.runId),
+    (await withoutTenant(() => store.pendingRuns())).map((run) => run.runId),
     [],
   );
 });
@@ -333,7 +334,7 @@ test("store: pending retains steers until acknowledged and leaves aborts for ter
       ["abort"],
       "steers are consumed exactly once; the abort is never consumed by a live drain",
     );
-    assert.ok((await store.pendingRuns()).map((run) => run.runId).includes(runId));
+    assert.ok((await withoutTenant(() => store.pendingRuns())).map((run) => run.runId).includes(runId));
     assert.deepEqual(
       (await store.takePending(runId)).map((s) => s.kind),
       ["abort"],
@@ -341,7 +342,7 @@ test("store: pending retains steers until acknowledged and leaves aborts for ter
     );
     assert.deepEqual(await store.pending(runId), []);
     assert.ok(
-      !(await store.pendingRuns()).map((run) => run.runId).includes(runId),
+      !(await withoutTenant(() => store.pendingRuns())).map((run) => run.runId).includes(runId),
       "nothing outlives the terminal drain",
     );
   } finally {
@@ -375,11 +376,11 @@ test("store: pendingRunIds lists unconsumed runs; prune deletes only old consume
   try {
     await store.send(a, { kind: "steer", text: "x" });
     await store.send(b, { kind: "steer", text: "y" });
-    const pending = (await store.pendingRuns()).map((run) => run.runId);
+    const pending = (await withoutTenant(() => store.pendingRuns())).map((run) => run.runId);
     assert.ok(pending.includes(a) && pending.includes(b));
     await store.takePending(a);
     await store.prune(0);
-    const after = (await store.pendingRuns()).map((run) => run.runId);
+    const after = (await withoutTenant(() => store.pendingRuns())).map((run) => run.runId);
     assert.ok(!after.includes(a), "consumed and pruned");
     assert.ok(after.includes(b), "unconsumed survives any prune");
     assert.equal((await store.takePending(b)).length, 1, "the surviving signal is intact");
