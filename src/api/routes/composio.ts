@@ -604,12 +604,6 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
 }
 
-export interface ComposioReturn {
-  url: string | null;
-  toolkit: string;
-  expiresAt: number;
-}
-
 async function identity(ctx: ApiCtx): Promise<void> {
   const principal = ctx.actor?.p ?? ctx.capability?.actorId;
   if (!principal || !(await activePrincipal(ctx.deps, principal)))

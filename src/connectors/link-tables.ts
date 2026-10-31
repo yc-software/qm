@@ -5,7 +5,6 @@ import { jsonBackfill, upsertStatement } from "../persistence/typed-statements.t
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { SecretDropRecord } from "../credentials/secret-drop.ts";
 import type { McpServer } from "../mcp/mcp-server-store.ts";
-import type { ComposioReturn } from "../api/routes/composio.ts";
 import type { ConsentLinkRecord } from "./consent-link.ts";
 import type { OAuthState } from "./oauth.ts";
 import type { StoredBrowserSession } from "./browser-session-store.ts";
@@ -19,6 +18,12 @@ export interface OneTimeRows<T> {
 export interface SecretDropRows extends OneTimeRows<SecretDropRecord> {
   siblings(rec: SecretDropRecord, createdSince: number): Promise<SecretDropRecord[]>;
   deleteCreatedBefore(cutoff: number): Promise<void>;
+}
+
+export interface ComposioReturn {
+  url: string | null;
+  toolkit: string;
+  expiresAt: number;
 }
 
 export interface ComposioReturnRows {
