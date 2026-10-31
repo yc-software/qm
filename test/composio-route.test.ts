@@ -528,7 +528,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     );
     assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
     assert.equal((await f.deps.principalLinks.list()).length, 0);
-    assert.equal((await f.deps.slackAccounts.all()).length, 0);
+    assert.equal((await (f.deps.slackAccounts as ReturnType<typeof createMemoryMap>).all()).length, 0);
   }
 });
 
@@ -1023,7 +1023,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
     });
     f.replies.push({ ...account, id: "ca_expired", user_id: canonical, status: "EXPIRED" }, account);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
-    await f.deps.slackAccounts.delete("alice");
+    await (f.deps.slackAccounts as ReturnType<typeof createMemoryMap>).delete("alice");
     f.replies.push(
       { session_id: "trs_test" },
       { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
@@ -1139,7 +1139,7 @@ test("Slack replies cannot target hidden sessions or accept blank messages", asy
 
 test("Slack replies require a linked user account and never fall back to the bot token", async () => {
   const f = await slackReplyFixture();
-  await f.deps.slackAccounts!.delete("alice");
+  await (f.deps.slackAccounts as ReturnType<typeof createMemoryMap>).delete("alice");
   f.deps.slackEnvBotToken = "must-not-use";
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, false);
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).status, 409);

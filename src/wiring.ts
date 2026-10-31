@@ -1,11 +1,22 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
-import { resolveEmbeddingModel } from "./model/pi-models.ts";
+import {
+  resolveEmbeddingModel,
+  auxiliaryModelFor,
+  codexSubscriptionModelId,
+  isOverlayModel,
+  modelRequestOverrides,
+  auxiliaryModelForProvider,
+  resolveModel,
+  resolveBuiltinModel,
+  type HarnessId,
+  modelSupportedByHarness,
+} from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import { createSlackTables, memorySlackRows, type SlackTables } from "./slack/slack-tables.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore, createPostgresApprovalStore } from "./core/approval-store.ts";
 import { createApprovalGrantStore, createPostgresApprovalGrantStore } from "./core/approval-grant-store.ts";
@@ -38,10 +49,9 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { emitRunReasoning, emitRunText, createRunStreamBus, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { perTenant } from "./tenants/context.ts";
+import { perTenant, boundTenant, currentTenant, tenantKey, tenantRootScope, withoutTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
 import { createLoopTables } from "./loops/tables.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
@@ -78,7 +88,6 @@ import {
 } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { Config } from "./config.ts";
@@ -97,7 +106,7 @@ import {
   createPrincipalLinkStore,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink } from "./api/routes/composio.ts";
+import type { SlackAccountRows } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import { createExternalMemberStore, createPostgresExternalMemberStore } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -112,7 +121,6 @@ import type { SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills, lazySkillBoot } from "./skills/seed.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
-import { boundTenant, currentTenant, tenantKey, tenantRootScope, withoutTenant } from "./tenants/context.ts";
 import { memoryTenants, pgTenants } from "./tenants/resolver.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import { createPostgresModelTables, memoryModelTables } from "./model/model-tables.ts";
@@ -371,17 +379,6 @@ import {
   createPostgresAckEmojiPickStore,
   type AckEmojiPickStore,
 } from "./surface-cache/ack-emoji-pick-store.ts";
-import {
-  auxiliaryModelFor,
-  codexSubscriptionModelId,
-  isOverlayModel,
-  modelRequestOverrides,
-  auxiliaryModelForProvider,
-  resolveModel,
-  resolveBuiltinModel,
-  type HarnessId,
-  modelSupportedByHarness,
-} from "./model/pi-models.ts";
 import { createAdminService, adminGrantSeed, type AdminService } from "./admin/admin-service.ts";
 import { composioNamespaceReader } from "./tenants/composio-namespace.ts";
 import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
@@ -477,6 +474,7 @@ export interface BuiltApp {
   runtime: Runtime;
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
+  slackTables?: SlackTables;
   slackInstallation: SlackInstallationStore;
   composioNamespace: () => Promise<string>;
   resolveClient: OAuthClientResolver;
@@ -513,7 +511,7 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
+  slackAccounts: SlackAccountRows;
   composioReturns: ComposioReturnRows;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
@@ -697,7 +695,11 @@ export function buildApp(
   const featureFlags = databaseUrl ? createPostgresFeatureFlagStore(databaseUrl) : createFeatureFlagStore();
   const teams = config.databaseUrl ? createPostgresTeamStore(config.databaseUrl, featureFlags) : undefined;
   const decisions = config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined;
-  const slackInstallation = createSlackInstallationStore(artifactMap("slack_installation"), connectorSecretKey);
+  const slackTables = config.databaseUrl ? createSlackTables(config.databaseUrl) : undefined;
+  const slackInstallation = createSlackInstallationStore(
+    (slackTables ?? memorySlackRows()).installation,
+    connectorSecretKey,
+  );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
@@ -2184,14 +2186,14 @@ export function buildApp(
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    ...(slackTables ? { taskAcknowledgements: slackTables.taskAcknowledgements } : {}),
+    ...(slackTables ? { sessionStatus: slackTables.sessionStatus } : {}),
     statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
+    ...(slackTables ? { stagedEnvelopes: slackTables.stagedEnvelopes } : {}),
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -2869,6 +2871,7 @@ export function buildApp(
     runtime,
     config: configStore,
     connectorTokens,
+    slackTables,
     slackInstallation,
     composioNamespace: composioNamespaceReader(pgArtifactMap?.pool ?? null),
     resolveClient,
@@ -2906,7 +2909,7 @@ export function buildApp(
     egressAudit,
     identity,
     principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    slackAccounts: (slackTables ?? memorySlackRows()).accounts,
     composioReturns,
     workspace,
     memory,

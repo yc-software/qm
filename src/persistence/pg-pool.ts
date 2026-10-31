@@ -62,7 +62,9 @@ async function retainPool(connectionString: string, kind: PoolKind): Promise<Poo
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
   const options = { ...connection, max, connectionTimeoutMillis: 10_000 };
-  const pool = guardedPool(kind === "query" || kind === "session" ? tenantPgPool(pg, options) : new pg.Pool(options));
+  const pool = guardedPool(
+    kind === "query" || kind === "session" || kind === "owner" ? tenantPgPool(pg, options) : new pg.Pool(options),
+  );
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }

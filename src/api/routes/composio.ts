@@ -627,6 +627,11 @@ export interface SlackAccountLink {
   workspace: string;
 }
 
+export interface SlackAccountRows {
+  get(principalId: string): Promise<SlackAccountLink | null>;
+  put(principalId: string, link: SlackAccountLink): Promise<void>;
+}
+
 async function slackStatus(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
   const installation = await ctx.deps.slackInstallation?.get();

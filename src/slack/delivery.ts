@@ -1,8 +1,8 @@
+import { boundTenant, currentTenant } from "../tenants/context.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
-import { perTenant } from "../tenants/context.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -29,13 +29,15 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
   };
 }
 
-const defaultIdentity = perTenant(() => ({ identity: {} as BotIdentityOverride }));
+const tenantIdentities = new Map<string, BotIdentityOverride>();
 export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  defaultIdentity().identity = identity ?? {};
+  if (identity && Object.keys(identity).length) tenantIdentities.set(currentTenant(), identity);
+  else tenantIdentities.delete(currentTenant());
 }
 
 export function botIdentityArgs(): BotIdentityOverride {
-  const id = defaultIdentity().identity;
+  const tenant = boundTenant();
+  const id = (tenant && tenantIdentities.get(tenant)) || {};
   return {
     ...(id.username ? { username: id.username } : {}),
     ...(id.icon_emoji ? { icon_emoji: id.icon_emoji } : {}),

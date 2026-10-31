@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 
 bindTestTenant();
 
@@ -28,7 +28,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
       },
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: {
       holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
       claimDeliveries: async (type: string) => {

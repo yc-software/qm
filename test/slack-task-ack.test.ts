@@ -8,7 +8,10 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 function setup() {
-  const store = createMemoryMap<TaskAckState>();
+  const map = createMemoryMap<TaskAckState>();
+  const store = Object.assign(map, {
+    unsettled: async () => (await map.entries()).filter(([, state]) => !state.synced || !state.finished),
+  });
   const events: string[] = [];
   const client = {
     reactions: {

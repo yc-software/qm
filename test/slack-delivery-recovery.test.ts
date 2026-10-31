@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 import { statusPlaceholderKey } from "../src/slack/lib.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
@@ -44,7 +44,7 @@ function harness(opts: { thread?: Array<Record<string, unknown>>; errors?: Recor
       acknowledgements.push(id);
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: core as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => {} } as never,

@@ -1,4 +1,3 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -15,6 +14,13 @@ export interface TaskAckState {
   synced?: boolean;
 }
 
+export interface TaskAckRows {
+  unsettled(): Promise<Array<[string, TaskAckState]>>;
+  get(runId: string): Promise<TaskAckState | null>;
+  putIfAbsent(runId: string, state: TaskAckState): Promise<TaskAckState>;
+  update?(runId: string, fn: (state: TaskAckState) => TaskAckState): Promise<TaskAckState | null>;
+}
+
 interface ReactionClient {
   reactions: {
     add(input: { channel: string; timestamp: string; name: string }): Promise<unknown>;
@@ -23,7 +29,7 @@ interface ReactionClient {
 }
 
 export function createTaskAcknowledgements(
-  store: DurableMap<TaskAckState>,
+  store: TaskAckRows,
   lease: LeaderLease,
   recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
 ) {
@@ -128,7 +134,7 @@ export function createTaskAcknowledgements(
   }
   return {
     reconcile: async (client: ReactionClient) => {
-      for (const [runId, state] of await store.entries()) {
+      for (const [runId, state] of await store.unsettled()) {
         if (!state.finished && recovery) {
           const run = await recovery.runs.get(runId);
           if (run && isTerminal(run.status) && !runResultDelivery(run)) {

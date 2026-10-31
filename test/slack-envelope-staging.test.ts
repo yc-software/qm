@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createEnvelopeStaging, envelopeKey, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -27,33 +28,6 @@ test("staging lands within its budget, or reports that it did not", async () => 
     stageTimeoutMs: 20,
   });
   assert.equal(await slow.stage("k2", envelope("message", "2.0")), false);
-});
-
-test("the sweep replays only stale unclaimed rows of its own account, claims them, and gives up on a failing handler after max attempts", async () => {
-  const map = createMemoryMap<StagedEnvelope>();
-  let now = 1_000_000;
-  const staging = createEnvelopeStaging(map, { account: "acct", now: () => now, staleAfterMs: 1_000, maxAttempts: 2 });
-  await map.put("other", { body: envelope("message", "2.0"), account: "other", receivedAt: 1, attempts: 0 });
-  await staging.stage("stale", envelope("message", "3.0"));
-  await map.merge("stale", { receivedAt: 1 });
-  now += 5_000;
-  await staging.stage("fresh", envelope("message", "1.0"));
-  const replayed: string[] = [];
-  const replay = async (body: Record<string, unknown>, gate: { failed(reason?: string): void }): Promise<void> => {
-    replayed.push((body.event as { ts: string }).ts);
-    gate.failed("handler down");
-  };
-  assert.equal(await staging.sweep(replay), 1);
-  assert.deepEqual(replayed, ["3.0"], "only the stale row of this account replays");
-  assert.equal(await staging.sweep(replay), 0, "a claimed row is not replayed again inside its claim window");
-  staging.accepted("fresh");
-  await tick(0);
-  now += 10 * 60_000;
-  assert.equal(await staging.sweep(replay), 1);
-  now += 10 * 60_000;
-  assert.equal(await staging.sweep(replay), 0, "after max attempts the row is left alone, not replayed forever");
-  assert.ok(await map.get("stale"), "the exhausted row stays visible until the daily sweep");
-  assert.ok(await map.get("other"), "another account's row is untouched");
 });
 
 test("a replay whose handler durably accepts clears the row through accepted()", async () => {
@@ -124,90 +98,41 @@ test("gate: a handler failure after the cap leaves the staged row for the sweepe
 
 test("a replay clears its row when the handler settles or accepts, keeps it while running, and keeps it on failure", async () => {
   const map = createMemoryMap<StagedEnvelope>();
-  let now = 1_000_000;
-  const staging = createEnvelopeStaging(map, {
-    account: "acct",
-    now: () => now,
-    staleAfterMs: 1_000,
-    replayWaitMs: 20,
-  });
-  for (const [key, ts] of [
+  const staging = createEnvelopeStaging(map, { account: "acct", replayWaitMs: 20 });
+  const rows = [
     ["settled", "1.0"],
     ["running", "2.0"],
     ["accepted", "3.0"],
     ["failed", "4.0"],
     ["late", "5.0"],
-  ] as const)
-    await staging.stage(key, envelope("message", ts));
-  now += 5_000;
+  ] as const;
+  for (const [key, ts] of rows) await staging.stage(key, envelope("message", ts));
   let releaseLate: (() => void) | undefined;
-  assert.equal(
-    await staging.sweep((body, gate) => {
-      const ts = (body.event as { ts: string }).ts;
-      if (ts === "2.0") return new Promise(() => {});
-      if (ts === "3.0") gate.persisted();
-      if (ts === "4.0") gate.failed("boom");
-      if (ts === "5.0") return new Promise((r) => (releaseLate = () => r()));
-      return Promise.resolve();
-    }),
-    5,
+  await Promise.all(
+    rows.map(([key, ts]) =>
+      staging.replay(
+        { tenantId: TEST_TENANT, key, body: envelope("message", ts), account: "acct", attempts: 1 },
+        (body, gate) => {
+          const replayed = (body.event as { ts: string }).ts;
+          if (replayed === "2.0") return new Promise(() => {});
+          if (replayed === "3.0") gate.persisted();
+          if (replayed === "4.0") gate.failed("boom");
+          if (replayed === "5.0") return new Promise((r) => (releaseLate = () => r()));
+          return Promise.resolve();
+        },
+      ),
+    ),
   );
   await tick(0);
   assert.equal(await map.get("settled"), null, "a settled replay (even a silent one) is done with the row");
   assert.equal(await map.get("accepted"), null, "durable acceptance clears the row");
   assert.ok(await map.get("running"), "an unfinished replay keeps its row until the handler accepts it");
   assert.ok(await map.get("failed"), "a replay whose handler failed keeps its row for the next attempt");
-  assert.ok(await map.get("late"), "the sweep moved on after its wait");
+  assert.ok(await map.get("late"), "the replay moved on after its wait");
   releaseLate!();
   await tick(0);
   assert.equal(await map.get("late"), null, "a replay that settles after the wait still clears its row");
 });
-
-test("the sweep skips a row another sweeper claimed between the read and the claim", async () => {
-  const map = createMemoryMap<StagedEnvelope>();
-  let now = 1_000_000;
-  const racing: typeof map = {
-    ...map,
-    update: async (key, fn) => {
-      await map.merge(key, { attempts: 1, claimedUntil: now + 60_000 });
-      return map.update!(key, fn);
-    },
-  };
-  const staging = createEnvelopeStaging(racing, { account: "acct", now: () => now, staleAfterMs: 1_000 });
-  await staging.stage("k", envelope("message", "1.0"));
-  now += 5_000;
-  let replays = 0;
-  assert.equal(
-    await staging.sweep(async () => {
-      replays++;
-    }),
-    0,
-  );
-  assert.equal(replays, 0);
-  assert.equal((await map.get("k"))?.attempts, 1, "the other sweeper's claim stands unmodified");
-});
-
-test("rows older than a day are dropped whatever their account, so retired apps do not leave garbage", async () => {
-  const map = createMemoryMap<StagedEnvelope>();
-  const now = 10 * 24 * 60 * 60_000;
-  const staging = createEnvelopeStaging(map, { account: "acct", now: () => now });
-  await map.put("old", {
-    body: envelope("message", "1.0"),
-    account: "retired",
-    receivedAt: now - 25 * 60 * 60_000,
-    attempts: 0,
-  });
-  await map.put("recent", {
-    body: envelope("message", "2.0"),
-    account: "retired",
-    receivedAt: now - 60_000,
-    attempts: 0,
-  });
-  assert.equal(await staging.sweep(async () => {}), 0);
-  assert.equal(await map.get("old"), null);
-  assert.ok(await map.get("recent"));
-});
-
 test("gate: acceptance that lands while the stage write is still in flight still clears the row once it lands", async () => {
   const map = createMemoryMap<StagedEnvelope>();
   let release: (() => void) | undefined;

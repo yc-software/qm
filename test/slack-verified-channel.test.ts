@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
@@ -135,6 +136,8 @@ test("equal observation stamps trigger recovery without changing the internal ro
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
 });
 
+const tenantFor = async (body: Record<string, unknown>) => (body.team_id === "T_TEST" ? TEST_TENANT : null);
+
 for (const mode of ["socket", "http"] as const)
   for (const afterCap of [false, true])
     test(`${mode} roster failure ${afterCap ? "after" : "before"} ack cap recovers without false external admission`, async (t) => {
@@ -142,7 +145,7 @@ for (const mode of ["socket", "http"] as const)
       const { observe } = fixture(options);
       const deduper = createDeduper();
       const map = createMemoryMap<StagedEnvelope>();
-      const staging = createEnvelopeStaging(map, { account: "test", staleAfterMs: 0 });
+      const staging = createEnvelopeStaging(map, { account: "test" });
       let release!: () => void;
       const blocked = new Promise<void>((resolve) => {
         release = resolve;
@@ -183,11 +186,18 @@ for (const mode of ["socket", "http"] as const)
       };
       const receiver =
         mode === "socket"
-          ? createDeferredAckReceiver({ appToken: "xapp-test", capMs: afterCap ? 1 : 5000, staging })
-          : createHttpEventsReceiver({ signingSecret: "test-secret", port: 0, capMs: afterCap ? 1 : 5000, staging });
+          ? createDeferredAckReceiver({ appToken: "xapp-test", capMs: afterCap ? 1 : 5000, staging, tenantFor })
+          : createHttpEventsReceiver({
+              signingSecret: "test-secret",
+              port: 0,
+              capMs: afterCap ? 1 : 5000,
+              staging,
+              tenantFor,
+            });
       receiver.init?.({ processEvent } as unknown as BoltApp);
       const body = {
         type: "event_callback",
+        team_id: "T_TEST",
         event_id: "EvTest",
         event: { type: "app_mention", channel: "C_ONE", ts: "1.1" },
       };
@@ -245,12 +255,12 @@ for (const mode of ["socket", "http"] as const)
       deduper.forget("message-key");
       options.failWrite = false;
       if (afterCap) {
-        assert.equal((await map.entries()).length, 1);
-        assert.equal(
-          await staging.sweep((replayed, ackGate) =>
-            processEvent({ body: replayed, ack: async () => {}, customProperties: { ackGate } }),
-          ),
-          1,
+        const staged = await map.entries();
+        assert.equal(staged.length, 1);
+        const [key, row] = staged[0]!;
+        await staging.replay(
+          { tenantId: TEST_TENANT, key, body: row.body, account: row.account, attempts: 1 },
+          (replayed, ackGate) => processEvent({ body: replayed, ack: async () => {}, customProperties: { ackGate } }),
         );
       } else {
         assert.equal((await map.entries()).length, 0);
