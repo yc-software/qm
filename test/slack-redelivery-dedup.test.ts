@@ -148,8 +148,7 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await claimTurn(built.ledger);
-    await endTurn(claimed!, { status: "ok", reply: "the answer" });
+    await endTurn((await claimTurn(built.ledger, runId))!, { status: "ok", reply: "the answer" });
     const again = await built.app.turn({ ...slackTurn("hello", "t1"), async: false });
     assert.equal(again.status, "silent");
   } finally {
