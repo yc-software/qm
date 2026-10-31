@@ -53,9 +53,7 @@ interface SurfaceRequest {
 }
 
 type InboundOutcome =
-  | { status: 401; reason: string }
-  | { status: 400; reason: string }
-  | { status: 200; messages: InboundMessage[] };
+  { status: 401; reason: string } | { status: 400; reason: string } | { status: 200; messages: InboundMessage[] };
 
 interface OutboundMessage {
   text: string;

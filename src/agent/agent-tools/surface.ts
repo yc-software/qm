@@ -46,9 +46,7 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? ` ${SLACK_MENTION_SYNTAX}`
-              : ""),
+            (surfaceName === "slack" ? ` ${SLACK_MENTION_SYNTAX}` : ""),
         }),
       ),
       channel: Type.Optional(
