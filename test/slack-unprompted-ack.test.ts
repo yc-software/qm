@@ -160,8 +160,9 @@ test("waitRun signals replying only once the run has passed detection and begun 
       get: async () => {
         polls++;
         if (polls === 2) turnStream.begin("r1");
-        return { id: "r1", status: polls >= 4 ? "done" : "running", attempts: 1 };
+        return { id: "r1", status: polls >= 4 ? "done" : "running", attempts: 1, leaseToken: "lease-1" };
       },
+      leaseHeld: async () => true,
     },
     app: { getRun: async () => ({ result: { status: "ok", reply: "done" } }) },
   } as any);

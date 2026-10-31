@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { ownTurnError } from "./support/turns.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -41,23 +42,24 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     await built.sandboxResources.setDefault(actor, scope, computer.id);
   }
   await built.config.setSharingPosture("org:default-org", "open");
+  const request = (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}): TurnRequest => ({
+    surface: "test",
+    actor: { externalId: actor },
+    origin: { kind: "human" },
+    conversation: room
+      ? {
+          kind: "channel",
+          channelRef: "C1",
+          threadRef: "C1:shared-test",
+          audience: members.map((externalId) => ({ externalId })),
+          publishMembers: members.map((externalId) => ({ externalId })),
+        }
+      : { kind: "dm", threadRef: `dm:${actor}:shared-test` },
+    text,
+    ...extra,
+  });
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
-    const result = await built.app.turn({
-      surface: "test",
-      actor: { externalId: actor },
-      origin: { kind: "human" },
-      conversation: room
-        ? {
-            kind: "channel",
-            channelRef: "C1",
-            threadRef: "C1:shared-test",
-            audience: members.map((externalId) => ({ externalId })),
-            publishMembers: members.map((externalId) => ({ externalId })),
-          }
-        : { kind: "dm", threadRef: `dm:${actor}:shared-test` },
-      text,
-      ...extra,
-    });
+    const result = await built.app.turn(request(text, room, actor, extra));
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.reply ?? "";
   };
@@ -100,7 +102,9 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   };
   const filePath = (ownerScopeId: string, name: string) =>
     `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
-  return { ...built, turn, skill, remove, file, filePath };
+  const failure = (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) =>
+    ownTurnError(built, request(text, room, actor, extra));
+  return { ...built, turn, failure, skill, remove, file, filePath };
 }
 
 test("sharing e2e: personal files and memories follow the speaker, opt-out, and automation boundaries", async (t) => {
@@ -548,7 +552,7 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   );
   let deniedTurn = 0;
   const denied = (origin: TurnRequest["origin"] = { kind: "human" }) =>
-    b.turn(onScratch("true"), true, "U1", {
+    b.failure(onScratch("true"), true, "U1", {
       origin,
       conversation: {
         kind: "channel",
@@ -559,20 +563,20 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
       },
     });
   await b.config.setSharingPosture("personal:U1", "isolated");
-  await assert.rejects(denied(), /credential handle is not available on this turn/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
+  assert.match(await denied(), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
   await b.config.setSharingPosture("personal:U1", "open");
   await b.config.setSharingPosture("channel:C1", "isolated");
-  await assert.rejects(denied(), /credential handle is not available on this turn/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
+  assert.match(await denied(), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
   await b.config.setSharingPosture("channel:C1", "open");
   await b.config.setSharingPosture("org:default-org", "isolated");
-  await assert.rejects(denied(), /credential handle is not available on this turn/);
-  await assert.rejects(denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
+  assert.match(await denied(), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
   await b.config.setSharingPosture("org:default-org", "open");
-  await assert.rejects(denied({ kind: "automation" }), /credential handle is not available on this turn/);
-  await assert.rejects(denied({ kind: "ambient" }), /credential handle is not available on this turn/);
-  await assert.rejects(denied({ kind: "ambient", live: false }), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "automation" }), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "ambient" }), /credential handle is not available on this turn/);
+  assert.match(await denied({ kind: "ambient", live: false }), /credential handle is not available on this turn/);
   const firstTurn = (channelRef: string, origin: TurnRequest["origin"] = { kind: "human" }) =>
     b.turn(selected(), true, "U1", {
       origin,
