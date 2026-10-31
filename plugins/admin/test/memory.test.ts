@@ -41,7 +41,7 @@ test("GET /api/memory forwards to /v1/admin/memory with the scope + actor + sign
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/memory?scope=org:acme");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -55,7 +55,7 @@ test("PATCH /api/memory forwards the body + scope to the core", async () => {
   const c = calls.at(-1)!;
   assert.equal(c.method, "PATCH");
   assert.equal(c.url, "/v1/admin/memory?scope=personal:U1");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.deepEqual(JSON.parse(c.body), { facts: [{ id: "1", text: "edited" }] });
 });
@@ -66,7 +66,7 @@ test("GET /api/memory/scopes (the notebook directory) forwards as a memory READ 
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/memory/scopes");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 

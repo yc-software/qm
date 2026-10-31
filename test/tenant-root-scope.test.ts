@@ -4,7 +4,7 @@ import { tenantRootScope, withTenant } from "../src/tenants/context.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { composioNamespaceReader } from "../src/tenants/composio-namespace.ts";
+import { composioNamespaceReader } from "../src/tenants/tenant-record.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";

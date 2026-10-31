@@ -45,7 +45,7 @@ test("POST /api/skill-packs forwards the register body, actor, and signature", a
   const c = calls.at(-1)!;
   assert.equal(c.method, "POST");
   assert.equal(c.url, "/v1/admin/skill-packs");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.deepEqual(JSON.parse(c.body), { url: "https://github.com/x/y", ref: "main" });
 });

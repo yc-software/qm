@@ -22,6 +22,16 @@ export function composioNamespaceReader(pool: Pick<PgPool, "q"> | null): () => P
   };
 }
 
+export function tenantNameReader(pool: Pick<PgPool, "q"> | null): () => Promise<string> {
+  return async () => {
+    const tenant = currentTenant();
+    if (!pool) return tenant;
+    const rows = await pool.q("SELECT name FROM tenants WHERE id = $1", [tenant]);
+    if (!rows[0]) throw new Error("Unknown tenant");
+    return String(rows[0].name);
+  };
+}
+
 export function composioUserId(namespace: string, principal: string): string {
   return `qm_${createHash("sha256")
     .update(JSON.stringify([namespace, principal]))

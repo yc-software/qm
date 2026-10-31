@@ -7113,8 +7113,8 @@
           if (me.status !== 401) return showView("unavailable-view", "Admin is temporarily unavailable.");
           return showView("signin-view", "Sign in through the portal to continue.");
         }
-        $("org-tag").textContent = me.data.org;
-        $("org-tag").title = "Organization: " + me.data.org;
+        $("org-tag").textContent = me.data.orgName;
+        $("org-tag").title = "Organization: " + me.data.orgName;
         $("who-name").title = "Signed in as " + me.data.principal;
         orgId = me.data.org;
         $("who-name").textContent = me.data.principal;
@@ -7122,7 +7122,7 @@
         if (me.data.isAdmin === false) {
           $("who").classList.remove("hidden");
           $("na-sub").textContent = me.data.principal;
-          $("na-org").textContent = me.data.org;
+          $("na-org").textContent = me.data.orgName;
           return showView("notadmin-view", "You don't have admin access.");
         }
         $("who").classList.remove("hidden");

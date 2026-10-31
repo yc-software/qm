@@ -21,9 +21,13 @@ const core = createServer((req: IncomingMessage, res) => {
     lastSigned = Boolean(req.headers["x-timestamp"] && req.headers["x-signature"]);
     lastPortalIdentity = (req.headers["x-portal-identity"] as string) ?? null;
     res.writeHead(200, { "content-type": "application/json" });
-    const admin = lastActor === "U-admin@acme";
+    const admin = lastActor === "U-admin";
     return void res.end(
-      JSON.stringify(admin ? { isAdmin: true, role: "org_admin", scopeId: "org:acme" } : { isAdmin: false }),
+      JSON.stringify({
+        ...(admin ? { isAdmin: true, role: "org_admin", scopeId: "org:tenant-1" } : { isAdmin: false }),
+        tenant: "tenant-1",
+        tenantName: "Acme",
+      }),
     );
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -76,20 +80,27 @@ test("/api/whoami with cookie admin=U-admin → 200 with the core's admin status
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), {
     principal: "U-admin",
-    org: "acme",
+    org: "tenant-1",
+    orgName: "Acme",
     isAdmin: true,
     role: "org_admin",
-    scopeId: "org:acme",
+    scopeId: "org:tenant-1",
     permissions: ["inbox"],
   });
-  assert.equal(lastActor, "U-admin@acme", "x-admin-actor forwarded as <sub>@<org>");
+  assert.equal(lastActor, "U-admin", "x-admin-actor forwarded as the bare principal");
   assert.equal(lastSigned, true, "source-auth headers present when CORE_SIGNING_SECRET is set");
 });
 
 test("/api/whoami with cookie admin=U-rando → 200 { isAdmin:false } (any non-empty cookie is trusted identity; the core decides)", async () => {
   const r = await api("/api/whoami", "admin=U-rando");
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { principal: "U-rando", org: "acme", isAdmin: false, permissions: [] });
+  assert.deepEqual(await r.json(), {
+    principal: "U-rando",
+    org: "tenant-1",
+    orgName: "Acme",
+    isAdmin: false,
+    permissions: [],
+  });
 });
 
 test("/api/whoami with NO admin cookie → 401 signed_out", async () => {
@@ -123,7 +134,7 @@ test("user deployments are never served on the privileged admin origin", async (
 test("a previously-non-allowlisted id (admin-zoe) is now forwarded as identity", async () => {
   const r = await api("/api/whoami", "admin=admin-zoe");
   assert.equal(r.status, 200);
-  assert.equal(lastActor, "admin-zoe@acme", "the core is asked about admin-zoe@acme");
+  assert.equal(lastActor, "admin-zoe", "the core is asked about admin-zoe");
   const body = (await r.json()) as { principal: string; isAdmin: boolean };
   assert.equal(body.principal, "admin-zoe");
   assert.equal(body.isAdmin, false);
@@ -134,13 +145,14 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
   const r = await fetch(`${base}/api/whoami`, { headers: { "x-portal-identity": token } });
   assert.equal(r.status, 200);
   assert.equal(lastPortalIdentity, token, "x-portal-identity forwarded verbatim to core");
-  assert.equal(lastActor, "U-admin@acme", "principal decoded from the portal identity, not a cookie");
+  assert.equal(lastActor, "U-admin", "principal decoded from the portal identity, not a cookie");
   assert.deepEqual(await r.json(), {
     principal: "U-admin",
-    org: "acme",
+    org: "tenant-1",
+    orgName: "Acme",
     isAdmin: true,
     role: "org_admin",
-    scopeId: "org:acme",
+    scopeId: "org:tenant-1",
     permissions: ["inbox"],
   });
 });

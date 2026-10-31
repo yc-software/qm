@@ -59,7 +59,7 @@ test("GET /api/spend?format=csv keeps the core's CSV headers and full body", asy
   assert.equal(body, CSV_BODY);
   assert.equal(Number(r.headers.get("content-length")), Buffer.byteLength(body));
   assert.equal(calls.at(-1)!.url, "/v1/admin/spend?from=2026-08-26&to=2026-09-25&format=csv");
-  assert.equal(calls.at(-1)!.actor, "U-admin@acme");
+  assert.equal(calls.at(-1)!.actor, "U-admin");
 });
 
 test("GET /api/spend without format still takes the JSON read path", async () => {
@@ -84,5 +84,5 @@ test("GET /api/spend forwards the model CSV dimension without losing auth", asyn
   assert.equal(r.status, 200);
   assert.equal(await r.text(), CSV_BODY);
   assert.equal(calls.at(-1)!.url, "/v1/admin/spend?format=csv&breakdown=model&from=2026-08-26&to=2026-09-25");
-  assert.equal(calls.at(-1)!.actor, "U-admin@acme");
+  assert.equal(calls.at(-1)!.actor, "U-admin");
 });

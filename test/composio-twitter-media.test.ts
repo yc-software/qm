@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { composioNamespaceReader, composioUserId } from "../src/tenants/composio-namespace.ts";
+import { composioNamespaceReader, composioUserId } from "../src/tenants/tenant-record.ts";
 import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-media.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";

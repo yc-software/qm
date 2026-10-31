@@ -409,7 +409,7 @@ import {
   modelSupportedByHarness,
 } from "./model/pi-models.ts";
 import { createAdminService, adminGrantSeed, type AdminService } from "./admin/admin-service.ts";
-import { composioNamespaceReader } from "./tenants/composio-namespace.ts";
+import { composioNamespaceReader, tenantNameReader } from "./tenants/tenant-record.ts";
 import { createAdminGrantStore, createMapAdminGrantPersistence, type AdminGrant } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
@@ -500,6 +500,7 @@ export interface BuiltApp {
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
   composioNamespace: () => Promise<string>;
+  tenantName: () => Promise<string>;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
@@ -3096,6 +3097,7 @@ export function buildApp(
     connectorTokens,
     slackInstallation,
     composioNamespace: composioNamespaceReader(pgArtifactMap?.pool ?? null),
+    tenantName: tenantNameReader(pgArtifactMap?.pool ?? null),
     resolveClient,
     consentLinks,
     oauthFlows,
@@ -3193,6 +3195,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     composioNamespace: built.composioNamespace,
+    tenantName: built.tenantName,
     modelGatewayTransport: built.modelGatewayTransport,
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,

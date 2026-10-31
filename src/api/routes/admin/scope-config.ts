@@ -122,8 +122,9 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
+  const tenant = { tenant: currentTenant(), ...(deps.tenantName ? { tenantName: await deps.tenantName() } : {}) };
   if (!actor || !(await activePrincipal(deps, actor.id)))
-    return sendJson(res, 200, { isAdmin: false, permissions: [], tenant: currentTenant() });
+    return sendJson(res, 200, { isAdmin: false, permissions: [], ...tenant });
   const status = await deps.admin.adminStatusOf(actor);
   const permissions = status.isAdmin ? ["admin"] : [];
   audit(deps, {
@@ -132,7 +133,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
     resource: "whoami",
     scopeLabel: status.scopeId ?? actor.id,
   });
-  return sendJson(res, 200, { ...status, permissions, tenant: currentTenant() });
+  return sendJson(res, 200, { ...status, permissions, ...tenant });
 }
 
 export async function listAdminScopes(ctx: ApiCtx): Promise<void> {

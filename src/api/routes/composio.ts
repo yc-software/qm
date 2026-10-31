@@ -16,7 +16,7 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { ServerDeps } from "../deps.ts";
-import { composioUserId } from "../../tenants/composio-namespace.ts";
+import { composioUserId } from "../../tenants/tenant-record.ts";
 import { tenantRootScope } from "../../tenants/context.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;

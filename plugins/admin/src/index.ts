@@ -265,7 +265,7 @@ async function uploadFileFromRequest(
 
 async function coreWhoami(
   principal: string,
-): Promise<{ isAdmin: boolean; role?: string; scopeId?: string; tenant?: string } | null> {
+): Promise<{ isAdmin: boolean; role?: string; scopeId?: string; tenant?: string; tenantName?: string | null } | null> {
   const corePath = "/v1/admin/whoami";
   const started = Date.now();
   let failure = "unknown failure";
@@ -281,7 +281,13 @@ async function coreWhoami(
         signal: AbortSignal.timeout(CORE_WHOAMI_TIMEOUT_MS),
       });
       if (r.ok) {
-        const body = (await r.json()) as { isAdmin?: unknown; role?: string; scopeId?: string; tenant?: string };
+        const body = (await r.json()) as {
+          isAdmin?: unknown;
+          role?: string;
+          scopeId?: string;
+          tenant?: string;
+          tenantName?: string | null;
+        };
         if (typeof body.isAdmin !== "boolean") throw new Error("core returned an invalid admin status");
         return { ...body, isAdmin: body.isAdmin };
       }
@@ -403,8 +409,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!p) return json(res, 401, { error: "signed_out" });
     const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    const { tenant, ...status } = who;
-    return json(res, 200, { principal: p, org: tenant, ...status, permissions: inboxPermissions(p) });
+    const { tenant, tenantName, ...status } = who;
+    return json(res, 200, {
+      principal: p,
+      org: tenant,
+      orgName: tenantName ?? tenant,
+      ...status,
+      permissions: inboxPermissions(p),
+    });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {

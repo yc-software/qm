@@ -8,8 +8,14 @@ const UNREWRITTEN_TABLES = `'tenants', 'qm_schema_migrations', 'items', 'tool_ca
   'session_llm_requests', 'channel_messages', 'channel_files', 'runs', 'run_activity', 'run_signals', 'deliveries',
   'audit_log', 'egress_events', 'error_events', 'credential_usage', 'cron_fires', 'webhook_history'`;
 
-const BROKER_ID = String.raw`left(encode(sha256(convert_to(json->>'ownerId', 'UTF8') || '\x00'::bytea ||
-  convert_to(json->>'service', 'UTF8') || '\x00'::bytea || convert_to('broker', 'UTF8')), 'hex'), 16)`;
+const hashIdSql = (...parts: string[]) =>
+  String.raw`left(encode(sha256(${parts.map((part) => `convert_to(${part}, 'UTF8')`).join(String.raw` || '\x00'::bytea || `)}), 'hex'), 16)`;
+
+const CREDENTIAL_SLOTS = String.raw`(VALUES ('broker'), ('file'), ('oauth:'),
+  ('env:' || coalesce(k.json->>'envKey', '')),
+  ('oauth:' || coalesce(nullif(k.json->'refresh'->>'accountType', 'default'), '')),
+  ('env:' || coalesce((SELECT string_agg(f->>'envKey', ',' ORDER BY f->>'envKey' COLLATE "C")
+    FROM jsonb_array_elements(k.json->'fields') f), ''))) s(slot)`;
 
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
@@ -38,7 +44,7 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     ],
   },
   {
-    id: "sessions/store/0048-tenant-root-scope",
+    id: "sessions/store/0050-tenant-root-scope",
     statements: [
       `ALTER TABLE tenants ADD COLUMN composio_namespace TEXT`,
       String.raw`DO $qm_root_scope$
@@ -49,6 +55,7 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          pattern text;
          replacement text;
          rel record;
+         tenant_count bigint;
        BEGIN
          IF to_regclass('deployment_identity') IS NULL THEN RETURN; END IF;
          SELECT json->>'orgId' INTO old_org FROM deployment_identity WHERE id = 'singleton';
@@ -57,7 +64,9 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
            DELETE FROM durable_map_versions WHERE tbl = 'deployment_identity';
          END IF;
          IF old_org IS NULL THEN RETURN; END IF;
-         SELECT id INTO STRICT tenant FROM tenants;
+         SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
+         IF tenant_count = 0 THEN RETURN; END IF;
+         IF tenant_count > 1 THEN RAISE EXCEPTION 'root scope migration expects one tenant, found %', tenant_count; END IF;
          UPDATE tenants SET composio_namespace = old_org WHERE id = tenant;
          PERFORM set_config('qm.tenant_id', tenant::text, true);
          needle := 'org:' || old_org;
@@ -90,23 +99,33 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
            UPDATE ambient_cursors SET id = tenant::text || substr(id, length(old_org) + 1)
              WHERE starts_with(id, old_org || ':');
          END IF;
-         IF to_regclass('slack_installation') IS NOT NULL THEN
-           UPDATE slack_installation SET id = tenant::text WHERE id = old_org;
-         END IF;
          IF to_regclass('keychain_credentials') IS NOT NULL THEN
-           CREATE TEMP TABLE qm_broker_ids ON COMMIT DROP AS
-             SELECT id AS old_id, ${BROKER_ID} AS new_id FROM keychain_credentials
-             WHERE json->>'kind' = 'broker' AND json->>'ownerId' = 'org:' || tenant::text;
-           DELETE FROM qm_broker_ids WHERE old_id = new_id;
+           CREATE TEMP TABLE qm_credential_ids ON COMMIT DROP AS
+             SELECT DISTINCT k.id AS old_id, ${hashIdSql("k.json->>'ownerId'", "k.json->>'service'", "s.slot")} AS new_id
+             FROM keychain_credentials k CROSS JOIN LATERAL ${CREDENTIAL_SLOTS}
+             WHERE k.json->>'ownerId' = 'org:' || tenant::text
+               AND k.id = ${hashIdSql("needle", "k.json->>'service'", "s.slot")};
+           DELETE FROM qm_credential_ids WHERE old_id = new_id;
            UPDATE keychain_credentials k SET id = m.new_id, json = jsonb_set(k.json, '{id}', to_jsonb(m.new_id))
-             FROM qm_broker_ids m WHERE k.id = m.old_id;
+             FROM qm_credential_ids m WHERE k.id = m.old_id;
            IF to_regclass('keychain_grants') IS NOT NULL THEN
              UPDATE keychain_grants g SET json = jsonb_set(g.json, '{credentialId}', to_jsonb(m.new_id))
-               FROM qm_broker_ids m WHERE g.json->>'credentialId' = m.old_id;
+               FROM qm_credential_ids m WHERE g.json->>'credentialId' = m.old_id;
+             CREATE TEMP TABLE qm_grant_ids ON COMMIT DROP AS
+               SELECT g.id AS old_id, ${hashIdSql("g.json->>'credentialId'", "'ask'", "g.json->>'askId'")} AS new_id
+               FROM keychain_grants g JOIN qm_credential_ids m ON g.json->>'credentialId' = m.new_id
+               WHERE g.json ? 'askId';
+             DELETE FROM qm_grant_ids WHERE old_id = new_id;
+             UPDATE keychain_grants g SET id = m.new_id, json = jsonb_set(g.json, '{id}', to_jsonb(m.new_id))
+               FROM qm_grant_ids m WHERE g.id = m.old_id;
+             IF to_regclass('keychain_asks') IS NOT NULL THEN
+               UPDATE keychain_asks q SET json = jsonb_set(q.json, '{grantId}', to_jsonb(m.new_id))
+                 FROM qm_grant_ids m WHERE q.json->>'grantId' = m.old_id;
+             END IF;
            END IF;
            IF to_regclass('keychain_asks') IS NOT NULL THEN
              UPDATE keychain_asks q SET json = jsonb_set(q.json, '{credentialId}', to_jsonb(m.new_id))
-               FROM qm_broker_ids m WHERE q.json->>'credentialId' = m.old_id;
+               FROM qm_credential_ids m WHERE q.json->>'credentialId' = m.old_id;
            END IF;
          END IF;
        END $qm_root_scope$`,
