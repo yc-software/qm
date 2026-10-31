@@ -68,8 +68,8 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
     },
-    setEnabled(id, enabled) {
-      return setTriggerEnabled(backing, id, enabled);
+    async setEnabled(id, enabled) {
+      await setTriggerEnabled(backing, id, enabled);
     },
     delete: (id) => backing.delete(id),
     async deleteDefunct(now) {

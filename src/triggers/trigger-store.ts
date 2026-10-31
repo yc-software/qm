@@ -47,8 +47,8 @@ export async function setTriggerEnabled<T extends TriggerBase>(
   backing: DurableMap<T>,
   id: string,
   enabled: boolean,
-): Promise<void> {
-  await backing.merge(id, { enabled } as Partial<T>);
+): Promise<boolean> {
+  return (await backing.merge(id, { enabled } as Partial<T>)) !== null;
 }
 
 export async function ownedBy<T extends TriggerBase>(backing: DurableMap<T>, scopeId: string): Promise<T[]> {

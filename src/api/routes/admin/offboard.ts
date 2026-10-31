@@ -40,7 +40,7 @@ const firstLine = (text: string | undefined): string => text?.trim().split("\n",
 
 const SHARED_HOME = "lives in a shared scope where others may rely on it; archive it there if nobody needs it";
 
-async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string) {
+async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string, member: boolean) {
   const { app, deps } = ctx;
   const isThem = deps.directory
     ? await samePersonMatcher(deps.directory, principalId)
@@ -60,18 +60,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
   const kept: Kept[] = [];
   const org = orgScope(deps);
 
-  if (deps.identity) {
-    await deps.identity.refresh(true);
-    if (deps.identity.deactivationSource(principalId) !== "manual")
-      steps.push({
-        kind: "principal",
-        id: principalId,
-        label: "sign-in and app access",
-        scopeId: org,
-        action: "deactivate",
-        run: () => deps.identity!.deactivate(principalId),
-      });
-  }
+  await deps.identity?.refresh(true);
   for (const cron of await app.listCrons()) {
     if (cron.loopId || (cron.archived && !cron.enabled) || !(await owns(cron.owner, cron.ownerScopeId))) continue;
     steps.push({
@@ -106,10 +95,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       label: firstLine(webhook.action) || webhook.id,
       scopeId: webhook.ownerScopeId,
       action: "disable",
-      run: async () => {
-        await present(app.getWebhook(webhook.id), "the webhook");
-        await app.setWebhookEnabled(webhook.id, false);
-      },
+      run: () => present(app.setWebhookEnabled(webhook.id, false), "the webhook"),
     });
   }
   if (deps.keychain) {
@@ -230,6 +216,16 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       scopeId: org,
       reason: "admin grants are portal-only; revoke it under Admins",
     });
+  if (!member && !deps.identity?.knows(principalId) && steps.length === 0 && kept.length === 0) return null;
+  if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
+    steps.unshift({
+      kind: "principal",
+      id: principalId,
+      label: "sign-in and app access",
+      scopeId: org,
+      action: "deactivate",
+      run: () => deps.identity!.deactivate(principalId),
+    });
   return { steps, kept };
 }
 
@@ -254,10 +250,9 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 404, { error: "not_found", message: "no such person" });
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
-  const { steps, kept } = await planOffboarding(ctx, actor.id, principalId);
-  const owns = kept.length > 0 || steps.some((s) => s.kind !== "principal");
-  const known = member || deps.identity?.knows(principalId) || owns;
-  if (!known) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
+  const plan = await planOffboarding(ctx, actor.id, principalId, !!member);
+  if (!plan) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
+  const { steps, kept } = plan;
   const org = orgScope(deps);
   const view = ({ run: _run, ...change }: Step): Change => change;
   if (input.apply !== true) {
@@ -265,6 +260,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { principalId, applied: false, changes: steps.map(view), kept });
   }
   const changes: OffboardedChange[] = [];
+  let principal: PrincipalRecord | null = null;
   for (const step of steps) {
     const change = view(step);
     try {
@@ -282,6 +278,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
       status: recorded.result === "done" ? "ok" : "error",
       ...(recorded.error ? { detail: recorded.error } : {}),
     });
+    if (deps.identity?.deactivationSource(principalId) === "manual")
+      principal = await deps.identity.recordOffboarded(principalId, actor.id, [recorded]);
   }
   const failed = changes.filter((c) => c.result === "failed").length;
   audit(deps, {
@@ -290,9 +288,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     resource: `${principalId}/done=${changes.length - failed}/failed=${failed}`,
     scopeLabel: org,
   });
-  const signedOut = deps.identity?.deactivationSource(principalId) === "manual";
-  const principal = signedOut ? summary(await deps.identity!.recordOffboarded(principalId, actor.id, changes)) : null;
-  return sendJson(res, 200, { principalId, applied: true, changes, kept, principal });
+  return sendJson(res, 200, { principalId, applied: true, changes, kept, principal: summary(principal) });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
