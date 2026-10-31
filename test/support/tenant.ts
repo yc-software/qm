@@ -4,6 +4,7 @@ import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 
 export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 
 export async function seedTenant(url: string, id = TEST_TENANT): Promise<void> {
   const db = createPgPool(url, [TENANCY_BASE]);
@@ -20,7 +21,11 @@ export async function seedTenant(url: string, id = TEST_TENANT): Promise<void> {
 export function bindTestTenant(): void {
   enterTenant(TEST_TENANT);
   const url = process.env.DATABASE_URL;
-  if (url) before(() => seedTenant(url));
+  if (url)
+    before(async () => {
+      await seedTenant(url, TEST_TENANT);
+      await seedTenant(url, OTHER_TENANT);
+    });
 }
 
 export function boundUrl(url: string, id = TEST_TENANT): string {

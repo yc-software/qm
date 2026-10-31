@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -70,6 +70,7 @@ test("pg audit log: migrates rows once from the legacy audit_events JSONB map", 
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("CREATE TABLE audit_events (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+  await p.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
   const rows: AuditEvent[] = [ev(10, "old-a"), ev(30, "old-c"), ev(20, "old-b")];
   for (const r of rows)
     await p.query("INSERT INTO audit_events (id, json) VALUES ($1,$2)", [`${r.at}-${r.action}`, JSON.stringify(r)]);
