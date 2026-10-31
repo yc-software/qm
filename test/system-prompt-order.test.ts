@@ -36,7 +36,7 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testCronRows } from "./support/typed-stores.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 import { testSkillBundleStore, testSkillStore } from "./support/typed-stores.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
@@ -117,7 +117,7 @@ async function buildOrchestrator(
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: testIdentityService(),
+    identity: await testIdentity(),
     resolution: createResolutionService(config, acl),
     sessions,
     workspace,

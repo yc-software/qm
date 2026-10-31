@@ -6,7 +6,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,
@@ -43,7 +43,7 @@ test("session approvals list only the session's own records and respect viewer v
   const app = createApp({
     sessions,
     approvals,
-    identity: testIdentityService(),
+    identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");

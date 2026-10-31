@@ -9,7 +9,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
@@ -406,7 +406,7 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
 });
 
 test("shutdown mid-turn through the agent leaves no stop marker, and the resumed attempt finishes the work", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "agent-resume-")), workers: 1, shutdownDrainMs: 30 }),
   );
   const threadRef = "agent-shutdown-resume";
@@ -531,7 +531,7 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
     leaseTtlMs: 5_000,
     reaperIntervalMs: 60_000,
   });
-  const built = buildApp(config);
+  const built = await buildLoadedApp(config);
   const a = await built.app.turn({
     surface: "test",
     actor: { externalId: "U1" },
@@ -562,7 +562,7 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
 });
 
 test("a worker pool drains a queued run end-to-end", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "wr-")),
       workers: 1,
@@ -591,7 +591,7 @@ test("a worker pool drains a queued run end-to-end", async () => {
 });
 
 test("runtime.start() leaves queued runs idle when background work is disabled", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "wr-")),
       backgroundWorkEnabled: false,
@@ -702,7 +702,7 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
 });
 
 test("runtime pauses without closing stores and restores worker capacity after a busy rollback", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wr-pause-")), workers: 1, leaseTtlMs: 5_000 }),
   );
   const completing = Promise.withResolvers<void>();
@@ -756,7 +756,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
 });
 
 test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
       backgroundDeploymentId: "controlled-test",
@@ -823,7 +823,7 @@ test("final shutdown waits for an already-started completion instead of releasin
     workers: 1,
     shutdownDrainMs: 30,
   });
-  const built = buildApp(config);
+  const built = await buildLoadedApp(config);
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -869,7 +869,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
     events.push(JSON.parse(String(init.body)).event);
     return new Response("ok");
   });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  const built = await buildLoadedApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
   try {
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
     for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
@@ -889,7 +889,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     events.push(JSON.parse(String(init.body)).event);
     return new Response("ok");
   });
-  const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  const built = await buildLoadedApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
@@ -922,7 +922,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     workers: 1,
     shutdownDrainMs: 200,
   });
-  const built = buildApp(config);
+  const built = await buildLoadedApp(config);
   const blocked = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
   const append = built.sessions.append.bind(built.sessions);
@@ -1003,7 +1003,7 @@ test("worker survives sustained claim failures and processes work after recovery
 });
 
 test("runtime shutdown contains store close failures and waits for remaining stores", async (t) => {
-  const built = buildApp(testConfig());
+  const built = await buildLoadedApp(testConfig());
   const closing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   built.runs.close = async () => {

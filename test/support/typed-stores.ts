@@ -83,8 +83,8 @@ export function testSkillBundleStore(url = testDatabaseUrl()) {
   return createPostgresSkillBundleStore(url);
 }
 
-export async function testIdentity() {
-  const identity = testIdentityService();
+export async function testIdentity(opts: IdentityOptions = {}, url = testDatabaseUrl()) {
+  const identity = testIdentityService(opts, url);
   await identity.ready();
   return identity;
 }

@@ -35,7 +35,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testSessionMailbox } from "./support/typed-stores.ts";
-import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+import { testFeatureFlagStore, testIdentity } from "./support/typed-stores.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -138,7 +138,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: () => "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: testIdentityService(),
+    identity: await testIdentity(),
     resolution: createResolutionService(config, acl),
     sessions,
     runs,

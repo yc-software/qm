@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -13,9 +13,9 @@ import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-function freshApp() {
+async function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-empty-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildLoadedApp(testConfig({ dataDir }));
 }
 
 const actor = { externalId: "U1" };
@@ -33,14 +33,17 @@ function enqueueRequest(threadRef: string): OrchestratorInput {
   };
 }
 
-async function strandShell(sessions: ReturnType<typeof freshApp>["sessions"], threadRef: string): Promise<string> {
+async function strandShell(
+  sessions: Awaited<ReturnType<typeof freshApp>>["sessions"],
+  threadRef: string,
+): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", "personal:U1");
   await sessions.addParticipant(s.id, "U1");
   return s.id;
 }
 
 test("listSessions hides a stranded entry-less session", async () => {
-  const { app, sessions } = freshApp();
+  const { app, sessions } = await freshApp();
 
   await app.turn(dm("Just a question", "web:U1:real"));
   const strandedId = await strandShell(sessions, "web:U1:stranded");
@@ -57,7 +60,7 @@ test("listSessions hides a stranded entry-less session", async () => {
 });
 
 test("an entry-less session with an in-flight turn stays visible", async () => {
-  const { app, sessions, runs } = freshApp();
+  const { app, sessions, runs } = await freshApp();
 
   const thread = "web:U1:fresh";
   const id = await strandShell(sessions, thread);
@@ -76,7 +79,7 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
 });
 
 test("a titled entry-less session stays listed", async () => {
-  const { app, sessions } = freshApp();
+  const { app, sessions } = await freshApp();
 
   const id = await strandShell(sessions, "web:U1:titled");
   await sessions.updateTitle(id, "Planning (fork)");
@@ -88,7 +91,7 @@ test("a titled entry-less session stays listed", async () => {
 });
 
 test("a turn refused with 'session busy' does not surface a stranded shell", async () => {
-  const { app, sessions } = freshApp();
+  const { app, sessions } = await freshApp();
 
   const thread = "web:U1:busy-race";
   const shell = await sessions.getOrCreateByThread(thread, "dm", "personal:U1");
@@ -105,7 +108,7 @@ test("a turn refused with 'session busy' does not surface a stranded shell", asy
 });
 
 test("context cards do not count hidden shells or treat them as shared-scope authority", async () => {
-  const { app, sessions } = freshApp();
+  const { app, sessions } = await freshApp();
 
   await app.turn(dm("real conversation", "web:U1:ctx-real"));
   await strandShell(sessions, "web:U1:ctx-stranded");
@@ -120,7 +123,7 @@ test("context cards do not count hidden shells or treat them as shared-scope aut
 });
 
 test("a session becomes visible once its first entry lands", async () => {
-  const { app, sessions } = freshApp();
+  const { app, sessions } = await freshApp();
 
   const thread = "web:U1:lands";
   const id = await strandShell(sessions, thread);

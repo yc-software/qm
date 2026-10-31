@@ -19,7 +19,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+import { testFeatureFlagStore, testIdentity } from "./support/typed-stores.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
@@ -49,7 +49,7 @@ async function appServingUpstream(upstreamPort: number) {
     acl,
     directory,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: testIdentityService(),
+    identity: await testIdentity(),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };

@@ -13,7 +13,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -24,7 +24,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   );
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const identity = testIdentityService();
+  const identity = await testIdentity();
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },

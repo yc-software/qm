@@ -9,7 +9,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
@@ -18,7 +18,7 @@ async function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   return createApp({
     acl,
     files,
-    identity: testIdentityService(),
+    identity: await testIdentity(),
   } as unknown as AppDeps);
 }
 

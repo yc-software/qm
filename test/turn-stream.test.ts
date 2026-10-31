@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
@@ -110,7 +110,7 @@ test("markReplyDone flags the reply as final independently of the run lifecycle"
 });
 
 test("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -138,7 +138,7 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
 });
 
 test("a queued tool-using run surfaces its activity + timings via getRun()", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -173,7 +173,7 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
 });
 
 test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -255,7 +255,7 @@ test("surfacePosted: false until marked, then sticky for the run", () => {
 });
 
 test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -284,7 +284,7 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
 });
 
 test("a harvested first block is stripped from the final reply (never shown twice)", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -311,7 +311,7 @@ test("a harvested first block is stripped from the final reply (never shown twic
 });
 
 test("a long first block is harvested too (no length gate) and stripped from the reply", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -342,7 +342,7 @@ test("a long first block is harvested too (no length gate) and stripped from the
 });
 
 test("a non-slack surface never strips the first block from the reply", async () => {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
       workers: 1,
@@ -432,7 +432,7 @@ test("goalView renders a goal record's status and floor", () => {
 });
 
 test("monitor wakes persist engagement after the reply gate", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
+  const built = await buildLoadedApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
   built.runtime.start();
   try {
     const ack = await built.app.turn({

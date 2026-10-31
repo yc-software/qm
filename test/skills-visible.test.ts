@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -14,16 +14,16 @@ import { testAdvisoryLock } from "./support/test-database.ts";
 import { testSkillStore } from "./support/typed-stores.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-function freshApp() {
+async function freshApp() {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-skvis-")),
     seedSkills: false,
   });
-  return buildApp(config);
+  return buildLoadedApp(config);
 }
 
 async function publish(
-  skills: ReturnType<typeof buildApp>["skills"],
+  skills: Awaited<ReturnType<typeof buildLoadedApp>>["skills"],
   scope: ScopeId,
   name: string,
   description: string,
@@ -38,7 +38,7 @@ async function publish(
 }
 
 test("listVisibleSkills returns a principal's personal + org skills with scope labels", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
   await publish(skills, TEST_ROOT_SCOPE, "deploy-bot", "ship the bot to prod");
 
@@ -49,7 +49,7 @@ test("listVisibleSkills returns a principal's personal + org skills with scope l
 });
 
 test("a personal skill shadows a same-named org skill (most-specific wins, shadow surfaced)", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   await publish(skills, TEST_ROOT_SCOPE, "notes", "the org-wide notes skill");
   await publish(skills, scopeId("personal", "U1"), "notes", "U1's own notes skill");
 
@@ -62,7 +62,7 @@ test("a personal skill shadows a same-named org skill (most-specific wins, shado
 });
 
 test("another principal does not see U1's personal skill (scope boundary)", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
 
   const visible = await app.listVisibleSkills("U2");
@@ -70,7 +70,7 @@ test("another principal does not see U1's personal skill (scope boundary)", asyn
 });
 
 test("an unpublished (draft/reviewed) skill is not visible", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   const draft = await skills.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "wip", description: "not ready", requiredCapabilities: [], body: "# wip" },

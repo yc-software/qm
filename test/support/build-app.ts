@@ -3,7 +3,7 @@ import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { setProviderBaseUrls } from "../../src/model/provider-endpoints.ts";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
-import { withTenant } from "../../src/tenants/context.ts";
+import { tenantReady, withTenant } from "../../src/tenants/context.ts";
 import {
   createTenantSettingsStore,
   type TenantSettingsStore,
@@ -97,6 +97,6 @@ export async function buildLoadedApp(
   overrides: Parameters<typeof buildProductionApp>[1] = {},
 ): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
   const app = buildApp(config, overrides);
-  await app.identity.ready();
+  await Promise.all([app.identity.ready(), tenantReady()]);
   return app;
 }

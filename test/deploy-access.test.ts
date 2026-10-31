@@ -24,7 +24,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -44,7 +44,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const identity = testIdentityService();
+  const identity = await testIdentity();
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace(
     [owner, requester, "carol@example.com"].map((principalId) => ({

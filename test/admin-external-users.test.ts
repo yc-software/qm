@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import { buildLoadedApp, testTenantSettings } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
 import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
@@ -51,7 +51,7 @@ function stubMailer(fail?: string): { sent: Sent[]; mailer: Mailer } {
 async function start(
   opts: { mailer?: Mailer; signed?: boolean; emailAuthDomain?: string; emailAuthPrincipals?: string[] } = {},
 ) {
-  const built = buildApp(
+  const built = await buildLoadedApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-external-users-")),
       ...(opts.signed ? { signingSecret: SECRET } : {}),

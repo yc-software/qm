@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import { buildLoadedApp, testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -14,22 +14,22 @@ import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
+async function withDefaultComputer(built: Awaited<ReturnType<typeof buildLoadedApp>>) {
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   return built;
 }
 
-function freshApp() {
+async function freshApp() {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-skill-")),
   });
-  return buildApp(config);
+  return buildLoadedApp(config);
 }
 
 const actor = { externalId: "U1" };
 
-async function publishPersonalSkill(skills: ReturnType<typeof buildApp>["skills"]) {
+async function publishPersonalSkill(skills: Awaited<ReturnType<typeof buildLoadedApp>>["skills"]) {
   const sk = await skills.create({
     scopeId: scopeId("personal", "U1"),
     manifest: {
@@ -46,7 +46,7 @@ async function publishPersonalSkill(skills: ReturnType<typeof buildApp>["skills"
 }
 
 test("a published personal skill is advertised and loads in the owner's DM", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   await publishPersonalSkill(skills);
 
   const sys = await app.turn({
@@ -68,7 +68,7 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
 });
 
 test("a channel session does NOT see a personal skill (scope boundary)", async () => {
-  const { app, skills } = freshApp();
+  const { app, skills } = await freshApp();
   await publishPersonalSkill(skills);
   const sys = await app.turn({
     surface: "test",
@@ -80,7 +80,7 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
 });
 
 test("ordinary sandbox work never touches the skills tree", async () => {
-  const { app, skills, sandbox } = await withDefaultComputer(freshApp());
+  const { app, skills, sandbox } = await withDefaultComputer(await freshApp());
   await publishPersonalSkill(skills);
   const touched: string[] = [];
   const read = sandbox.readFile.bind(sandbox);
@@ -107,7 +107,7 @@ test("ordinary sandbox work never touches the skills tree", async () => {
   assert.deepEqual(touched, []);
 });
 
-async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], name: string) {
+async function publishFileSkill(skills: Awaited<ReturnType<typeof buildLoadedApp>>["skills"], name: string) {
   const sk = await skills.create({
     scopeId: scopeId("personal", "U1"),
     manifest: {
@@ -125,7 +125,7 @@ async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], n
 }
 
 test("skill files stay on the computer across turns", async () => {
-  const { app, skills } = await withDefaultComputer(freshApp());
+  const { app, skills } = await withDefaultComputer(await freshApp());
   const first = await publishFileSkill(skills, "helper");
   const request = {
     surface: "test",
@@ -141,7 +141,7 @@ test("skill files stay on the computer across turns", async () => {
 });
 
 test("skills index order ignores skill use, so the system prompt stays byte-stable", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   for (let i = 0; i < 20; i++) {
     const skill = await built.skills.create({
       scopeId: "personal:U1",
@@ -181,7 +181,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
 });
 
 test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {
-  const built = buildApp(testConfig(), { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
+  const built = await buildLoadedApp(testConfig(), { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
   await built.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
   await publishPersonalSkill(built.skills);
   const result = await built.app.turn({

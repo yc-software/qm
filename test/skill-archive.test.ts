@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
@@ -62,7 +62,9 @@ test("create carries pack provenance, kept out of the signature", async () => {
 });
 
 test("a person sees their archived skill stored under a linked identity", async (t) => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), seedSkills: false }));
+  const built = await buildLoadedApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), seedSkills: false }),
+  );
   installPrincipalLinks({
     canonical: (key) => (key === "U123" ? "alice@acme.com" : undefined),
     aliases: (key) => (key === "alice@acme.com" ? ["U123"] : []),

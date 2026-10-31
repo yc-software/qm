@@ -19,7 +19,7 @@ import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts"
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
@@ -45,7 +45,7 @@ async function appWithFakeRuntime() {
     acl,
     directory,
     sessions,
-    identity: testIdentityService(),
+    identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, acl, directory, sessions };
 }

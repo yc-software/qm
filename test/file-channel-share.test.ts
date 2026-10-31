@@ -13,7 +13,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { testIdentityService } from "./support/typed-stores.ts";
+import { testIdentity } from "./support/typed-stores.ts";
 
 const initiator = "U1";
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
@@ -65,7 +65,7 @@ async function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   return createApp({
     acl,
     files,
-    identity: testIdentityService(),
+    identity: await testIdentity(),
   } as unknown as AppDeps);
 }
 
