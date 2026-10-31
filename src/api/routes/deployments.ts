@@ -818,7 +818,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     return true;
   }
   const row = { table: "deployments", columns: ["name", "id"], id: slug };
-  await withRowTenant(ctx, row, () => proxyAppSubdomain(ctx, rawHost, slug, fromAppHost));
+  await withRowTenant(res, deps.rowTenants, row, () => proxyAppSubdomain(ctx, rawHost, slug, fromAppHost));
   return true;
 }
 

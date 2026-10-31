@@ -268,7 +268,6 @@ export interface SessionSearchHit {
 }
 
 export interface App extends SkillMethods {
-  tenantReady?(): Promise<void>;
   swarms?: SwarmService;
   turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult>;
   getApproval(requestId: string, viewer?: string): Promise<(PendingApprovalRecord & { requestId: string }) | null>;
