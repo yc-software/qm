@@ -1,24 +1,24 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "./support/mock-harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let started!: () => void;
 let release!: () => void;
 let handoffTo: string | undefined;
-mock.module("./support/mock-harness.ts", {
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      harness.turns.runTurn = async () => {
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      agent.runTurn = async () => {
         if (handoffTo) {
           const modelId = handoffTo;
           handoffTo = undefined;
           return {
             reply: "",
-            runtimeHandoff: { choice: { harnessId: "pi", modelId }, lifetime: "task" as const },
+            runtimeHandoff: { choice: { modelId }, lifetime: "task" as const },
           };
         }
         started();
@@ -27,7 +27,7 @@ mock.module("./support/mock-harness.ts", {
         });
         return { reply: "Done" };
       };
-      return harness;
+      return agent;
     },
   },
 });

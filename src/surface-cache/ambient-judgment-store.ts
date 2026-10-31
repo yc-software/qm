@@ -41,20 +41,25 @@ const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane:
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/ambient-judgment/0001", [
-    `CREATE TABLE IF NOT EXISTS ambient_judgments(
+  const { q, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/ambient-judgment/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS ambient_judgments(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, container TEXT NOT NULL,
         decision TEXT NOT NULL, reason TEXT, asked_by TEXT, prompt TEXT, model TEXT,
         latency_ms INT, ts_from TEXT, ts_to TEXT, created_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created
+        `ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT`,
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created
         ON ambient_judgments(org_id, container, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_created
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_created
         ON ambient_judgments(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision
+        `CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision
         ON ambient_judgments(org_id, decision)`,
+      ],
+    },
   ]);
   const row = (r: Record<string, unknown>): AmbientJudgment => ({
     id: Number(r.id),
@@ -145,43 +150,5 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       return out;
     },
     close,
-  };
-}
-
-export function createMemoryAmbientJudgmentStore(): AmbientJudgmentStore {
-  const judgments: AmbientJudgment[] = [];
-  let seq = 0;
-  const filtered = (opts?: { container?: string }) =>
-    judgments.filter((j) => !opts?.container || j.container === opts.container);
-  return {
-    async record(j) {
-      const a = judgments;
-      a.push({ ...j, id: ++seq });
-      if (a.length > 5000) a.splice(0, a.length - 5000);
-    },
-    async list(opts) {
-      const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const all = filtered(opts)
-        .filter(
-          (j) =>
-            (!opts?.decision?.length || opts.decision.includes(j.decision)) &&
-            (opts?.before == null ||
-              (opts.beforeId != null
-                ? j.createdAt < opts.before || (j.createdAt === opts.before && (j.id ?? 0) < opts.beforeId)
-                : j.createdAt < opts.before)),
-        )
-        .slice()
-        .sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
-      return all.slice(0, limit).map(({ prompt: _p, ...rest }) => rest);
-    },
-    async get(id) {
-      return judgments.find((j) => j.id === id) ?? null;
-    },
-    async counts(opts) {
-      const out = emptyCounts();
-      for (const j of filtered(opts)) if (j.decision in out) out[j.decision] += 1;
-      return out;
-    },
-    async close() {},
   };
 }

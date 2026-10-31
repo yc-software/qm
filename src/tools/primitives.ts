@@ -11,7 +11,7 @@ import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
-import type { RuntimeRequest, RuntimeResult } from "../harness/runtime-types.ts";
+import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
 import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
@@ -59,9 +59,17 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
+import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import {
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+  type MemoryWrite,
+  type OutcomeReport,
+} from "../memory/provider-outcome.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
@@ -77,7 +85,7 @@ import type {
   ControlErr,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
-import type { Cron, Webhook } from "../types.ts";
+import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
@@ -198,10 +206,8 @@ export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
-  /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
-  commandCredentialHandles?: readonly string[];
   execute(
     command: string,
     opts?: {
@@ -238,9 +244,13 @@ export interface ToolContext extends SurfaceToolDeps {
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
   createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
-  memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null>;
+  memorySearch(
+    q: string,
+    limit?: number,
+    scope?: ScopeId,
+  ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
-  memoryAdd(facts: string[]): Promise<number | null>;
+  memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
@@ -419,15 +429,6 @@ interface SurfaceMembersResult {
   message?: string;
 }
 
-interface SurfaceFileResult {
-  ok: boolean;
-  content?: string;
-  name?: string;
-  sizeBytes?: number;
-  contentType?: string;
-  message?: string;
-}
-
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -452,7 +453,6 @@ export interface SurfaceToolDeps {
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
-  readFile(ref: string): Promise<SurfaceFileResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -735,9 +735,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
-    ...(deps.commandCredentials?.length
-      ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
-      : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
           async sandboxResources(
@@ -1123,10 +1120,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
-    async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
-      if (deps.context) return deps.context.searchMemory(q, limit, scope);
-      if (!memory) return null;
-      return searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy);
+    async memorySearch(q: string, limit?: number, scope?: ScopeId) {
+      const context = deps.context;
+      const search = context
+        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
+        : memory &&
+          ((report: OutcomeReport) =>
+            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
+      if (!search) return null;
+      const { value: hits, problems } = await withProviders("search", search);
+      return hits === null ? null : { hits: hits ?? [], problems };
     },
 
     async memoryRead(scope?: ScopeId): Promise<string | null> {
@@ -1136,19 +1139,26 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         deps.context && deps.memoryAccess?.read.includes(target)
           ? await deps.context.readMemory(target)
           : await readNotebook(memory, target);
-      if (body === null) return null;
-      return scope !== undefined ? `### ${target}\n${body}` : body;
+      if (body === null || !body.trim()) return body;
+      return scope !== undefined ? `### ${target}\n${quotedData(body)}` : quotedData(body);
     },
 
-    async memoryAdd(facts: string[]): Promise<number | null> {
+    async memoryAdd(facts: string[]) {
       const write = deps.memoryAccess?.write;
       if (!memory || !write) return null;
-      return memory.capture(write, facts, Date.now(), deps.createdBy, {
-        ...deps.memoryCaptureMetadata?.(),
-        mode: "explicit",
-        actorId: deps.createdBy,
-        conversationScopeId: writableScopeId ?? write,
-      });
+      return writeFacts(
+        memory,
+        write,
+        facts,
+        deps.createdBy,
+        {
+          ...deps.memoryCaptureMetadata?.(),
+          mode: "explicit",
+          actorId: deps.createdBy,
+          conversationScopeId: writableScopeId ?? write,
+        },
+        deps.runId,
+      );
     },
 
     async memoryEdit(edits: MemoryEdit[]): Promise<true | null> {
@@ -1326,7 +1336,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
-    readFile: (ref) => surfaceOp((s) => s.readFile(ref)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

@@ -87,6 +87,7 @@ export interface ShareArtifactRequest {
   email?: string;
   permission?: Permission;
   move?: boolean;
+  notify?: boolean;
 }
 
 export type ShareArtifactResult =

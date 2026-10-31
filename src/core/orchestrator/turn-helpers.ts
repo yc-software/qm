@@ -42,17 +42,6 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
   return lead.slice(ack.length).trimStart();
 }
 
-export function headLooksLikeText(head: Buffer): boolean {
-  if (head.length === 0) return true;
-  if (head.includes(0)) return false;
-  let suspicious = 0;
-  for (const ch of head.toString("utf8")) {
-    const c = ch.codePointAt(0)!;
-    if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
-  }
-  return suspicious / head.length < 0.1;
-}
-
 const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   dropbox: "dropbox",
   "email-draft-in-voice": "google",
@@ -210,7 +199,6 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.detectContext ? { detectContext: input.detectContext } : {}),
     ...(input.detectOpener ? { detectOpener: input.detectOpener } : {}),
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-    ...(input.harness ? { harness: input.harness } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),

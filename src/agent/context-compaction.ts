@@ -1,0 +1,250 @@
+import type { RunStop } from "../runs/run-store.ts";
+import type { SessionEntry } from "../types.ts";
+import { contextSummaryPayload } from "../sessions/session-store.ts";
+import { headSlice, tailSlice } from "../util/text.ts";
+import { countTokens } from "../util/tokens.ts";
+import { isObj } from "../util/objects.ts";
+import { documentAttachmentTokens, replayableDocumentMetas } from "../core/documents.ts";
+
+const MAX_COMPACT_ENTRY_CHARS = 16_000;
+const COMPACT_ENTRY_TAIL_CHARS = 2_000;
+const CHAINED_SUMMARY_PREFIX_HEADROOM = 1_000;
+const FALLBACK_SUMMARY_BODY_CHARS = 8_000;
+const FALLBACK_SUMMARY_TAIL_CHARS = 6_000;
+
+function headTailSlice(s: string, maxChars: number, tailChars: number): string {
+  if (s.length <= maxChars) return s;
+  const notice = `…[truncated — ${s.length} chars]…`;
+  return headSlice(s, maxChars - tailChars - notice.length) + notice + tailSlice(s, tailChars);
+}
+
+export const INTERRUPTED_TOOL_RESULT =
+  "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
+
+const STOP_CAUSES = {
+  parked: "A pause to let a person's turn run first",
+  shutdown: "A routine platform deploy",
+  lease_expired: "A worker crash",
+  error: "An internal error",
+  provider: "A model-provider failure",
+};
+
+export function unrecordedToolResult(stop: RunStop | undefined): string {
+  const by =
+    stop?.kind === "error" && stop.code
+      ? `${STOP_CAUSES.provider} (${stop.code}${stop.status !== undefined ? `, HTTP ${stop.status}` : ""})`
+      : stop && STOP_CAUSES[stop.kind];
+  return by
+    ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying.`
+    : INTERRUPTED_TOOL_RESULT;
+}
+
+export const CONTEXT_SUMMARY_HEADER =
+  "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
+
+export function withoutWire(payload: unknown): Record<string, unknown> {
+  return { ...(payload as Record<string, unknown> | null), step: undefined, wire: undefined };
+}
+
+function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
+  return entries.filter(
+    (e) =>
+      ((e.type !== "thinking" && e.type !== "text") || isObj((e.payload as { step?: unknown } | null)?.step)) &&
+      (e.payload as { slackReplyReceipt?: unknown } | null)?.slackReplyReceipt !== true &&
+      (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
+  );
+}
+
+export function forModelContext(entries: SessionEntry[]): SessionEntry[] {
+  const replayable = modelReplayable(entries);
+  const latest = replayable.findLast((e) => contextSummaryPayload(e));
+  if (!latest) return replayable;
+  const throughSeq = contextSummaryPayload(latest)!.throughSeq;
+  return [latest, ...replayable.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq)];
+}
+
+export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
+  const replayable = modelReplayable(entries);
+  const latest = replayable.findLast((e) => contextSummaryPayload(e));
+  return replayable.filter(
+    (e) =>
+      e.type !== "tool_result" &&
+      e.type !== "thinking" &&
+      e.type !== "text" &&
+      (!contextSummaryPayload(e) || e === latest),
+  );
+}
+
+const entryTokenCache = new Map<string, number>();
+const ENTRY_TOKEN_CACHE_MAX = 50_000;
+
+export function estimateEntryTokens(entry: SessionEntry): number {
+  return estimateEntryTextTokens(entry) + (entry.type === "user" ? documentAttachmentTokens(entry.payload) : 0);
+}
+
+function estimateEntryTextTokens(entry: SessionEntry): number {
+  const payload = entry.payload as { text?: string; environment?: string; thinking?: string } | null;
+  const prose = entry.type === "thinking" ? [payload?.thinking] : [payload?.text, payload?.environment];
+  const text =
+    typeof prose[0] === "string"
+      ? prose.filter((s) => typeof s === "string" && s).join("\n\n")
+      : JSON.stringify(withoutWire(entry.payload));
+  const key = `${entry.sessionId}:${entry.seq}:${text.length}`;
+  const hit = entryTokenCache.get(key);
+  if (hit !== undefined) return hit;
+  const n = countTokens(text);
+  if (entryTokenCache.size >= ENTRY_TOKEN_CACHE_MAX) {
+    entryTokenCache.delete(entryTokenCache.keys().next().value!);
+  }
+  entryTokenCache.set(key, n);
+  return n;
+}
+
+export function estimateHistoryTokens(history: SessionEntry[]): number {
+  let total = 0;
+  for (const entry of history) total += estimateEntryTokens(entry);
+  return total;
+}
+
+export function recentEntryCountWithinBudget(history: SessionEntry[], maxTokens: number): number {
+  let count = 0;
+  let tokens = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const next = tokens + estimateEntryTokens(history[i]!);
+    if (count >= 1 && next > maxTokens) break;
+    tokens = next;
+    count += 1;
+  }
+  return count;
+}
+
+function entryStamp(createdAt: number): string {
+  return Number.isFinite(createdAt) && createdAt > 0 ? ` ${new Date(createdAt).toISOString().slice(0, 16)}Z` : "";
+}
+
+export function compactTranscript(history: SessionEntry[]): string {
+  const resultByCallId = new Map<string, true>();
+  for (const entry of history) {
+    if (entry.type !== "tool_result") continue;
+    const payload = entry.payload as { callId?: unknown; interrupted?: unknown } | null;
+    if (typeof payload?.callId === "string" && payload.callId && payload.interrupted !== true)
+      resultByCallId.set(payload.callId, true);
+  }
+  const lines: string[] = [];
+  const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
+  for (const entry of history) {
+    if (entry.type === "thinking") continue;
+    const stamp = entryStamp(entry.createdAt);
+    const summary = contextSummaryPayload(entry);
+    if (summary) {
+      push(`Prior summary through seq ${summary.throughSeq}${stamp ? ` (written${stamp})` : ""}: ${summary.text}`);
+      continue;
+    }
+    const op = entry.payload as {
+      text?: string;
+      overheard?: unknown;
+      sourceRole?: unknown;
+      name?: unknown;
+      files?: unknown;
+      isError?: unknown;
+    } | null;
+    const ov = entry.type === "user" && op?.overheard === true;
+    const text = String(op?.text ?? "").trim();
+    const ovFiles = ov && Array.isArray(op?.files) ? (op!.files as unknown[]).map(String).filter(Boolean) : [];
+    const files =
+      entry.type === "user" && !ov
+        ? replayableDocumentMetas(entry.payload).map((meta) => `${meta.name} [file ${meta.artifactId}]`)
+        : ovFiles;
+    const author = entry.type === "user" && typeof op?.name === "string" && op.name ? op.name : null;
+    const label = ov
+      ? `overheard#${entry.seq}${stamp} (${op?.sourceRole === "agent" ? "agent" : (author ?? "someone")})`
+      : `${entry.type}#${entry.seq}${stamp}${author ? ` (${author})` : ""}`;
+    if (text) push(`${label}: ${text}${files.length ? ` (files: ${files.join(", ")})` : ""}`);
+    else if (ov && ovFiles.length) push(`${label}: (shared file) (files: ${ovFiles.join(", ")})`);
+    else if (!ov) {
+      const payload =
+        entry.payload && typeof entry.payload === "object"
+          ? { ...withoutWire(entry.payload), memoryRecall: undefined, memoryRecallOutcomes: undefined }
+          : entry.payload;
+      push(`${label}:${op?.isError === true ? " [isError]" : ""} ${JSON.stringify(payload ?? {})}`);
+    }
+    if (entry.type === "tool_call") {
+      const cid = (entry.payload as { callId?: unknown } | null)?.callId;
+      if (typeof cid === "string" && cid && !resultByCallId.has(cid)) {
+        lines.push(`tool_result for tool_call#${entry.seq} (none recorded): ${INTERRUPTED_TOOL_RESULT}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+export const COMPACT_SOFT_FRACTION = 0.7;
+export const COMPACT_HARD_FRACTION = 0.9;
+
+export function overBudgetFraction(history: SessionEntry[], maxTokens: number, fraction: number): boolean {
+  return estimateHistoryTokens(history) > maxTokens * fraction;
+}
+
+export interface CompactionPlan {
+  toSummarize: SessionEntry[];
+  kept: SessionEntry[];
+  reuse?: SessionEntry;
+}
+
+export function planCompaction(
+  history: SessionEntry[],
+  maxTokens: number,
+  keepRecentTokenFraction: number,
+  reuseBudgetTokens: number = maxTokens,
+): CompactionPlan | null {
+  const latestSummary = [...history].reverse().find((entry) => contextSummaryPayload(entry));
+  const latestPayload = latestSummary ? contextSummaryPayload(latestSummary) : null;
+  const afterSummary = history.filter((entry) => {
+    if (contextSummaryPayload(entry)) return false;
+    return latestPayload ? entry.seq > latestPayload.throughSeq : true;
+  });
+  const keepRecentTokens = Math.floor(maxTokens * keepRecentTokenFraction);
+  if (latestSummary && estimateHistoryTokens([latestSummary, ...afterSummary]) <= reuseBudgetTokens) {
+    return { toSummarize: [], kept: [latestSummary, ...afterSummary], reuse: latestSummary };
+  }
+
+  const keptCount = recentEntryCountWithinBudget(afterSummary, keepRecentTokens);
+  let overflowCount = Math.max(0, afterSummary.length - keptCount);
+  while (overflowCount > 0) {
+    const last = afterSummary[overflowCount - 1]!;
+    if (last.type !== "tool_call") break;
+    const cid = (last.payload as { callId?: unknown } | null)?.callId;
+    if (typeof cid !== "string" || !cid) break;
+    const pairedInBatch = afterSummary
+      .slice(0, overflowCount)
+      .some((e) => e.type === "tool_result" && (e.payload as { callId?: unknown } | null)?.callId === cid);
+    if (pairedInBatch) break;
+    overflowCount -= 1;
+  }
+  const overflow = afterSummary.slice(0, overflowCount);
+  const toSummarize = latestSummary ? [latestSummary, ...overflow] : overflow;
+  if (!overflow.length) return null;
+  return { toSummarize, kept: afterSummary.slice(overflowCount) };
+}
+
+export function compactionThroughSeq(entries: SessionEntry[]): number {
+  return entries.reduce((max, entry) => {
+    const summary = contextSummaryPayload(entry);
+    return Math.max(max, summary ? summary.throughSeq : entry.seq);
+  }, -1);
+}
+
+export function deterministicCompactSummary(history: SessionEntry[]): string {
+  const throughSeq = compactionThroughSeq(history);
+  const body = headTailSlice(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
+  return `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.\n${body}`;
+}
+
+export const MAX_COMPACT_SUMMARY_CHARS = MAX_COMPACT_ENTRY_CHARS - CHAINED_SUMMARY_PREFIX_HEADROOM;
+
+export function validateCompactSummary(candidate: string | undefined): string {
+  const text = candidate?.trim();
+  if (!text) throw new Error("Compaction returned an empty summary");
+  if (text.length > MAX_COMPACT_SUMMARY_CHARS) throw new Error("Compaction summary exceeds the character limit");
+  return text;
+}

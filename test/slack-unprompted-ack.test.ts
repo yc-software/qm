@@ -11,7 +11,7 @@ const directory = {
   classifyUserCached: async () => ({ actor }),
 } as unknown as Directory;
 
-function harness(run: (hooks: any) => Promise<unknown>) {
+function agent(run: (hooks: any) => Promise<unknown>) {
   const reactions: string[] = [];
   const posts: string[] = [];
   const postArgs: Array<Record<string, unknown>> = [];
@@ -85,7 +85,7 @@ function harness(run: (hooks: any) => Promise<unknown>) {
 }
 
 test("an unmentioned thread followup QM answers gets the ack reaction added then cleared", async () => {
-  const h = harness(async (hooks) => {
+  const h = agent(async (hooks) => {
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
     return { status: "ok", reply: "Staging is green." };
@@ -97,7 +97,7 @@ test("an unmentioned thread followup QM answers gets the ack reaction added then
 });
 
 test("an answered followup's ack clears as soon as QM posts into the thread", async () => {
-  const h = harness(async (hooks) => {
+  const h = agent(async (hooks) => {
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
     hooks.onSurfacePosted?.();
@@ -110,7 +110,7 @@ test("an answered followup's ack clears as soon as QM posts into the thread", as
 });
 
 test("an answered followup whose reply post fails still clears its ack", async () => {
-  const h = harness(async (hooks) => {
+  const h = agent(async (hooks) => {
     await hooks.onQueued?.("r1");
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
@@ -125,7 +125,7 @@ test("an answered followup whose reply post fails still clears its ack", async (
 
 test("synthetic reaction turns never receive ack hooks", async () => {
   let hooksSeen: string[] = [];
-  const h = harness(async (hooks) => {
+  const h = agent(async (hooks) => {
     hooksSeen = Object.keys(hooks).filter((k) => k.startsWith("on") && typeof hooks[k] === "function");
     return { status: "silent" };
   });
@@ -137,7 +137,7 @@ test("synthetic reaction turns never receive ack hooks", async () => {
 
 for (const outcome of [{ status: "silent" }, { status: "react", reactions: ["thumbsup"] }] as const) {
   test(`an unmentioned followup QM declines (${outcome.status}) gets no ack reaction`, async () => {
-    const h = harness(async () => {
+    const h = agent(async () => {
       await new Promise((r) => setTimeout(r, 2_200));
       return outcome;
     });
@@ -175,7 +175,7 @@ test("waitRun signals replying only once the run has passed detection and begun 
 });
 
 test("a mention-only thread reply starts a turn with the tag intact", async () => {
-  const h = harness(async () => ({ status: "ok", reply: "On it." }));
+  const h = agent(async () => ({ status: "ok", reply: "On it." }));
   await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT>" }, h.client);
   assert.equal(h.turns.length, 1);
   assert.equal(h.turns[0].text, "@qm");
@@ -183,7 +183,7 @@ test("a mention-only thread reply starts a turn with the tag intact", async () =
 });
 
 test("the bot's own mention reaches the agent instead of being stripped", async () => {
-  const h = harness(async () => ({ status: "ok", reply: "Done." }));
+  const h = agent(async () => ({ status: "ok", reply: "Done." }));
   await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> check &amp; report" }, h.client);
   assert.equal(h.turns[0].text, "@qm check & report");
 });

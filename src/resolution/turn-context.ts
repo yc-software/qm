@@ -13,7 +13,7 @@ import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
+import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -38,7 +38,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
 
-// A turn-local view, never a reusable capability or a cross-turn cache.
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
   const sharingSources = input.external
@@ -98,7 +97,11 @@ export async function resolveTurnContext(input: ContextInput) {
         complete: notebooks.every(({ facts }) => !!facts),
       };
     },
-    recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
+    recallMemory: (
+      query: string,
+      disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>,
+      report?: MemoryRecallContext["report"],
+    ) =>
       tracePhase(
         "turn.memory_recall",
         () =>
@@ -110,13 +113,19 @@ export async function resolveTurnContext(input: ContextInput) {
               actorId: input.actor.id,
               maxChars: RECALL_MAX_CHARS,
               ...(disclosedFacts ? { disclosedFacts } : {}),
+              ...(report ? { report } : {}),
             },
             memoryLabels,
           ),
         { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
       ),
-    searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {
-      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id);
+    searchMemory: async (
+      query: string,
+      limit = 20,
+      scope?: ScopeId,
+      report?: MemoryRecallContext["report"],
+    ): Promise<string[] | null> => {
+      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id, report);
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;
     },

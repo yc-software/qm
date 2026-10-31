@@ -244,14 +244,13 @@ test("default runtime controls save reasoning level and fast mode", () => {
     {
       baseModelOptions: [{ id: "a" }],
       baseModelDefault: "a",
-      runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
+      runtime: { modelId: "a", effortLevel: "high", fastMode: true },
       fastModeModelIds: ["a"],
     },
     "org:test",
     "runtime",
   );
   assert.deepEqual(settingsStates.get("runtime")!.collect(), {
-    harnessId: "pi",
     modelId: "a",
     effortLevel: "high",
     fastMode: true,

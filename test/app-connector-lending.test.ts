@@ -9,9 +9,7 @@ import { createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { personalScope } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
@@ -21,13 +19,18 @@ import {
 } from "../src/auth/capability-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
 const CO_MANAGER = "co@example.com";
 const tokenOf = (host: string) => `publisher-token-for-${host}`;
 
-async function harness(t: { after: (fn: () => Promise<void>) => void }) {
+async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const audits: AuditEvent[] = [];
   const auditLog = {
     record: (e: AuditEvent) => void audits.push(e),
@@ -35,10 +38,10 @@ async function harness(t: { after: (fn: () => Promise<void>) => void }) {
     events: async () => [],
     tail: async () => [],
   };
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 1 }),
@@ -52,9 +55,9 @@ async function harness(t: { after: (fn: () => Promise<void>) => void }) {
   const app = createApp({
     deploy,
     acl,
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
-    identity: createIdentityService(),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
     ownerScopeId: personalScope(PUBLISHER),
@@ -65,6 +68,7 @@ async function harness(t: { after: (fn: () => Promise<void>) => void }) {
   });
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
   const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SIGNING,
     auditLog,
     keychain: {
@@ -120,7 +124,7 @@ async function harness(t: { after: (fn: () => Promise<void>) => void }) {
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
 
 test("only the live publisher can lend, per app and per connected-app host", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
@@ -173,7 +177,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 });
 
 test("public apps cannot borrow connectors", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   await h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER });
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
   await h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER });
@@ -182,7 +186,7 @@ test("public apps cannot borrow connectors", async (t) => {
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   await h.lend(PUBLISHER, ["slack.com"]);
   await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).status, 200, "the publisher's own publish keeps it");

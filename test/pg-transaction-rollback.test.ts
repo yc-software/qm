@@ -59,7 +59,7 @@ test("a migration whose ROLLBACK fails keeps its error and discards the connecti
   };
   const pool = { connect: async () => client } as unknown as Pool;
   await assert.rejects(
-    applyPgMigrations(pool, [definePgMigration("test/rollback/0001", ["SELECT broken_migration"])]),
+    applyPgMigrations(pool, [definePgMigration({ id: "test/rollback/0001", statements: ["SELECT broken_migration"] })]),
     /migration failed/,
   );
   assert.equal(released.length, 1);

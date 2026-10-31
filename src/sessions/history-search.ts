@@ -1,6 +1,7 @@
 import { isObj } from "../util/objects.ts";
 import type { SessionEntry } from "../types.ts";
-import { contextSummaryPayload } from "./session-store.ts";
+import { contextSummaryPayload, isOverheardEntry } from "./session-store.ts";
+import { entrySearchAuthor } from "./entry-search.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 
 const MAX_HIT_CHARS = 500;
@@ -27,26 +28,16 @@ function entryText(entry: SessionEntry): string {
   return JSON.stringify(rest);
 }
 
-function entryAuthor(entry: SessionEntry): string | undefined {
-  if (entry.type !== "user") return undefined;
-  const name = (entry.payload as { name?: unknown } | null)?.name;
-  return typeof name === "string" && name.trim() ? name.trim() : undefined;
-}
-
 const MAX_OPEN_CHARS = 20_000;
 const OPEN_TAIL_CHARS = 2_000;
 
-function isOverheard(entry: SessionEntry): boolean {
-  return entry.type === "user" && (entry.payload as { overheard?: unknown } | null)?.overheard === true;
-}
-
 function entryLabel(entry: SessionEntry): string {
   const stamp = `(${new Date(entry.createdAt).toISOString()})`;
-  if (isOverheard(entry)) {
-    const author = entryAuthor(entry) ?? "someone";
+  if (isOverheardEntry(entry)) {
+    const author = entrySearchAuthor(entry) ?? "someone";
     return `overheard#${entry.seq} ${stamp} ${author} (untrusted, SAID — not established fact):`;
   }
-  const author = entryAuthor(entry);
+  const author = entrySearchAuthor(entry);
   return `${entry.type}#${entry.seq} ${stamp}${author ? ` ${author}:` : ":"}`;
 }
 
@@ -68,7 +59,7 @@ export function searchSessionEntries(entries: SessionEntry[], query: string, lim
   for (let i = entries.length - 1; i >= 0 && hits.length < limit; i--) {
     const entry = entries[i]!;
     const text = entryText(entry).trim();
-    const author = entryAuthor(entry);
+    const author = entrySearchAuthor(entry);
     const haystack = `${author ? `${author} ` : ""}${text}`.toLowerCase();
     if (!terms.every((t) => haystack.includes(t))) continue;
     const clipped = clipHit(text, terms);

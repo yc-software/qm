@@ -55,6 +55,18 @@ link therefore stays effective for at most a minute of cached sessions.
 
 Links live in the `principal_links` durable map of the company database.
 
+## Attested actors
+
+Memory providers with `attestActor` and attested MCP connectors receive the
+canonical id in the `x-qm-actor` header, so every linked sign-in reaches them
+as one person. QM attests only ids of 1 to 256 visible ASCII characters (`!`
+through `~`), the rule the credential broker also applies to its actor; the
+broker checks the turn's own principal id and sends it unchanged. Slack
+ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email
+principal with non-ASCII characters, or any id over 256 characters, is not
+attested. QM makes no call for such a member and reports `invalid_actor`;
+link them to a conforming canonical id.
+
 ## Self-service Slack linking
 
 The dedicated Connect Slack flow preserves the signed-in web principal as canonical, keeping its existing connector ownership. Completion verifies a short-lived signed ticket, Composio account ownership, Slack user identity, and the installed company workspace before linking the directory member. Existing credentials or Composio accounts on the Slack principal require support instead of being silently stranded. Email similarity is not proof of identity.

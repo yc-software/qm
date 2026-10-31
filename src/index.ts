@@ -12,11 +12,15 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { instanceTenant } from "./tenants/instance.ts";
+import { enterTenant } from "./tenants/context.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+const tenant = await instanceTenant(config);
+if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
@@ -43,15 +47,15 @@ const server = createServer(built.app, {
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
-await built.identity.hydrate();
+await built.identity.refresh();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
 
@@ -66,7 +70,7 @@ if (config.deployAppsDomain) {
   });
 }
 
-if (config.databaseUrl && !config.adminGrants) {
+if (!config.adminGrants) {
   console.warn(
     "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
   );

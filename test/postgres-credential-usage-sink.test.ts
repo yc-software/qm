@@ -94,9 +94,30 @@ test("pg credential-usage sink: sparse and absent credentials use an ordered ind
   }
 });
 
+function windowSummary(
+  slug: string,
+  events: readonly { ts: number; status: string; principalId: string }[],
+  window: number,
+) {
+  const recent = events
+    .map((event, id) => ({ ...event, id }))
+    .sort((x, y) => y.ts - x.ts || y.id - x.id)
+    .slice(0, window);
+  const ok = recent.filter((event) => event.status === "ok");
+  const principals: string[] = [];
+  for (const event of ok) if (!principals.includes(event.principalId)) principals.push(event.principalId);
+  return {
+    slug,
+    usageCount: ok.length,
+    usageTruncated: recent.length === window,
+    usageSince: ok.length ? Math.min(...ok.map((event) => event.ts)) : null,
+    lastUsedAt: ok.length ? Math.max(...ok.map((event) => event.ts)) : null,
+    recentUsagePrincipals: principals.slice(0, 12),
+  };
+}
+
 test("pg credential summaries aggregate a bounded window without transferring raw events", { skip }, async (t) => {
-  const { createCredentialUsageSink, CREDENTIAL_USAGE_WINDOW } = await import("../src/admin/credential-usage-sink.ts");
-  const memory = createCredentialUsageSink();
+  const { CREDENTIAL_USAGE_WINDOW } = await import("../src/admin/credential-usage-sink.ts");
   const sink = createPostgresCredentialUsageSink(URL!);
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
@@ -104,38 +125,29 @@ test("pg credential summaries aggregate a bounded window without transferring ra
   await pool.query(
     `INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
     SELECT n, 'summary-window', 'example.com', CASE WHEN n % 3 = 0 THEN 'denied' ELSE 'ok' END,
-      'personal:summary', 'person-' || (n % 20) FROM generate_series(1, $1::int) n`,
+      'personal:summary', 'person-' || (n % 20) FROM generate_series(1, $1::int) n ORDER BY n`,
     [CREDENTIAL_USAGE_WINDOW + 10],
   );
-  const clock = t.mock.method(Date, "now");
-  for (let n = 1; n <= CREDENTIAL_USAGE_WINDOW + 10; n++) {
-    clock.mock.mockImplementation(() => n);
-    memory.record({
-      slug: "summary-window",
-      host: "example.com",
-      status: n % 3 === 0 ? "denied" : "ok",
-      scopeLabel: "personal:summary",
-      principalId: "person-" + (n % 20),
-    });
-  }
-  clock.mock.restore();
-  const slugs = ["summary-window", "summary-absent", "summary-window"];
-  assert.deepEqual(await sink.summary(slugs), await memory.summary(slugs));
+  const windowEvents = Array.from({ length: CREDENTIAL_USAGE_WINDOW + 10 }, (_, i) => ({
+    ts: i + 1,
+    status: (i + 1) % 3 === 0 ? "denied" : "ok",
+    principalId: "person-" + ((i + 1) % 20),
+  }));
+  assert.deepEqual(await sink.summary(["summary-window", "summary-absent", "summary-window"]), [
+    windowSummary("summary-window", windowEvents, CREDENTIAL_USAGE_WINDOW),
+    windowSummary("summary-absent", [], CREDENTIAL_USAGE_WINDOW),
+  ]);
   await pool.query(`INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
     SELECT 123, 'summary-ties', 'example.com', 'ok', 'personal:summary', 'person-' || n
-    FROM generate_series(1, 20) n`);
-  const tiedClock = t.mock.method(Date, "now", () => 123);
-  for (let n = 1; n <= 20; n++) {
-    memory.record({
-      slug: "summary-ties",
-      host: "example.com",
-      status: "ok",
-      scopeLabel: "personal:summary",
-      principalId: "person-" + n,
-    });
-  }
-  tiedClock.mock.restore();
-  assert.deepEqual(await sink.summary(["summary-ties"]), await memory.summary(["summary-ties"]));
+    FROM generate_series(1, 20) n ORDER BY n`);
+  const tiedEvents = Array.from({ length: 20 }, (_, i) => ({
+    ts: 123,
+    status: "ok",
+    principalId: "person-" + (i + 1),
+  }));
+  assert.deepEqual(await sink.summary(["summary-ties"]), [
+    windowSummary("summary-ties", tiedEvents, CREDENTIAL_USAGE_WINDOW),
+  ]);
   assert.deepEqual(await sink.summary([]), []);
   assert.equal((await sink.summary(["serp"]))[0]!.usageCount, 0);
 });

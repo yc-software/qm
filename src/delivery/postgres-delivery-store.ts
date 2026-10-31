@@ -16,6 +16,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
+    ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
@@ -74,6 +75,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
       ],
     },
+    {
+      id: "delivery/store/0007",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
+      ],
+    },
   ]);
 
   const enqueueListeners = new Set<() => void>();
@@ -115,6 +123,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
+             AND deliveries.failed_reason IS NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -180,6 +189,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           WHERE id = $1 AND delivered_at IS NULL`,
         [id, at, slackApiMs ?? null],
       );
+    },
+    async fail(id, reason, at) {
+      const rows = await q(
+        `UPDATE deliveries
+            SET expired_at = $3, failed_reason = $2, claim_expires_at = NULL
+          WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL
+          RETURNING *`,
+        [id, reason, at],
+      );
+      return rows[0] ? rowToDelivery(rows[0]) : null;
     },
     async ackByKey(idempotencyKey, at) {
       await query(

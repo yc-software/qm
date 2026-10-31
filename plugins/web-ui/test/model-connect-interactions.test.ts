@@ -186,7 +186,12 @@ test("AI account modal interactions", async (t) => {
     fetcher = (path) => {
       if (path.endsWith("/chatgpt/start")) starts++;
       return path.endsWith("/chatgpt/poll")
-        ? Promise.resolve(Response.json({ message: "login expired or unknown" }, { status: 502 }))
+        ? Promise.resolve(
+            Response.json(
+              { error: "oauth_poll_failed", message: "login expired or unknown — start again" },
+              { status: 404 },
+            ),
+          )
         : base(path);
     };
     await open();

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { addressGuardedFetch } from "../../src/util/network.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -58,9 +59,17 @@ export async function startMcpTestServer(
     authorize?: (authorization: string | undefined) => boolean;
     clients?: Record<string, string>;
     authorizationServer?: string;
-    call?: (name: string, args: Record<string, unknown>, authorization?: string) => CallToolResult;
+    call?: (
+      name: string,
+      args: Record<string, unknown>,
+      authorization?: string,
+    ) => CallToolResult | Promise<CallToolResult>;
     description?: string;
     instructions?: string;
+    stateless?: boolean;
+    deleteStatus?: number;
+    status?: number;
+    tokenStatus?: number;
   } = {},
 ): Promise<McpTestServer> {
   const tools = opts.tools ?? DEFAULT_TOOLS;
@@ -118,6 +127,7 @@ export async function startMcpTestServer(
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     const body = req.method === "POST" ? await readBody(req) : "";
+    if (path === "/token" && opts.tokenStatus) return json(res, opts.tokenStatus, { error: "server_error" });
     if (path === "/token" && opts.clients) return token(req, body, res);
     if (path.startsWith("/.well-known/oauth-protected-resource") && opts.authorizationServer) {
       return json(res, 200, { resource: `${url}/mcp`, authorization_servers: [opts.authorizationServer] });
@@ -135,6 +145,17 @@ export async function startMcpTestServer(
     });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });
+    }
+    if (opts.status) return json(res, opts.status, { error: "refused" });
+    if (req.method === "DELETE" && opts.deleteStatus) return json(res, opts.deleteStatus, { error: "session_gone" });
+    if (opts.stateless) {
+      if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: opts.json ?? false,
+      });
+      await mcpServer().connect(transport);
+      return transport.handleRequest(req, res, parsed);
     }
     const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string") {
@@ -186,3 +207,5 @@ export async function startMcpTestServer(
     revokeTokens: () => tokens.clear(),
   };
 }
+
+export const loopbackFetch = addressGuardedFetch(() => false);

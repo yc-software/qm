@@ -54,9 +54,12 @@ test("multiple recall providers compose without duplicating query hits", async (
       { provider: "knowledge", scopes: ["org"], capture: "off", label: "Org knowledge", manage: false },
     ],
   });
-  assert.equal(
-    recallText(await memory.recall("org:acme")),
-    "### Notebook\nnotebook memory\n### Org knowledge\nknowledge memory",
+  assert.deepEqual(
+    (await memory.recall("org:acme")).map((row) => [row.text, row.source?.label]),
+    [
+      ["notebook memory", "Notebook"],
+      ["knowledge memory", "Org knowledge"],
+    ],
   );
 });
 

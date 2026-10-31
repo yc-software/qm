@@ -10,7 +10,7 @@ import type { SessionEntry } from "../types.ts";
 
 function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
   return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth } }),
+    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth }, fetch }),
     tool: spec.tool,
     timeoutMs,
     ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),
@@ -52,6 +52,7 @@ export function createConfiguredMemoryService(opts: {
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs),
       ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
+      attestActor: provider.attestActor,
     });
   }
   return createRoutedMemoryService({

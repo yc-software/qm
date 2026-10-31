@@ -1,5 +1,5 @@
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
-import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
+import { type EventBus } from "../util/event-bus.ts";
 
 export type LedgerEventOp =
   | "ingest"
@@ -29,10 +29,6 @@ export interface OwnedLedgerEvent extends LedgerEvent {
 export type LedgerEventBus = EventBus<OwnedLedgerEvent>;
 
 const CHANNEL = "loop_item_events";
-
-export function createMemoryLedgerEventBus(): LedgerEventBus {
-  return createMemoryEventBus<OwnedLedgerEvent>("ledger-event");
-}
 
 export function createPostgresLedgerEventBus(connectionString: string): LedgerEventBus {
   return createPostgresNotifyBus<OwnedLedgerEvent>(connectionString, CHANNEL, "ledger-event");

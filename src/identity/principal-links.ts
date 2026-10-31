@@ -1,5 +1,6 @@
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createTtlRefresh } from "../util/async.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -40,15 +41,9 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(
-  backing?: DurableMap<PrincipalLink>,
-  lock: AdvisoryLock = createMemoryAdvisoryLock(),
-): PrincipalLinkService {
-  const store = backing ?? createMemoryMap<PrincipalLink>();
+export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
-  let refreshedAt = 0;
-  let refreshP: Promise<void> | null = null;
 
   function index(rows: PrincipalLink[]): void {
     byAlias.clear();
@@ -62,21 +57,7 @@ export function createPrincipalLinkService(
     }
   }
 
-  async function refresh(force = false): Promise<void> {
-    if (refreshP && !force) return refreshP;
-    while (refreshP) await refreshP;
-    if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    refreshP = store
-      .all()
-      .then(index)
-      .then(() => {
-        refreshedAt = Date.now();
-      })
-      .finally(() => {
-        refreshP = null;
-      });
-    return refreshP;
-  }
+  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all()));
 
   return {
     canonical(key) {

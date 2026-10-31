@@ -67,3 +67,27 @@ test("MCP recall is locally bounded and times out", async () => {
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
   await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
 });
+
+test("MCP recall returns one row per line of the provider's answer", async () => {
+  const memory = createMcpMemoryProvider({
+    read: { client: client([], "first fact\n\nsecond fact\n"), tool: "search_knowledge", timeoutMs: 100 },
+  });
+  assert.deepEqual(
+    (await memory.recall("org:acme", { query: "q" })).map((row) => row.text),
+    ["first fact", "second fact"],
+  );
+});
+
+test("a write that carries no member is not sent to an attested provider", async () => {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const memory = createMcpMemoryProvider({
+    read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
+    write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
+    attestActor: true,
+  });
+  assert.equal(
+    await memory.capture("channel:C1", ["history before May is unavailable"], 10, undefined, { mode: "explicit" }),
+    0,
+  );
+  assert.deepEqual(calls, []);
+});

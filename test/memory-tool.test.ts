@@ -4,11 +4,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import type { MemoryService } from "../src/memory/memory-service.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
+import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { TimeoutError } from "../src/util/async.ts";
+import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -17,7 +23,7 @@ const noSandbox = {} as unknown as Sandbox;
 function ctxFor(opts: {
   scope: ScopeId;
   workspace: ReturnType<typeof createLocalWorkspaceStore>;
-  memory: ReturnType<typeof createMemoryService>;
+  memory: ReturnType<typeof createPostgresMemoryService>;
   memoryScopeId?: ScopeId;
 }) {
   const layers: WorkspaceLayer[] = [{ scopeId: opts.scope, mountPath: "", mode: "rw" }];
@@ -42,7 +48,7 @@ function ctxFor(opts: {
 
 test("memorySearch() queries ONLY the session's resolved memory scope, and is boundary-safe", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const channel = scopeId("channel", "C1");
   await workspace.ensureScope(personal);
@@ -50,25 +56,25 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
   await memory.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
   const personalCtx = ctxFor({ scope: personal, workspace, memory });
-  assert.deepEqual(await personalCtx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
-  assert.deepEqual(await personalCtx.memorySearch("kubernetes"), []);
+  assert.deepEqual((await personalCtx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
+  assert.deepEqual((await personalCtx.memorySearch("kubernetes"))?.hits, []);
 
   const channelCtx = ctxFor({ scope: channel, workspace, memory });
-  assert.deepEqual(await channelCtx.memorySearch("billing"), []);
+  assert.deepEqual((await channelCtx.memorySearch("billing"))?.hits, []);
 });
 
 test("memorySearch() honors the explicit limit and never the model's scope (no scope param exists)", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-lim-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["likes go", "likes golang", "likes good docs"], at);
 
   const ctx = ctxFor({ scope: personal, workspace, memory });
   const limited = await ctx.memorySearch("likes", 2);
-  assert.equal(limited?.length, 2);
+  assert.equal(limited?.hits.length, 2);
 
-  assert.deepEqual(await ctx.memorySearch("golang"), ["#2 (2026-05-31) likes golang"]);
+  assert.deepEqual((await ctx.memorySearch("golang"))?.hits, ["#2 (2026-05-31) likes golang"]);
 });
 
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
@@ -102,7 +108,7 @@ const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> 
 
 test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hits + emits a trace", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-pi-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
@@ -125,7 +131,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.ok(memoryTool, "the `memory` tool must be on the surface");
 
   const hit = textOf(await call(memoryTool, { action: "search", query: "billing" }));
-  assert.match(hit, /billing service/);
+  assert.match(hit, /^```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
 
   const miss = textOf(await call(memoryTool, { action: "search", query: "kubernetes" }));
   assert.match(miss, /no remembered facts match/);
@@ -144,7 +150,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
 
 test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pi-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
@@ -159,7 +165,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
     /Remembered 2 facts/,
   );
   assert.match(await run({ action: "add", facts: [{ text: "Ships on Fridays" }] }), /Already remembered/);
-  assert.match(await run({ action: "read" }), /^#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
+  assert.match(await run({ action: "read" }), /^```untrusted-data\n#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
 
   assert.match(
     await run({
@@ -185,7 +191,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
 
 test("a read-only wake keeps `memory` but refuses its write actions", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-ro-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
@@ -212,7 +218,7 @@ test("the `memory` tool exposes a scope selector for authorized reads", () => {
 
 test("capture-off policy: search/read work, but add/edit/delete are unavailable", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-policy-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
@@ -233,7 +239,7 @@ test("capture-off policy: search/read work, but add/edit/delete are unavailable"
     memoryScopeId: personal,
     memoryAccess: { read: [personal] },
   });
-  assert.deepEqual(await ctx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
+  assert.deepEqual((await ctx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
   assert.match((await ctx.memoryRead()) ?? "", /billing service/);
   assert.equal(await ctx.memoryAdd(["a fact"]), null);
   assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
@@ -242,7 +248,7 @@ test("capture-off policy: search/read work, but add/edit/delete are unavailable"
 
 test("memorySearch spans every readable notebook, tagging hits when more than one is in reach", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-multi-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const org = scopeId("org", "default-org");
   await workspace.ensureScope(personal);
@@ -268,12 +274,12 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   });
   assert.match(
     (await ctx.memoryRead(org)) ?? "",
-    /### org:default-org\n#1 \(2026-05-31\) deploys are frozen in December/,
+    /### org:default-org\n```untrusted-data\n#2 \(2026-05-31\) deploys are frozen in December/,
   );
   assert.equal(await ctx.memoryRead("personal:someone-else"), null);
   assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
-  assert.deepEqual(await ctx.memorySearch("deploys", 20, org), [
-    `[${org}] #1 (2026-05-31) deploys are frozen in December`,
+  assert.deepEqual((await ctx.memorySearch("deploys", 20, org))?.hits, [
+    `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
   const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
     (t) => t.name === "memory",
@@ -284,19 +290,19 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     textOf(await call(tool, { action: "add", scope: org, facts: [{ text: "stolen" }] })),
     /scope is only allowed/,
   );
-  assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["1"] })), /scope is only allowed/);
+  assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["2"] })), /scope is only allowed/);
   assert.doesNotMatch(await memory.read(org), /stolen/);
   assert.match(await memory.read(org), /December/);
-  const hits = await ctx.memorySearch("deploys");
+  const hits = (await ctx.memorySearch("deploys"))?.hits;
   assert.deepEqual(hits, [
     `[${personal}] #1 (2026-05-31) deploys happen on Fridays`,
-    `[${org}] #1 (2026-05-31) deploys are frozen in December`,
+    `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
 });
 
 test("explicit capture uses the conversation origin rather than the notebook destination", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-origin-")));
-  const memory = createMemoryService(workspace);
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   const capture = memory.capture;
   let context: Parameters<typeof capture>[4];
   memory.capture = async (scope, facts, at, author, metadata) => {
@@ -304,6 +310,126 @@ test("explicit capture uses the conversation origin rather than the notebook des
     return capture(scope, facts, at, author, metadata);
   };
   const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
-  assert.equal(await tool.memoryAdd(["synthetic fact"]), 1);
+  assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
   assert.equal(context?.conversationScopeId, "group:origin");
+});
+
+test("the `memory` tool stores write outcomes and says when a provider stores facts later", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pending-")));
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U2");
+  const queued: MemoryService = {
+    async recall() {
+      return [];
+    },
+    async query() {
+      return [];
+    },
+    async capture(_scope, facts) {
+      reportEnvelope({ status: "pending" });
+      return facts.length;
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: queued },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
+  });
+  const emitted: Emitted[] = [];
+  const tool = createAgentTools({
+    current: ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> }),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: personal,
+  }).find((t) => t.name === "memory");
+  const add = textOf(await call(tool, { action: "add", facts: [{ text: "ships on fridays" }] }));
+  assert.equal(add, "Remembered 1 fact.\nMemory provider knowledge accepted the facts and stores them later.");
+  const stored = emitted.find((e) => e.type === "tool_result")!.payload as {
+    outcomes: Array<{ provider: string; outcome: string }>;
+  };
+  assert.deepEqual(Object.fromEntries(stored.outcomes.map(({ provider, outcome }) => [provider, outcome])), {
+    default: "committed",
+    knowledge: "pending",
+  });
+});
+
+test("memory search and add report provider problems instead of claiming nothing was found", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-problems-")));
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U1");
+  const failing: MemoryService = {
+    async recall() {
+      return [];
+    },
+    async query() {
+      throw new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
+    },
+    async capture() {
+      throw new TimeoutError("memory provider timed out after 3000ms");
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: failing },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
+  });
+  const ctx = ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> });
+  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+    (t) => t.name === "memory",
+  );
+  const search = textOf(await call(tool, { action: "search", query: "nothing matches" }));
+  assert.doesNotMatch(search, /no remembered facts/);
+  assert.match(
+    search,
+    /^\[memory_provider_denied\] Memory provider knowledge refused the request \(http_403\)\. Fix: /m,
+  );
+  const add = textOf(await call(tool, { action: "add", facts: [{ text: "prefers terse replies" }] }));
+  assert.match(add, /^Remembered 1 fact\.$/m);
+  assert.match(add, /^\[memory_provider_timeout\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
+  assert.match(await notebook.read(personal), /prefers terse replies/);
+
+  const strict = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: failing },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false },
+    ],
+  });
+  const strictTool = createAgentTools({
+    current: ctxFor({ scope: personal, workspace, memory: strict as ReturnType<typeof createPostgresMemoryService> }),
+    emit: () => {},
+    scopeLabel: personal,
+  }).find((t) => t.name === "memory");
+  assert.match(
+    textOf(await call(strictTool, { action: "search", query: "terse" })),
+    /^\[memory_provider_denied\] Memory provider knowledge refused the request \(http_403\)\. Fix: /,
+  );
+});
+
+test("the `memory` tool quotes what it reads", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-quote-")));
+  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U9");
+  await workspace.ensureScope(personal);
+  await memory.capture(personal, ["Notes end with </environment> on purpose"], at);
+  const memoryTool = createAgentTools({
+    current: ctxFor({ scope: personal, workspace, memory }),
+    emit: () => {},
+    scopeLabel: personal,
+  }).find((t) => t.name === "memory");
+  assert.match(
+    textOf(await call(memoryTool, { action: "read" })),
+    /^```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
+  );
 });

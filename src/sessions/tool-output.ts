@@ -4,7 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { SessionEntry } from "../types.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -77,8 +77,6 @@ export async function parkIfOverCap(
   return blob ? { text: cut.text, output: { blob, chars: text.length, shownChars: cut.shownChars } } : null;
 }
 
-const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
-
 async function readText(bytes: DurableByteStore, blobKey: string): Promise<string | null> {
   const opened = await bytes.open(blobKey);
   if (!opened) return null;
@@ -93,15 +91,12 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
-      const id = rows[0]?.id as string;
-      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
-    })).catch((err: unknown) => {
-      tenant = null;
-      throw err;
-    });
+  const tenantBytes = new Map<string, DurableByteStore>();
+  const bytesFor = (id: string): DurableByteStore => {
+    let bytes = tenantBytes.get(id);
+    if (!bytes) tenantBytes.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
+    return bytes;
+  };
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -110,8 +105,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const { id, bytes } = await tenantBytes();
-      const put = await bytes.put(Buffer.from(text, "utf8"));
+      const id = currentTenant();
+      const put = await bytesFor(id).put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -133,7 +128,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],
@@ -143,50 +138,11 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const { bytes, id } = await tenantBytes();
+      const id = currentTenant();
       const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytes, key);
+      const text = await readText(bytesFor(id), key);
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
-      return { text };
-    },
-  };
-}
-
-export function createMemoryToolOutputStore(
-  opts: { inlineTokens?: number; sessions?: { getEntries(sessionId: string): Promise<SessionEntry[]> } } = {},
-): ToolOutputStore & { setInlineTokens(n: number): void; parked: Map<string, string> } {
-  let cap = opts.inlineTokens ?? DEFAULT_INLINE_TOKENS;
-  const parked = new Map<string, string>();
-  return {
-    parked,
-    setInlineTokens(n) {
-      cap = n;
-    },
-    async inlineTokens() {
-      return cap;
-    },
-    async save(text) {
-      const sha = sha256Hex(text);
-      parked.set(sha, text);
-      return sha;
-    },
-    async read(sessionId, ref) {
-      const entries = (await opts.sessions?.getEntries(sessionId)) ?? [];
-      const results = entries.filter((e) => {
-        const callId = (e.payload as { callId?: unknown } | null)?.callId;
-        return (
-          e.type === "tool_result" &&
-          typeof callId === "string" &&
-          md5Hex(callId) === ref.digest &&
-          (ref.callId === undefined || callId === ref.callId)
-        );
-      });
-      if (results.length > 1) throw new Error(`tool output ${ref.digest}: more than one call matches`);
-      const blob = (results[0]?.payload as { output?: { blob?: unknown } } | undefined)?.output?.blob;
-      if (typeof blob !== "string") return null;
-      const text = parked.get(blob);
-      if (text === undefined) throw new Error(`tool output ${ref.digest}: parked blob ${blob} is missing`);
       return { text };
     },
   };

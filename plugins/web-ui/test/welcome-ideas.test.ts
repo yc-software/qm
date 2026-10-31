@@ -25,8 +25,7 @@ test("More ideas opens a fresh personal web chat and sends the examples once", a
       await new Promise((resolve) => setTimeout(resolve, 25));
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: ["test-model"] },
+        models: ["test-model"],
         modelCatalog: {
           "test-model": {
             id: "test-model",
@@ -42,8 +41,8 @@ test("More ideas opens a fresh personal web chat and sends the examples once", a
             maxTokens: 1000,
           },
         },
-        effective: { harnessId: "pi", modelId: "test-model" },
-        orgDefault: { harnessId: "pi", modelId: "test-model", revision: 1 },
+        effective: { modelId: "test-model" },
+        orgDefault: { modelId: "test-model", revision: 1 },
         scopeOverride: null,
         upgradeAvailable: false,
       });

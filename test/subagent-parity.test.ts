@@ -1,6 +1,6 @@
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
-import type { RuntimeControl } from "../src/harness/runtime-types.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
+import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -8,35 +8,40 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness } from "../src/harness/harness.ts";
-import { harnessToolOptions } from "../src/harness/harness-shared.ts";
-import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
+import type { Agent } from "../src/agent/agent.ts";
+import { turnToolOptions } from "../src/agent/turn-support.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import {
+  testConfigStore,
+  testDatabaseUrl,
+  testMap,
+  testDeployBackings,
+  testAdvisoryLock,
+} from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -59,16 +64,17 @@ const SUBAGENT_EXCEPTIONS = {
 const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({
+    advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
-    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
-    signals: createMemoryRunSignalStore(),
+    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
@@ -86,83 +92,72 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     },
   });
   const turns = new Map<string, Turn>();
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
+  const agent: Agent = {
+    async runTurn(turn) {
+      const results: Turn["results"] = [];
+      const ref = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+          if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+          return turn.emit(entry);
+        },
+        screenToolResult: turn.screenToolResult,
+        pendingApprovals: [],
+      };
+      const options = turnToolOptions({}, turn);
+      const tools = createAgentTools(ref, options);
+      const record: Turn = {
+        ref,
+        runtime: turn.runtimeControl,
+        requestedRuntime: turn.runtime,
+        options,
+        tools: tools.map((t) => t.name).sort(),
+        systemPrompt: turn.systemPrompt,
+        results,
+        started: sidebar,
+      };
+      turns.set(turn.session.threadRef, record);
+      for (
+        let call = next(record, !!turn.session.parentSessionId);
+        call;
+        call = next(record, !!turn.session.parentSessionId)
+      ) {
+        const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
+          id: string,
+          input: unknown,
+        ) => Promise<unknown>;
+        await execute(`call-${results.length}`, call.args);
+      }
+      return { reply: "done", modelCalls: 1 };
     },
-    {
-      async runTurn(turn) {
-        const results: Turn["results"] = [];
-        const ref = {
-          current: turn.tools,
-          scopeLabel: turn.scopeLabel,
-          emit: async (entry: Parameters<typeof turn.emit>[0]) => {
-            if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-            return turn.emit(entry);
-          },
-          screenToolResult: turn.screenToolResult,
-          pendingApprovals: [],
-        };
-        const options = harnessToolOptions({}, turn);
-        const tools = createAgentTools(ref, options);
-        const record: Turn = {
-          ref,
-          runtime: turn.runtimeControl,
-          requestedRuntime: turn.runtime,
-          options,
-          tools: tools.map((t) => t.name).sort(),
-          systemPrompt: turn.systemPrompt,
-          results,
-          started: sidebar,
-        };
-        turns.set(turn.session.threadRef, record);
-        for (
-          let call = next(record, !!turn.session.parentSessionId);
-          call;
-          call = next(record, !!turn.session.parentSessionId)
-        ) {
-          const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
-            id: string,
-            input: unknown,
-          ) => Promise<unknown>;
-          await execute(`call-${results.length}`, call.args);
-        }
-        return { reply: "done", modelCalls: 1 };
-      },
-    },
-  );
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
-  const config = createMemoryConfigStore("org");
-  await config.setApprovedHarnesses(["pi", "claude"]);
+  };
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-opus-5" },
+      { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
-      deployStore: createDeployStore(),
+      deployStore: createDeployStore(testDeployBackings()),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "subagent-parity-deploy"),
       auditLog,
@@ -285,7 +280,7 @@ test("human-descended tasks cannot finish silently without surface tools", async
 test("human-descended tasks can change their runtime but not scope defaults", async () => {
   const w = await world(["persistent_subagents"], script);
   const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
-  const active = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+  const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
   assert.ok(child.runtime);
   assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
   assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {

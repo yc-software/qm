@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
-import type { Session, Monitor } from "../src/types.ts";
+import type { Session } from "../src/types.ts";
+import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
+import { testMap } from "./support/test-database.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -20,8 +21,8 @@ function deferred() {
 
 function fixture() {
   let at = 1_000;
-  const store = createMemoryMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(createMemoryMap());
+  const store = testMap<SlackSessionStatusState>();
+  const flags = createFeatureFlagStore(testMap());
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];

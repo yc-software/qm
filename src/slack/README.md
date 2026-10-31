@@ -82,7 +82,7 @@ One process — core boots the Slack surface itself when the tokens are in its e
 ```bash
 cd ~/Programming/qm
 nvm use
-HARNESS=pi ORG_ID=acme ANTHROPIC_API_KEY=… \
+ORG_ID=acme ANTHROPIC_API_KEY=… \
 SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
 npm start
 ```
@@ -179,7 +179,7 @@ the tokens, core simply runs without Slack.
   **Allow session**, **Allow always**, and **Deny**. Session/always approvals are exact-command
   grants; deny rules still cannot be bypassed. This works whether the turn _paused_ awaiting
   approval (`pending_approval`) or _finished with a reply but skipped_ the gated command
-  (collect-mode `ok` + `pendingApprovals`, what the real Pi harness does) — in the latter case
+  (collect-mode `ok` + `pendingApprovals`, what the real agent does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
 - **Hand-offs are plain DMs.** When channel work needs another member's own logins, files or
   memory, the agent follows the `hand-off` skill: in Open conversations it uses the requester's own

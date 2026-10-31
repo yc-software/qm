@@ -1,6 +1,4 @@
 import type { ScopeId } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue } from "../util/async.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
@@ -17,9 +15,21 @@ import {
 } from "./facts.ts";
 
 export const MEMORY_FILE = "memory/MEMORY.md";
-const MEMORY_FACTS_FILE = "memory/facts.json";
 
-export interface MemoryRecallContext {
+export interface MemoryProviderOutcome {
+  provider: string;
+  scope: ScopeId;
+  outcome: "ok" | "empty" | "committed" | "pending" | "unknown" | "denied" | "timed_out" | "failed";
+  ms: number;
+  code?: string;
+  added?: number;
+}
+
+interface MemoryOutcomeSink {
+  report?: (outcome: MemoryProviderOutcome) => void;
+}
+
+export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
   disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
@@ -28,7 +38,7 @@ export interface MemoryRecallContext {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext extends MemoryCaptureMetadata {
+export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
   actorId?: string;
   input?: string;
@@ -195,42 +205,6 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     ...(store.metadata ? { metadata: () => store.metadata!() } : {}),
   };
-}
-
-interface FactsFile {
-  nextId: number;
-  facts: MemoryFact[];
-}
-
-export function createMemoryService(workspace: WorkspaceStore): MemoryService {
-  const perScope = createKeyedQueue<ScopeId>();
-  async function load(scopeId: ScopeId): Promise<FactsFile> {
-    const raw = await workspace.read(scopeId, MEMORY_FACTS_FILE);
-    return raw ? (JSON.parse(raw) as FactsFile) : { nextId: 1, facts: [] };
-  }
-  return createNotebookMemory({
-    list: async (scopeId) => (await load(scopeId)).facts,
-    transact: (scopeId, fn) =>
-      perScope(scopeId, async () => {
-        const file = await load(scopeId);
-        const draft: FactsFile = structuredClone(file);
-        const result = await fn({
-          list: async () => draft.facts,
-          async insert(fact) {
-            draft.facts.push({ ...fact, id: String(draft.nextId++) });
-          },
-          async update(id, patch, at) {
-            draft.facts = draft.facts.map((fact) => (fact.id === id ? { ...fact, ...patch, updatedAt: at } : fact));
-          },
-          async remove(ids) {
-            draft.facts = draft.facts.filter((fact) => !ids.includes(fact.id));
-          },
-        });
-        if (JSON.stringify(draft) !== JSON.stringify(file))
-          await workspace.write(scopeId, MEMORY_FACTS_FILE, `${JSON.stringify(draft)}\n`);
-        return result;
-      }),
-  });
 }
 
 export function isSystemActor(actorId: string | undefined): boolean {

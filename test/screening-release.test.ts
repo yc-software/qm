@@ -1,20 +1,20 @@
 import "./support/auto-fake-sprites.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createMockHarness } from "./support/mock-harness.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let executions = 0;
 let observedRelease = "";
-mock.module("./support/mock-harness.ts", {
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    createMockHarness() {
-      const harness = createMockHarness();
-      const run = harness.turns.runTurn;
-      harness.turns.runTurn = async (turn: HarnessTurnInput) => {
+    createMockAgent() {
+      const agent = createMockAgent();
+      const run = agent.runTurn;
+      agent.runTurn = async (turn: AgentTurnInput) => {
         if (turn.input.startsWith("The human released quarantined")) {
           const held = turn.history.findLast(
             (entry) =>
@@ -63,7 +63,7 @@ mock.module("./support/mock-harness.ts", {
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         return { reply, pendingApprovals: ref.pendingApprovals, pausedOnApproval: ref.pausedOnApproval };
       };
-      return harness;
+      return agent;
     },
   },
 });

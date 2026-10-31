@@ -31,6 +31,7 @@ async function withServer<T>(
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   }
 }
 

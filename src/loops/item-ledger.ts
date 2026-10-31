@@ -8,9 +8,9 @@ import type {
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
-} from "../types.ts";
+} from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -210,14 +210,13 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 }
 
 export function createLoopItemLedger(
-  backing: DurableMap<LoopItem> = createMemoryMap<LoopItem>(),
+  backing: DurableMap<LoopItem>,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;
     accepts: (loopId: string) => Promise<boolean>;
   },
 ): LoopItemLedger {
-  if (!backing.update) throw new Error("loop items need atomic durable updates");
   const update = backing.update.bind(backing);
   const emit = (item: LoopItem | null | undefined, op: LedgerEventOp): void => {
     if (item && onEvent) onEvent({ loopId: item.loopId, itemId: item.id, op, at: Date.now() });
@@ -294,12 +293,8 @@ export function createLoopItemLedger(
         updatedAt: now,
         ...(input.sourceSummary !== undefined ? { sourceSummary: input.sourceSummary } : {}),
       };
-      if (backing.insertIfAbsent) {
-        const created = await backing.insertIfAbsent(id, candidate);
-        return { item: created ? candidate : ((await backing.get(id)) ?? candidate), created };
-      }
-      const stored = await backing.putIfAbsent(id, candidate);
-      return { item: stored, created: stored.createdAt === candidate.createdAt };
+      const created = await backing.insertIfAbsent(id, candidate);
+      return { item: created ? candidate : ((await backing.get(id)) ?? candidate), created };
     },
     async summaries(loopIds, options) {
       if (!options?.includeInboxMetadata)

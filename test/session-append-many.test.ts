@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
@@ -14,7 +17,9 @@ for (const backend of ["memory", "postgres"] as const) {
     },
     async () => {
       const store =
-        backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+        backend === "memory"
+          ? createPostgresSessionStore(testDatabaseUrl())
+          : createPostgresSessionStore(process.env.DATABASE_URL!);
       const scope = scopeId("personal", "batch-test");
       const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
       await store.addParticipant(session.id, "batch-test");
@@ -124,7 +129,7 @@ test(
     const releaseCommit = Promise.withResolvers<void>();
     let held = false;
     pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
-      if (args[0] === "COMMIT" && !held) {
+      if (((args[0] as { text?: string })?.text ?? args[0]) === "COMMIT" && !held) {
         held = true;
         reachedCommit.resolve();
         return releaseCommit.promise.then(() => query.apply(this, args));

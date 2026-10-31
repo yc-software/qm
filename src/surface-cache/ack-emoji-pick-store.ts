@@ -41,19 +41,24 @@ const emptyCounts = (): AckPickCounts => ({ picked: 0, declined: 0 });
 
 export function createPostgresAckEmojiPickStore(connectionString: string): AckEmojiPickStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/ack-emoji-pick/0001", [
-    `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
+  const { q, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/ack-emoji-pick/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,
         outcome TEXT NOT NULL, picked TEXT, icon TEXT, message TEXT, candidates TEXT, model TEXT,
         latency_ms INT, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
         ON ack_emoji_picks(org_id, channel, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
         ON ack_emoji_picks(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
         ON ack_emoji_picks(org_id, outcome)`,
+      ],
+    },
   ]);
   const row = (r: Record<string, unknown>): AckEmojiPick => ({
     id: Number(r.id),
@@ -144,42 +149,5 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
       return out;
     },
     close,
-  };
-}
-
-export function createMemoryAckEmojiPickStore(): AckEmojiPickStore {
-  const picks: AckEmojiPick[] = [];
-  let seq = 0;
-  const filtered = (opts?: { channel?: string }) => picks.filter((p) => !opts?.channel || p.channel === opts.channel);
-  return {
-    async record(p) {
-      const a = picks;
-      a.push({ ...p, id: ++seq });
-      if (a.length > 5000) a.splice(0, a.length - 5000);
-    },
-    async list(opts) {
-      const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
-      const all = filtered(opts)
-        .filter(
-          (p) =>
-            (!opts?.outcome?.length || opts.outcome.includes(p.outcome)) &&
-            (opts?.before == null ||
-              (opts.beforeId != null
-                ? p.createdAt < opts.before || (p.createdAt === opts.before && (p.id ?? 0) < opts.beforeId)
-                : p.createdAt < opts.before)),
-        )
-        .slice()
-        .sort((a, b) => b.createdAt - a.createdAt || (b.id ?? 0) - (a.id ?? 0));
-      return all.slice(0, limit).map(({ candidates: _c, ...rest }) => rest);
-    },
-    async get(id) {
-      return picks.find((p) => p.id === id) ?? null;
-    },
-    async counts(opts) {
-      const out = emptyCounts();
-      for (const p of filtered(opts)) if (p.outcome in out) out[p.outcome] += 1;
-      return out;
-    },
-    async close() {},
   };
 }
