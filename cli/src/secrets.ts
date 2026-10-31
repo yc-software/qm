@@ -351,23 +351,11 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "INBOX_USERS",
-    service: "web-ui",
-    required: false,
-    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
-  },
-  {
     name: "CORE_SIGNING_SECRET",
     service: "admin",
     required: true,
     description: "HMAC key shared by core and surface plugins.",
     generate: MINT_LOCALLY,
-  },
-  {
-    name: "INBOX_USERS",
-    service: "admin",
-    required: false,
-    description: "Comma-separated principals allowed to access Inbox, Calendar, and Design System.",
   },
   {
     name: "OIDC_CLIENT_ID",
@@ -770,7 +758,7 @@ export function secretDestinations(
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const add = (workload: string, name: string): void => {
-    if (workload === "core" && isTenantSetting(name)) return;
+    if (isTenantSetting(name)) return;
     out.set(workload, (out.get(workload) ?? new Set()).add(name));
   };
   for (const service of secret.services) {

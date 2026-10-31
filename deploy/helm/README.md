@@ -53,16 +53,21 @@ Bring these before installing:
 
 Store credentials in a Kubernetes Secret and use `envFrom`, or supply `secretEnv`
 through a protected values file. Helm stores `secretEnv` values in its release
-history. Never commit these values. With `envFrom`, explicitly provide both
-`AUTH_ALLOWED_EMAILS` and `OIDC_ALLOWED_EMAILS` (or both corresponding domain
-variables); Helm cannot inspect externally supplied Secret values. When `envFrom`
-is present, the chart does not derive OIDC allowlist environment entries from
-`env` or `services.auth.env`, since those entries would override a potentially
-narrower policy in an external Secret. Set OIDC explicitly in values or the external
-Secret, including when mixing auth values with `envFrom`. Without `envFrom`, auth
-allowlists in `env` or `services.auth.env` propagate unless explicit OIDC values
-in `env` or `secretEnv` override them. Auth allowlists in `secretEnv` are aliased
-inside the chart-managed Secret; later `envFrom` sources retain their precedence.
+history. Never commit these values.
+
+Settings that belong to the install's tenant go under `tenantSettings`, not in any
+service's environment: `ADMIN_GRANTS`, `AUTH_ALLOWED_EMAILS` or
+`AUTH_ALLOWED_EMAIL_DOMAIN`, the portal's `OIDC_*` values and
+`PORTAL_EXPECTED_TEAM_ID`. The chart refuses them in `env`, `secretEnv` or
+`services.<name>.env`. After each install or upgrade, a hook Job running the core
+image creates the install's tenant (`PUT /v1/install/tenant`) and writes these
+settings to it (`PUT /v1/tenant-settings`), signed with `CORE_SIGNING_SECRET` and
+authorized by `DEPLOYMENT_CONTROL_SECRET`. With the embedded auth broker, the chart
+derives the portal's OIDC endpoints and copies `AUTH_CLIENT_ID`/`AUTH_CLIENT_SECRET`
+from `secretEnv` and the auth allowlist into the matching `OIDC_*` settings; an
+explicit `tenantSettings.OIDC_*` value wins. With `envFrom`, set
+`tenantSettings.OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` yourself, since Helm
+cannot read an external Secret.
 
 Only portal should normally have public ingress. `ingress.service` accepts an
 enabled `portal`, `core` or `web-ui`, not embedded modules or the TCP egress proxy.
@@ -93,7 +98,8 @@ services:
       S3_REGION: us-west-2
 ```
 
-This fragment expects `DATABASE_URL`, a remote `SANDBOX_BACKEND` and S3 credentials
+This fragment expects `DATABASE_OWNER_URL`, `DATABASE_URL`, `DATABASE_READER_URL`,
+`DEPLOYMENT_CONTROL_SECRET`, a remote `SANDBOX_BACKEND` and S3 credentials
 in `qm-runtime`; see
 [Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
 runtime config and `images.yaml`, render and inspect before applying:
@@ -110,8 +116,14 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 
 ## Core data and rollout behavior
 
-Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
-store for file bytes. Choose one of two layouts.
+Core keeps durable state in two places: Postgres and an object store for file
+bytes. Postgres takes three logins: `DATABASE_OWNER_URL` owns the tables and runs
+migrations, `DATABASE_URL` is the `qm_app` login requests use (not the owner, not
+a superuser, no `BYPASSRLS`) and `DATABASE_READER_URL` is `qm_reader`. The
+migrations create `qm_app` and `qm_reader`, and core sets their passwords from the
+URLs. Core refuses to start without `DATABASE_OWNER_URL`, or when `DATABASE_URL`
+logs in as the owner, a superuser or a role that bypasses row-level security.
+Choose one of two layouts.
 
 **Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
 with `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`

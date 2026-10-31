@@ -64,7 +64,10 @@ any other way.
    zone, `NS` delegation in the parent, wildcard record inside — then reconcile; see
    below), and so is the LoadBalancer in front of the egress proxy ("Forcing sandbox
    egress through the proxy" — without it egress runs fail-open).
-4. **Provision Postgres and set `DATABASE_URL` before first boot.** Sign-in is not
+4. **Provision Postgres and set `DATABASE_OWNER_URL`, `DATABASE_URL` and
+   `DATABASE_READER_URL` before first boot.** The owner URL runs migrations; the
+   other two name the `qm_app` and `qm_reader` logins the migrations create, and core
+   sets their passwords from the URLs. Sign-in is not
    optional here: the auth broker's single-use claim endpoint needs core's durable
    store, so an instance without a database accepts no sign-ins at all. The Porter
    path has no `qm`-CLI database provisioning — create a datastore in the dashboard
@@ -72,9 +75,12 @@ any other way.
    can come back with `connected_cluster_ids` naming your cluster while its security
    group still refuses it — verify with a `psql` from a pod before booting, and
    prefer in-cluster Postgres when in doubt.
-5. **Name the administrator before first boot.** Set `ADMIN_GRANTS=<email>:org_admin`
-   on core and the sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>` — the Helm chart
-   bridges it to the portal's `OIDC_ALLOWED_EMAILS`). This is the step the old docs
+5. **Name the administrator at first boot.** `ADMIN_GRANTS=<email>:org_admin` and the
+   sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>`) are tenant settings, not app
+   environment: once core is up, create the install tenant with `PUT /v1/install/tenant`
+   and write both with `PUT /v1/tenant-settings` (source-signed, with
+   `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
+   this from `tenantSettings`. This is the step the old docs
    never mentioned: with Postgres and no `ADMIN_GRANTS`, the instance boots, everyone
    allowed can sign in, and the admin console is permanently unreachable — there is no
    in-product way to grant the first admin afterwards.
@@ -124,14 +130,14 @@ latest environment with provided name`, because `porter env create` makes a
 Nothing generates the inter-service wiring for you — `cli/src/services.ts` has `fly` and
 `docker` targets but no Porter one — so set it by hand on each app:
 
-| Service      | Wiring                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all          | `CORE_ORG_ID`/`ORG_ID`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`                                                                                                                                                                                                                                                                           |
-| all but core | `CORE_API_URL=http://qm-core-core.<namespace>.svc.cluster.local:8080`                                                                                                                                                                                                                                                                             |
-| core         | `MODEL_PROVIDER`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL` (the portal's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DATABASE_URL` — production refuses to boot without them                                                                                                                  |
-| portal       | `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`, `AUTH_BROKER_UPSTREAM`, `AUTH_BROKER_PREFIX=/idp`, the `OIDC_*` set from `brokerWiring` in `cli/src/services.ts` (including `OIDC_CLIENT_SECRET`), and `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_EMAIL_DOMAIN` — production refuses to boot without an allow-list |
-| admin        | `ADMIN_BASE_PATH=/admin`                                                                                                                                                                                                                                                                                                                          |
-| auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in                            |
+| Service      | Wiring                                                                                                                                                                                                                                                                                                                 |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| all          | `CORE_ORG_ID`/`ORG_ID`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`                                                                                                                                                                                                                                                |
+| all but core | `CORE_API_URL=http://qm-core-core.<namespace>.svc.cluster.local:8080`                                                                                                                                                                                                                                                  |
+| core         | `MODEL_PROVIDER`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL` (the portal's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DATABASE_URL` — production refuses to boot without them; `DATABASE_OWNER_URL` and `DATABASE_READER_URL` alongside `DATABASE_URL`              |
+| portal       | `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`, `AUTH_BROKER_UPSTREAM`, `AUTH_BROKER_PREFIX=/idp`; the portal reads its `OIDC_*` sign-in settings (the set from `brokerWiring` in `cli/src/services.ts`, `OIDC_CLIENT_SECRET` and the allow-list) from core's tenant settings       |
+| admin        | `ADMIN_BASE_PATH=/admin`                                                                                                                                                                                                                                                                                               |
+| auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in |
 
 Core also reads `RESEND_API_KEY` and `AUTH_EMAIL_FROM` when they are set — optional there,
 they let admins email external-user invitations from the admin Users tab or by chatting
@@ -166,9 +172,9 @@ manage the release themselves; it expects the images published at
 commit that actually carries the Porter backend — the published tags are commit SHAs, and
 one from before Porter support landed rejects `SANDBOX_BACKEND=porter` at startup. Set
 `publicUrl` and the chart derives the broker wiring (`AUTH_ISSUER`, `AUTH_REDIRECT_URI`
-and the portal's `OIDC_*` endpoints) the way `cli/src/services.ts` does for the other
-targets; what it cannot invent is the identity allow-list, so production still refuses to
-boot until `AUTH_ALLOWED_EMAILS`/`AUTH_ALLOWED_EMAIL_DOMAIN` is set, and the auth broker
+and, through its hook Job, the portal's `OIDC_*` tenant settings) the way
+`cli/src/services.ts` does for the other targets; what it cannot invent is the identity
+allow-list, so set `tenantSettings.AUTH_ALLOWED_EMAILS` or `AUTH_ALLOWED_EMAIL_DOMAIN`, and the auth broker
 needs a real mail transport (`RESEND_API_KEY` or the `SMTP_*` set) because there is no
 console transport. `SANDBOX_BACKEND` has no default and core refuses to start in
 production without it.

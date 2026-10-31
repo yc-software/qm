@@ -22,7 +22,8 @@ test(
     await admin.connect();
     const suffix = randomBytes(4).toString("hex");
     const password = randomBytes(12).toString("hex");
-    const [app, bypass, owner, member] = ["app", "bypass", "owner", "member"].map((kind) => `qmt_${kind}_${suffix}`);
+    const role = (kind: string): string => `qmt_${kind}_${suffix}`;
+    const [app, bypass, owner, member] = [role("app"), role("bypass"), role("owner"), role("member")];
     const table = `qmt_owned_${suffix}`;
     try {
       await admin.query(`CREATE ROLE ${app} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);

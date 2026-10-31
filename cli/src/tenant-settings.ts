@@ -3,7 +3,7 @@ import { CoreUnreachableError } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
 import { computedSecrets } from "./secrets.ts";
-import { serviceHost } from "./services.ts";
+import { brokerWiring } from "./services.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
@@ -21,14 +21,37 @@ function sandboxBackendSetting(config: QmConfig): Record<string, string> {
   return backend ? { SANDBOX_BACKEND: backend } : {};
 }
 
+const SLACK_SIGN_IN: Record<string, string> = {
+  OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize",
+  OIDC_TOKEN_ENDPOINT: "https://slack.com/api/openid.connect.token",
+  OIDC_USERINFO_ENDPOINT: "https://slack.com/api/openid.connect.userInfo",
+  OIDC_ISSUER: "https://slack.com",
+  OIDC_JWKS_URI: "https://slack.com/openid/connect/keys",
+  OIDC_SCOPES: "openid profile email",
+  OIDC_PRINCIPAL_CLAIM: "email",
+};
+
+function portalSignInSettings(config: QmConfig): Record<string, string> {
+  if (!config.services.includes("portal")) return {};
+  if (config.services.includes("auth")) {
+    const allowedEmailDomain = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN;
+    return brokerWiring("portal", {
+      publicUrl: config.publicUrl,
+      authBaseUrl: "",
+      ...(allowedEmailDomain ? { allowedEmailDomain } : {}),
+    });
+  }
+  return config.target === "render" ? SLACK_SIGN_IN : {};
+}
+
 export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, string>): Record<string, string> {
   const secret = (name: string): string | undefined => deploymentSecretValue(name, values.get(name));
   const fromSecrets: Record<string, string> = {};
   for (const { name, services, aliases } of computedSecrets(config)) {
     const value = secret(name);
     if (value === undefined) continue;
-    if (services.some((service) => serviceHost(service) === "core")) fromSecrets[name] = value;
-    for (const alias of aliases ?? []) if (serviceHost(alias.service) === "core") fromSecrets[alias.name] = value;
+    if (services.some((service) => service !== "sandbox")) fromSecrets[name] = value;
+    for (const alias of aliases ?? []) fromSecrets[alias.name] = value;
   }
   const renderSandbox =
     config.target === "render" && config.render
@@ -45,6 +68,9 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
     ...(config.botName ? { ORG_BRAND_SELF_LABEL: config.botName } : {}),
     ...(config.orgName ? { ORG_BRAND_ORG_NAME: config.orgName } : {}),
     ...(authDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: authDomain } : {}),
+    ...portalSignInSettings(config),
+    ...config.env.auth,
+    ...config.env.portal,
     ...config.env.core,
     ...securityScreenEnv(config),
     ...renderSandbox,

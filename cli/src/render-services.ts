@@ -170,5 +170,5 @@ export function renderServiceEnv(
         out[key] = config.env.portal?.[key] ?? value;
     }
   }
-  return service === "core" ? withoutTenantSettings(out) : out;
+  return withoutTenantSettings(out);
 }

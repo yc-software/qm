@@ -271,29 +271,6 @@ function createTimingRecorder(stack: string): {
   };
 }
 
-export function stageFlyEmailAllowlist(
-  config: QmConfig,
-  envFile: string,
-  selectedWorkloads: ReadonlySet<string>,
-): void {
-  const values = readEnvFile(envFile);
-  const value = deploymentSecretValue("AUTH_ALLOWED_EMAILS", values.get("AUTH_ALLOWED_EMAILS"));
-  if (value === undefined) return;
-  if (isInvalidSecret("AUTH_ALLOWED_EMAILS", value)) {
-    throw new CliError("required secret AUTH_ALLOWED_EMAILS is missing or invalid");
-  }
-  const secret = computedSecrets(config).find((candidate) => candidate.name === "AUTH_ALLOWED_EMAILS");
-  if (!secret) return;
-  const staged: string[] = [];
-  for (const [workload, names] of secretDestinations(secret)) {
-    if (!selectedWorkloads.has(workload)) continue;
-    const app = `${appPrefixOf(config)}-${workload}`;
-    for (const name of names) stageSecret(app, name, value);
-    staged.push(app);
-  }
-  if (staged.length) step(`AUTH_ALLOWED_EMAILS: staged from .env on ${staged.join(", ")}`);
-}
-
 const tomlStr = (v: string): string => JSON.stringify(v);
 const FLY_DEPLOYMENT_ID_ENV = "QM_DEPLOYMENT_ID";
 const flyDeploymentId = (flyOrg: string, deploymentId: string, appPrefix: string): string =>
@@ -321,7 +298,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     ...deploymentEnv,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.deploymentId, ctx.appPrefix),
   };
-  const overrides = service === "core" ? withoutTenantSettings(merged) : merged;
+  const overrides = withoutTenantSettings(merged);
   const provided = new Set(Object.keys(overrides));
   const vm = ctx.config.vms?.[service];
   const lines = base.split("\n");
@@ -367,7 +344,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
         const key = kv[2] ?? "";
         envIndent = indent;
         seen.add(key);
-        if (service === "core" && isTenantSetting(key)) continue;
+        if (isTenantSetting(key)) continue;
         const ov = overrides[key];
         if (ov !== undefined) {
           out.push(`${indent}${key} = ${tomlStr(ov)}`);
@@ -988,15 +965,18 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
   });
 }
 
-function unsetRetiredCoreSecrets(config: QmConfig, appPrefix: string): void {
-  const app = `${appPrefix}-core`;
-  const expected = new Set(computedSecrets(config).flatMap((secret) => runtimeSecretNames("core", secret)));
-  const stale = [...(secretNames(app) ?? [])].filter(
-    (name) => isTenantSetting(name) || (name.startsWith("FLY_RESIDENT_ENV_") && !expected.has(name)),
-  );
-  if (!stale.length) return;
-  fly(["secrets", "unset", "--stage", "-a", app, ...stale]);
-  note(`removed tenant-owned and retired settings from ${app} env: ${stale.join(", ")}`);
+function unsetRetiredSecrets(config: QmConfig, appPrefix: string, workloads: readonly string[]): void {
+  for (const workload of workloads) {
+    const app = `${appPrefix}-${workload}`;
+    const expected = new Set(computedSecrets(config).flatMap((secret) => runtimeSecretNames("core", secret)));
+    const stale = [...(secretNames(app) ?? [])].filter(
+      (name) =>
+        isTenantSetting(name) || (workload === "core" && name.startsWith("FLY_RESIDENT_ENV_") && !expected.has(name)),
+    );
+    if (!stale.length) continue;
+    fly(["secrets", "unset", "--stage", "-a", app, ...stale]);
+    note(`removed tenant-owned and retired settings from ${app} env: ${stale.join(", ")}`);
+  }
 }
 
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
@@ -1121,10 +1101,6 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       return;
     }
 
-    if (!opts.dryRun) {
-      stageFlyEmailAllowlist(config, ctx.envFile, new Set([...services, ...plugins.map((plugin) => plugin.name)]));
-    }
-
     const gateSecrets = (app: string, header: string, path: string, required: string[], timingKey: string): boolean => {
       const existing = timing.time(timingKey, "secret checks", () => secretNames(app)) ?? new Set<string>();
       const missing = required.filter((sec) => !existing.has(sec));
@@ -1169,10 +1145,8 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     if (missingAny) {
       die("\naborting `up`: set the missing secrets above first (use --stage, the deploy applies them)");
     }
-    if (services.includes("core")) {
-      unsetRetiredCoreSecrets(config, ctx.appPrefix);
-      unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
-    }
+    unsetRetiredSecrets(config, ctx.appPrefix, services);
+    if (services.includes("core")) unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
 
     for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
@@ -1705,7 +1679,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   for (const workload of runnableServices(config.services))
     ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
-  unsetRetiredCoreSecrets(config, prefix);
+  unsetRetiredSecrets(config, prefix, runnableServices(config.services));
   unsetDisabledFlyPublisherToken(config, prefix);
   unsetCorelessPluginCoreSecrets(plugins, prefix);
   const stagedApps = new Set<string>();

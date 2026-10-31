@@ -1639,7 +1639,8 @@ test("Render connects a private web UI to the public portal and copies shared au
   assert.equal(portal.WEB_UI_UPSTREAM, "http://acme-web-ui-assigned:8080");
   assert.equal(portal.ADMIN_UPSTREAM, "http://acme-web-ui-assigned:8080/admin");
   assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
-  assert.equal(portal.AUTH_CLIENT_SECRET, portal.OIDC_CLIENT_SECRET);
+  assert.ok(portal.AUTH_CLIENT_SECRET);
+  assert.equal(portal.OIDC_CLIENT_SECRET, undefined, "the portal's OIDC client secret is a tenant setting");
   assert.equal(portal.CORE_SIGNING_SECRET, core.CORE_SIGNING_SECRET);
   assert.equal(c.envs.get("srv-acme-minio")!.MINIO_BROWSER, "off");
 });

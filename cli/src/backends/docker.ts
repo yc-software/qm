@@ -378,7 +378,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
       }),
     );
   }
-  return out;
+  return withoutTenantSettings(out);
 }
 
 function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string> {

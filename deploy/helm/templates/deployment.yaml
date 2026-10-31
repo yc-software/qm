@@ -91,15 +91,6 @@ spec:
           {{- end }}
           {{- if eq $name "portal" }}
           {{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}
-          {{- if $authEnabled }}
-          {{- $_ := set $wired "OIDC_ISSUER" $issuer }}
-          {{- $_ := set $wired "OIDC_AUTH_ENDPOINT" (printf "%s/authorize" $issuer) }}
-          {{- $_ := set $wired "OIDC_TOKEN_ENDPOINT" (printf "%s/token" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_USERINFO_ENDPOINT" (printf "%s/userinfo" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_JWKS_URI" (printf "%s/.well-known/jwks.json" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_SCOPES" "openid email" }}
-          {{- $_ := set $wired "OIDC_PRINCIPAL_CLAIM" "email" }}
-          {{- end }}
           {{- end }}
           {{- if and (eq $name "portal") $authEnabled }}
           {{- $_ := set $wired "AUTH_ISSUER" $issuer }}
@@ -143,15 +134,6 @@ spec:
           {{- fail "core persistence requires DATA_DIR=/data" }}
           {{- end }}
           {{- $_ := set $env "DATA_DIR" "/data" }}
-          {{- end }}
-          {{- if and (eq $name "portal") $authEnabled (not $root.Values.envFrom) }}
-          {{- range $authKey, $oidcKey := dict "AUTH_ALLOWED_EMAILS" "OIDC_ALLOWED_EMAILS" "AUTH_ALLOWED_EMAIL_DOMAIN" "OIDC_ALLOWED_EMAIL_DOMAIN" }}
-          {{- if and (not (hasKey $env $oidcKey)) (not (index $root.Values.secretEnv $oidcKey)) }}
-          {{- if hasKey $env $authKey }}
-          {{- $_ := set $env $oidcKey (index $env $authKey) }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
           {{- end }}
           {{- if $env }}
           env:

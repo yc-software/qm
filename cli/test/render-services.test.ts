@@ -176,7 +176,8 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
     }
   }
   const portal = renderServiceEnv(config, "portal", values, connections);
-  assert.equal(portal.OIDC_ISSUER, `${config.publicUrl}/idp`);
+  assert.equal(portal.OIDC_ISSUER, undefined);
+  assert.equal(tenantSettingsEnv(config, values).OIDC_ISSUER, `${config.publicUrl}/idp`);
   assert.equal(portal.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
   assert.equal(portal.ADMIN_UPSTREAM, "http://web-ui:8080/admin");
   assert.equal(renderServiceEnv(config, "slack", values, connections).PUBLIC_API_URL, config.apiUrl);
@@ -216,19 +217,20 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   assert.equal(portal.AUTH_EMBEDDED, "0");
   assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
   assert.equal(portal.ADMIN_UPSTREAM, "");
-  assert.equal(portal.OIDC_ISSUER, "https://idp.example.test");
-  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
+  assert.equal(portal.OIDC_ISSUER, undefined);
+  assert.equal(tenantSettingsEnv(config, new Map()).OIDC_ISSUER, "https://idp.example.test");
+  assert.equal(tenantSettingsEnv(config, new Map()).OIDC_JWKS_URI, "https://slack.com/openid/connect/keys");
 });
 
-test("removing an embedded auth domain clears the broker allowlists; core never carries it", (t) => {
+test("an embedded auth domain is a tenant setting that no Render service env carries", (t) => {
   const { config } = deployment(t);
   config.env.auth = { AUTH_ALLOWED_EMAIL_DOMAIN: "example.test" };
   assert.equal(renderServiceEnv(config, "core", new Map(), connections).AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
   assert.equal(tenantSettingsEnv(config, new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.test");
-  delete config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN;
+  assert.equal(tenantSettingsEnv(config, new Map()).OIDC_ALLOWED_EMAIL_DOMAIN, "example.test");
   const portal = renderServiceEnv(config, "portal", new Map(), connections);
-  assert.equal(portal.AUTH_ALLOWED_EMAIL_DOMAIN, "");
-  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
+  assert.equal(portal.AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, undefined);
 });
 
 test("Render storage validates settings and reserves bundled resource names", (t) => {

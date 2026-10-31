@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { derivedLoginPassword } from "../../../cli/src/database-logins.ts";
 import { ensureInstallTenant } from "../../../src/tenants/install.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -21,8 +22,13 @@ export async function prepareDurability(opts: {
 }): Promise<Durability> {
   const { worktree, env, liveEnvFile, log, phase } = opts;
   phase("durability", "start");
-  let databaseUrl = env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
-  let adminGrantsSeed = env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
+  const envFile = join(worktree, ".env");
+  let databaseUrl =
+    env.DATABASE_OWNER_URL ||
+    envFileGet(envFile, "DATABASE_OWNER_URL") ||
+    env.DATABASE_URL ||
+    envFileGet(envFile, "DATABASE_URL");
+  let adminGrantsSeed = env.ADMIN_GRANTS || envFileGet(envFile, "ADMIN_GRANTS");
   let localPg = false;
   if (!databaseUrl) {
     try {
@@ -60,4 +66,16 @@ export async function ensureDevInstallTenant(databaseUrl: string, phase: Phase):
   phase("tenant", "start");
   const { tenant, created } = await ensureInstallTenant(databaseUrl);
   phase("tenant", "ok", `${created ? "created" : "using"} install tenant ${tenant}`);
+}
+
+export function devDatabaseEnv(ownerUrl: string): Record<string, string> {
+  const owner = new URL(ownerUrl);
+  const secret = decodeURIComponent(owner.password) || ownerUrl;
+  const login = (name: string): string => {
+    const url = new URL(ownerUrl);
+    url.username = name;
+    url.password = derivedLoginPassword(secret, name);
+    return url.toString();
+  };
+  return { DATABASE_OWNER_URL: ownerUrl, DATABASE_URL: login("qm_app"), DATABASE_READER_URL: login("qm_reader") };
 }

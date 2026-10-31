@@ -9,7 +9,6 @@ primary_region = "sjc"
   AUTH_CLIENT_ID = "qm-portal"
   AUTH_REDIRECT_URI = "https://agent.example.com/auth/callback"
   AUTH_EMAIL_TRANSPORT = "resend"
-  AUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
   AUTH_BRAND_NAME = "Acme"
 
 [http_service]

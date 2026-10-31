@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { ChildSpec, SlotPorts } from "../lib/types.ts";
+import { devDatabaseEnv } from "./durability.ts";
 
 export interface SpecInputs {
   worktree: string;
@@ -34,7 +35,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ...base,
         ORG_ID: orgId,
         PORT: String(i.ports.core),
-        ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
+        ...(i.databaseUrl ? devDatabaseEnv(i.databaseUrl) : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
         PUBLIC_WEB_URL: i.web === false ? "" : `http://localhost:${i.ports.portal}`,
         ...(i.slack
