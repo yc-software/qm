@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { InstallTenantConflict } from "../src/tenants/install.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "operator-only-secret".repeat(3);
@@ -15,6 +17,7 @@ const path = "/v1/install/tenant";
 async function fixture(secret: string | undefined, installTenant: () => Promise<{ tenant: string; created: boolean }>) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),

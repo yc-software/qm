@@ -835,6 +835,7 @@ test("background ownership requires durable storage and an independent deploymen
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
+    DATABASE_OWNER_URL: "postgres://owner@localhost/test",
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
     DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
   };
@@ -844,6 +845,7 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(config.backgroundWorkEnabled, true);
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
   assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
+  assert.throws(() => loadConfig({ ...env, DATABASE_OWNER_URL: "" }), /DATABASE_OWNER_URL/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
   assert.throws(
     () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
