@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SlackInstallationStore } from "./slack-installation.ts";
@@ -12,7 +13,7 @@ import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import type { TenantResolver } from "../tenants/resolver.ts";
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
 const INSTALL_STATE_AUD = "slack-install";
@@ -84,7 +85,7 @@ export function createManagedSlack(opts: {
     const owner = await opts.resolver.forSlackTeam(input.teamId);
     if (owner && owner !== state.tenant) return sendJson(res, 409, { error: "workspace_conflict" });
     const installId = input.installId as string;
-    return withTenant(state.tenant, async () => {
+    return inTenantOf(state.tenant, async () => {
       if (!(await opts.store.consumeInstallState(state.nonce, state.exp)))
         return sendJson(res, 403, { error: "invalid_state" });
       const accepted = await opts.store.setManaged({
@@ -107,7 +108,7 @@ export function createManagedSlack(opts: {
       return sendJson(res, 400, { error: "invalid_installation" });
     const tenant = await opts.resolver.forSlackTeam(input.teamId);
     if (!tenant) return sendJson(res, 403, { error: "unknown_team" });
-    return withTenant(tenant, async () => {
+    return inTenantOf(tenant, async () => {
       await opts.store.disableManaged(input.installId as string);
       refresh();
       return sendJson(res, 200, { ok: true });
@@ -120,7 +121,7 @@ export function createManagedSlack(opts: {
     const team = slackTeamOf(body);
     const tenant = team ? await opts.resolver.forSlackTeam(team) : null;
     if (!tenant) return sendJson(res, 403, { error: "unknown_team" });
-    return withTenant(tenant, async () => {
+    return inTenantOf(tenant, async () => {
       const stored = await opts.store.get();
       if (!stored || stored.installId !== input.installId || (!!opts.appId && stored.appId !== opts.appId)) {
         return sendJson(res, 409, { error: "installation_mismatch" });

@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
@@ -29,7 +30,7 @@ import {
   applyReactions,
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import { withTenant, withoutTenant } from "../tenants/context.ts";
+import { withoutTenant } from "../tenants/context.ts";
 import type { Delivery } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
@@ -157,7 +158,7 @@ export function createDeliveryPoller(deps: {
         return queue.length;
       }
       const tenant = d.tenantId ? deps.tenant(d.tenantId) : undefined;
-      if (tenant) await withTenant(d.tenantId!, () => deliver(d, tenant));
+      if (tenant) await inTenantOf(d.tenantId!, () => deliver(d, tenant));
     }
     return queue.length;
   }
