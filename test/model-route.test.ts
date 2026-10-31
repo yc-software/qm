@@ -6,9 +6,6 @@ import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
-import { buildModelRuntime } from "../src/model/model-runtime.ts";
-import { lastGatewayBudgetRejection } from "../src/model/model-route.ts";
-import { getRequiredModel } from "../src/model/pi-models.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { orgScope } from "../src/config.ts";
@@ -241,7 +238,7 @@ test("helper calls run on the org's utility model, not the deployment default", 
   );
 });
 
-test("the runtime listing says which account each model bills and when the gateway last ran out of budget", async () => {
+test("the runtime listing says which account each model bills", async () => {
   const deps = {
     config: testConfigStore("default-org"),
     baseModelDefault: "claude-sonnet-5",
@@ -250,36 +247,9 @@ test("the runtime listing says which account each model bills and when the gatew
     },
   } as unknown as Parameters<typeof runtimeConfigBody>[0]["deps"];
   await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
-  const runtime = await buildModelRuntime({}, GATEWAY);
-  const call = () =>
-    runtime
-      .streamSimple(getRequiredModel("gpt-6-astra"), { messages: [{ role: "user", content: "hi", timestamp: 0 }] })
-      .result();
-
-  await withFetch(budgetRejection, async () => {
-    await call();
-  });
   const listed = await runtimeConfigBody({ deps }, orgScope());
   assert.equal(listed.modelCatalog["claude-sonnet-5"]?.billing, "org_key");
   assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "model_gateway");
-  assert.match(listed.gatewayBudgetRejected?.error ?? "", /Budget has been exceeded/);
-
-  await withFetch(
-    () => errorReply(400, "invalid_request_error", "a request problem, not a budget"),
-    async () => {
-      await call();
-    },
-  );
-  assert.ok(lastGatewayBudgetRejection(), "an unrelated failure leaves the budget note in place");
-  await withFetch(
-    () =>
-      sse([
-        { type: "response.created", response: { id: "r", status: "in_progress", output: [] } },
-        { type: "response.completed", response: { id: "r", status: "completed", output: [], usage: {} } },
-      ]),
-    async () => {
-      await call();
-    },
-  );
-  assert.equal((await runtimeConfigBody({ deps }, orgScope())).gatewayBudgetRejected, undefined);
+  const personal = await runtimeConfigBody({ deps }, orgScope(), async () => null);
+  assert.ok(Object.values(personal.modelCatalog).every((model) => model.billing === "personal_account"));
 });

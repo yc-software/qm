@@ -7,7 +7,6 @@ import {
   calculateCost,
   InMemoryCredentialStore,
   type Api,
-  type AssistantMessage,
   type Context,
   type Model,
   type ModelsApiStreamOptions,
@@ -39,8 +38,6 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import { providerTurnError } from "./provider-error.ts";
-import { noteGatewayOutcome } from "./model-route.ts";
-import { swallowAs } from "../util/errors.ts";
 
 export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
@@ -177,7 +174,7 @@ export async function buildModelRuntime(
   const route = <T extends ModelsSimpleStreamOptions | undefined>(
     model: Model<Api>,
     options: T,
-  ): { model: Model<Api>; options: T; gateway: boolean } => {
+  ): { model: Model<Api>; options: T } => {
     const request = modelGatewayRequest(modelGateway, model);
     if (!request) {
       const custom = resolveCustomModel(model.id);
@@ -196,7 +193,6 @@ export async function buildModelRuntime(
       } as T;
       return {
         model: candidate,
-        gateway: false,
         options:
           providerModelId === model.id && !unregistered
             ? passthrough
@@ -216,7 +212,6 @@ export async function buildModelRuntime(
     } as T;
     return {
       model: request.model,
-      gateway: true,
       options: wireModelId(routed, model, async () => {
         await modelGateway?.refresh?.();
         const current = modelGatewayRequest(modelGateway, model);
@@ -225,10 +220,6 @@ export async function buildModelRuntime(
       }),
     };
   };
-  const observed = <S extends { result(): Promise<AssistantMessage> }>(stream: S, gateway: boolean): S => {
-    if (gateway) void stream.result().then(noteGatewayOutcome).catch(swallowAs("model: gateway outcome", undefined));
-    return stream;
-  };
   const stream = runtime.stream.bind(runtime);
   runtime.stream = (<TApi extends Api>(
     model: Model<TApi>,
@@ -236,15 +227,12 @@ export async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const routed = route(model, options as ModelsSimpleStreamOptions | undefined);
-    return observed(
-      stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>),
-      routed.gateway,
-    );
+    return stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>);
   }) as typeof runtime.stream;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const routed = route(model, options);
-    return observed(streamSimple(routed.model, context, routed.options), routed.gateway);
+    return streamSimple(routed.model, context, routed.options);
   }) as typeof runtime.streamSimple;
   return runtime;
 }

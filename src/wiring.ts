@@ -302,7 +302,7 @@ import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts"
 import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
-import type { Agent, SessionRoute } from "./agent/agent.ts";
+import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
@@ -1463,7 +1463,7 @@ export function buildApp(
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const resolveSessionRuntime = (route: SessionRoute, requested = route.runtime) =>
+  const resolveRequestedRuntime = (route: SessionRoute, requested: SessionRoute["runtime"]) =>
     resolveRuntimeChoice(
       configStore,
       runtimeOrgScope,
@@ -1473,10 +1473,14 @@ export function buildApp(
       hydrateModelCatalog,
       route.runtimePurpose,
     );
+  const resolveSessionRuntime = async (route: SessionRoute): Promise<RuntimeChoice> => {
+    if (!route.runtimePinned || !route.runtime?.modelId) return resolveRequestedRuntime(route, route.runtime);
+    if (!modelSupported(route.runtime.modelId)) throw new Error(`Unsupported model: ${route.runtime.modelId}`);
+    return { ...route.runtime, modelId: route.runtime.modelId };
+  };
   const agent = withResolvedRuntime(
     baseAgent,
     async (input, routedBy) => {
-      const resolve = (requested: typeof input.runtime) => resolveSessionRuntime(input, requested);
       const decision = await tracePhase("turn.decision", () =>
         decide("turn_start", turnStartState(input), {
           ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
@@ -1486,13 +1490,11 @@ export function buildApp(
           ...(input.cancel ? { cancel: input.cancel } : {}),
         }),
       );
-      const routed = await routeTurnRuntime(decision, resolve, async () => {
-        if (input.runtimePinned && input.runtime?.modelId) {
-          if (!modelSupported(input.runtime.modelId)) throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-          return { ...input.runtime, modelId: input.runtime.modelId };
-        }
-        return resolve(input.runtime);
-      });
+      const routed = await routeTurnRuntime(
+        decision,
+        (requested) => resolveRequestedRuntime(input, requested),
+        () => resolveSessionRuntime(input),
+      );
       if (routed.routedBy) routedBy(routed.routedBy);
       return routed.choice;
     },

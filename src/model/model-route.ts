@@ -1,8 +1,7 @@
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 import { modelDisplayName } from "./pi-models.ts";
-import { providerTurnError } from "./provider-error.ts";
 
 export type ModelBilling = "model_gateway" | "org_key" | "personal_account";
 
@@ -27,20 +26,4 @@ export function modelBilling(viaGateway: boolean, personal: boolean): ModelBilli
 
 export function routeLabel(route: Pick<ModelRoute, "modelId" | "billing">): string {
   return `${modelDisplayName(route.modelId)} (billed to ${BILLING_LABELS[route.billing]})`;
-}
-
-let gatewayBudgetRejection: { at: string; error: string } | undefined;
-
-export function noteGatewayOutcome(message: AssistantMessage): void {
-  if (message.stopReason !== "error") {
-    gatewayBudgetRejection = undefined;
-    return;
-  }
-  const failure = providerTurnError(message);
-  if (failure.code === "model_budget")
-    gatewayBudgetRejection = { at: new Date().toISOString(), error: failure.message };
-}
-
-export function lastGatewayBudgetRejection(): { at: string; error: string } | undefined {
-  return gatewayBudgetRejection;
 }

@@ -116,16 +116,15 @@ export async function resolveRuntimeChoice(
 export function withResolvedRuntime(
   agent: Agent,
   resolve: (input: AgentTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
-  resolveSession?: (route: SessionRoute) => Promise<RuntimeChoice>,
+  resolveSession: (route: SessionRoute) => Promise<RuntimeChoice>,
 ): Agent {
   const compactHistory = agent.compactHistory?.bind(agent);
   return {
     ...agent,
-    ...(compactHistory && resolveSession
+    ...(compactHistory
       ? {
           async compactHistory(input: CompactInput) {
-            const runtime = input.runtimePinned && input.runtime?.modelId ? input.runtime : await resolveSession(input);
-            return compactHistory({ ...input, runtime });
+            return compactHistory({ ...input, runtime: await resolveSession(input) });
           },
         }
       : {}),

@@ -27,7 +27,7 @@ import {
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
-import { lastGatewayBudgetRejection, modelBilling } from "../model/model-route.ts";
+import { modelBilling } from "../model/model-route.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -149,7 +149,6 @@ export async function runtimeConfigBody(
   const modelCatalog = Object.fromEntries(
     Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
   );
-  const gatewayBudgetRejected = lastGatewayBudgetRejection();
   return {
     scopeId: scope,
     ...(purpose ? { executionPurpose: purpose } : {}),
@@ -167,7 +166,6 @@ export async function runtimeConfigBody(
     upgradeAvailable: Boolean(scopeOverride && scopeOverride.orgRevision !== orgDefault.revision),
     fastModeModelIds: fastModeModelIds(),
     interactiveFastMode: await config.getInteractiveFastModeDurable(),
-    ...(gatewayBudgetRejected && models.some((id) => billing(id) === "model_gateway") ? { gatewayBudgetRejected } : {}),
   };
 }
 

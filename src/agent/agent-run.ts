@@ -877,23 +877,24 @@ export function createAgent(opts?: AgentOptions): Agent {
   const modelGateway = opts?.modelGateway;
   const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
   const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const routeFor = async (modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute | undefined> => {
+  const routeFor = async (modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
     const model = requiredModel(modelId, !personalKeys);
     const keys = personalKeys ?? (await resolveProviderKeys());
     const gateway = personalKeys ? undefined : modelGateway;
-    const viaGateway = !!modelGatewayRequest(gateway, model);
-    if (!viaGateway && !keys[String(model.provider)]) return undefined;
     return {
       modelId,
       model,
       keys,
       ...(gateway ? { gateway } : {}),
-      billing: modelBilling(viaGateway, !!personalKeys),
+      billing: modelBilling(!!modelGatewayRequest(gateway, model), !!personalKeys),
     };
   };
+  const servable = (route: ModelRoute): ModelRoute | undefined =>
+    route.billing === "model_gateway" || route.keys[String(route.model.provider)] ? route : undefined;
   const sessionRoute = (session: Pick<CompactInput, "runtime" | "providerKeys">) =>
     routeFor(session.runtime?.modelId ?? baseModelId(), session.providerKeys);
-  const utilityRoute = (modelId?: string) => routeFor(modelId ?? auxiliaryModelFor(baseModelId()));
+  const utilityRoute = async (modelId?: string) =>
+    servable(await routeFor(modelId ?? auxiliaryModelFor(baseModelId())));
   const fallbackRoute = async (
     fromModelIds: ReadonlySet<string>,
     providerKeys?: ProviderKeys,
@@ -905,7 +906,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       : runtime.modelId;
     const served = providerKeys ? modelId : companyServedId(modelId);
     if (fromModelIds.has(modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys)) return undefined;
-    const route = await routeFor(modelId, providerKeys);
+    const route = servable(await routeFor(modelId, providerKeys));
     return route && { ...route, runtime };
   };
   const captureRequests = opts?.captureRequests ?? true;
@@ -937,18 +938,14 @@ export function createAgent(opts?: AgentOptions): Agent {
     systemPrompt: string,
     history: SessionEntry[],
     priorTurns: ConversationTurn[] | undefined,
-    turnProviderKeys: ProviderKeys | undefined,
+    route: ModelRoute,
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(
-      turnProviderKeys ?? (await resolveProviderKeys()),
-      turnProviderKeys ? undefined : modelGateway,
-      "long",
-    );
+    const modelRuntime = await buildModelRuntime(route.keys, route.gateway, "long");
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
@@ -1015,7 +1012,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             );
           }
           try {
-            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+            const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
             finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
           } catch (e) {
             swallow("pi: request byte budget", e);
@@ -1046,9 +1043,8 @@ export function createAgent(opts?: AgentOptions): Agent {
 
   const agent: Agent = {
     async runTurn(dispatched: AgentTurnInput): Promise<AgentTurnResult> {
-      const desiredModelId = dispatched.runtime?.modelId ?? baseModelId();
-      const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-      const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+      const route = await sessionRoute(dispatched);
+      const desiredModelId = route.modelId;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
       const ref: TurnSession["ref"] = {
         current: dispatched.tools,
@@ -1076,12 +1072,12 @@ export function createAgent(opts?: AgentOptions): Agent {
       const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
       const { entry } = await createTurnSession(
-        withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+        withRequestHeaders(route.model, route.billing !== "model_gateway", wantFast),
         turn.session.id,
         turn.systemPrompt,
         turn.history,
         turn.priorTurns,
-        turn.providerKeys,
+        route,
         ref,
         tools,
         turn.loadImage,
@@ -1353,17 +1349,13 @@ export function createAgent(opts?: AgentOptions): Agent {
           refusedModelIds.add(fromId);
           const fallback = await fallbackRoute(refusedModelIds, turn.providerKeys);
           if (!fallback || !roomToReprompt()) return false;
-          const from = {
-            modelId: fromId,
-            billing: modelBilling(!!turnModelGateway?.models[fromId], !!turn.providerKeys),
-          };
           console.error(
             `[pi] provider ${failure.code} — retrying on fallback model ${fromId} -> ${fallback.modelId} session=${turn.session.id}: ${failure.message}`,
           );
           try {
             const wantFast = wantsFastMode(fallback.runtime.fastMode ?? turn.runtime?.fastMode, fallback.modelId);
             await entry.agentSession.setModel(
-              withRequestHeaders(fallback.model, !fallback.gateway?.models[fallback.modelId], wantFast),
+              withRequestHeaders(fallback.model, fallback.billing !== "model_gateway", wantFast),
             );
             entry.ref.fast = wantFast;
             entry.ref.effortLevel =
@@ -1373,7 +1365,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
             dropFailedAssistant(entry.agentSession, messagesBefore);
             const outcome = await reprompt(
-              refusalFallbackNote(routeLabel(from), routeLabel(fallback), failure.message),
+              refusalFallbackNote(routeLabel(route), routeLabel(fallback), failure.message),
             );
             if (userAborted) return false;
             if (outcome !== "ok") throw new Error(`the retry ended ${outcome}`);
@@ -1645,7 +1637,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           return runtime.streamSimple(summaryModel, context, options);
         });
       };
-      const primary = await sessionRoute(input);
+      const primary = servable(await sessionRoute(input));
       if (!primary)
         throw new Error(`no configured credential can serve ${input.runtime?.modelId ?? baseModelId()} for a summary`);
       try {
