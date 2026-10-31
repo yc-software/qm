@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 
 let settings: Record<string, string> | null = null;
 const core = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host"))
+    return res.end(JSON.stringify({ tenant: "00000000-0000-4000-8000-000000000001" }));
   if (!req.url?.startsWith("/v1/plugin-settings")) return res.end("{}");
   res.statusCode = settings ? 200 : 503;
   res.end(JSON.stringify(settings ? { values: settings } : { error: "unavailable" }));
