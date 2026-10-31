@@ -62,6 +62,7 @@ export async function withRequestTenant(
     capabilitySecret: string | undefined;
     controlSecret?: string;
     unsignedTenant: string | null;
+    app?: TenantReadyApp;
   },
   next: () => Promise<void> | void,
 ): Promise<void> {
@@ -79,19 +80,25 @@ export async function withRequestTenant(
     sendJson(res, 403, { error: "forbidden", message: "this credential belongs to another tenant" });
     return void req.resume();
   }
+  return bindTenant(tenant, deps.app, next);
+}
+
+type TenantReadyApp = { tenantReady?(): Promise<void> };
+
+function bindTenant(tenant: string, app: TenantReadyApp | undefined, next: () => Promise<void> | void): Promise<void> {
   return withTenant(tenant, async () => {
     await tenantReady();
+    await app?.tenantReady?.();
     return next();
   });
 }
 
 export async function withRowTenant(
-  res: ServerResponse,
-  rowTenants: RowTenants | undefined,
+  ctx: { res: ServerResponse; app: TenantReadyApp; deps: { rowTenants?: RowTenants | undefined } },
   row: { table: string; columns: readonly string[]; id: string },
   next: () => Promise<void> | void,
 ): Promise<void> {
-  const tenants = rowTenants ? await rowTenants(row.table, row.columns, row.id) : [];
-  if (tenants.length !== 1) return sendJson(res, 404, { error: "not_found" });
-  return withTenant(tenants[0]!, next);
+  const tenants = ctx.deps.rowTenants ? await ctx.deps.rowTenants(row.table, row.columns, row.id) : [];
+  if (tenants.length !== 1) return sendJson(ctx.res, 404, { error: "not_found" });
+  return bindTenant(tenants[0]!, ctx.app, next);
 }

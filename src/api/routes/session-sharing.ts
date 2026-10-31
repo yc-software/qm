@@ -116,7 +116,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
 function readPublicShare(ctx: ApiCtx): Promise<void> {
   const row = { table: "session_shares", columns: ["id"], id: ctx.params.token! };
   const claimed = tenantHeader(ctx.req);
-  return withRowTenant(ctx.res, ctx.deps.rowTenants, row, () =>
+  return withRowTenant(ctx, row, () =>
     claimed && claimed !== currentTenant() ? sendJson(ctx.res, 404, { error: "not_found" }) : readShare(ctx),
   );
 }

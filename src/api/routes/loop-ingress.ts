@@ -135,7 +135,7 @@ async function receive(ctx: BaseCtx) {
     ctx.res.end(result.body);
   };
   if (id === GMAIL_PUSH_ID) return deliver();
-  return withRowTenant(ctx.res, ctx.deps.rowTenants, { table: "loop_ingress", columns: ["id"], id }, deliver);
+  return withRowTenant(ctx, { table: "loop_ingress", columns: ["id"], id }, deliver);
 }
 
 export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
