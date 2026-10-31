@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -84,8 +84,8 @@ test("row security alone hides other tenants' keys from the app role and fails c
         const keys = (bound: string) => withTenant(bound, () => app.q(`SELECT key FROM idempotency`));
         assert.deepEqual(await keys(tenant), [{ key: "k" }]);
         assert.deepEqual(await keys(otherTenant), []);
-        await assert.rejects(app.q(`SELECT key FROM idempotency`), /No tenant is bound/);
-        await assert.rejects(store.committed("k"), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT key FROM idempotency`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.committed("k"), /No tenant is bound/));
       } finally {
         await app.close();
       }

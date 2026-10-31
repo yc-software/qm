@@ -3,7 +3,7 @@ import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { computeBundleHash, createPostgresSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
@@ -129,8 +129,8 @@ test("row security alone hides other tenants' packs from the app role and fails 
       const refs = (bound: string) => withTenant(bound, () => app.q(`SELECT ref FROM skill_packs`));
       assert.deepEqual(await refs(tenant), [{ ref: "main" }]);
       assert.deepEqual(await refs(otherTenant), []);
-      await assert.rejects(app.q(`SELECT ref FROM skill_packs`), /No tenant is bound/);
-      await assert.rejects(store.list(), /No tenant is bound/);
+      await withoutTenant(() => assert.rejects(app.q(`SELECT ref FROM skill_packs`), /No tenant is bound/));
+      await withoutTenant(() => assert.rejects(store.list(), /No tenant is bound/));
     } finally {
       await app.close();
     }
@@ -199,8 +199,8 @@ test(
         const packs = (bound: string) => withTenant(bound, () => app.q(`SELECT pack_id FROM skill_bundles`));
         assert.deepEqual(await packs(tenant), [{ pack_id: "p1" }]);
         assert.deepEqual(await packs(otherTenant), []);
-        await assert.rejects(app.q(`SELECT pack_id FROM skill_bundles`), /No tenant is bound/);
-        await assert.rejects(store.get("p1"), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT pack_id FROM skill_bundles`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.get("p1"), /No tenant is bound/));
       } finally {
         await app.close();
       }

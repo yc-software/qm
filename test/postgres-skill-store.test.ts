@@ -1,22 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeploymentLayerStore } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer } from "../src/deployment/load-layer.ts";
 import type { StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
 import { createPostgresSkillStore } from "../src/skills/postgres-skill-store.ts";
 import type { SkillManifest, SkillStore } from "../src/skills/skill-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 const ORG = scopeId("org", "acme");
 const ALICE = scopeId("personal", "alice");
 const TEAM = scopeId("team", "t1");
-const make = (url: string) => createPostgresSkillStore(url, { signingSecret: "pg-test" });
+const make = (url: string) =>
+  createPostgresSkillStore(url, { signingSecret: "pg-test", advisoryLock: testAdvisoryLock() });
 
 const manifest = (name: string, extra: Partial<SkillManifest> = {}): SkillManifest => ({
   name,
@@ -227,8 +228,8 @@ test(
         const names = (bound: string) => withTenant(bound, () => app.q(`SELECT name FROM skills`));
         assert.deepEqual(await names(tenant), [{ name: "digest" }]);
         assert.deepEqual(await names(otherTenant), []);
-        await assert.rejects(app.q(`SELECT name FROM skills`), /No tenant is bound/);
-        await assert.rejects(store.listAll(), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT name FROM skills`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.listAll(), /No tenant is bound/));
       } finally {
         await app.close();
       }
@@ -250,6 +251,19 @@ async function insertRaw(
   );
 }
 
+test("skill mutations reject names that could escape or collide when materialized", { skip }, async () => {
+  await withTypedTableDb(make, async ({ store, tenant }) => {
+    await withTenant(tenant, async () => {
+      for (const name of ["..", "foo/bar", "foo\\bar", "foo bar", ".hidden", "foo."]) {
+        await assert.rejects(
+          () => store.create({ scopeId: ALICE, manifest: manifest(name), createdBy: "alice" }),
+          /skill name must/,
+        );
+      }
+    });
+  });
+});
+
 test("unsafe skill names stored before validation never reach materialization", { skip }, async () => {
   await withTypedTableDb(make, async ({ store, admin, tenant }) => {
     await insertRaw(admin, tenant, "foo/bar", "reviewed");
@@ -269,7 +283,7 @@ test(
       await withTenant(tenant, async () => {
         const layer = createDeploymentLayerStore({
           ...singleProcessDeps(),
-          backing: createMemoryMap<StoredDeploymentLayer>(),
+          backing: testMap<StoredDeploymentLayer>(),
           runtime: emptyDeploymentLayer(),
           skills: store,
           scopeId: ORG,

@@ -104,12 +104,12 @@ test("computeBundleHash is stable under reordering and busts on content change",
   );
 });
 
-test("SkillBundleStore get/put/delete/list round-trips by packId", async () => {
+test("SkillBundleStore get/put/delete/forPacks round-trips by packId", async () => {
   const store = testSkillBundleStore();
   const files: SkillFile[] = [{ path: "lib/x.mjs", content: "1" }];
   await store.put({ packId: "s1", commit: "c1", files, hash: computeBundleHash(files) });
   assert.equal((await store.get("s1"))?.commit, "c1");
-  assert.equal((await store.list()).length, 1);
+  assert.equal((await store.forPacks(["s1", "s2"])).length, 1);
   await store.delete("s1");
   assert.equal(await store.get("s1"), null);
 });

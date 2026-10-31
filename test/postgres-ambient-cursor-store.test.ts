@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresAmbientCursorStore } from "../src/api/ambient-cursor-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -74,8 +74,8 @@ test(
         const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT container FROM ambient_cursors`));
         assert.deepEqual(await rows(tenant), [{ container: "C1" }]);
         assert.deepEqual(await rows(otherTenant), []);
-        await assert.rejects(app.q(`SELECT container FROM ambient_cursors`), /No tenant is bound/);
-        await assert.rejects(store.get("slack", "C1"), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT container FROM ambient_cursors`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.get("slack", "C1"), /No tenant is bound/));
       } finally {
         await app.close();
       }

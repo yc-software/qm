@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresUiStateStore } from "../src/surfaces/ui-state.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -136,11 +136,13 @@ test(
           const keys = (bound: string) => withTenant(bound, () => app.q(`SELECT key FROM web_ui_state`));
           assert.deepEqual(await keys(tenant), [{ key: "theme" }]);
           assert.deepEqual(await keys(otherTenant), []);
-          await assert.rejects(app.q(`SELECT key FROM web_ui_state`), /No tenant is bound/);
-          await assert.rejects(store.get("U1", "theme"), /No tenant is bound/);
-          await assert.rejects(
-            store.modify("U1", "theme", (c) => c!),
-            /No tenant is bound/,
+          await withoutTenant(() => assert.rejects(app.q(`SELECT key FROM web_ui_state`), /No tenant is bound/));
+          await withoutTenant(() => assert.rejects(store.get("U1", "theme"), /No tenant is bound/));
+          await withoutTenant(() =>
+            assert.rejects(
+              store.modify("U1", "theme", (c) => c!),
+              /No tenant is bound/,
+            ),
           );
         } finally {
           await app.close();

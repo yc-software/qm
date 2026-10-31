@@ -5,12 +5,7 @@ import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
-import type {
-  Conversation,
-  Principal,
-  TurnRequest,
-  TurnResult,
-} from "../../types.ts";
+import type { Conversation, Principal, TurnRequest, TurnResult } from "../../types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";

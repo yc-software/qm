@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
+import type { NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
 import { testSkillPackStore } from "./support/typed-stores.ts";
 
 const base: NewSkillPack = {
@@ -18,7 +17,7 @@ const base: NewSkillPack = {
 };
 
 test("create stamps id + createdAt and is retrievable", async () => {
-  const store = createSkillPackStore({ backing: testMap(), now: () => 1000 });
+  const store = testSkillPackStore({ now: () => 1000 });
   const s = await store.create(base);
   assert.ok(s.id);
   assert.equal(s.createdAt, 1000);

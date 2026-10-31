@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
-import type { ExternalMember } from "../src/identity/external-members.ts";
-import { testMap } from "./support/test-database.ts";
+import { createIdentityService, createPostgresDeactivationStore } from "../src/identity/identity-service.ts";
+import { createPostgresExternalMemberStore, type ExternalMember } from "../src/identity/external-members.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
 const id = testIdentityService();
@@ -65,29 +65,29 @@ test("case fold does not merge distinct emails or touch non-email ids", async ()
 });
 
 test("durable rehydration folds a cased stored deactivation", async () => {
-  const backing = testMap<DeactivationRecord>();
-  const first = createIdentityService(backing, { externalMembers: testMap() });
+  const url = testDatabaseUrl();
+  const first = testIdentityService({}, url);
   await first.deactivate("Carol@Corp.com");
-  const second = createIdentityService(backing, { externalMembers: testMap() });
+  const second = testIdentityService({}, url);
   await second.refresh();
   assert.equal(second.classify("carol@corp.com").type, "guest");
 });
 
 test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
-  const backing = testMap<DeactivationRecord>();
-  const first = createIdentityService(backing, { externalMembers: testMap() });
+  const url = testDatabaseUrl();
+  const first = testIdentityService({}, url);
   await first.deactivate("U-leaver");
 
-  const second = createIdentityService(backing, { externalMembers: testMap() });
+  const second = testIdentityService({}, url);
   assert.equal(second.classify("U-leaver").type, "internal");
   await second.refresh();
   assert.equal(second.classify("U-leaver").type, "guest");
 });
 
 test("a running instance refreshes deactivations written by another instance", async () => {
-  const backing = testMap<DeactivationRecord>();
-  const writer = createIdentityService(backing, { externalMembers: testMap() });
-  const reader = createIdentityService(backing, { externalMembers: testMap() });
+  const url = testDatabaseUrl();
+  const writer = testIdentityService({}, url);
+  const reader = testIdentityService({}, url);
   await reader.refresh();
   await writer.deactivate("U-leaver");
   assert.equal(reader.classify("U-leaver").type, "internal");
@@ -96,9 +96,9 @@ test("a running instance refreshes deactivations written by another instance", a
 });
 
 test("external members written by one instance reach another over the same backing", async () => {
-  const externalMembers = testMap<ExternalMember>();
-  const writer = createIdentityService(testMap(), { externalMembers });
-  const reader = createIdentityService(testMap(), { externalMembers });
+  const url = testDatabaseUrl();
+  const writer = testIdentityService({}, url);
+  const reader = testIdentityService({}, url);
   await reader.refresh();
   const now = Date.now();
   const member = (expiresAt: number): ExternalMember => ({
@@ -120,7 +120,7 @@ test("external members written by one instance reach another over the same backi
   assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
   await reader.refresh(true);
   assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
-  const late = createIdentityService(testMap(), { externalMembers });
+  const late = testIdentityService({}, url);
   await late.refresh();
   assert.equal(late.classify("pat@partner.example").type, "guest");
 });
@@ -136,19 +136,19 @@ test("a manual deactivation issued alongside a directory sync is not undone by i
 test("a deactivation written during a refresh survives that refresh", async () => {
   const entered = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
-  const backing = testMap<DeactivationRecord>();
-  const all = backing.all.bind(backing);
+  const url = testDatabaseUrl();
+  const backing = createPostgresDeactivationStore(url);
   const svc = createIdentityService(
     {
       ...backing,
-      all: async () => {
-        const rows = await all();
+      list: async () => {
+        const rows = await backing.list();
         entered.resolve();
         await gate.promise;
         return rows;
       },
     },
-    { externalMembers: testMap() },
+    { externalMembers: createPostgresExternalMemberStore(url) },
   );
   const loading = svc.refresh(true);
   await entered.promise;

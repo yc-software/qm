@@ -3,7 +3,7 @@ import test from "node:test";
 import { createPostgresApprovalStore, type ApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore, type DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
 
@@ -222,8 +222,8 @@ test(
           const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT id FROM approvals`));
           assert.deepEqual(await rows(tenant), [{ id: "A1" }]);
           assert.deepEqual(await rows(otherTenant), []);
-          await assert.rejects(app.q(`SELECT id FROM approvals`), /No tenant is bound/);
-          await assert.rejects(store.get("A1"), /No tenant is bound/);
+          await withoutTenant(() => assert.rejects(app.q(`SELECT id FROM approvals`), /No tenant is bound/));
+          await withoutTenant(() => assert.rejects(store.get("A1"), /No tenant is bound/));
         } finally {
           await app.close();
         }

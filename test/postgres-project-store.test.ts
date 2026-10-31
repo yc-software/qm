@@ -3,7 +3,7 @@ import test from "node:test";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresProjectStore, projectGroupRef } from "../src/projects/project-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -184,8 +184,8 @@ test(
         const names = (bound: string) => withTenant(bound, () => app.q(`SELECT name FROM projects`));
         assert.deepEqual(await names(tenant), [{ name: "Mine" }]);
         assert.deepEqual(await names(otherTenant), []);
-        await assert.rejects(app.q(`SELECT name FROM projects`), /No tenant is bound/);
-        await assert.rejects(store.listLinked(), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT name FROM projects`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.listLinked(), /No tenant is bound/));
       } finally {
         await app.close();
       }

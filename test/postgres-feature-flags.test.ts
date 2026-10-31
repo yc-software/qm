@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresFeatureFlagStore } from "../src/feature-flags.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { tenantRootScope, withTenant } from "../src/tenants/context.ts";
+import { tenantRootScope, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -130,8 +130,10 @@ test("row security alone hides other tenants' flags from the app role and fails 
         const names = (bound: string) => withTenant(bound, () => app.q(`SELECT feature_name FROM feature_flags`));
         assert.deepEqual(await names(tenant), [{ feature_name: "swarms" }]);
         assert.deepEqual(await names(otherTenant), []);
-        await assert.rejects(app.q(`SELECT feature_name FROM feature_flags`), /No tenant is bound/);
-        await assert.rejects(store.list(), /No tenant is bound/);
+        await withoutTenant(() =>
+          assert.rejects(app.q(`SELECT feature_name FROM feature_flags`), /No tenant is bound/),
+        );
+        await withoutTenant(() => assert.rejects(store.list(), /No tenant is bound/));
       } finally {
         await app.close();
       }

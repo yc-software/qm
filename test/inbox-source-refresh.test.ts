@@ -701,7 +701,6 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
 });
 
 test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
-  const { createFeatureFlagStore } = await import("../src/feature-flags.ts");
   const flags = testFeatureFlagStore();
   await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
   for (const mode of [undefined, "avatars"] as const) {

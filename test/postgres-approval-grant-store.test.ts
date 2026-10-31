@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresApprovalGrantStore } from "../src/core/approval-grant-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import type { CommandApprovalGrant } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
@@ -75,8 +75,8 @@ test(
         const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT id FROM approval_grants`));
         assert.deepEqual(await rows(tenant), [{ id: "g1" }]);
         assert.deepEqual(await rows(otherTenant), []);
-        await assert.rejects(app.q(`SELECT id FROM approval_grants`), /No tenant is bound/);
-        await assert.rejects(store.forActors(["alice"]), /No tenant is bound/);
+        await withoutTenant(() => assert.rejects(app.q(`SELECT id FROM approval_grants`), /No tenant is bound/));
+        await withoutTenant(() => assert.rejects(store.forActors(["alice"]), /No tenant is bound/));
       } finally {
         await app.close();
       }

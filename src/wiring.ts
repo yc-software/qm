@@ -117,12 +117,7 @@ import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type {
-  ScopeId,
-  Session,
-  TurnRequest,
-  TurnResult,
-} from "./types.ts";
+import type { ScopeId, Session, TurnRequest, TurnResult } from "./types.ts";
 import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import { personalScope, scopeId } from "./types.ts";
@@ -261,11 +256,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import {
-  createPostgresFeatureFlagStore,
-  externalAppSharingAllowed,
-  type FeatureFlagStore,
-} from "./feature-flags.ts";
+import { createPostgresFeatureFlagStore, externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,

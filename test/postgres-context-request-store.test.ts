@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresContextRequestStore } from "../src/api/context-request-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import type { SurfaceContextRequest } from "../src/types.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import type { SurfaceContextRequest } from "../src/reach/reach.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -91,8 +91,10 @@ test(
         const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT id FROM context_requests`));
         assert.deepEqual(await rows(tenant), [{ id: "r1" }]);
         assert.deepEqual(await rows(otherTenant), []);
-        await assert.rejects(app.q(`SELECT id FROM context_requests`), /No tenant is bound/);
-        await assert.rejects(store.pending("slack", 0), /No tenant is bound/);
+        await withoutTenant(async () => {
+          await assert.rejects(app.q(`SELECT id FROM context_requests`), /No tenant is bound/);
+          await assert.rejects(store.pending("slack", 0), /No tenant is bound/);
+        });
       } finally {
         await app.close();
       }

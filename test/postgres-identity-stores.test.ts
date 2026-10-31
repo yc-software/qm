@@ -4,7 +4,8 @@ import { createPostgresExternalMemberStore, type ExternalMember } from "../src/i
 import { createPostgresDeactivationStore } from "../src/identity/identity-service.ts";
 import { createPostgresPrincipalLinkStore, createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -59,7 +60,7 @@ test("principal links insert once, list in creation order and are taken by folde
       );
       assert.deepEqual(await store.links.take("CASEY@acme.test"), link("casey@acme.test", "U1", 2));
       assert.equal(await store.links.take("casey@acme.test"), null);
-      const service = createPrincipalLinkService(store.links);
+      const service = createPrincipalLinkService(store.links, testAdvisoryLock());
       await service.refresh(true);
       assert.equal(service.canonical("oidc|1"), "U1");
       assert.deepEqual(service.aliases("U1"), ["oidc|1"]);
@@ -193,10 +194,12 @@ test(
         assert.deepEqual(await withTenant(otherTenant, () => app.q(counts)), [
           { links: 0, deactivations: 0, members: 0 },
         ]);
-        await assert.rejects(app.q(counts), /No tenant is bound/);
-        await assert.rejects(store.links.list(), /No tenant is bound/);
-        await assert.rejects(store.deactivations.list(), /No tenant is bound/);
-        await assert.rejects(store.members.list(), /No tenant is bound/);
+        await withoutTenant(async () => {
+          await assert.rejects(app.q(counts), /No tenant is bound/);
+          await assert.rejects(store.links.list(), /No tenant is bound/);
+          await assert.rejects(store.deactivations.list(), /No tenant is bound/);
+          await assert.rejects(store.members.list(), /No tenant is bound/);
+        });
       } finally {
         await app.close();
       }

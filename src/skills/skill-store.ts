@@ -3,7 +3,6 @@ import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
@@ -356,4 +355,3 @@ export function skillStore(skills: SkillRows, opts: SkillStoreOptions): SkillSto
     },
   };
 }
-
