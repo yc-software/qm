@@ -2,6 +2,10 @@ import { boundTenant, isTenantId, tenantId, tenantStore, withTenant } from "../.
 
 export { boundTenant, isTenantId, withTenant };
 
+export function withoutTenant<T>(fn: () => T): T {
+  return tenantStore.exit(fn);
+}
+
 export function enterTenant(id: string): void {
   tenantStore.enterWith(tenantId(id));
 }

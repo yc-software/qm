@@ -13,11 +13,11 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS, bindTestTenant } from "./support/tenant.ts";
 import { signedFetcher } from "./support/signed-core.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
-
-bindTestTenant();
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -89,6 +89,7 @@ describe("user-scoped routes always require a portal-verified actor", () => {
     assert.ok(claimed?.leaseToken);
     await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
     const strictServer = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
       portalIdentitySecret: PID,

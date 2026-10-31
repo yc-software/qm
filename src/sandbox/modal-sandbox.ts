@@ -166,7 +166,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
-    if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
     const requested = await store.update(scope, (current) => {
       if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
       return {
@@ -420,8 +419,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     if (scratchKeyByName.has(name)) return withSessionUnlocked(name, action);
-    const shared = advisoryLock.withSharedLock ?? advisoryLock.withLock;
-    return shared(`modal-use:${scopeByName.get(name) ?? "default"}`, () => withSessionUnlocked(name, action));
+    const key = `modal-use:${scopeByName.get(name) ?? "default"}`;
+    return advisoryLock.withSharedLock(key, () => withSessionUnlocked(name, action));
   }
 
   const lastTouchMs = new Map<string, number>();

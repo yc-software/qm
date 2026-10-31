@@ -124,7 +124,7 @@ function skillPackSourceIdentity(pack: SkillPack): string {
 }
 
 function withSkillMutationLock<T>(deps: AppDeps, fn: () => Promise<T>): Promise<T> {
-  return deps.advisoryLock?.withLock(SKILL_MATERIALIZATION_LOCK, fn) ?? fn();
+  return deps.advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
 }
 
 async function reconcilePack(

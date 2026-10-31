@@ -1,5 +1,5 @@
 import { WebClient } from "@slack/web-api";
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../../slack/delivery.ts";
 import { neutralizeMentions, wireMentionKeys } from "../../slack/mrkdwn.ts";

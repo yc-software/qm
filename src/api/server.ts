@@ -467,12 +467,11 @@ type ServerOptions = Omit<ServerDeps, "control">;
 
 function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | null): Server {
   const allowUnsignedSourceAuth = unsignedTenant !== null;
-  const auth = deps.signingSecret
-    ? createSourceAuth({
-        signingSecret: deps.signingSecret,
-        ...(deps.replayDedupe ? { dedupe: deps.replayDedupe } : {}),
-      })
-    : null;
+  if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
+  const auth =
+    deps.signingSecret && deps.replayDedupe
+      ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
+      : null;
   const wiring: Wiring = {
     app,
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
@@ -499,7 +498,7 @@ function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | nul
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    armBodyDeadline(req, 30_000);
+    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");

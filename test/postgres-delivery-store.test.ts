@@ -4,6 +4,7 @@ import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-s
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
+  exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
 
@@ -94,4 +95,8 @@ test("pg delivery store: undelivered rows expire after the TTL instead of cloggi
 
 test("pg delivery store: once-ever keys revive after a TTL drop instead of deadlocking", { skip }, async () => {
   await exerciseDeliveryExpiryRevive((opts) => createPostgresDeliveryStore(URL!, opts));
+});
+
+test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
+  await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });

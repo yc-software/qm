@@ -43,36 +43,11 @@ retention also removes expired entries from the legacy table, preventing a later
 restart from importing them again. The legacy table remains available for older
 binaries.
 
-Upgrading from a release that predates the `items` table copies session history
-into `items` during startup migrations, then drops `session_entries`, `session_tape`
-and the old search table. Stop every older core and worker first: they cannot run
-against the new schema. `src/sessions/legacy-history-migrations.ts` keeps those released
-migrations verbatim; delete it once every supported deployment has applied
-`sessions/store/0036-items-cutover`. Upgrading from a release that still writes `session_tape`
-first copies its step metadata into `legacy_tape_steps`, then drops the tape. Stop every
-older core and worker before starting the new release: a tape write after the copy
-starts makes the drop refuse, and that startup fails with the reset to run. The copy
-runs on the direct migration connection without a statement timeout and resumes
-after an interrupted startup. It walks every session at roughly 30 sessions per
-second, so a few thousand sessions take a couple of minutes; above that, run
-`node src/migrate-main.ts` with the release's configuration before starting the
-servers so readiness checks do not time out. Instances that start meanwhile wait for the copy on
-the migration lock.
-
-Sessions created before QM recorded each session's origin get `origin` and `origin_id`
-from their thread reference during startup migrations. The backfill commits 5,000
-sessions at a time, resumes after an interrupted startup, and fills roughly 10,000
-sessions per second; with more than a few hundred thousand such sessions, run
-`node src/migrate-main.ts` with the release's configuration before starting the servers
-so readiness checks do not time out.
-
-A startup migration marks every saved spend day dirty once, so the refresher recomputes
-days saved before spend rows carried a cron id; until it catches up, Spend and the spend
-export report an older `asOf` for ranges that include a day still waiting. It relies on
-the previous release already writing cron ids. When upgrading from a release without
-per-cron spend, the previous deployment's refresher can save those days again without
-them; once it has stopped, run `INSERT INTO session_spend_dirty(day) SELECT day FROM
-session_spend_days ON CONFLICT DO NOTHING` to recompute them.
+Session and run tables start from one base schema (`sessions/store/0047-base-schema`,
+`runs/store/0011-base-schema`). A database already at `sessions/store/0046-spend-days-cron-rebuild`
+and `runs/store/0010-drop-turn-metrics` treats the base schema as applied. A database with
+session or run tables from an older release refuses to start: first run a release that applies
+both of those migrations but predates the base schema until its migrations finish, then upgrade.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

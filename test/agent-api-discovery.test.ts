@@ -11,9 +11,9 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -27,6 +27,7 @@ async function start(swarmsEnabled = true) {
     }),
   );
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     memory: built.memory,
     auditLog: built.auditLog,

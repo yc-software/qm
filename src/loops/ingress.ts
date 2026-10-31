@@ -3,7 +3,7 @@ import { withTenant } from "../tenants/context.ts";
 import type { RowTenants } from "../tenants/row-tenant.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { Loop, LoopItem } from "../types.ts";
+import type { Loop, LoopItem } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
@@ -203,12 +203,8 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       }
     };
     const keys = [`loop-ingress:${sourceId}`, `loop-lifecycle:${initial.loopId}`];
-    const acquire = async (held: string[], action: () => Promise<void>) => {
-      if (deps.lock.tryWithLocks) await deps.lock.tryWithLocks(held, action);
-      else await deps.lock.withLock(`loop-ingress:${sourceId}`, action);
-    };
-    await acquire([...keys, `loop-intake:${initial.loopId}`], run);
-    await acquire(keys, async () => {
+    await deps.lock.tryWithLocks([...keys, `loop-intake:${initial.loopId}`], run);
+    await deps.lock.tryWithLocks(keys, async () => {
       const source = await deps.sources.get(sourceId);
       if (
         !source?.enabled ||

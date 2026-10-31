@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
 export type TenantResolver = {
@@ -22,10 +21,6 @@ export function pgTenants(pool: Pick<PgPool, "q">): TenantList {
     return tenants;
   };
 }
-
-const PROCESS_TENANT = randomUUID();
-
-export const memoryTenants: TenantList = async () => [PROCESS_TENANT];
 
 export function singleTenantResolver(tenants: TenantList): TenantResolver {
   const onlyTenant = async (): Promise<string | null> => {

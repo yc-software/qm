@@ -7,9 +7,9 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();
@@ -18,6 +18,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
   const server = createServer(
     { swarms: fixture.service, authorizesCapabilityScope: async () => true } as unknown as App,
     {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: "swarm-regression-source-secret-distinct",
       capabilitySecret,
     },
@@ -88,6 +89,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     },
   } as unknown as App;
   const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     capabilitySecret,
     portalIdentitySecret,
@@ -184,7 +186,11 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
   const secret = "swarm-attempt-regression-secret";
   const server = createServer(
     { swarms: fixture.service, authorizesCapabilityScope: async () => true } as unknown as App,
-    { signingSecret: "swarm-attempt-source-secret-distinct-long", capabilitySecret: secret },
+    {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: "swarm-attempt-source-secret-distinct-long",
+      capabilitySecret: secret,
+    },
   );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
@@ -217,6 +223,7 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   const capabilitySecret = "swarm-atomic-http-test-secret";
   const server = createServer({ swarms: f.service, authorizesCapabilityScope: async () => true } as unknown as App, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: "swarm-atomic-http-source-secret-distinct",
     capabilitySecret,
   });

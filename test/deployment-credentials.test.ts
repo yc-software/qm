@@ -5,6 +5,8 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ORG = scopeId("org", "default-org");
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({
@@ -20,7 +22,7 @@ const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): Public
 });
 
 test("a published app gets only enabled broker credentials that are switched on for apps AND granted org-wide", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const grant = (slug: string, grantee: string) =>
     acl.grant({
       ownerScopeId: ORG,

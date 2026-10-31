@@ -447,7 +447,7 @@ test("turn_start rules see the turn's context alongside the message", () => {
   const state = turnStartState({
     input: "Audit our session cookies",
     surfaceName: "web",
-    runtime: { harnessId: "claude", modelId: "claude-opus" },
+    runtime: { modelId: "claude-opus" },
     runtimePinned: true,
     continueTurn: true,
     scopeLabel: "personal:someone@example.com",
@@ -456,7 +456,7 @@ test("turn_start rules see the turn's context alongside the message", () => {
     "- surface: web",
     "- purpose: interactive",
     "- scope: personal",
-    "- requested runtime: claude/claude-opus",
+    "- requested runtime: claude-opus",
     "- model account: the user's own provider account",
     "- continued turn: yes",
   ])
@@ -467,8 +467,8 @@ test("turn_start rules see the turn's context alongside the message", () => {
 
 test("a turn_start rule only counts as routing the turn when it changes the runtime", async () => {
   const { routeTurnRuntime } = await import("../src/decisions/hooks.ts");
-  const opus = { harnessId: "pi", modelId: "claude-opus-5-5" };
-  const haiku = { harnessId: "pi", modelId: "claude-haiku-5-5" };
+  const opus = { modelId: "claude-opus-5-5" };
+  const haiku = { modelId: "claude-haiku-5-5" };
   const verdict = {
     ruleId: "hard-task",
     option: "reroute",

@@ -4,14 +4,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
-import {
-  createMemoryAdvisoryLock,
-  createPostgresAdvisoryLock,
-  type AdvisoryLock,
-} from "../src/persistence/advisory-lock.ts";
+import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createPostgresAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { scopeId } from "../src/types.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;
@@ -22,8 +19,8 @@ after(async () => {
 
 const shared = async (): Promise<{ backing: DurableMap<Skill>; lock: () => AdvisoryLock }> => {
   if (!factory) {
-    const lock = createMemoryAdvisoryLock();
-    return { backing: createMemoryMap<Skill>(), lock: () => lock };
+    const lock = testAdvisoryLock();
+    return { backing: testMap<Skill>(), lock: () => lock };
   }
   const table = `xsrv_skills_${process.pid}_${++tableSequence}`;
   await factory.pool.query(`DROP TABLE IF EXISTS ${table}`);

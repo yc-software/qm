@@ -52,7 +52,7 @@ for (const conflict of [false, true]) {
       await ready.promise;
       return update(...args);
     };
-    const input = { requestId: "note", text: "reply", audience: "all" as const, replyTo: initial.id, notify: false };
+    const input = { requestId: "note", text: "reply", audience: "all" as const, replyTo: initial.id, wake: false };
     const results = await Promise.allSettled([
       f.service.send(f.caller, input),
       f.service.send(f.caller, { ...input, text: conflict ? "changed" : input.text }),
@@ -72,6 +72,9 @@ for (const conflict of [false, true]) {
     assert.equal(message.actorId, initial.actorId);
     assert.equal(message.replyTo, initial.id);
     assert.deepEqual(message.audience, swarm.members.map((m) => m.id).sort());
-    assert.deepEqual(message.notifications, {});
+    assert.deepEqual(
+      message.notifications,
+      Object.fromEntries(swarm.members.filter((m) => m.id !== f.root.id).map((m) => [m.id, { state: "mailbox" }])),
+    );
   });
 }

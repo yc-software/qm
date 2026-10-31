@@ -12,17 +12,18 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -55,13 +56,13 @@ function mintPortalSession(sub: string): string {
 }
 
 function serviceWithProvider(provider: DeployProvider) {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "seam-")),
   });
   return { deploy, deployStore };
@@ -144,7 +145,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -154,15 +155,15 @@ function appServingUpstream(upstreamPort: number) {
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "subdomain-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(),
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
-    identity: createIdentityService(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
 }
@@ -372,6 +373,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   });
   const signingSecret = "s".repeat(64);
   const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",

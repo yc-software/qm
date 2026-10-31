@@ -12,9 +12,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const SECRET = "test-signing-secret".repeat(3);
 
@@ -30,7 +30,7 @@ function start(signingSecret?: string): { base: string; close: () => Promise<voi
     }),
   );
   const server = signingSecret
-    ? createServer(built.app, { signingSecret })
+    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret })
     : createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -202,7 +202,11 @@ test("the explicit insecure test server leaves the boundary open", async () => {
 
 test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")) }));
-  const server = createServer(built.app, { signingSecret: SECRET, blobTransfer: built.blobTransfer });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    blobTransfer: built.blobTransfer,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -239,6 +243,7 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
 test("egress-audit ingest requires source auth: unsigned is 401, signed lands — including under portal-identity enforcement", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-egress-")) }));
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     egressAudit: built.egressAudit,
     capabilitySecret: `${SECRET}-cap`,

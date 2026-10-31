@@ -1,7 +1,6 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
-import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
+import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
-import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -13,21 +12,19 @@ import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigi
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
-import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
+import { turnRuntimePurpose } from "../core/turn-options.ts";
+import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
 import {
-  defaultModelForHarness,
-  harnessIdOrPi,
-  isHarnessId,
-  modelProviderAvailabilityFor,
+  defaultModel,
   modelServiceable,
   modelOfferedInWebui,
   modelUnavailableReason,
   resolveModel,
 } from "../model/pi-models.ts";
-import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
+import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
+import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -99,7 +96,7 @@ export function createTurnMethods(
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
-    return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+    return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
@@ -214,38 +211,20 @@ export function createTurnMethods(
           : "company";
       const individualAuth = modelAccount !== "company";
       const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
-      if (req.triggered && (req.model || req.harness)) {
-        const choices = await runtimeConfigBody(
+      if (req.triggered && req.model) {
+        const error = await requestedRuntimeError(
           { deps },
           conversationScope(req.conversation, actor.id),
-          undefined,
-          runtimePurpose,
           {
-            ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
-            ...(req.model ? { modelId: req.model } : {}),
+            modelId: req.model,
             ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
             ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
           },
+          runtimePurpose,
         );
-        const harness = req.harness ?? choices.effective.harnessId;
-        const model = req.model ?? choices.effective.modelId;
-        const error = !isHarnessId(harness)
-          ? "harness_not_approved"
-          : await availableRuntimeError(
-              { deps },
-              conversationScope(req.conversation, actor.id),
-              {
-                harnessId: harness,
-                modelId: model,
-                effortLevel: req.thinkingLevel,
-                fastMode: req.fastMode,
-              },
-              runtimePurpose,
-            );
         if (error) return { status: "refused", reason: error };
       }
       let requestedModel = req.model;
-      let requestedHarness = req.harness;
       if (req.surface === "web") {
         const threadRef = req.conversation.threadRef;
         const existing = await deps.sessions.getByThread(threadRef);
@@ -261,24 +240,15 @@ export function createTurnMethods(
         }
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
-        const fallbackHarness = harnessIdOrPi(deps.harnessId);
-        const runtimeFallback = deps.runtimeFallback ?? {
-          harnessId: fallbackHarness,
-          modelId: defaultModelForHarness(fallbackHarness),
-        };
-        if (individualAuth && (req.model || req.harness)) {
+        const runtimeFallback = deps.runtimeFallback ?? { modelId: defaultModel() };
+        if (individualAuth && req.model) {
           const available = await userRuntimeConfigBody({ deps }, targetScope, actor.id);
-          const harness = req.harness ?? available.effective.harnessId;
-          const model = req.model ?? available.effective.modelId;
-          if (!available.modelsByHarness[harness]?.includes(model))
-            return { status: "refused", reason: "Your connected AI account cannot serve this model on that harness." };
-          const invalidModelOption = validateWebTurnModelOptions(
-            { ...req, model },
-            available.modelsByHarness[harness] ?? [],
-          );
+          const model = req.model;
+          if (!available.models.includes(model))
+            return { status: "refused", reason: "Your connected AI account cannot serve this model." };
+          const invalidModelOption = validateWebTurnModelOptions({ ...req, model }, available.models);
           if (invalidModelOption) return { status: "refused", reason: invalidModelOption };
           requestedModel = model;
-          requestedHarness = harness;
         }
         if (!individualAuth) {
           const configuredKeys = deps.providerKeys ??
@@ -290,15 +260,14 @@ export function createTurnMethods(
             const orgModel =
               storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
             orgRuntime = modelUnavailableReason(orgModel)
-              ? { harnessId: storedOrgRuntime?.harnessId ?? runtimeFallback.harnessId, modelId: orgModel }
-              : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoiceDurable(
+              ? { modelId: orgModel }
+              : await resolveRuntimeChoice(deps.config, org, org, runtimeFallback);
+            runtime = await resolveRuntimeChoice(
               deps.config,
               org,
               targetScope,
               runtimeFallback,
               {
-                ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
                 ...(req.model ? { modelId: req.model } : {}),
                 ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
                 ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
@@ -310,14 +279,11 @@ export function createTurnMethods(
             swallow("turn: runtime resolution", error);
             return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
           }
-          if (req.harness && !isHarnessId(req.harness)) {
-            return { status: "refused", reason: `runtime ${req.harness} is not approved` };
-          }
           let providers = deps.modelProviders;
           if (deps.modelCredentials) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
+            providers = managedKeys;
           } else if (deps.providerKeys) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
+            providers = configuredKeys;
           }
           if (providers && !modelServiceable(runtime.modelId, providers)) {
             return {
@@ -334,13 +300,10 @@ export function createTurnMethods(
           } else if (providers?.openrouter) {
             enabledWebuiModels = [
               ...new Set([
-                ...selectableCatalogForHarness(
-                  await selectableModelCatalog(deps.modelCredentialFetch),
-                  runtime.harnessId,
-                )
+                ...selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
                   .filter((model) => modelOfferedInWebui(model.id))
                   .map((model) => model.id),
-                ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
+                orgRuntime.modelId,
               ]),
             ];
           }
@@ -407,7 +370,6 @@ export function createTurnMethods(
         ...(req.detectOpener ? { detectOpener: req.detectOpener } : {}),
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
-        ...((!individualAuth || req.surface === "web") && requestedHarness ? { harness: requestedHarness } : {}),
         ...((!individualAuth || req.surface === "web") && requestedModel ? { model: requestedModel } : {}),
         ...turnModelOptions(req),
         ...(req.readOnly ? { readOnly: true } : {}),
@@ -807,7 +769,7 @@ export function createTurnMethods(
         if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
         return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session, USER_STOP);
       };
-      return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
+      return deps.advisoryLock.withLock("session-tree-admission", stop);
     },
 
     async activeRunForThread(threadRef, viewer) {

@@ -48,7 +48,6 @@ function readableByMemberProtocol(state: BackgroundOwnership, previous?: StoredO
 }
 
 export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnership>) {
-  if (!map.update) throw new Error("Background ownership requires atomic updates");
   const key = "ownership";
   const initial: BackgroundOwnership = { ownerDeploymentId: null, setAt: null, setBy: null };
   const ready = () => map.putIfAbsent(key, readableByMemberProtocol(initial));
@@ -58,7 +57,7 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
     },
     async set(change: BackgroundOwnershipChange): Promise<BackgroundOwnership> {
       await ready();
-      const result = await map.update!(key, (stored) => {
+      const result = await map.update(key, (stored) => {
         const current = fromStored(stored);
         if (
           change.expectedOwnerDeploymentId !== undefined &&

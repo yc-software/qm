@@ -11,14 +11,18 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
-const core = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
+const core = createServer(built.app, {
+  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  signingSecret: SECRET,
+  scheduler: built.scheduler,
+});
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
 
@@ -271,7 +275,6 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
-  await built.config.setApprovedHarnesses(["pi"]);
   const cron = await built.app.createCron({
     title: "runtime",
     action: "check",
@@ -280,7 +283,7 @@ test("cron runtime patches pass through the web API, validate, and clear", async
     createdBy: "alice",
     ownerScopeId: "personal:alice",
   });
-  const runtime = { harnessId: "pi", modelId: "claude-sonnet-5" };
+  const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
     fetch(
       `${webBase}/api/crons/${cron.id}`,

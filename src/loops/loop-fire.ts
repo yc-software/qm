@@ -11,7 +11,8 @@ import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
-import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
+import type { TurnRequest, TurnResult } from "../types.ts";
+import type { Loop, LoopItem, LoopOutput } from "./types.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -79,7 +80,7 @@ interface ItemTurnResult {
   sessionId?: string;
 }
 
-type LoopFollowUpOptions = Pick<TurnRequest, "model" | "harness" | "thinkingLevel" | "fastMode" | "attachments">;
+type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "attachments">;
 
 type StageOptions = LoopFollowUpOptions & Pick<TurnRequest, "readOnly">;
 
@@ -559,7 +560,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       threadRef,
       surface: "loop",
       ...(options?.model ? { model: options.model } : {}),
-      ...(options?.harness ? { harness: options.harness } : {}),
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
       ...(options?.attachments?.length ? { attachments: options.attachments } : {}),

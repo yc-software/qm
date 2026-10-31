@@ -2,23 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
 import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push.ts";
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
-bindTestTenant();
-
 async function world() {
-  const sources = createMemoryMap<LoopIngress>();
-  const deliveries = createMemoryMap<IngressDelivery>();
-  const loops = createLoopStore();
-  const items = createLoopItemLedger();
+  const sources = testMap<LoopIngress>();
+  const deliveries = testMap<IngressDelivery>();
+  const loops = createLoopStore(testMap());
+  const items = createLoopItemLedger(testMap());
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",
@@ -34,8 +31,8 @@ async function world() {
     deliveries,
     loops,
     items,
-    outputs: createLoopOutputStore(),
-    lock: createMemoryAdvisoryLock(),
+    outputs: createLoopOutputStore(testMap()),
+    lock: testAdvisoryLock(),
     rowTenants: async () => [TEST_TENANT],
     fire: {
       fire: async (

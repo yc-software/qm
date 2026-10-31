@@ -9,7 +9,7 @@ import { mintCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from ".
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
-import { memoryTenants, singleTenantResolver } from "../src/tenants/resolver.ts";
+import { singleTenantResolver } from "../src/tenants/resolver.ts";
 import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
@@ -25,8 +25,6 @@ describe("tenant resolution", () => {
     assert.equal(await singleTenantResolver(async () => [TEST_TENANT]).forSlackTeam("T1"), TEST_TENANT);
     assert.equal(await singleTenantResolver(async () => []).forHost("any.example"), null);
     assert.equal(await singleTenantResolver(async () => [TEST_TENANT, OTHER_TENANT]).forHost("a.example"), null);
-    const [memory] = await memoryTenants();
-    assert.deepEqual(await memoryTenants(), [memory]);
   });
 
   it("an owner row lookup binds the row's tenant and refuses unknown or ambiguous rows", async () => {

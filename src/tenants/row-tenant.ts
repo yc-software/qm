@@ -1,5 +1,4 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { memoryTenants } from "./resolver.ts";
 
 export type RowTenants = (table: string, columns: readonly string[], value: string) => Promise<string[]>;
 
@@ -27,5 +26,3 @@ export function ownerRowTenants(db: Pick<PgPool, "ownerPool">): RowTenants {
     return tenants;
   };
 }
-
-export const memoryRowTenants: RowTenants = () => memoryTenants();

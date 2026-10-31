@@ -1,8 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createMemoryMap } from "../../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import { createMemorySessionStore } from "../../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";
 import { createSandboxResources, type SandboxResource } from "../../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
@@ -12,6 +8,9 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
+import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 export async function swarmFixture(
   options: {
@@ -20,14 +19,14 @@ export async function swarmFixture(
     runs?: RunStore;
     lock?: AdvisoryLock;
     backend?: Sandbox;
-    runtime?: Pick<OrchestratorInput, "model" | "harness" | "thinkingLevel" | "fastMode">;
+    runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
-  const sessions = options.sessions ?? createMemorySessionStore();
-  const runs = options.runs ?? createMemoryRunStore().runs;
-  const lock = options.lock ?? createMemoryAdvisoryLock();
-  const store = options.store ?? createSwarmStore(createMemoryMap(), { runs, sessions });
-  const records = createMemoryMap<SandboxResource>();
+  const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
+  const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
+  const lock = options.lock ?? testAdvisoryLock();
+  const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
+  const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const state = { allowed: true, failProvision: false };
@@ -64,7 +63,7 @@ export async function swarmFixture(
   };
   const sandboxes = createSandboxResources({
     records,
-    defaults: createMemoryMap(),
+    defaults: testMap(),
     backends: { modal: backend },
     defaultBackend: "modal",
     lock,

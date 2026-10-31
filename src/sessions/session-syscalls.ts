@@ -1,5 +1,6 @@
+import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { TURN_STOPPED_KIND } from "../harness/replay.ts";
+import { TURN_STOPPED_KIND } from "../agent/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -7,7 +8,7 @@ import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
@@ -120,7 +121,6 @@ interface SessionOpenInput {
   name?: string;
   readOnly?: boolean;
   model?: string;
-  harness?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
 }
@@ -133,7 +133,7 @@ interface SessionWriteInput {
   peer?: boolean;
   text?: string;
   interrupt?: boolean;
-  followup?: boolean;
+  wake?: boolean;
   requestId?: string;
 }
 
@@ -142,7 +142,9 @@ type SessionWriteResult =
       ok: true;
       sessionId: string;
       title: string;
-      delivered: "steered" | "queued_turn" | "interrupted" | "queued_message";
+      delivered: "queued_turn" | "interrupted" | "queued_message";
+      busy?: boolean;
+      notWoken?: string;
     }
   | { ok: false; message: string };
 
@@ -249,7 +251,7 @@ export interface SessionSyscallDeps {
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
@@ -368,7 +370,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     envelopeWrapped: true,
     ...(meta.readOnly ? { readOnly: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
-    ...(meta.harness ? { harness: meta.harness } : {}),
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
@@ -507,7 +508,7 @@ export async function sessionTreeRunCount(
 }
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
-  const lock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  const lock = deps.advisoryLock;
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
@@ -560,8 +561,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             deps.sessions.visibleEntries(target.id, id),
           ),
         );
-        const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
-        return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
+        const allowed = commonEntrySeqs(views);
+        return (views[0] ?? []).filter((entry) => allowed.has(entry.seq));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -701,7 +702,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(binding.request.timezone ? { timezone: binding.request.timezone } : {}),
                 ...(input.readOnly || binding.request.readOnly ? { readOnly: true } : {}),
                 ...(input.model ? { model: input.model } : {}),
-                ...(input.harness ? { harness: input.harness } : {}),
                 ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
                 ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
               };
@@ -775,7 +775,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ...(target.parentSessionId
                     ? {
                         model: target.spawnMeta?.model,
-                        harness: target.spawnMeta?.harness,
                         thinkingLevel: target.spawnMeta?.thinkingLevel,
                         fastMode: target.spawnMeta?.fastMode,
                       }
@@ -803,16 +802,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
               const text = input.text?.trim();
-              if (!text)
-                return {
-                  ok: false,
-                  message: input.followup
-                    ? "followup_task requires `task`: the full instruction the subagent works from."
-                    : "send_message requires `text` (or interrupt: true).",
-                };
+              if (!text) return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
-              if (!input.followup) {
+              const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
+              const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
                 const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
@@ -826,15 +820,22 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
-                return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
-              }
-              if (input.followup && binding.request.privateSessionMessage)
-                return { ok: false, message: "private turns cannot assign follow-up work" };
-              if (input.followup && !target.parentSessionId)
                 return {
-                  ok: false,
-                  message: "follow-up tasks can only target an attached subagent; use a message for the root",
+                  ok: true,
+                  sessionId: target.id,
+                  title,
+                  delivered: "queued_message",
+                  busy,
+                  ...(notWoken ? { notWoken } : {}),
                 };
+              };
+              if (!input.wake) return leaveMail();
+              if (binding.request.privateSessionMessage)
+                return leaveMail("a private turn cannot start work in another session");
+              if (!target.parentSessionId)
+                return leaveMail(
+                  "a message cannot start a turn in a top-level conversation; if it is your parent, your final answer reaches it when you finish",
+                );
 
               const dedupKey = input.requestId
                 ? `subagent-followup:${hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)}`
@@ -847,17 +848,23 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
                   )
                     return { ok: false, message: "the requestId was already used for different work" };
-                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+                  const others = (await deps.runs.inFlightForThread(target.threadRef)).filter(
+                    (run) => run.id !== existing.id,
+                  );
+                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
                 }
               }
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               if (
                 (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
                 cap
               )
-                return { ok: false, message: `all ${cap} session run slots are in use.` };
+                return {
+                  ok: false,
+                  message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
+                };
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
               await deps.runs.enqueue({
                 sessionId: target.threadRef,
                 dedupKey,
@@ -871,7 +878,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 },
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
+              return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
             })
             .catch((error): SessionWriteResult => ({ ok: false, message: errMessage(error) }));
         },

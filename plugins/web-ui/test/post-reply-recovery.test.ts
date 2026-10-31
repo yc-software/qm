@@ -125,11 +125,10 @@ test("post replies remain visible in new and continuing conversations", async (t
     if (path.includes("runtime-config"))
       return Response.json({
         scopeId: row.scopeId,
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: ["test-model"] },
+        models: ["test-model"],
         modelCatalog: { "test-model": metadata("test-model", "Test model") },
-        orgDefault: { harnessId: "pi", modelId: "test-model", revision: 0 },
-        effective: { harnessId: "pi", modelId: "test-model" },
+        orgDefault: { modelId: "test-model", revision: 0 },
+        effective: { modelId: "test-model" },
         scopeOverride: null,
       });
     if (path.includes("/api/runs/active")) return Response.json({ runId: null, queued: [] });

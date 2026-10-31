@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SkillFile } from "./skill-store.ts";
 
 export interface SkillBundle {
@@ -25,8 +25,8 @@ export interface SkillBundleStore {
   list(): Promise<SkillBundle[]>;
 }
 
-export function createSkillBundleStore(opts: { backing?: DurableMap<SkillBundle> } = {}): SkillBundleStore {
-  const bundles = opts.backing ?? createMemoryMap<SkillBundle>();
+export function createSkillBundleStore(opts: { backing: DurableMap<SkillBundle> }): SkillBundleStore {
+  const bundles = opts.backing;
   return {
     get: (packId) => bundles.get(packId),
     async put(bundle) {

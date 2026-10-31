@@ -1,17 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { BotIdentity } from "../src/slack/directory.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
 import { createDeduper } from "../src/slack/lib.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
 function fixture(fail?: Error) {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const notes: string[] = [];
   const core = {
     noteSurfaceHistoryGap: async (container: string, note: string) => {
@@ -51,7 +52,7 @@ function fixture(fail?: Error) {
   return { cache, calls, notes, readHistory };
 }
 
-async function joinedLate(cache: ReturnType<typeof createMemorySurfaceCache>) {
+async function joinedLate(cache: ReturnType<typeof createPostgresSurfaceCache>) {
   await cache.ingest([
     { container: "C1", ts: "20.000000", text: "root", authorId: "U1" },
     { container: "C1", ts: "21.000000", sub: "20.000000", text: "what did we decide above?", authorId: "U1" },
@@ -127,7 +128,7 @@ test("a non-rate-limit backfill failure writes no memory note", async () => {
 });
 
 test("the history gap note lands in the conversation's own scope memory", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.000000", text: "hi", authorId: "U1", kind: "channel" },
     { container: "G1", ts: "1.000000", text: "hi", authorId: "U1", kind: "group" },

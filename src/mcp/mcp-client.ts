@@ -3,6 +3,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { swallowAs } from "../util/errors.ts";
+import { publicFetch, type AddressFetch } from "../util/network.ts";
 
 const MAX_TOOLS = 64;
 const CALL_TIMEOUT_MS = 300_000;
@@ -36,10 +37,11 @@ export interface McpClient {
   callTool(name: string, args: Record<string, unknown>, headers?: Record<string, string>): Promise<CallToolResult>;
 }
 
-export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient {
+export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: AddressFetch }): McpClient {
   const trimmed = opts.url.replace(/\/+$/g, "");
   const endpoint = new URL(new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed);
   const { auth } = opts;
+  const fetchFn = opts.fetch ?? publicFetch;
   const authProvider =
     auth.mode === "client-credentials"
       ? new ClientCredentialsProvider({
@@ -58,7 +60,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
-      fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
+      fetch: (url, init) => fetchFn(url, { ...init, redirect: "error" }),
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
     try {

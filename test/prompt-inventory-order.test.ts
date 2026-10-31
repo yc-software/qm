@@ -1,15 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderSandboxProviders } from "../src/core/environment-facts.ts";
-import { renderGatewayContext } from "../src/core/gateway-context.ts";
-import { sharedFilesSystemSection } from "../src/core/attachments.ts";
+import {
+  renderGatewayContext,
+  renderSandboxProviders,
+  sharedFilesSystemSection,
+} from "../src/core/orchestrator/prompt-blocks.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
   renderReachRoster,
   renderStandingObligations,
 } from "../src/core/orchestrator/prompt-blocks.ts";
-import type { Cron, Webhook, Monitor, GrantedHandle, CandidateDestination } from "../src/types.ts";
+import type { GrantedHandle, CandidateDestination } from "../src/types.ts";
+import type { Cron, Webhook, Monitor } from "../src/triggers/types.ts";
 import type { DirectoryMember, DirectoryChannel } from "../src/directory/directory-store.ts";
 
 function checkOrder<T>(items: T[], render: (items: T[]) => string | null): void {

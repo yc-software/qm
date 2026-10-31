@@ -7,15 +7,13 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { OTHER_TENANT, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -91,7 +89,7 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = createMemoryMap<SessionShare>();
+  const store = testMap<SessionShare>();
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
   const countedBytes = {
@@ -101,7 +99,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       return bytes.put(...args);
     },
   };
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const deliveries = createDeliveryStore();
   const original = [
     ...entries,

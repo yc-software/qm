@@ -13,7 +13,7 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
   const control = ctx.deps.backgroundOwnership!;
   const run = ctx.deps.deploymentLiveSmoke;
   const replay = ctx.deps.replayDedupe;
-  if (!run || !replay?.durable) return sendJson(ctx.res, 503, { error: "deployment_smoke_unavailable" });
+  if (!run || !replay) return sendJson(ctx.res, 503, { error: "deployment_smoke_unavailable" });
   const body = ctx.body;
   if (
     !isObj(body) ||

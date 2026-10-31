@@ -140,15 +140,12 @@ supervisor; extra connections on another host must be stopped on that host. `DEV
 
 The dev instance should exercise the real system:
 
-- real LLM: needs a model credential for the harness you run. Core supports
-  `HARNESS=pi|claude`; the launcher runs Pi when it finds an Anthropic key and honours an
-  explicit `HARNESS=claude`. Pi's GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
-  to a local Codex CLI `auth.json`. The auth-file path is for local dev instances; deployed
-  production processes use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
+- real LLM: needs a model credential. An Anthropic key (or a Claude subscription token in
+  `ANTHROPIC_API_KEY`) serves Claude models and an OpenAI key serves GPT models; deployed
+  production processes may instead use a keychain credential (`CODEX_AUTH_CREDENTIAL` /
   `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.
 - real durability: uses `DATABASE_URL` when supplied; otherwise starts/reuses a local
-  Docker Postgres container and runs core with `SESSION_STORE=postgres` and
-  `RUN_STORE=postgres`
+  Docker Postgres container
 - production data is never copied into a dev instance
 - captured model context: request capture is on unless overridden, so you can read back what the model was actually sent
 - fast local edits: runs Node surfaces with `--watch` and serves the web UI through
@@ -167,7 +164,6 @@ Only use escape hatches for deliberate wiring checks — this is how you ask for
 the full real stack when a test doesn't need it:
 
 ```bash
-DEV_INSTANCE_ALLOW_MEMORY=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_WATCH=0 bash scripts/dev-instance.sh up
 DEV_INSTANCE_RECLAIM_STALE=0 bash scripts/dev-instance.sh up
 ```

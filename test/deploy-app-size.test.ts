@@ -9,11 +9,13 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 function service(maxAppBytes?: number) {
   const dir = mkdtempSync(join(tmpdir(), "deploy-app-size-"));
   let applies = 0;
-  const store = createDeployStore({ git: { repoRoot: join(dir, "repos") } });
+  const store = createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } }));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: store,
@@ -26,7 +28,7 @@ function service(maxAppBytes?: number) {
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: join(dir, "deploy"),
   });
   return { deploy, store, applies: () => applies };

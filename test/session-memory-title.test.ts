@@ -1,15 +1,16 @@
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -19,21 +20,24 @@ interface Rig {
   mailbox: SessionMailbox;
   sessions: SessionStore;
   runs: RunStore;
-  signals: ReturnType<typeof createMemoryRunSignalStore>;
+  signals: ReturnType<typeof createPostgresRunSignalStore>;
+  advisoryLock: AdvisoryLock;
   room: Session;
   syscallsFor(session: Session): ReturnType<ReturnType<typeof createSessionSyscalls>["forTurn"]>;
 }
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
     runs,
     signals,
+    advisoryLock,
     maxAttempts: 3,
     ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
   });
@@ -57,6 +61,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
     sessions,
     runs,
     signals,
+    advisoryLock,
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };

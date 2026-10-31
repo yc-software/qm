@@ -1,17 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { classifiedMemory } from "../src/memory/classification.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
-  const memory = createMemoryService(createLocalWorkspaceStore(await mkdtemp(join(tmpdir(), "classification-"))));
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   return { memory, facts: (scope: string) => memory.facts!(scope) };
 }
 
@@ -27,7 +24,7 @@ test("production strategy classifies automatic capture in the existing extractio
   let calls = 0;
   const { strategy } = createMemoryStrategy("per-turn", {
     memory,
-    harness: {
+    agent: {
       oneShot: async () => {
         calls++;
         return "SENSITIVITY: ordinary\n- Prefers short replies";
@@ -47,7 +44,7 @@ test("missing or malformed classifier labels fail closed without losing captured
     "ordinary\n- Prefers short replies",
   ]) {
     const { memory, facts } = await fixture();
-    const strategy = createPerTurnStrategy({ memory, harness: { oneShot: async () => output } });
+    const strategy = createPerTurnStrategy({ memory, agent: { oneShot: async () => output } });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts: [] });
     assert.ok((await facts(scope)).every((fact) => fact.sensitivity === "unknown"));
     assert.match(await memory.read(scope), /Prefers short replies/);
@@ -59,7 +56,7 @@ test("ordinary classification never completes missing provenance or downgrades i
     const { memory, facts } = await fixture();
     const strategy = createPerTurnStrategy({
       memory,
-      harness: { oneShot: async () => "SENSITIVITY: ordinary\n- Derived fact" },
+      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Derived fact" },
     });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts });
     const fact = (await facts(scope))[0]!;
@@ -75,7 +72,7 @@ test("explicit captures classify in agent-only mode and classification failures 
     const { memory, facts } = await fixture();
     const { memory: wrapped } = createMemoryStrategy("agent-only", {
       memory,
-      harness: {
+      agent: {
         oneShot: async () => {
           if (verdict === undefined) throw new Error("unavailable");
           return verdict;
@@ -121,7 +118,7 @@ test("burst capture joins dependencies and preserves missing provenance from any
       memory,
       captureQuietMs: 1000,
       captureMaxTurns: 2,
-      harness: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" },
+      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" },
     });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts: dependency });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts: complete ? [] : undefined });
@@ -136,7 +133,7 @@ test("automatic capture preserves sources and sensitivity only in the source not
   const { memory, facts } = await fixture();
   const strategy = createPerTurnStrategy({
     memory,
-    harness: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
+    agent: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
   });
   await strategy.onTurnEnd!({ ...turn, scopeId: "group:private", inheritedFacts: [] });
   const fact = (await facts("group:private")).find((f) => f.text.includes("Confidential"))!;

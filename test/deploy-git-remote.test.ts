@@ -12,11 +12,10 @@ import type { App } from "../src/api/app.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
+import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);
@@ -26,10 +25,10 @@ async function fixture(): Promise<{
   close: () => Promise<void>;
   deployment: Deployment;
 }> {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const backing = testDeployBackings();
+  const archiveStore = testMap<DeployGitArchive>();
   const writerStore = createDeployStore({
-    deployments,
+    ...backing,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },
   });
   const deployment = await writerStore.create({
@@ -45,14 +44,17 @@ async function fixture(): Promise<{
   });
   await writerStore.setAppliedVersion(deployment.id, 1);
   const readerStore = createDeployStore({
-    deployments,
+    ...backing,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-reader-")), archiveStore },
   });
   const app = {
     listDeployments: async () => [deployment],
     deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
-  const server: Server = createServer(app, { signingSecret: SECRET });
+  const server: Server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+  });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return { base, deployment, close: () => new Promise<void>((r) => server.close(() => r())) };

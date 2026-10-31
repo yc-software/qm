@@ -5,12 +5,17 @@ export function createPostgresRateLimiter(
   connectionString: string,
   opts: { maxPerWindow: number; windowMs: number },
 ): RateLimiter {
-  const { q } = createPgPool(connectionString, "ratelimit/limiter/0001", [
-    `CREATE TABLE IF NOT EXISTS rate_limit_windows(
+  const { q } = createPgPool(connectionString, [
+    {
+      id: "ratelimit/limiter/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS rate_limit_windows(
       principal_id TEXT PRIMARY KEY,
       window_start BIGINT NOT NULL,
       count INTEGER NOT NULL
     )`,
+      ],
+    },
   ]);
   return {
     async check(principalId) {
