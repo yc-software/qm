@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
@@ -178,7 +179,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
 
 test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {
   const built = buildApp(testConfig({ securityScreen: "off" }));
-  await built.config.setSharingPosture("org:default-org", "open");
+  await built.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
   await publishPersonalSkill(built.skills);
   const result = await built.app.turn({
     surface: "test",

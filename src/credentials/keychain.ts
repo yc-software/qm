@@ -1,5 +1,4 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
@@ -121,7 +120,6 @@ interface CredentialRefresh {
   grantedScopes?: string[];
   refreshFailedAt?: number;
   refreshError?: string;
-  orgId?: string;
 }
 
 export interface CredentialFile {
@@ -148,7 +146,6 @@ export interface CredentialFieldInput {
 export interface KeychainCredential {
   id: string;
   ownerId: string;
-  orgId?: string;
   service: string;
   kind: CredentialKind;
   envKey?: string;
@@ -176,7 +173,6 @@ export interface KeychainGrant {
   id: string;
   credentialId: string;
   ownerId: string;
-  orgId?: string;
   audienceScopeId: ScopeId;
   mode: GrantMode;
   purpose: string;
@@ -196,7 +192,6 @@ export interface KeychainAsk {
   credentialId: string;
   ownerId: string;
   requesterId: string;
-  orgId?: string;
   requesterScopeId: ScopeId;
   requesterDestination?: Destination;
   requesterThreadRef?: string;
@@ -309,7 +304,6 @@ export interface OAuthToken {
   grantedScopes?: string[];
   clientRef?: string;
   accountType?: string;
-  orgId?: string;
   /** OIDC id token, for providers whose API needs it alongside the access token (e.g. Codex). */
   idToken?: string;
   /** Provider-side account identifier carried with the token (e.g. ChatGPT account id). */
@@ -707,7 +701,6 @@ export function createKeychain(deps: {
   }
 
   const brokerId = (orgScopeId: string, slug: string) => credId(orgScopeId, slug, "broker");
-  const orgIdOf = (orgScopeId: string) => orgScopeId.replace(/^org:/, "");
 
   function brokerToPublic(rec: KeychainCredential): PublicServiceCredential {
     const b = rec.broker ?? { name: rec.service, enabled: true };
@@ -754,7 +747,6 @@ export function createKeychain(deps: {
     return {
       id: brokerId(orgScopeId, input.slug),
       ownerId: orgScopeId,
-      orgId: orgIdOf(orgScopeId),
       service: input.slug,
       kind: "broker",
       host: input.host,
@@ -796,7 +788,6 @@ export function createKeychain(deps: {
     return {
       id,
       ownerId: principalId,
-      orgId: token.orgId ?? configOrgId(),
       service: host.toLowerCase(),
       kind: "env",
       host: host.toLowerCase(),
@@ -812,7 +803,6 @@ export function createKeychain(deps: {
         ...(at ? { accountType: at } : {}),
         ...(token.clientRef ? { clientRef: token.clientRef } : {}),
         ...(token.grantedScopes ? { grantedScopes: token.grantedScopes } : {}),
-        ...(token.orgId ? { orgId: token.orgId } : {}),
       },
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
@@ -849,7 +839,6 @@ export function createKeychain(deps: {
       ...(rec.refresh?.grantedScopes ? { grantedScopes: rec.refresh.grantedScopes } : {}),
       ...(rec.refresh?.clientRef ? { clientRef: rec.refresh.clientRef } : {}),
       ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
-      ...(rec.refresh?.orgId ? { orgId: rec.refresh.orgId } : {}),
     };
   }
 
@@ -880,7 +869,6 @@ export function createKeychain(deps: {
         const merged: OAuthToken = {
           ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
           ...(stored.accountType ? { accountType: stored.accountType } : {}),
-          ...(stored.orgId ? { orgId: stored.orgId } : {}),
           ...(stored.idToken ? { idToken: stored.idToken } : {}),
           ...(stored.accountId ? { accountId: stored.accountId } : {}),
           ...fresh,
@@ -978,7 +966,6 @@ export function createKeychain(deps: {
       return {
         id,
         ownerId,
-        orgId: configOrgId(),
         service,
         kind,
         ...(envKey ? { envKey } : {}),
@@ -1115,7 +1102,6 @@ export function createKeychain(deps: {
         : hashId([cred.id, input.audienceScopeId, String(t), purpose]),
       credentialId: cred.id,
       ownerId: cred.ownerId,
-      orgId: cred.orgId,
       audienceScopeId: input.audienceScopeId,
       mode: input.mode,
       purpose,
@@ -1309,7 +1295,6 @@ export function createKeychain(deps: {
         credentialId: cred.id,
         ownerId: cred.ownerId,
         requesterId: input.requesterId,
-        orgId: configOrgId(),
         requesterScopeId: input.requesterScopeId,
         ...(input.requesterDestination ? { requesterDestination: input.requesterDestination } : {}),
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),

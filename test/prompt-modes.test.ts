@@ -27,8 +27,7 @@ import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limite
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-
-const ORG = "default-org";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
@@ -77,9 +76,9 @@ async function buildOrchestrator(
     brandingDefault?: OrgBranding;
   } = {},
 ) {
-  const config = testConfigStore(ORG);
-  if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
-  if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
+  const config = testConfigStore();
+  if (opts.orgSoul !== undefined) await config.setSoul(TEST_ROOT_SCOPE, opts.orgSoul);
+  if (opts.branding) await config.setBranding(TEST_ROOT_SCOPE, opts.branding);
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -93,7 +92,7 @@ async function buildOrchestrator(
     auditLog,
     acl,
   });
-  const resolution = createResolutionService(ORG, config, acl);
+  const resolution = createResolutionService(config, acl);
 
   if (opts.scopeSoulFor) {
     const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);

@@ -113,7 +113,7 @@ export async function stagingApiHeaders(
   );
 }
 
-type LiveSessionConfig = Pick<Config, "adminGrants" | "orgId" | "portalIdentitySecret" | "signingSecret">;
+type LiveSessionConfig = Pick<Config, "adminGrants" | "portalIdentitySecret" | "signingSecret">;
 
 export async function checkLiveSession(
   config: LiveSessionConfig,
@@ -124,8 +124,7 @@ export async function checkLiveSession(
     sleep,
   },
 ): Promise<void> {
-  const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
-  if (!orgId) throw new Error("live session smoke requires ORG_ID");
+  const { portalIdentitySecret, signingSecret: sourceSecret } = config;
   if (!sourceSecret) throw new Error("live session smoke requires CORE_SIGNING_SECRET");
   if (!portalIdentitySecret) throw new Error("live session smoke requires PORTAL_IDENTITY_SECRET");
   const principalId = firstAdminPrincipal(config.adminGrants);
@@ -145,7 +144,7 @@ export async function checkLiveSession(
       method,
       path,
       raw,
-      admin ? { "x-admin-actor": `${principalId}@${orgId}` } : {},
+      admin ? { "x-admin-actor": principalId } : {},
     );
     const response = await fetchImpl(`${root}${path}`, {
       method,
@@ -246,16 +245,15 @@ export async function checkLiveSession(
 }
 
 async function checkApi(
-  orgId: string,
   principalId: string,
   sourceSecret: string,
   portalIdentitySecret: string,
   port: string,
 ): Promise<void> {
-  const path = `/v1/admin/sessions?scope=${encodeURIComponent(`org:${orgId}`)}&limit=5&_smoke=${randomUUID()}`;
+  const path = `/v1/admin/sessions?scope=${encodeURIComponent(`personal:${principalId}`)}&limit=5&_smoke=${randomUUID()}`;
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     headers: await stagingApiHeaders(principalId, sourceSecret, portalIdentitySecret, "GET", path, "", {
-      "x-admin-actor": `${principalId}@${orgId}`,
+      "x-admin-actor": principalId,
     }),
   });
   const body = await response.text();
@@ -271,7 +269,6 @@ type PostdeployConfig = Pick<
   | "databaseCaCert"
   | "databaseCaCertFile"
   | "flyAppName"
-  | "orgId"
   | "port"
   | "portalIdentitySecret"
   | "publicWebUrl"
@@ -306,20 +303,13 @@ async function checkDatabase(config: PostdeployConfig): Promise<void> {
 }
 
 async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
-  const { orgId, portalIdentitySecret, signingSecret: sourceSecret } = config;
-  if (!orgId) throw new Error("postdeploy smoke requires ORG_ID");
+  const { portalIdentitySecret, signingSecret: sourceSecret } = config;
   if (!sourceSecret) throw new Error("postdeploy smoke requires CORE_SIGNING_SECRET");
   if (!portalIdentitySecret) throw new Error("postdeploy smoke requires PORTAL_IDENTITY_SECRET");
 
   await checkDatabase(config);
 
-  await checkApi(
-    orgId,
-    firstAdminPrincipal(config.adminGrants),
-    sourceSecret,
-    portalIdentitySecret,
-    String(config.port),
-  );
+  await checkApi(firstAdminPrincipal(config.adminGrants), sourceSecret, portalIdentitySecret, String(config.port));
   await checkDeployedHealth(deployedHealthUrls(config.flyAppName, config.publicWebUrl));
   await checkSlackCredentials(config.slack?.botToken, config.slack?.appToken, config.slack?.apiUrl);
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");

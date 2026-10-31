@@ -98,7 +98,6 @@ export interface PublishInput {
 
 export interface PublishAudienceDescriptor {
   kind: PublishAudienceKind;
-  orgId?: string;
   channelRef?: string;
   memberCount?: number;
   snapshotAt?: number;
@@ -958,7 +957,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       signal?.throwIfAborted();
       const { handle, resource, crossScope } = await machine(sandboxId);
-      const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
+      const mounts = crossScope ? [] : fallbackMounts;
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
       const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
@@ -1337,8 +1336,7 @@ function audienceFromGrantees(
   createdInScope?: ScopeId,
 ): PublishAudienceDescriptor {
   if (granteeScopeIds.length === 0) return { kind: "owner" };
-  const orgGrant = granteeScopeIds.find((g) => parseScopeId(g).kind === "org");
-  if (orgGrant) return { kind: "org", orgId: parseScopeId(orgGrant).ref };
+  if (granteeScopeIds.some((g) => parseScopeId(g).kind === "org")) return { kind: "org" };
   const origin = createdInScope ? parseScopeId(createdInScope) : { kind: null, ref: "" };
   return {
     kind: "members",

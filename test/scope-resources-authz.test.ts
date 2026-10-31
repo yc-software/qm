@@ -12,12 +12,12 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ORG = "default-org";
 const U1 = "U1";
 const C1 = "C1";
 const channelScope = scopeId("channel", C1);
-const orgScope = scopeId("org", ORG);
+const orgScope = TEST_ROOT_SCOPE;
 
 function makeDeps() {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());

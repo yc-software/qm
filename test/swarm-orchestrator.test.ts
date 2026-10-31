@@ -16,6 +16,7 @@ import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -49,10 +50,9 @@ mock.module("./support/mock-agent.ts", {
   },
 });
 const wiring = await import("./support/build-app.ts");
-const { orgId } = await import("../src/config.ts");
 const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
   const built = wiring.buildApp(...args);
-  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
+  void built.featureFlags.setEnabled("swarms", TEST_ROOT_SCOPE, true, "test");
   return built;
 };
 test.after(() => fake.cleanup());
@@ -80,7 +80,7 @@ for (const kind of ["command", "security-screen"] as const) {
         securityScreenData: undefined,
       });
       if (kind === "command")
-        await built.config.setCommandPolicy("org:default-org", {
+        await built.config.setCommandPolicy(TEST_ROOT_SCOPE, {
           mode: "denylist",
           rules: [{ pattern: "approval-isolation", decision: "require_approval", reason: "Confirm this command" }],
         });
@@ -459,7 +459,7 @@ test("a resolved command approval informs the model without changing its request
     turns.push(turn);
   };
   try {
-    await built.config.setCommandPolicy("org:default-org", {
+    await built.config.setCommandPolicy(TEST_ROOT_SCOPE, {
       mode: "denylist",
       rules: [{ pattern: "approval-isolation", decision: "require_approval", reason: "test approval" }],
     });

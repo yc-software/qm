@@ -13,7 +13,7 @@ export interface Me {
   modelAuthConnected?: boolean;
   mode?: AuthMode;
   user: string;
-  org: string;
+  org: string | null;
   slackWorkspaceUrl?: string | null;
   impersonatedBy?: string | null;
   displayName?: string | null;

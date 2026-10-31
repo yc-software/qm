@@ -45,7 +45,7 @@ test("PUT /api/crons/:id/destination forwards the body + scope to the core", asy
   const c = calls.at(-1)!;
   assert.equal(c.method, "PUT");
   assert.equal(c.url, "/v1/admin/crons/c1/destination?scope=personal:U1");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.deepEqual(JSON.parse(c.body), {
     destination: { type: "slack", target: "D1", audienceScopeId: "personal:U1" },

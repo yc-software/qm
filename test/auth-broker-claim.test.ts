@@ -37,9 +37,7 @@ function start(
   dedupe: ReplayDedupe;
   close: () => Promise<void>;
 } {
-  const built: BuiltApp = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")), orgId: "acme" }),
-  );
+  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")) }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe,

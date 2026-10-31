@@ -7,7 +7,7 @@ import { text, outsideWorkspace, sandboxSelector, type ToolKit } from "./kit.ts"
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
   const note = a.note ? ` (note: ${a.note})` : "";
-  if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
+  if (a.kind === "org") return `Owned by you; reachable by anyone at your org.${note}`;
   if (a.kind === "members") {
     if (a.memberCount === undefined)
       return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;

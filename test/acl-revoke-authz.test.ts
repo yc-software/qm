@@ -16,10 +16,11 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const grant = (over: Partial<Grant> = {}): Grant => ({
   ownerScopeId: owner,
   ref: "F1",

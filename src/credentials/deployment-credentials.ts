@@ -13,6 +13,7 @@ import {
   type ServiceCredentialStore,
 } from "./keychain.ts";
 import type { ScopeId } from "../types.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 export interface DeploymentBrokerCredential {
   slug: string;
@@ -139,23 +140,22 @@ function reservedSlugError(slug: string): Error {
 
 export function withDeploymentCredentials(
   store: ServiceCredentialStore,
-  orgScopeId: ScopeId,
   credentials: readonly DeploymentBrokerCredential[],
 ): ServiceCredentialStore {
   if (!credentials.length) return store;
   const bySlug = new Map(credentials.map((c) => [c.slug, c]));
-  const reserved = (scope: ScopeId, slug: string) => scope === orgScopeId && bySlug.has(slug);
+  const reserved = (scope: ScopeId, slug: string) => scope === tenantRootScope() && bySlug.has(slug);
   const guard = (scope: ScopeId, slug: string) => {
     if (reserved(scope, slug)) throw reservedSlugError(slug);
   };
   return {
     async getServiceCredentialSecret(scope, slug) {
-      const own = scope === orgScopeId ? bySlug.get(slug) : undefined;
+      const own = scope === tenantRootScope() ? bySlug.get(slug) : undefined;
       return own ? decrypted(own) : store.getServiceCredentialSecret(scope, slug);
     },
     async listServiceCredentials(scope) {
       const stored = await store.listServiceCredentials(scope);
-      if (scope !== orgScopeId) return stored;
+      if (scope !== tenantRootScope()) return stored;
       return [...credentials.map(projected), ...stored.filter((c) => !bySlug.has(c.slug))];
     },
     async setServiceCredential(scope, input) {

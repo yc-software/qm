@@ -31,6 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -71,7 +72,7 @@ test("listAllMetadata returns person-facing metadata only", async () => {
   const k = kc();
   const meta = await k.save(GH);
   await k.setConnectorToken("github.com", "U1", { accessToken: "gho_managed" });
-  await k.setServiceCredential(scopeId("org", "default-org"), {
+  await k.setServiceCredential(TEST_ROOT_SCOPE, {
     slug: "serp",
     name: "SERP",
     secret: "s3",
@@ -110,7 +111,7 @@ test("listing and per-owner reads use the store's projected select and never a f
     asks: testMap(),
     key: KEY,
   });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await k.save({ ...GH, ownerId: "Alice@X.com" });
   await k.save(GH);
   await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
@@ -294,7 +295,7 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
   const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
   const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
-  const ORG = scopeId("org", "default-org");
+  const ORG = TEST_ROOT_SCOPE;
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
   await grants.put("g-broker", {

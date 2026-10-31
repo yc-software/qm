@@ -27,7 +27,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 
@@ -112,7 +111,7 @@ function fakeProcessSandbox() {
 }
 
 function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
@@ -127,7 +126,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
@@ -144,8 +143,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
 
 async function memoryScope(): Promise<string> {
   const resolution = createResolutionService(
-    ORG,
-    testConfigStore(ORG),
+    testConfigStore(),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));

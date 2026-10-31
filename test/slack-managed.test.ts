@@ -24,8 +24,7 @@ const event = {
 async function fixture(t: test.TestContext, appId = "A123") {
   const map = testMap();
   const store = createSlackInstallationStore(
-    "company",
-    map as Parameters<typeof createSlackInstallationStore>[1],
+    map as Parameters<typeof createSlackInstallationStore>[0],
     "test-encryption-key",
   );
   const bridge = createManagedSlack({
@@ -150,7 +149,7 @@ test("failed delivery withholds acknowledgment", async (t) => {
 });
 
 test("installation launch restricts redirect origin and hides service credentials", async () => {
-  const store = createSlackInstallationStore("company", testMap(), "test-key");
+  const store = createSlackInstallationStore(testMap(), "test-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -231,8 +230,7 @@ test("explicit app pin still rejects another app at installation", async (t) => 
 
 test("managed Slack refuses a service credential that a bearer header cannot carry", () => {
   const store = createSlackInstallationStore(
-    "company",
-    testMap() as Parameters<typeof createSlackInstallationStore>[1],
+    testMap() as Parameters<typeof createSlackInstallationStore>[0],
     "test-encryption-key",
   );
   for (const token of ["", "company-token\n", " company-token"]) {

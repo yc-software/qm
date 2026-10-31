@@ -12,6 +12,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "control-service-test";
 
@@ -1049,7 +1050,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
+  await built.config.setWebuiModels(TEST_ROOT_SCOPE, ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
@@ -1071,7 +1072,7 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
     assert.equal(result.run.request.fastMode, false);
-    await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
+    await built.config.setWebuiModels(TEST_ROOT_SCOPE, ["gpt-6-astra"]);
     return result;
   });
   await assert.rejects(

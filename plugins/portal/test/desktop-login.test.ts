@@ -16,7 +16,6 @@ const now = Math.floor(Date.now() / 1000);
 const browser: SessionClaims = {
   k: "session",
   sub: "person@example.test",
-  org: "desktop-test",
   auth: now - 60,
   iat: now - 30,
   exp: now + 3600,
@@ -51,7 +50,6 @@ Object.assign(process.env, {
   PORTAL_PUBLIC_URL: origin,
   PORTAL_SESSION_SECRET: secret,
   CORE_SIGNING_SECRET: "desktop-core-secret",
-  CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
   WEB_UI_UPSTREAM: coreUrl,
   ADMIN_UPSTREAM: coreUrl,
@@ -148,7 +146,7 @@ test("wrong proof cannot consume a code and one of concurrent valid redemptions 
   const success = results.find((r) => r.status === 200)!;
   const sessionCookie = success.headers.getSetCookie().find((c) => c.startsWith("portal_session="))!;
   const token = sessionCookie.split(";")[0]!.slice("portal_session=".length);
-  const session = openSession(token, deriveKey(secret, "portal.session.v1"), Date.now(), browser.org);
+  const session = openSession(token, deriveKey(secret, "portal.session.v1"), Date.now());
   assert.equal(session?.sub, browser.sub);
   assert.equal(session?.auth, browser.auth);
   assert.equal(session?.exp, browser.exp);
@@ -167,16 +165,15 @@ test("claim store outages fail closed without issuing a session", async () => {
   }
 });
 
-test("codes are bounded by signature, audience, organization, state, and browser lifetime", () => {
+test("codes are bounded by signature, audience, state, and browser lifetime", () => {
   const code = mintDesktopLogin(browser, secret, origin, challenge, state);
-  const verify = (value = code, target = origin, org = browser.org, when = Date.now(), expectedState = state) =>
-    openDesktopLogin(value, verifier, expectedState, secret, target, org, 86400, when);
+  const verify = (value = code, target = origin, when = Date.now(), expectedState = state) =>
+    openDesktopLogin(value, verifier, expectedState, secret, target, 86400, when);
   assert.ok(verify());
   assert.equal(verify(`${code}x`), null);
   assert.equal(verify(code, "https://other.test"), null);
-  assert.equal(verify(code, origin, "other-org"), null);
-  assert.equal(verify(code, origin, browser.org, Date.now() + 121_000), null);
-  assert.equal(verify(code, origin, browser.org, Date.now(), randomBytes(32).toString("base64url")), null);
+  assert.equal(verify(code, origin, Date.now() + 121_000), null);
+  assert.equal(verify(code, origin, Date.now(), randomBytes(32).toString("base64url")), null);
   const old = mintDesktopLogin({ ...browser, auth: now - 86401 }, secret, origin, challenge, state);
   assert.equal(verify(old), null);
 });
@@ -189,16 +186,7 @@ test("desktop handoff renews a browser session near expiry without resetting its
   assert.equal(page.status, 200);
   assert.ok(page.headers.getSetCookie().some((value) => value.startsWith("portal_session=")));
   const code = await issue(oldCookie);
-  const effective = openDesktopLogin(
-    code,
-    verifier,
-    state,
-    secret,
-    origin,
-    browser.org,
-    2_592_000,
-    (testNow + 31) * 1000,
-  );
+  const effective = openDesktopLogin(code, verifier, state, secret, origin, 2_592_000, (testNow + 31) * 1000);
   assert.equal(effective?.session.auth, oldBrowser.auth);
   assert.ok(effective && effective.session.exp >= testNow + 604_800);
 });

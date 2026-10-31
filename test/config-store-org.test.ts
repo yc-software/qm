@@ -1,21 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedDeploymentIdentity } from "../src/resolution/config-store.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-
-test("a durable database is pinned to one organization", async () => {
-  const deploymentIdentity = testMap<PersistedDeploymentIdentity>();
-  await testConfigStore("default-org", { deploymentIdentity }).hydrate!();
-  await assert.rejects(
-    testConfigStore("other", { deploymentIdentity }).hydrate!(),
-    /database belongs to org default-org/,
-  );
-});
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
   const baseModels = testMap<import("../src/resolution/config-store.ts").PersistedBaseModel>();
-  const store = testConfigStore("default-org", { baseModels });
-  const org = "org:default-org";
+  const store = testConfigStore({ baseModels });
+  const org = TEST_ROOT_SCOPE;
   const cron = { modelId: "gpt-5.5", fastMode: false };
   const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
   assert.equal(store.getPurposeRuntime("cron"), undefined);
@@ -23,7 +14,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getBaseModel(org), null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = testConfigStore("default-org", { baseModels });
+  const reader = testConfigStore({ baseModels });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);

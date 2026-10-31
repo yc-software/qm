@@ -9,8 +9,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "x-admin-actor": "admin-alice" };
 
 function start(overrides: Partial<ServerDeps> = {}) {
   const config = testConfig();
@@ -22,7 +23,7 @@ function start(overrides: Partial<ServerDeps> = {}) {
   return { built, deps, base, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-const scopePath = "/v1/admin/scopes/org%3Adefault-org";
+const scopePath = `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`;
 
 async function warm(base: string) {
   await (await fetch(base + scopePath + "?view=customize", { headers: ADMIN })).arrayBuffer();
@@ -31,7 +32,7 @@ async function warm(base: string) {
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
+  await srv.built.config.setBranding(TEST_ROOT_SCOPE, { selfLabel: "Test assistant", accent: "#445566" });
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
@@ -135,7 +136,7 @@ test("each settings projection retains authorization before reading configuratio
     "onboarding",
   ]) {
     const response = await fetch(srv.base + scopePath + "?view=" + view, {
-      headers: { "x-admin-actor": "nobody@default-org" },
+      headers: { "x-admin-actor": "nobody" },
     });
     assert.equal(response.status, 403);
   }
@@ -154,7 +155,7 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openai: true,
     openrouter: true,
   }));
-  await srv.built.config.setRuntimeSelection("org:default-org", {
+  await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
     modelId: "settings/previously-saved-model",
   });
   await warm(srv.base);
@@ -187,7 +188,7 @@ test("a configured base model the cold catalog cannot resolve stays listed witho
     openrouter: true,
   }));
   for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
-    await srv.built.config.setBaseModel("org:default-org", modelId);
+    await srv.built.config.setBaseModel(TEST_ROOT_SCOPE, modelId);
     const response = await fetch(srv.base + scopePath + "?view=models", { headers: ADMIN });
     assert.equal(response.status, 200);
     const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };

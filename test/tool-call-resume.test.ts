@@ -30,8 +30,8 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:resume", audience: [actor] };
 const personal = scopeId("personal", "U1");
@@ -60,7 +60,7 @@ function turnFor(
     history,
     tools,
     scopeLabel: personal,
-    orgScopeId: scopeId("org", ORG),
+    orgScopeId: TEST_ROOT_SCOPE,
     emit: async (entry) => {
       sink.push({ type: entry.type, payload: entry.payload });
       return { ...entry, sessionId: "s1", seq: seq++, parentSeq: null, createdAt: 1000 + seq } as SessionEntry;
@@ -256,7 +256,7 @@ function buildScenario() {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions,
     runs,
     workspace,

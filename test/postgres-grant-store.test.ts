@@ -7,7 +7,7 @@ import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant, boundUrl, testTenantsSeeded } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, TEST_ROOT_SCOPE, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -27,7 +27,7 @@ before(async () => {
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
   type: "internal",

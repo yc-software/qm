@@ -11,6 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -32,7 +33,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE = { "x-admin-actor": "admin-alice" };
 const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
@@ -48,14 +49,14 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
-    const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
+    const sess = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}`);
     assert.ok(sess.sessions.length >= 1, "at least one conversation");
     const conv = sess.sessions[0];
     assert.ok(conv.turns >= 1 && conv.messages >= 2, "turn + message counts populated");
     assert.equal(conv.firstMessage, "hello there", "the listing previews the conversation's opening line");
     assert.equal(conv.lastMessage, "hello there", "the listing previews the latest user message");
 
-    const tx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}?scope=org:default-org`);
+    const tx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(tx.status, 200);
     const txd = await tx.json();
     const transcript = txd as { entries: { type: string }[] };
@@ -67,7 +68,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
 
     await s.built.files.put({
       id: "todo-art-1",
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       name: "todo.txt",
       path: "notes/todo.txt",
@@ -75,7 +76,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
       data: Buffer.from("buy milk"),
       direction: "out",
     });
-    const files = await getJson(s.base, "/v1/admin/files?scope=org:default-org");
+    const files = await getJson(s.base, `/v1/admin/files?scope=${TEST_ROOT_SCOPE}`);
     const f = files.files.find((x: { name: string }) => x.name === "todo.txt");
     assert.ok(f, "the saved document is enumerated");
     assert.ok(f.openable, "it has downloadable content");
@@ -94,7 +95,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
 
     await s.built.files.put({
       id: "html-art-1",
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       name: "page.html",
       path: "notes/page.html",
@@ -114,7 +115,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
 
     await s.built.files.put({
       id: "pic-art-1",
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       name: "pic.png",
       path: "notes/pic.png",
@@ -134,7 +135,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
 
     await s.built.files.put({
       id: "svg-art-1",
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       name: "sneaky.svg",
       path: "notes/sneaky.svg",
@@ -147,7 +148,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const runs = await getJson(s.base, "/v1/admin/runs?scope=org:default-org");
+    const runs = await getJson(s.base, `/v1/admin/runs?scope=${TEST_ROOT_SCOPE}`);
     assert.ok(runs.runs.length >= 1, "the run is listed");
     assert.equal(runs.runs[0].sessionType, "dm");
 
@@ -179,9 +180,9 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
 
-    const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
+    const sess = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}`);
     const conv = sess.sessions[0];
-    const r = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=org:default-org`);
+    const r = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(r.status, 200);
     const d = (await r.json()) as {
       requests: {
@@ -204,7 +205,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     );
     const tr = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=${meta.turnSeq}&scope=org:default-org`,
+      `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=${meta.turnSeq}&scope=${TEST_ROOT_SCOPE}`,
     );
     assert.equal(tr.status, 200);
     const td = (await tr.json()) as {
@@ -226,7 +227,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
     );
     assert.ok(typeof req.promptEnvelope.system === "string", "and the system prompt we sent");
     assert.equal(
-      (await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=nope&scope=org:default-org`))
+      (await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=nope&scope=${TEST_ROOT_SCOPE}`))
         .status,
       400,
       "non-integer turnSeq rejected",
@@ -234,8 +235,8 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
 
     assert.equal(
       (
-        await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=org:default-org`, {
-          "x-admin-actor": "nobody@default-org",
+        await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=${TEST_ROOT_SCOPE}`, {
+          "x-admin-actor": "nobody",
         })
       ).status,
       403,
@@ -249,7 +250,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       400,
       "scope required",
     );
-    assert.equal((await get(s.base, "/v1/admin/sessions/does-not-exist/llm?scope=org:default-org")).status, 404);
+    assert.equal((await get(s.base, `/v1/admin/sessions/does-not-exist/llm?scope=${TEST_ROOT_SCOPE}`)).status, 404);
   } finally {
     await s.close();
   }
@@ -324,7 +325,10 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     const recipient = await s.built.sessions.getByThread("dm:D-erica");
     assert.ok(recipient);
 
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
+    const orgRead = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${TEST_ROOT_SCOPE}`,
+    );
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
     assert.equal(
@@ -360,7 +364,10 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
     assert.equal(scopedBody.deliveryEvents[0].llmRequests, undefined);
 
-    const sourceRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=org:default-org`);
+    const sourceRead = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=${TEST_ROOT_SCOPE}`,
+    );
     assert.equal(sourceRead.status, 200);
     const sourceBody = (await sourceRead.json()) as any;
     assert.equal(sourceBody.deliveryEvents.length, 1, "source transcript renders the outbound Slack delivery");
@@ -440,7 +447,10 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     const recipient = await s.built.sessions.getByThread("dm:D-webhook-erica");
     assert.ok(recipient);
 
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
+    const orgRead = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${TEST_ROOT_SCOPE}`,
+    );
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
     assert.equal(orgBody.deliveryEvents.length, 1);
@@ -489,7 +499,7 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     assert.ok(mismatchRecipient);
     const mismatchRead = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(mismatchRecipient!.id)}?scope=org:default-org`,
+      `/v1/admin/sessions/${encodeURIComponent(mismatchRecipient!.id)}?scope=${TEST_ROOT_SCOPE}`,
     );
     assert.equal(mismatchRead.status, 200);
     const mismatchBody = (await mismatchRead.json()) as any;
@@ -523,7 +533,7 @@ test("a live conversation post's provenance joins its source session but renders
     await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-live-erica");
     const recipient = await s.built.sessions.getByThread("dm:D-live-erica");
     assert.ok(recipient);
-    const read = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
+    const read = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(read.status, 200);
     const body = (await read.json()) as any;
     assert.equal(body.deliveryEvents.length, 1);
@@ -608,7 +618,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
       false,
     );
 
-    const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=org:default-org`);
+    const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(orgTx.status, 200);
     const orgBody = (await orgTx.json()) as any;
     assert.equal(orgBody.entries.length, 0, "delivery is not a transcript entry");
@@ -705,7 +715,10 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
     const recipient = await s.built.sessions.getByThread("dm:D-alice");
     assert.ok(recipient);
 
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
+    const orgRead = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${TEST_ROOT_SCOPE}`,
+    );
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
     assert.equal(orgBody.deliveryEvents.length, 1);
@@ -715,7 +728,10 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
     assert.equal(orgBody.deliveryEvents[0].sourceSession.id, source.id);
     assert.equal(orgBody.deliveryEvents[0].llmRequests.length, 1);
 
-    const sourceRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=org:default-org`);
+    const sourceRead = await get(
+      s.base,
+      `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=${TEST_ROOT_SCOPE}`,
+    );
     assert.equal(sourceRead.status, 200);
     const sourceBody = (await sourceRead.json()) as any;
     assert.equal(sourceBody.deliveryEvents.length, 1);
@@ -763,7 +779,7 @@ test("conversation listing pages by keyset cursor; counts come from the backgrou
       assert.equal((await s.built.app.turn(dm)).status, "ok");
     }
 
-    const path = "/v1/admin/sessions?scope=org:default-org&limit=2";
+    const path = `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}&limit=2`;
     const p1 = await getJson(s.base, path);
     assert.equal(p1.sessions.length, 2, "limit bounds the returned slice");
     assert.equal(p1.total, undefined, "the listing computes no live totals");
@@ -776,7 +792,7 @@ test("conversation listing pages by keyset cursor; counts come from the backgrou
     assert.equal(p3.nextCursor, undefined, "a short page ends the walk");
     const ids = new Set([...p1.sessions, ...p2.sessions, ...p3.sessions].map((x: { id: string }) => x.id));
     assert.equal(ids.size, 5, "the three pages cover every session exactly once");
-    const exact = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=5");
+    const exact = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}&limit=5`);
     assert.equal(exact.sessions.length, 5);
     assert.equal(exact.nextCursor, undefined, "a page that exactly fills the limit offers no empty next page");
 
@@ -1059,7 +1075,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
 
 test("the files listing filters by name server-side with q", async () => {
   const s = start();
-  const scope = "org:default-org";
+  const scope = TEST_ROOT_SCOPE;
   const doc = (id: string, name: string) => ({
     id,
     ownerScopeId: scope,
@@ -1137,14 +1153,14 @@ test("a saved document is read and downloaded by artifact id", async () => {
 test("admin observability enforces scope grants (authz is the boundary)", async () => {
   const s = start();
   try {
-    const UMA = { "x-admin-actor": "user-uma@default-org" };
-    assert.equal((await get(s.base, "/v1/admin/sessions?scope=org:default-org", UMA)).status, 403);
+    const UMA = { "x-admin-actor": "user-uma" };
+    assert.equal((await get(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}`, UMA)).status, 403);
     assert.equal(
-      (await get(s.base, "/v1/admin/runs?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
+      (await get(s.base, `/v1/admin/runs?scope=${TEST_ROOT_SCOPE}`, { "x-admin-actor": "nobody" })).status,
       403,
     );
     assert.equal((await get(s.base, "/v1/admin/files")).status, 400);
-    assert.equal((await get(s.base, "/v1/admin/sessions/does-not-exist?scope=org:default-org")).status, 404);
+    assert.equal((await get(s.base, `/v1/admin/sessions/does-not-exist?scope=${TEST_ROOT_SCOPE}`)).status, 404);
   } finally {
     await s.close();
   }
@@ -1164,7 +1180,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
     server.listen(0);
     try {
       const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-      return (await getJson(base, "/v1/admin/scopes/org:default-org")).egressEnforcement;
+      return (await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).egressEnforcement;
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -1223,7 +1239,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
       body: JSON.stringify({ modelId }),
     });
   try {
-    const initial = await getJson(base, "/v1/admin/scopes/org:default-org");
+    const initial = await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`);
     assert.equal(initial.baseModel, null, "no override by default");
     assert.ok(initial.baseModelDefault, "the effective default is reported");
     assert.ok(
@@ -1232,12 +1248,12 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     );
 
     assert.equal(
-      (await putModel("org:default-org", "claude-opus-4-8", { "x-admin-actor": "nobody@default-org" })).status,
+      (await putModel(TEST_ROOT_SCOPE, "claude-opus-4-8", { "x-admin-actor": "nobody" })).status,
       403,
       "admin-gated",
     );
     assert.equal(
-      (await putModel("org:default-org", "claude-future-99", ALICE)).status,
+      (await putModel(TEST_ROOT_SCOPE, "claude-future-99", ALICE)).status,
       400,
       "an id pi-ai doesn't know is rejected",
     );
@@ -1247,30 +1263,30 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
       "a channel scope can pin its own model",
     );
     assert.equal(built.config.getBaseModel("channel:C1"), "claude-opus-4-8", "the channel override is stored");
-    assert.equal(built.config.getBaseModel("org:default-org"), null, "the channel pin does not touch the org default");
+    assert.equal(built.config.getBaseModel(TEST_ROOT_SCOPE), null, "the channel pin does not touch the org default");
 
-    assert.equal((await putModel("org:default-org", "claude-opus-4-8", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, "claude-opus-4-8");
+    assert.equal((await putModel(TEST_ROOT_SCOPE, "claude-opus-4-8", ALICE)).status, 200);
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).baseModel, "claude-opus-4-8");
     assert.equal(
-      built.config.getBaseModel("org:default-org"),
+      built.config.getBaseModel(TEST_ROOT_SCOPE),
       "claude-opus-4-8",
       "the store the agent reads sees the change",
     );
 
-    const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/base-model", {
+    const nonString = await fetch(base + `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/base-model`, {
       method: "PUT",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId: 123 }),
     });
     assert.equal(nonString.status, 400, "a non-string modelId is rejected, not treated as a clear");
     assert.equal(
-      built.config.getBaseModel("org:default-org"),
+      built.config.getBaseModel(TEST_ROOT_SCOPE),
       "claude-opus-4-8",
       "the override is untouched by a malformed body",
     );
 
-    assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty modelId clears the override");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, null);
+    assert.equal((await putModel(TEST_ROOT_SCOPE, "", ALICE)).status, 200, "empty modelId clears the override");
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).baseModel, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -1292,35 +1308,35 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
       body: JSON.stringify({ steps }),
     });
   try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null, "no limit by default");
-
     assert.equal(
-      (await putSteps("org:default-org", 80, { "x-admin-actor": "nobody@default-org" })).status,
-      403,
-      "admin-gated",
+      (await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseMaxSteps,
+      null,
+      "no limit by default",
     );
-    assert.equal((await putSteps("channel:C1", 80, ALICE)).status, 400, "org-wide only — a channel scope is rejected");
-    assert.equal((await putSteps("org:default-org", 0, ALICE)).status, 400, "zero is rejected");
-    assert.equal((await putSteps("org:default-org", 2.5, ALICE)).status, 400, "a non-integer is rejected");
-    assert.equal((await putSteps("org:default-org", 501, ALICE)).status, 400, "values past the cap are rejected");
 
-    assert.equal((await putSteps("org:default-org", 120, ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, 120);
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, 80, { "x-admin-actor": "nobody" })).status, 403, "admin-gated");
+    assert.equal((await putSteps("channel:C1", 80, ALICE)).status, 400, "org-wide only — a channel scope is rejected");
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, 0, ALICE)).status, 400, "zero is rejected");
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, 2.5, ALICE)).status, 400, "a non-integer is rejected");
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, 501, ALICE)).status, 400, "values past the cap are rejected");
+
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, 120, ALICE)).status, 200);
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseMaxSteps, 120);
     assert.equal(
-      built.config.getBrowseMaxSteps("org:default-org"),
+      built.config.getBrowseMaxSteps(TEST_ROOT_SCOPE),
       120,
       "the store the orchestrator reads sees the change",
     );
 
     assert.equal(
-      (await putSteps("org:default-org", "90", ALICE)).status,
+      (await putSteps(TEST_ROOT_SCOPE, "90", ALICE)).status,
       200,
       "a numeric string is accepted (the UI sends input.value)",
     );
-    assert.equal(built.config.getBrowseMaxSteps("org:default-org"), 90);
+    assert.equal(built.config.getBrowseMaxSteps(TEST_ROOT_SCOPE), 90);
 
-    assert.equal((await putSteps("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseMaxSteps, null);
+    assert.equal((await putSteps(TEST_ROOT_SCOPE, "", ALICE)).status, 200, "empty clears to the default");
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseMaxSteps, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -1344,13 +1360,15 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putModel = (modelId: unknown) =>
-    fetch(base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/browse-model`, {
       method: "PUT",
       headers: { ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions as Array<{ id: string }>;
+    const opts = (await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseModelOptions as Array<{
+      id: string;
+    }>;
     assert.ok(opts.length > 0, "the picker is not empty just because the deployment has no Anthropic key");
     assert.ok(
       opts.every((m) => m.id.startsWith("gpt-")),
@@ -1363,7 +1381,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
       "an Anthropic pick is refused when no Anthropic key is configured",
     );
     assert.equal((await putModel("gpt-5.6-luna")).status, 200);
-    assert.equal(built.config.getBrowseModel("org:default-org"), "gpt-5.6-luna");
+    assert.equal(built.config.getBrowseModel(TEST_ROOT_SCOPE), "gpt-5.6-luna");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -1385,10 +1403,14 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
       body: JSON.stringify({ modelId }),
     });
   try {
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null, "no override by default");
+    assert.equal(
+      (await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseModel,
+      null,
+      "no override by default",
+    );
 
     assert.equal(
-      (await putModel("org:default-org", "claude-sonnet-4-6", { "x-admin-actor": "nobody@default-org" })).status,
+      (await putModel(TEST_ROOT_SCOPE, "claude-sonnet-4-6", { "x-admin-actor": "nobody" })).status,
       403,
       "admin-gated",
     );
@@ -1398,29 +1420,29 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
       "org-wide only — a channel scope is rejected",
     );
     assert.equal(
-      (await putModel("org:default-org", "not-a-model", ALICE)).status,
+      (await putModel(TEST_ROOT_SCOPE, "not-a-model", ALICE)).status,
       400,
       "an unknown model id is rejected",
     );
     assert.equal(
-      (await putModel("org:default-org", "gpt-5.6-luna", ALICE)).status,
+      (await putModel(TEST_ROOT_SCOPE, "gpt-5.6-luna", ALICE)).status,
       200,
       "a non-Anthropic model is accepted — the browse runner follows the model's provider",
     );
     assert.equal(
-      (await putModel("org:default-org", 42, ALICE)).status,
+      (await putModel(TEST_ROOT_SCOPE, 42, ALICE)).status,
       400,
       "a non-string is rejected, not treated as a clear",
     );
 
-    assert.equal((await putModel("org:default-org", "claude-sonnet-4-6", ALICE)).status, 200);
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, "claude-sonnet-4-6");
+    assert.equal((await putModel(TEST_ROOT_SCOPE, "claude-sonnet-4-6", ALICE)).status, 200);
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseModel, "claude-sonnet-4-6");
     assert.equal(
-      built.config.getBrowseModel("org:default-org"),
+      built.config.getBrowseModel(TEST_ROOT_SCOPE),
       "claude-sonnet-4-6",
       "the store the orchestrator reads sees the change",
     );
-    const opts = (await getJson(base, "/v1/admin/scopes/org:default-org")).browseModelOptions;
+    const opts = (await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseModelOptions;
     assert.ok(
       Array.isArray(opts) && opts.some((m: { id: string }) => m.id === "claude-opus-4-8"),
       "the scope read carries the browse model picker options",
@@ -1430,8 +1452,8 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
       "the browse picker spans providers, not Anthropic alone",
     );
 
-    assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty clears to the default");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).browseModel, null);
+    assert.equal((await putModel(TEST_ROOT_SCOPE, "", ALICE)).status, 200, "empty clears to the default");
+    assert.equal((await getJson(base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`)).browseModel, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
@@ -1463,12 +1485,12 @@ test("the sessions listing digests cron fires from the fire table, even after th
       reply: "42 signups today",
     });
 
-    const listed = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
+    const listed = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}&category=background`);
     const row = listed.sessions.find((x: any) => x.id === session.id);
     assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
 
     await s.built.app.deleteCron(cron.id);
-    const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
+    const relisted = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}&category=background`);
     const survivor = relisted.sessions.find((x: any) => x.id === session.id);
     assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");
   } finally {
@@ -1478,7 +1500,7 @@ test("the sessions listing digests cron fires from the fire table, even after th
 
 test("admin governance: Auto flagger model and rubric round-trip and reset", async () => {
   const s = start();
-  const url = s.base + "/v1/admin/scopes/org%3Adefault-org/auto-flagger";
+  const url = s.base + `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/auto-flagger`;
   const put = (body: unknown) =>
     fetch(url, {
       method: "PUT",
@@ -1486,7 +1508,7 @@ test("admin governance: Auto flagger model and rubric round-trip and reset", asy
       body: JSON.stringify(body),
     });
   try {
-    const initial = await getJson(s.base, "/v1/admin/scopes/org:default-org");
+    const initial = await getJson(s.base, `/v1/admin/scopes/${TEST_ROOT_SCOPE}`);
     assert.equal(initial.autoFlagger, null);
     assert.match(initial.autoFlaggerDefault.rubric, /redirect an agent/);
 
@@ -1542,7 +1564,7 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const post = (body: unknown, scope = "org%3Adefault-org") =>
+  const post = (body: unknown, scope = `${encodeURIComponent(TEST_ROOT_SCOPE)}`) =>
     fetch(`${base}/v1/admin/scopes/${scope}/auto-flagger/test`, {
       method: "POST",
       headers: { ...ALICE, "content-type": "application/json" },
@@ -1607,7 +1629,11 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
     );
     assert.equal((await post({}, "channel%3AC1")).status, 400, "the flagger is org-wide");
     assert.equal(
-      (await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/auto-flagger/test`, { method: "POST" })).status,
+      (
+        await fetch(`${base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/auto-flagger/test`, {
+          method: "POST",
+        })
+      ).status,
       403,
       "a non-admin cannot spend model calls here",
     );

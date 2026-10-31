@@ -7,6 +7,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const turns: AgentTurnInput[] = [];
 let piOptions: Parameters<typeof agentRun.createAgent>[0];
@@ -140,7 +141,7 @@ test("personal web selections reject wrong providers, policy exclusions and disc
       model,
     });
   for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
-  await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
+  await built.config.setWebuiModels(TEST_ROOT_SCOPE, ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
   assert.equal((await submit("gpt-5.6-sol")).status, "refused");

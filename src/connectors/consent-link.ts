@@ -4,7 +4,6 @@ import type { AccountType } from "./oauth.ts";
 
 export interface ConsentLinkRecord {
   principalId: string;
-  orgId?: string;
   provider: string;
   accountType: AccountType;
   redirectUri: string;

@@ -12,7 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 afterEach(() => setCustomProviders([]));
 
@@ -52,10 +52,9 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
 
     assert.equal(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
 
-    const runtime = await fetch(
-      `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
-      { headers: ADMIN },
-    );
+    const runtime = await fetch(`${base}/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice`, {
+      headers: ADMIN,
+    });
     assert.equal(runtime.status, 200);
     const body = (await runtime.json()) as {
       effective: { modelId: string };

@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { filterConnectorSkills } from "../src/core/orchestrator.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function skill(name: string): SkillResolution {
   return {
     skill: {
       id: name,
-      scopeId: scopeId("org", "acme"),
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name, description: name, requiredCapabilities: [], body: name },
       signature: "sig",
       status: "published",

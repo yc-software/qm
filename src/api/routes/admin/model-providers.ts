@@ -3,7 +3,8 @@ import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
+import { tenantRootScope } from "../../../tenants/context.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -32,7 +33,7 @@ function validationUrl(provider: ModelProvider): string {
 }
 
 async function actor(ctx: ApiCtx) {
-  const scope = orgScope(ctx.deps);
+  const scope = tenantRootScope();
   return authorizeAdmin(ctx, scope);
 }
 
@@ -57,7 +58,7 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "model-providers.read",
     resource: "model-providers",
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   const cached =
     ctx.url.searchParams.get("catalog") === "cached" ? cachedModelCatalog(ctx.deps.modelCredentialFetch) : undefined;
@@ -91,7 +92,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "model-providers.update",
     resource: provider,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   const status = (await ctx.deps.modelCredentials.statuses()).find((item) => item.provider === provider);
   return sendJson(ctx.res, 200, { ok: true, status });
@@ -108,7 +109,7 @@ export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "model-providers.delete",
     resource: provider,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   return sendJson(ctx.res, 200, { ok: true });
 }

@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -192,7 +193,7 @@ test("direct share paths notify only after successful grants; org, self and revo
   const f = await fixture(t);
   await f.share(null);
   await f.share("read", person(owner));
-  await f.share("read", scopeId("org", "acme"));
+  await f.share("read", TEST_ROOT_SCOPE);
   const control = createControlService(f.app);
   const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
   const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };

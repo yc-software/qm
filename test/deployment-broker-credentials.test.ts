@@ -25,10 +25,11 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
-const ORG = "org:default-org";
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+const ORG = TEST_ROOT_SCOPE;
 const KEY = "deployment-supplied-key";
 
 const entry = {
@@ -158,7 +159,7 @@ function memoryStore(): ServiceCredentialStore & { writes: string[] } {
 
 test("deployment credentials win lookups in their org and reserve their slugs against stored writes", async () => {
   const stored = memoryStore();
-  const store = withDeploymentCredentials(stored, ORG, deploymentCreds());
+  const store = withDeploymentCredentials(stored, deploymentCreds());
 
   const listed = await store.listServiceCredentials(ORG);
   assert.deepEqual(
@@ -328,7 +329,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
 
 test("a deployment credential cannot back a decision provider", async () => {
   const saved: unknown[] = [];
-  const serviceCreds = withDeploymentCredentials(memoryStore(), ORG, deploymentCreds());
+  const serviceCreds = withDeploymentCredentials(memoryStore(), deploymentCreds());
   const ctx = (body: unknown) =>
     ({
       body,

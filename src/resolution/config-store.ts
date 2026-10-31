@@ -1,5 +1,6 @@
 import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -93,9 +94,6 @@ export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
 
-export interface PersistedDeploymentIdentity {
-  orgId: string;
-}
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
@@ -203,7 +201,6 @@ export interface ConfigStoreMaps {
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
-  deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
 
 const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
@@ -229,7 +226,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   browseMaxSteps: "browse_max_steps_configs",
   browseModels: "browse_model_configs",
   autoFlaggerConfigs: "auto_flagger_configs",
-  deploymentIdentity: "deployment_identity",
 };
 
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
@@ -238,7 +234,6 @@ export const configStoreMaps = (map: (table: string) => DurableMap<never>): Requ
   ) as unknown as Required<ConfigStoreMaps>;
 
 export function createConfigStore(
-  orgId: string,
   opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
@@ -253,7 +248,6 @@ export function createConfigStore(
   const soulHistoryStore = opts.soulHistory;
   const baseModelStore = opts.baseModels;
   const slackEmojiCatalogStore = opts.slackEmojiCatalog;
-  const deploymentIdentity = opts.deploymentIdentity;
   const writeQueue = createKeyedQueue();
   const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
     writeQueue(key, async () => {
@@ -266,13 +260,12 @@ export function createConfigStore(
     name: M,
     read: (row: Row<M>) => T,
     toRow: (id: ScopeId, value: T) => Row<M>,
-    orgOnly = false,
   ) => {
     const store = opts[name] as DurableMap<Row<M>>;
     const cache = new Map<ScopeId, T>();
     const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
     const refresh = async (id: ScopeId) => {
-      if (!orgOnly || id === org) load(id, await store.get(id));
+      load(id, await store.get(id));
     };
     return {
       store,
@@ -292,17 +285,15 @@ export function createConfigStore(
         );
       },
       async hydrate() {
-        if (orgOnly) await refresh(org);
-        else for (const row of await store.all()) load((row as { scopeId: ScopeId }).scopeId, row);
+        for (const row of await store.all()) load((row as { scopeId: ScopeId }).scopeId, row);
       },
     };
   };
-  const field = <M extends SettingKey, K extends Exclude<keyof Row<M>, "scopeId">>(name: M, key: K, orgOnly = false) =>
+  const field = <M extends SettingKey, K extends Exclude<keyof Row<M>, "scopeId">>(name: M, key: K) =>
     setting(
       name,
       (row) => row[key],
       (id, value: Row<M>[K]) => ({ scopeId: id, [key]: value }) as Row<M>,
-      orgOnly,
     );
   const settings = {
     commandPolicies: field("commandPolicies", "policy"),
@@ -313,9 +304,9 @@ export function createConfigStore(
     unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
-    orgAmbient: field("orgAmbient", "on", true),
-    interactiveFastMode: field("interactiveFastMode", "on", true),
-    individualModelAuth: field("individualModelAuth", "on", true),
+    orgAmbient: field("orgAmbient", "on"),
+    interactiveFastMode: field("interactiveFastMode", "on"),
+    individualModelAuth: field("individualModelAuth", "on"),
     webuiModels: field("webuiModels", "ids"),
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
@@ -325,7 +316,6 @@ export function createConfigStore(
       "autoFlaggerConfigs",
       ({ modelId, rubric }): AutoFlaggerConfig => ({ modelId, rubric }),
       (id, config) => ({ scopeId: id, ...config }),
-      true,
     ),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
@@ -353,9 +343,8 @@ export function createConfigStore(
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
-  const org = scopeId("org", orgId);
   const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
-    id === org
+    id === tenantRootScope()
       ? {
           ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
@@ -399,15 +388,15 @@ export function createConfigStore(
     else baseModels.delete(id);
   };
   const setPurposeRuntime = async (purpose: RuntimePurpose, selection?: RuntimeSelection) => {
-    await writeQueue(`model:${org}`, async () => {
+    await writeQueue(`model:${tenantRootScope()}`, async () => {
       const key = `${purpose}Runtime` as const;
-      const saved = await updateBaseModelRow(org, (current) => {
-        const row: PersistedBaseModel = { ...current, scopeId: org };
+      const saved = await updateBaseModelRow(tenantRootScope(), (current) => {
+        const row: PersistedBaseModel = { ...current, scopeId: tenantRootScope() };
         if (selection) row[key] = { ...selection };
         else delete row[key];
         return row;
       });
-      cacheBaseModel(org, saved);
+      cacheBaseModel(tenantRootScope(), saved);
     });
   };
   const defaultSecurityPosture = opts.defaultSecurityPosture ?? "auto";
@@ -424,12 +413,11 @@ export function createConfigStore(
       "You are a helpful internal assistant for this organization. Be concise, accurate, and respect data boundaries: never reveal information to people who are not party to the current conversation.",
     version: 1,
   };
-  souls.set(org, defaultOrgSoul);
+  const soulOf = (id: ScopeId) => souls.get(id) ?? (id === tenantRootScope() ? defaultOrgSoul : undefined);
 
   let hydrated: Promise<void> | null = null;
   const loadSoulCache = (id: ScopeId, soul: PersistedSoul | null): void => {
     if (soul) souls.set(id, { content: soul.content, version: soul.version });
-    else if (id === org) souls.set(org, defaultOrgSoul);
     else souls.delete(id);
     if (soul?.history) soulHistory.set(id, soul.history);
     else soulHistory.delete(id);
@@ -469,7 +457,7 @@ export function createConfigStore(
           writeQueue(`soul:${id}`, async () => {
             const soul = await soulStore.get(id);
             if (soul) souls.set(id, { content: soul.content, version: soul.version });
-            else if (id !== org) souls.delete(id);
+            else souls.delete(id);
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
@@ -479,8 +467,6 @@ export function createConfigStore(
     hydrate() {
       if (!hydrated) {
         hydrated = (async () => {
-          const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId });
-          if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
           for (const r of await soulStore.all()) {
             souls.set(r.scopeId, { content: r.content, version: r.version });
             if (r.history?.length) soulHistory.set(r.scopeId, r.history);
@@ -501,7 +487,7 @@ export function createConfigStore(
       }
       return hydrated;
     },
-    getSoul: (id) => souls.get(id)?.content ?? null,
+    getSoul: (id) => soulOf(id)?.content ?? null,
     setSoul(id, content, updatedBy) {
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
@@ -521,7 +507,7 @@ export function createConfigStore(
         };
         let saved = await soulStore.update(id, append);
         if (!saved) {
-          const baseVersion = souls.get(id)?.version ?? 0;
+          const baseVersion = soulOf(id)?.version ?? 0;
           const revision: PersistedSoulRevision = {
             scopeId: id,
             content,
@@ -556,7 +542,7 @@ export function createConfigStore(
         const durable = await soulStore.get(id);
         let saved: PersistedSoul;
         if (!durable) {
-          if ((souls.get(id)?.version ?? 0) !== expectedVersion) return null;
+          if ((soulOf(id)?.version ?? 0) !== expectedVersion) return null;
           const canonical = await soulStore.putIfAbsent(id, candidate);
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
@@ -582,7 +568,7 @@ export function createConfigStore(
         return saved.version;
       });
     },
-    soulVersion: (id) => souls.get(id)?.version ?? 0,
+    soulVersion: (id) => soulOf(id)?.version ?? 0,
     soulHistory: (id) => (soulHistory.get(id) ?? []).slice(0, 25),
     captureSoulSnapshot(id) {
       return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
@@ -590,73 +576,81 @@ export function createConfigStore(
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
-    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
+    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === tenantRootScope() ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
     async getSecurityPostureDurable(id) {
-      const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
-      if (id === org) return orgPosture;
+      const orgPosture = (await settings.securityPostures.durable(tenantRootScope())) ?? defaultSecurityPosture;
+      if (id === tenantRootScope()) return orgPosture;
       return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
     },
     async setSecurityPosture(id, posture) {
       const effective =
-        id === org
+        id === tenantRootScope()
           ? posture
-          : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
+          : composeSecurityPosture(
+              (await settings.securityPostures.durable(tenantRootScope())) ?? defaultSecurityPosture,
+              posture,
+            );
       await settings.securityPostures.set(id, effective);
     },
     async getSharingPostureDurable(id) {
-      const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
+      const orgPosture = (await settings.sharingPostures.durable(tenantRootScope())) ?? defaultSharingPosture;
+      return id === tenantRootScope()
+        ? orgPosture
+        : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
     },
     getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
       const [orgPosture, personalPosture, targetPosture] = await Promise.all(
-        [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
+        [tenantRootScope(), personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
       );
       return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
-        personalId === org ? undefined : personalPosture,
-        targetId === org || targetId === personalId ? undefined : targetPosture,
+        personalId === tenantRootScope() ? undefined : personalPosture,
+        targetId === tenantRootScope() || targetId === personalId ? undefined : targetPosture,
       ]);
     },
     setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
     clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
     async getApprovalGrantModesDurable(id) {
-      const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
+      const orgModes = (await settings.approvalGrantModes.durable(tenantRootScope())) ?? DEFAULT_APPROVAL_GRANT_MODES;
+      if (id === tenantRootScope()) return { ...orgModes };
       return composeApprovalGrantModes(orgModes, await settings.approvalGrantModes.durable(id));
     },
     setApprovalGrantModes: (id, modes) =>
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org ? orgDefaultEgress : null),
+    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === tenantRootScope() ? orgDefaultEgress : null),
     setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
     getUnfulfilledInsights: (id) =>
-      (settings.unfulfilledInsights.get(org) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
+      (settings.unfulfilledInsights.get(tenantRootScope()) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
     setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
     getExternalSlackParticipants: (id) =>
-      (settings.externalSlackParticipants.get(org) ?? false) || (settings.externalSlackParticipants.get(id) ?? false),
+      (settings.externalSlackParticipants.get(tenantRootScope()) ?? false) ||
+      (settings.externalSlackParticipants.get(id) ?? false),
     setExternalSlackParticipants: (id, on) => settings.externalSlackParticipants.set(id, on),
     getExternalSlackParticipantsDurable: async (id) =>
-      ((await settings.externalSlackParticipants.durable(org)) ?? false) ||
+      ((await settings.externalSlackParticipants.durable(tenantRootScope())) ?? false) ||
       ((await settings.externalSlackParticipants.durable(id)) ?? false),
-    getChannelHeaderPin: (id) => settings.channelHeaderPin.get(id) ?? settings.channelHeaderPin.get(org) ?? false,
+    getChannelHeaderPin: (id) =>
+      settings.channelHeaderPin.get(id) ?? settings.channelHeaderPin.get(tenantRootScope()) ?? false,
     async setChannelHeaderPin(id, on) {
       await settings.channelHeaderPin.set(id, on);
       noteChannelHeaderPinChanged(id);
     },
     getChannelHeaderPinDurable: async (id) =>
       (await settings.channelHeaderPin.durable(id)) ??
-      (id === org ? false : ((await settings.channelHeaderPin.durable(org)) ?? false)),
+      (id === tenantRootScope() ? false : ((await settings.channelHeaderPin.durable(tenantRootScope())) ?? false)),
     getChannelHeaderPinOverrideDurable: async (id) => (await settings.channelHeaderPin.durable(id)) ?? null,
-    getChannelHeaderPinDefaultDurable: async () => (await settings.channelHeaderPin.durable(org)) ?? false,
+    getChannelHeaderPinDefaultDurable: async () =>
+      (await settings.channelHeaderPin.durable(tenantRootScope())) ?? false,
     onChannelHeaderPinChanged(listener) {
       channelHeaderPinListeners.add(listener);
     },
     getPurposeRuntime: (purpose) => {
-      const selection = baseModels.get(org)?.[`${purpose}Runtime`];
+      const selection = baseModels.get(tenantRootScope())?.[`${purpose}Runtime`];
       return selection ? { ...selection } : undefined;
     },
     getPurposeRuntimeDurable: async (purpose) => {
-      const selection = (await baseModelStore.get(org))?.[`${purpose}Runtime`];
+      const selection = (await baseModelStore.get(tenantRootScope()))?.[`${purpose}Runtime`];
       return selection ? { ...selection } : undefined;
     },
     setPurposeRuntime,
@@ -679,9 +673,10 @@ export function createConfigStore(
           cacheBaseModel(id, await updateBaseModelRow(id, (row) => withoutRuntime(id, row)));
           return;
         }
-        const orgRevision = id === org ? 0 : ((await baseModelStore.get(org))?.revision ?? 0);
+        const orgRevision =
+          id === tenantRootScope() ? 0 : ((await baseModelStore.get(tenantRootScope()))?.revision ?? 0);
         const saved = await updateBaseModelRow(id, (row) => {
-          if (id !== org) return { scopeId: id, ...selection, orgRevision };
+          if (id !== tenantRootScope()) return { scopeId: id, ...selection, orgRevision };
           const revision = (row?.revision ?? 0) + 1;
           return { scopeId: id, ...purposeFields(id, row), ...selection, revision, orgRevision: revision };
         });
@@ -690,9 +685,9 @@ export function createConfigStore(
       noteRuntimeSelectionChanged(id);
     },
     async acknowledgeRuntimeSelection(id) {
-      if (id === org) return;
+      if (id === tenantRootScope()) return;
       await writeQueue(`model:${id}`, async () => {
-        const orgRevision = (await baseModelStore.get(org))?.revision ?? 0;
+        const orgRevision = (await baseModelStore.get(tenantRootScope()))?.revision ?? 0;
         const saved = await baseModelStore.merge(id, { orgRevision });
         if (saved) baseModels.set(id, saved);
       });
@@ -701,16 +696,16 @@ export function createConfigStore(
       runtimeSelectionListeners.add(listener);
     },
     getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
-    getOrgAmbient: () => settings.orgAmbient.get(org) ?? true,
-    setOrgAmbient: (on) => settings.orgAmbient.set(org, on),
-    getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(org)) ?? true,
-    getInteractiveFastMode: () => settings.interactiveFastMode.get(org) ?? false,
-    setInteractiveFastMode: (on) => settings.interactiveFastMode.set(org, on),
-    getInteractiveFastModeDurable: async () => (await settings.interactiveFastMode.durable(org)) ?? false,
-    getIndividualModelAuth: () => settings.individualModelAuth.get(org) ?? false,
-    setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
+    getOrgAmbient: () => settings.orgAmbient.get(tenantRootScope()) ?? true,
+    setOrgAmbient: (on) => settings.orgAmbient.set(tenantRootScope(), on),
+    getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(tenantRootScope())) ?? true,
+    getInteractiveFastMode: () => settings.interactiveFastMode.get(tenantRootScope()) ?? false,
+    setInteractiveFastMode: (on) => settings.interactiveFastMode.set(tenantRootScope(), on),
+    getInteractiveFastModeDurable: async () => (await settings.interactiveFastMode.durable(tenantRootScope())) ?? false,
+    getIndividualModelAuth: () => settings.individualModelAuth.get(tenantRootScope()) ?? false,
+    setIndividualModelAuth: (on) => settings.individualModelAuth.set(tenantRootScope(), on),
     async getIndividualModelAuthDurable(principalId) {
-      if (await settings.individualModelAuth.durable(org)) return true;
+      if (await settings.individualModelAuth.durable(tenantRootScope())) return true;
       return principalId
         ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
         : false;
@@ -718,7 +713,7 @@ export function createConfigStore(
     async getModelAccountDurable(principalId) {
       const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
       if (row?.on) return row.provider ?? "personal";
-      return (await settings.individualModelAuth.durable(org)) ? "personal" : "company";
+      return (await settings.individualModelAuth.durable(tenantRootScope())) ? "personal" : "company";
     },
     async setPersonalModelAuth(principalId, on, provider) {
       const id = scopeId("personal", principalId);
@@ -727,11 +722,11 @@ export function createConfigStore(
     getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
     getBaseModelDurable: async (id) =>
       (await baseModelStore.get(id))?.modelId ??
-      (id === org ? null : ((await baseModelStore.get(org))?.modelId ?? null)),
+      (id === tenantRootScope() ? null : ((await baseModelStore.get(tenantRootScope()))?.modelId ?? null)),
     getWebuiModels: (id) => settings.webuiModels.get(id) ?? null,
     setWebuiModels: (id, ids) => settings.webuiModels.set(id, ids?.length ? ids : null),
     getWebuiModelsDurable: async (id) =>
-      (await settings.webuiModels.durable(id)) ?? (await settings.webuiModels.durable(org)) ?? null,
+      (await settings.webuiModels.durable(id)) ?? (await settings.webuiModels.durable(tenantRootScope())) ?? null,
     getAckEmoji: (id) => settings.ackEmoji.get(id) ?? null,
     setAckEmoji: (id, names) => settings.ackEmoji.set(id, names?.length ? names : null),
     getAckEmojiDurable: async (id) => (await settings.ackEmoji.durable(id)) ?? null,
@@ -748,20 +743,20 @@ export function createConfigStore(
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
     getBrowseModel: (id) => settings.browseModels.get(id) ?? null,
     setBrowseModel: (id, modelId) => settings.browseModels.set(id, modelId),
-    getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
+    getEmbeddingModelDurable: async () => (await baseModelStore.get(tenantRootScope()))?.embeddingModelId ?? null,
     setEmbeddingModel: async (modelId) => {
-      await writeQueue(`model:${org}`, async () => {
-        const saved = await updateBaseModelRow(org, (current) => {
-          const row: PersistedBaseModel = { ...current, scopeId: org };
+      await writeQueue(`model:${tenantRootScope()}`, async () => {
+        const saved = await updateBaseModelRow(tenantRootScope(), (current) => {
+          const row: PersistedBaseModel = { ...current, scopeId: tenantRootScope() };
           if (modelId) row.embeddingModelId = modelId;
           else delete row.embeddingModelId;
           return row;
         });
-        cacheBaseModel(org, saved);
+        cacheBaseModel(tenantRootScope(), saved);
       });
     },
-    getAutoFlaggerConfig: () => settings.autoFlaggerConfigs.get(org) ?? null,
-    setAutoFlaggerConfig: (config) => settings.autoFlaggerConfigs.set(org, config),
+    getAutoFlaggerConfig: () => settings.autoFlaggerConfigs.get(tenantRootScope()) ?? null,
+    setAutoFlaggerConfig: (config) => settings.autoFlaggerConfigs.set(tenantRootScope(), config),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,

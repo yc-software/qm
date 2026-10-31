@@ -1,14 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const org = scopeId("org", "acme");
+const org = TEST_ROOT_SCOPE;
 const channel = "channel:C123" as ScopeId;
 const other = "channel:C456" as ScopeId;
 
 async function freshStore() {
-  const store = testConfigStore("acme", {});
+  const store = testConfigStore({});
   await store.hydrate!();
   return store;
 }

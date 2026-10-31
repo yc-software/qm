@@ -16,6 +16,7 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -112,7 +113,6 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   const c = fake.containers.get(h.id)!;
   assert.equal(c.labels["qm.sandbox"], "1");
   assert.equal(c.labels["qm.scope"], scope);
-  assert.equal(c.labels["qm.org"], "default-org");
   assert.equal(c.labels["agent_env"], "dev");
   assert.equal(c.volume, localVolumeName(scope));
 
@@ -235,7 +235,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const fake = installFakeDocker(daemonPort);
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
-  const shared = scopeId("org", "default-org");
+  const shared = TEST_ROOT_SCOPE;
   await workspace.write(shared, "guide.md", "shared doc");
   const sb = createLocalSandbox(workspace, { dockerExec: fake.dockerExec, homeDir: guestHome, repoRoot: tmp });
   const h = await sb.provision([

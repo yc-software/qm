@@ -65,7 +65,7 @@ test("combined admin preserves authorization and request-local identity", async 
   const privileged = calls.slice(before).filter((entry) => entry.path === "/v1/admin/scopes");
   assert.equal(privileged.length, 2);
   for (const call of privileged) {
-    assert.equal(call.actor, `${call.principal}@acme`);
+    assert.equal(call.actor, call.principal);
     assert.equal(call.path, "/v1/admin/scopes");
   }
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import type { McpClient } from "../src/mcp/mcp-client.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -36,15 +37,18 @@ test("MCP provider passes query, actor, and explicit writes through configured t
     },
   });
   assert.equal(
-    recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 })),
+    recallText(await memory.recall(TEST_ROOT_SCOPE, { query: "launch", actorId: "u1", maxChars: 2000 })),
     "result",
   );
-  assert.equal(await memory.capture("org:acme", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
+  assert.equal(await memory.capture(TEST_ROOT_SCOPE, ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
   assert.deepEqual(calls, [
-    { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:acme", max_chars: 2000 } },
+    {
+      tool: "search_knowledge",
+      args: { query: "launch", acting_user: "u1", namespace: TEST_ROOT_SCOPE, max_chars: 2000 },
+    },
     {
       tool: "write_knowledge",
-      args: { content: "decision", captured_at: 10, source: "explicit", acting_user: "u1", namespace: "org:acme" },
+      args: { content: "decision", captured_at: 10, source: "explicit", acting_user: "u1", namespace: TEST_ROOT_SCOPE },
     },
   ]);
 });
@@ -54,7 +58,7 @@ test("MCP recall is locally bounded and times out", async () => {
   const bounded = createMcpMemoryProvider({
     read: { client: client(calls, "abcdefgh"), tool: "read", timeoutMs: 100 },
   });
-  assert.equal(recallText(await bounded.recall("org:acme", { maxChars: 4 })), "abcd");
+  assert.equal(recallText(await bounded.recall(TEST_ROOT_SCOPE, { maxChars: 4 })), "abcd");
 
   const hanging: McpClient = {
     async listTools() {
@@ -65,5 +69,5 @@ test("MCP recall is locally bounded and times out", async () => {
     },
   };
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
-  await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
+  await assert.rejects(timed.recall(TEST_ROOT_SCOPE), /timed out after 10ms/);
 });

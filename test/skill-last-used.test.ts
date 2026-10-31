@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 test("recordUse sets lastUsedAt without touching version/updatedAt or the signature", async () => {

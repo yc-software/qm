@@ -8,8 +8,9 @@ import { scopeId, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
 
 function aclWith(grantees: string[]) {

@@ -26,7 +26,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> => ({
   surface: "test",
@@ -105,7 +104,7 @@ function buildOrchestrator(
   agent = createMockAgent(),
   surfaceCache?: SurfaceCache,
 ) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
@@ -121,7 +120,7 @@ function buildOrchestrator(
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

@@ -1,11 +1,10 @@
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
-import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -47,6 +46,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { tenantRootScope } from "../../tenants/context.ts";
 
 export interface AutoFlaggerDraft {
   modelId: string;
@@ -534,7 +534,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           };
         const current =
           runtime ??
-          (await resolveRuntimeChoice(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
+          (await resolveRuntimeChoice(ctx.deps.config!, tenantRootScope(), scope, {
             modelId: defaultModel(ctx.deps.baseModelDefault),
           }));
         await ctx.deps.config!.setRuntimeSelection(scope, {

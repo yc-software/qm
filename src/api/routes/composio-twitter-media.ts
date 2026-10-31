@@ -88,7 +88,7 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     )
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(String(owned.account.user_id)))
+    if (!(await composioUserIds(ctx.deps, access.principal)).includes(String(owned.account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx.deps, {
       principalId: access.principal,
