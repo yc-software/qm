@@ -121,4 +121,7 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
   assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
   assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
   assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+  for (const expression of ["0 8 * * 5#L", "0 8 * * 5#l", "0 8 * * fri#l"]) {
+    assert.match(renderStandingObligations([cron(expression)], [], []), /last Friday/);
+  }
 });
