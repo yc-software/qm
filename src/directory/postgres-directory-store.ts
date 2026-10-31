@@ -276,6 +276,31 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     });
   }
 
+  async function readGroupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>> {
+    const rosters = new Map<string, DirectoryMember[]>();
+    if (!groupIds.length) return rosters;
+    const rows = await q(
+      `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
+              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
+       FROM directory_groups group_row
+       JOIN directory_group_members roster
+         ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
+       LEFT JOIN directory_members member
+         ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
+       WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
+       ORDER BY group_row.group_id, roster.principal_id`,
+      [orgId, [...groupIds]],
+    );
+    const incomplete = new Set<string>();
+    for (const row of rows) {
+      const groupId = row.group_id as string;
+      if (!row.principal_id) incomplete.add(groupId);
+      else rosters.set(groupId, [...(rosters.get(groupId) ?? []), memberRow(row)]);
+    }
+    for (const groupId of incomplete) rosters.delete(groupId);
+    return rosters;
+  }
+
   return {
     async replace(members, syncedAt) {
       const byId = new Map<string, DirectoryMember>();
@@ -603,61 +628,25 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async conversationMembers(kind, id) {
-      const rows =
-        kind === "channel"
-          ? await q(
-              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
-               FROM directory_channels channel
-               LEFT JOIN directory_channel_members roster
-                 ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE channel.org_id = $1 AND channel.channel_id = $2
-               ORDER BY roster.principal_id`,
-              [orgId, id],
-            )
-          : await q(
-              `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
-               FROM directory_groups group_row
-               LEFT JOIN directory_group_members roster
-                 ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE group_row.org_id = $1 AND group_row.group_id = $2
-               ORDER BY roster.principal_id`,
-              [orgId, id],
-            );
+      if (kind === "group") return (await readGroupRosters([id])).get(id);
+      const rows = await q(
+        `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
+                member.principal_id, member.display_name, member.type, member.slack_id
+         FROM directory_channels channel
+         LEFT JOIN directory_channel_members roster
+           ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
+         LEFT JOIN directory_members member
+           ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
+         WHERE channel.org_id = $1 AND channel.channel_id = $2
+         ORDER BY roster.principal_id`,
+        [orgId, id],
+      );
       if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
       return rows.map(memberRow);
     },
 
-    async groupRosters(groupIds) {
-      const rosters = new Map<string, DirectoryMember[]>();
-      if (!groupIds.length) return rosters;
-      const rows = await q(
-        `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
-                member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
-         FROM directory_groups group_row
-         JOIN directory_group_members roster
-           ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
-         LEFT JOIN directory_members member
-           ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-         WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
-         ORDER BY group_row.group_id, roster.principal_id`,
-        [orgId, [...groupIds]],
-      );
-      const incomplete = new Set<string>();
-      for (const row of rows) {
-        const groupId = row.group_id as string;
-        if (!row.principal_id) incomplete.add(groupId);
-        else rosters.set(groupId, [...(rosters.get(groupId) ?? []), memberRow(row)]);
-      }
-      for (const groupId of incomplete) rosters.delete(groupId);
-      return rosters;
-    },
+    groupRosters: readGroupRosters,
 
     async listChannelsFor(principalId) {
       const rows = await q(
