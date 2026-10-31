@@ -40,6 +40,23 @@ function endPool() {
   return ended;
 }
 
+function runnerAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+async function dropAbandonedRuns() {
+  const { rows } = await admin.query("SELECT datname FROM pg_database WHERE datname ~ '^qmt_[0-9]+_'");
+  for (const { datname } of rows) {
+    if (runnerAlive(Number(datname.split("_")[1]))) continue;
+    await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
+  }
+}
+
 function killGroup(child) {
   if (!child.pid) return;
   try {
@@ -126,6 +143,7 @@ function migrateTemplate() {
 }
 
 const started = Date.now();
+await dropAbandonedRuns();
 await admin.query(`CREATE DATABASE ${templateName}`);
 await migrateTemplate().catch(async (error) => {
   try {
