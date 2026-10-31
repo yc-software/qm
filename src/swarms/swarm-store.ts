@@ -1,3 +1,4 @@
+import { turnFenceHeld } from "../turns/turn-fence.ts";
 import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
@@ -111,7 +112,7 @@ function decode(swarm: SwarmStorage): Swarm {
 
 export function createSwarmStore(
   backing: DurableMap<SwarmStorage>,
-  authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
+  authority?: { runs: Pick<RunStore, "get" | "leaseHeld">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
   async function fencedWrite(
     id: string,
@@ -126,11 +127,12 @@ export function createSwarmStore(
         await client.query("SET LOCAL lock_timeout = '10s'");
         await client.query("SET LOCAL statement_timeout = '15s'");
         const result = await client.query<Run>(
-          `SELECT status, attempts, lease_token AS "leaseToken", lease_expires_at::double precision AS "leaseExpiresAt", session_id AS "sessionId", request::jsonb AS request FROM runs WHERE id=$1 FOR UPDATE`,
+          `SELECT status, attempts, lease_token AS "leaseToken", session_id AS "sessionId", request::jsonb AS request FROM runs WHERE id=$1 FOR UPDATE`,
           [fence.runId],
         );
         const run = result.rows[0] ?? null;
-        assertSwarmRun(fence, run);
+        const held = run !== null && (await turnFenceHeld(client, fence.runId, fence.leaseToken));
+        assertSwarmRun(fence, run, held);
         const session = await client.query(
           "SELECT id FROM sessions WHERE id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
           [fence.sessionId, fence.scopeId, fence.threadRef],
@@ -147,7 +149,7 @@ export function createSwarmStore(
           "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json",
           [id, jsonbStringify(next)],
         );
-        assertSwarmRun(fence, run);
+        assertSwarmRun(fence, run, held);
         return next;
       });
     }
@@ -155,13 +157,14 @@ export function createSwarmStore(
     if (!session || session.scopeId !== fence.scopeId || session.threadRef !== fence.threadRef)
       throw new Error("capability session mismatch");
     const run = await authority.runs.get(fence.runId);
-    assertSwarmRun(fence, run);
+    const held = run !== null && (await authority.runs.leaseHeld(run, fence.leaseToken));
+    assertSwarmRun(fence, run, held);
     const updated = await backing.update(id, (current) => {
-      assertSwarmRun(fence, run);
+      assertSwarmRun(fence, run, held);
       return mutate(current);
     });
     if (updated) return updated;
-    assertSwarmRun(fence, run);
+    assertSwarmRun(fence, run, held);
     return backing.putIfAbsent(id, mutate(null));
   }
   return {

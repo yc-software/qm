@@ -1,3 +1,4 @@
+import { turnFenceHeld } from "../turns/turn-fence.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { likeContains } from "../persistence/like.ts";
@@ -417,6 +418,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [lease.sessionId, lease.token, t + leaseTtlMs, t],
       );
       if (!held.rowCount) throw new Error(invalidMsg);
+      if (lease.fenceToken && !(await turnFenceHeld(client, lease.turnId ?? "", lease.fenceToken)))
+        throw new Error(`${invalidMsg}: the turn no longer holds its claim`);
       return fn(client);
     });
 

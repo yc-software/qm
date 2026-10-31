@@ -17,6 +17,7 @@ import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
+import { isUnstarted } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -488,7 +489,7 @@ export async function stopSessionTree(
     if (session.scopeId !== root.scopeId) continue;
     for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
       await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      if (run.status === "queued" || run.status === "pending") await deps.runs.withdraw(run.id);
       stopped = true;
     }
   }
@@ -1204,7 +1205,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     const existing = await deps.runs.getByDedupKey(dedupKey);
     const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
     if (!unread) {
-      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+      if (existing && isUnstarted(existing)) await deps.runs.withdraw(existing.id, { unstartedOnly: true });
       return true;
     }
     if (existing && (existing.status === "done" || existing.status === "failed")) return true;

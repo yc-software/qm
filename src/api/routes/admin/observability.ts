@@ -58,7 +58,7 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
   const byThread = new Map(
     ((await deps.sessions?.sessionsByThreadRefs(rawRuns.map((r) => r.sessionId))) ?? []).map((s) => [s.threadRef, s]),
   );
-  const ACTIVE = new Set(["pending", "running"]);
+  const ACTIVE = new Set(["queued", "pending", "running"]);
   const runs = rawRuns
     .map((r) => {
       const s = byThread.get(r.sessionId);
@@ -71,7 +71,7 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
         attempts: r.attempts,
         maxAttempts: r.maxAttempts,
         workerId: r.workerId,
-        leaseExpiresAt: r.leaseExpiresAt,
+        leaseExpiresAt: null,
         createdAt: r.createdAt,
         startedAt: r.startedAt,
         finishedAt: r.finishedAt,

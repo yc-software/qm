@@ -388,6 +388,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     scopeId: ScopeId;
     automated: boolean;
     runId?: string;
+    fenceToken?: string;
     surface?: string;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
@@ -400,7 +401,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
     const waitedMs = attempt.waitedMs ?? 0;
     if (attempt.lease)
-      return { lease: args.runId ? { ...attempt.lease, turnId: args.runId } : attempt.lease, waitedMs };
+      return {
+        lease: args.runId
+          ? { ...attempt.lease, turnId: args.runId, ...(args.fenceToken ? { fenceToken: args.fenceToken } : {}) }
+          : attempt.lease,
+        waitedMs,
+      };
     if (attempt.heldUntil === undefined) {
       deps.errors?.record({
         category: "sessions",
@@ -991,6 +997,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.runLeaseToken ? { fenceToken: input.runLeaseToken } : {}),
           ...(input.surface ? { surface: input.surface } : {}),
         });
         if (!acquired.lease) return acquired.refusal;
@@ -1950,6 +1957,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.runLeaseToken ? { fenceToken: input.runLeaseToken } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
       });
       if (!acquired.lease) return acquired.refusal;

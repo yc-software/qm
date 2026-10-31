@@ -20,3 +20,22 @@ export const settle = async (check: () => Promise<boolean>): Promise<void> => {
   }
   if (lastError !== undefined) console.error("[settle] condition never held; last error:", lastError);
 };
+export async function eventually<T>(
+  read: () => T | Promise<T>,
+  opts: { until?: (value: T) => unknown; timeoutMs?: number; label?: string } = {},
+): Promise<T> {
+  const { until = Boolean, timeoutMs = 15_000, label = "condition" } = opts;
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  for (;;) {
+    try {
+      const value = await read();
+      if (until(value)) return value;
+      lastError = undefined;
+    } catch (err) {
+      lastError = err;
+    }
+    if (Date.now() >= deadline) throw new Error(`${label} did not hold within ${timeoutMs}ms`, { cause: lastError });
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
