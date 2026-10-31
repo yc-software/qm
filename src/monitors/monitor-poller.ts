@@ -273,15 +273,22 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     if (enabled.length === 0) return;
 
     const handles = new Map<string, { tenantId: string; handle: SandboxHandle }>();
-    let fires = 0;
+    const fires = new Map<string, number>();
     try {
       for (const m of enabled) {
         if (stopped || observed !== epoch) break;
-        if (fires >= maxFiresPerTick) {
-          console.warn(`[monitor] fan-out capped: fired ${fires}/${enabled.length} watched jobs this tick`);
-          break;
+        const fired = fires.get(m.tenantId) ?? 0;
+        if (fired >= maxFiresPerTick) {
+          if (fired === maxFiresPerTick)
+            console.warn(`[monitor] fan-out capped: fired ${fired} watched jobs this tick`);
+          fires.set(m.tenantId, fired + 1);
+          continue;
         }
-        if (await inTenantOf(m.tenantId, () => pollOne(sandbox, handles, m, t))) fires++;
+        try {
+          if (await inTenantOf(m.tenantId, () => pollOne(sandbox, handles, m, t))) fires.set(m.tenantId, fired + 1);
+        } catch (e) {
+          console.error("%s", `[monitor] poll failed for ${m.id}:`, errMessage(e));
+        }
       }
     } finally {
       for (const { tenantId, handle } of handles.values()) {
