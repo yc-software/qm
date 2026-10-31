@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import pg from "pg";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDeployStore, createPostgresDeploymentRows, type Deployment } from "../src/deploy/deploy-store.ts";
@@ -90,6 +91,42 @@ test("deployment names are unique across every tenant", { skip }, async () => {
     });
   });
 });
+
+test(
+  "a raw duplicate name from the app login hits the unique index the owner migration created",
+  { skip },
+  async () => {
+    await withTypedTableDb(stores, async ({ url, tenant, admin }) => {
+      const { rows: owned } = await admin.query(
+        `SELECT pg_get_indexdef(to_regclass('deployments_name_key')) AS def,
+              (SELECT tableowner FROM pg_tables WHERE tablename = 'deployments') AS owner`,
+      );
+      assert.match(owned[0].def, /CREATE UNIQUE INDEX deployments_name_key ON .*deployments USING btree \(name\)/);
+      const app = new pg.Client({ connectionString: url });
+      await app.connect();
+      try {
+        const { rows } = await app.query(
+          `SELECT current_user AS login, pg_has_role(current_user, 'qm_app', 'MEMBER') AS member`,
+        );
+        assert.notEqual(rows[0].login, owned[0].owner);
+        assert.equal(rows[0].member, true);
+        await app.query("BEGIN");
+        await app.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
+        const insert = (id: string) =>
+          app.query(
+            `INSERT INTO deployments (id, owner_scope_id, created_by, current_version, status, versions, name)
+           VALUES ($1, 'personal:U1', 'U1', 1, 'running', '[]', 'held')`,
+            [id],
+          );
+        await insert("raw-a");
+        await assert.rejects(insert("raw-b"), { code: "23505", constraint: "deployments_name_key" });
+      } finally {
+        await app.query("ROLLBACK");
+        await app.end();
+      }
+    });
+  },
+);
 
 const older = (id: string): Deployment =>
   legacy(id, {
