@@ -339,18 +339,18 @@ test("an address outside the allowlist is never emailed and never redeemed", asy
   await requestLink(h, { email: "stranger@example.org" });
   assert.equal(h.mailer.sent.length, 0, "a disallowed address must not receive a link");
 
-  const permitted = await startHarness({ env: { AUTH_ALLOWED_EMAILS: "stranger@example.org" } });
+  const permitted = await startHarness({ emailAllowed: async (email) => email === "stranger@example.org" });
   t.after(() => permitted.close());
   await requestLink(permitted, { email: "stranger@example.org" });
   const link = linkFrom(permitted.mailer);
 
-  const narrowed = await startHarness({ env: { AUTH_ALLOWED_EMAILS: "admin@example.com" } });
+  const narrowed = await startHarness({ emailAllowed: async (email) => email === "admin@example.com" });
   t.after(() => narrowed.close());
   const refused = await openLink(narrowed, link);
   assert.notEqual(refused.status, 302, "a link minted for an address that is no longer allowed must not redeem");
 });
 
-test("an invited external address signs in through core's answer and an uninvited one does not", async (t) => {
+test("every address signs in only through core's answer", async (t) => {
   const invited = new Set(["guest@partner.test"]);
   const asked: string[] = [];
   const h = await startHarness({
@@ -362,12 +362,12 @@ test("an invited external address signs in through core's answer and an uninvite
   t.after(() => h.close());
 
   await requestLink(h, { email: "admin@example.com" });
-  assert.deepEqual(asked, [], "an address on the env allow-list never consults core");
+  assert.equal(h.mailer.sent.length, 0, "an address core does not admit gets no link");
 
   const { verifier } = await requestLink(h, { email: "guest@partner.test" });
-  assert.equal(h.mailer.sent.length, 2);
-  assert.equal(h.mailer.sent[1]!.to, "guest@partner.test");
-  assert.deepEqual(asked, ["guest@partner.test"]);
+  assert.equal(h.mailer.sent.length, 1);
+  assert.equal(h.mailer.sent[0]!.to, "guest@partner.test");
+  assert.deepEqual(asked, ["admin@example.com", "guest@partner.test"]);
   const code = new URL(await redeem(h)).searchParams.get("code")!;
   const tokens = await exchange(h, code, verifier);
   assert.equal(tokens.status, 200);
@@ -379,7 +379,7 @@ test("an invited external address signs in through core's answer and an uninvite
   assert.equal(claims.email, "guest@partner.test");
 
   await requestLink(h, { email: "stranger@partner.test" });
-  assert.equal(h.mailer.sent.length, 2, "an address core does not know must not receive a link");
+  assert.equal(h.mailer.sent.length, 1, "an address core does not know must not receive a link");
 
   await requestLink(h, { email: "guest@partner.test" });
   invited.clear();
@@ -403,15 +403,6 @@ test("the confirmation page is identical for permitted and unknown addresses", a
   assert.equal(await bodyFor("admin@example.com"), await bodyFor("nobody@elsewhere.test"));
 });
 
-test("an email domain allowlist admits the domain and nothing else", async (t) => {
-  const h = await startHarness({ env: { AUTH_ALLOWED_EMAILS: undefined, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } });
-  t.after(() => h.close());
-  await requestLink(h, { email: "anyone@example.com" });
-  assert.equal(h.mailer.sent.length, 1);
-  await requestLink(h, { email: "anyone@notexample.com" });
-  assert.equal(h.mailer.sent.length, 1, "a lookalike domain must not be admitted");
-});
-
 test("link sends are rate limited per mailbox and per client address", async (t) => {
   const h = await startHarness({ env: { AUTH_SEND_LIMIT_PER_EMAIL: "2", AUTH_SEND_LIMIT_PER_IP: "50" } });
   t.after(() => h.close());
@@ -422,7 +413,8 @@ test("link sends are rate limited per mailbox and per client address", async (t)
   assert.equal(h.mailer.sent.length, 3, "a fresh window lets sending resume");
 
   const perIp = await startHarness({
-    env: { AUTH_SEND_LIMIT_PER_IP: "1", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com", AUTH_ALLOWED_EMAILS: undefined },
+    env: { AUTH_SEND_LIMIT_PER_IP: "1" },
+    emailAllowed: async (email) => email.endsWith("@example.com"),
   });
   t.after(() => perIp.close());
   await requestLink(perIp, { email: "one@example.com" });
@@ -737,7 +729,7 @@ test("core source credentials cannot mint broker cookies", async (t) => {
 
 test("a remembered browser loses access when email eligibility is withdrawn", async (t) => {
   let allowed = true;
-  const h = await startHarness({ env: { AUTH_ALLOWED_EMAILS: "" }, emailAllowed: async () => allowed });
+  const h = await startHarness({ emailAllowed: async () => allowed });
   t.after(() => h.close());
   await requestLink(h);
   const verified = await openLink(h, linkFrom(h.mailer));
