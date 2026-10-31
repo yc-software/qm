@@ -207,6 +207,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
   });
   let errorsAfterStop: number;
   let built = buildApp(config);
+  await built.identity.ready();
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
   const issuedTokens = new Map<string, string>();
