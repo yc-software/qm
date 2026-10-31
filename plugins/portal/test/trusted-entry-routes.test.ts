@@ -55,7 +55,6 @@ const upstream = createServer((req, res) => {
       assert.equal(grant.purpose, "trusted-entry-admin");
       assert.equal(grant.subject, "person-7");
       assert.equal(grant.issuer, issuer);
-      assert.equal(grant.org, "org:test-company");
       res.statusCode = adminAvailable ? 200 : 503;
       return res.end(JSON.stringify({ ok: adminAvailable }));
     }

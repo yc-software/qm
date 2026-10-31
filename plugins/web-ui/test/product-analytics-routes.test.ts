@@ -25,6 +25,14 @@ const core = createServer(async (req, res) => {
     );
     return;
   }
+  if (req.url?.startsWith("/v1/session-cap")) {
+    res.end(JSON.stringify({ token: "session-cap" }));
+    return;
+  }
+  if (req.url?.startsWith("/v1/admin/whoami")) {
+    res.end(JSON.stringify({ isAdmin: false, permissions: [], tenant: "tenant-1" }));
+    return;
+  }
   res.end(JSON.stringify(req.url?.startsWith("/v1/turns") ? { runId: "accepted-run" } : {}));
 });
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
@@ -59,7 +67,7 @@ test("analytics config is authenticated, company-scoped and omitted during imper
   const response = await fetch(`${base}/me`, { headers: headers() });
   const body = await response.json();
   assert.deepEqual(body.analytics, { apiKey: "phc_test", host: "https://us.i.posthog.com" });
-  assert.equal(body.org, "acme");
+  assert.equal(body.org, "tenant-1");
   assert.equal(body.user, "alice@example.com");
   assert.equal((await (await fetch(`${base}/me`, { headers: headers("admin") })).json()).analytics, undefined);
   coreStatus = 503;
