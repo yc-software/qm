@@ -19,6 +19,9 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ALICE = "admin-alice";
 const NOBODY = "user-uma";
@@ -58,7 +61,7 @@ async function start(
       }),
     },
   );
-  await built.config.setBranding(scopeId("org", "default-org"), { selfLabel: "Acme Bot" });
+  await built.config.setBranding(TEST_ROOT_SCOPE, { selfLabel: "Acme Bot" });
   const deps = {
     admin: built.admin,
     sessions: built.sessions,

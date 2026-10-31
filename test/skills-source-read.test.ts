@@ -5,10 +5,13 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
-  await built.deploymentLayerReady;
+  await built.deploymentLayerReady();
   for (const actor of ["U1", "U2"]) {
     const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
     await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);

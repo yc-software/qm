@@ -25,13 +25,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-to
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj } from "./shared.ts";
-import {
-  UI_STATE_KEY_PATTERN,
-  UI_STATE_MAX_BYTES,
-  UI_STATE_MAX_FUTURE_SKEW_MS,
-  storeUiState,
-  uiStateId,
-} from "../../surfaces/ui-state.ts";
+import { UI_STATE_KEY_PATTERN, UI_STATE_MAX_BYTES, UI_STATE_MAX_FUTURE_SKEW_MS } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
@@ -637,7 +631,7 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
   if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
   if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
-  const rec = await deps.uiState.get(uiStateId(principalId, key));
+  const rec = await deps.uiState.get(principalId, key);
   return sendJson(res, 200, rec ?? { value: null, updatedAt: 0 });
 }
 
@@ -653,8 +647,8 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 413, { error: "payload_too_large", message: "ui state too large" });
   if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
-  const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
-  const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
+  const updatedAt = Math.max(0, Math.trunc(Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS)));
+  const result = await deps.uiState.putNewer(principalId, key, { value: b.value, updatedAt });
   return sendJson(res, 200, result);
 }
 
@@ -894,12 +888,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const resolved = (await app.listVisibleSkills(principalId)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archivedChecks = await Promise.all(
-    (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
-  );
-  const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
+  const archived = (await app.listSkills({ archivedFor: principalId })).map((skill) => ({ skill, shadowed: [] }));
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),

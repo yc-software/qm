@@ -14,6 +14,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function loadViewerCacheHelpers(): {
   callCacheUsage: (q: unknown) => { cacheRead: number; cacheWrite: number; uncachedInput: number } | null;

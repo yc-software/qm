@@ -15,8 +15,6 @@ import { createServer } from "../src/api/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -31,6 +29,7 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testLinkTables } from "./support/typed-stores.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -98,8 +97,8 @@ describe("SecretDropStore", () => {
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: testIdempotencyStore(),
+    identity: testIdentityService(),
     run,
   });
 
@@ -153,8 +152,8 @@ describe("fireDropResolution", () => {
     const deliveries = createDeliveryStore();
     const deps = {
       deliveries,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;

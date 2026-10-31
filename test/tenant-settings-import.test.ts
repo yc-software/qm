@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { testFeatureFlagStore } from "./support/typed-stores.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
@@ -16,7 +16,7 @@ async function deps() {
   return {
     settings: await testSettingsStore(),
     modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: KEY }),
-    featureFlags: createFeatureFlagStore(testMap<FeatureFlagRecord>()),
+    featureFlags: testFeatureFlagStore(),
     config: testConfigStore({ connectorSecretKey: KEY }),
     rootScope: root,
     actor: "import-test",

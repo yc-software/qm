@@ -5,14 +5,7 @@ import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
-import type {
-  CommandApprovalGrant,
-  Conversation,
-  Principal,
-  PendingApprovalRecord,
-  TurnRequest,
-  TurnResult,
-} from "../../types.ts";
+import type { Conversation, Principal, TurnRequest, TurnResult } from "../../types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
@@ -53,7 +46,8 @@ import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
-import type { DurableMap } from "../../persistence/durable-map.ts";
+import type { ApprovalStore } from "../../slack/approval-store.ts";
+import type { ApprovalGrantStore } from "../approval-grant-store.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
@@ -158,8 +152,8 @@ export interface OrchestratorDeps {
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
   skillsReady?: () => Promise<void>;
-  approvals: DurableMap<PendingApprovalRecord>;
-  approvalGrants: DurableMap<CommandApprovalGrant>;
+  approvals: ApprovalStore;
+  approvalGrants: ApprovalGrantStore;
   errors?: ErrorLog;
   signals?: RunSignalStore;
   turnStream?: TurnStream;

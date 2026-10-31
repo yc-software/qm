@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { featureRoutes } from "../src/api/routes/features.ts";
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { testFeatureFlagStore } from "./support/typed-stores.ts";
 import { testMap } from "./support/test-database.ts";
 import { scopeId } from "../src/types.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const flags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
+const flags = testFeatureFlagStore();
 await flags.setEnabled("web_ui", TEST_ROOT_SCOPE, true, "admin");
 await flags.setEnabled("voice", scopeId("personal", "alice"), true, "admin");
 

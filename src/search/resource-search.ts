@@ -1,4 +1,3 @@
-import type { SkillSummary } from "../skills/skill-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
 import type { ScopeId } from "../types.ts";
@@ -6,6 +5,7 @@ import type { Cron } from "../triggers/types.ts";
 import { TENANT } from "../tenants/migrations.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
+type IndexedResourceKind = Exclude<ResourceKind, "skills">;
 export interface ResourceCandidate {
   id: string;
   title: string;
@@ -25,8 +25,7 @@ export interface ResourceSearchHit {
   snippet: string;
 }
 export interface ResourceSearchStore {
-  skillMetadata(names: readonly string[]): Promise<{ skills: SkillSummary[]; homes: ScopeId[] }>;
-  search(kind: ResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
+  search(kind: IndexedResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
 const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
@@ -37,17 +36,12 @@ const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ow
 const TRIGGER_FIELDS = `owner_scope_id AS "ownerScopeId", created_by AS "createdBy", owner, destination`;
 
 const jsonSources = {
-  skills: {
-    table: "skills",
-    title: "coalesce(json->'manifest'->>'name', '')",
-    description: "coalesce(json->'manifest'->>'description', '')",
-  },
   deploys: {
     table: "deployments",
     title: "coalesce(json->>'displayName', json->>'name', '')",
     description: "coalesce(json->>'name', '')",
   },
-} satisfies Record<Exclude<ResourceKind, "crons" | "webhooks">, { table: string; title: string; description: string }>;
+} satisfies Record<Exclude<ResourceKind, "skills" | "crons" | "webhooks">, { table: string; title: string; description: string }>;
 
 export const CRON_SEARCH_TITLE = "coalesce(title, '')";
 export const CRON_SEARCH_DESCRIPTION = "coalesce(action, '') || ' ' || coalesce(message, '')";
@@ -55,7 +49,7 @@ export const WEBHOOK_SEARCH_TITLE = "coalesce(action, '')";
 export const WEBHOOK_SEARCH_DESCRIPTION = "coalesce(verification->>'scheme', '')";
 
 const sources: Record<
-  ResourceKind,
+  IndexedResourceKind,
   { table: string; title: string; description: string; fields?: string; where?: string }
 > = {
   ...jsonSources,
@@ -83,14 +77,11 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
       "SET LOCAL statement_timeout = '15s'",
       `CREATE TABLE IF NOT EXISTS ${source.table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS ${source.table}_resource_search_gin ON ${source.table} USING GIN (to_tsvector('simple', ${source.title} || ' ' || ${source.description}))`,
-      ...(kind === "skills"
-        ? ["CREATE INDEX IF NOT EXISTS skills_resource_name_idx ON skills ((json->'manifest'->>'name'))"]
-        : []),
     ],
   }));
   for (const migration of migrations) pg.registerMigration(migration);
-  const ready = new Map<ResourceKind, Promise<void>>();
-  const ensure = (kind: ResourceKind): Promise<void> => {
+  const ready = new Map<IndexedResourceKind, Promise<void>>();
+  const ensure = (kind: IndexedResourceKind): Promise<void> => {
     let pending = ready.get(kind);
     if (!pending) {
       const migration = migrations[Object.keys(jsonSources).indexOf(kind)];
@@ -104,25 +95,6 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
     return pending;
   };
   return {
-    async skillMetadata(names) {
-      await ensure("skills");
-      const [rows, homes] = await Promise.all([
-        pg.q(
-          "SELECT id, json->>'scopeId' AS scope, json->>'status' AS status, json->'manifest'->>'name' AS name FROM skills WHERE json->'manifest'->>'name' = ANY($1::text[]) ORDER BY id",
-          [[...names]],
-        ),
-        pg.q("SELECT json->>'scopeId' AS scope FROM skills GROUP BY json->>'scopeId' ORDER BY min(id)"),
-      ]);
-      return {
-        skills: rows.map((r) => ({
-          id: String(r.id),
-          scopeId: r.scope as ScopeId,
-          status: r.status as SkillSummary["status"],
-          manifest: { name: String(r.name) },
-        })),
-        homes: homes.map((r) => r.scope as ScopeId),
-      };
-    },
     async search(kind, query, limit) {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];

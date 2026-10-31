@@ -17,7 +17,6 @@ import {
 } from "../src/deploy/render-deploy-artifacts.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { renderGatewayToken } from "../src/deploy/render-deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
@@ -29,6 +28,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl, testPgPool } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -100,7 +100,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     acl,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = testIdentityService();
   const app = createApp({
     deploy,
     deploymentGitPrincipals: artifacts,

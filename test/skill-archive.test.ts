@@ -1,14 +1,22 @@
+import { scopeId } from "../src/types.ts";
+import "./support/auto-fake-sprites.ts";
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSkillStore } from "../src/skills/skill-store.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 
 async function published() {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = testSkillStore();
   const s = await skills.create({ scopeId: org, manifest, createdBy: "pack:src1" });
   await skills.review(s.id, "system:pack-reviewer", []);
   await skills.publish(s.id);
@@ -42,7 +50,7 @@ test("an archived skill can be re-published (resurrection on re-import)", async 
 });
 
 test("create carries pack provenance, kept out of the signature", async () => {
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = testSkillStore();
   const s = await skills.create({
     scopeId: org,
     manifest,
@@ -51,4 +59,27 @@ test("create carries pack provenance, kept out of the signature", async () => {
   });
   assert.deepEqual(s.pack, { packId: "src1", commit: "abc123", upstreamName: "demo" });
   assert.ok(skills.verify(s));
+});
+
+test("a person sees their archived skill stored under a linked identity", async (t) => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), seedSkills: false }),
+  );
+  installPrincipalLinks({
+    canonical: (key) => (key === "U123" ? "alice@acme.com" : undefined),
+    aliases: (key) => (key === "alice@acme.com" ? ["U123"] : []),
+  });
+  t.after(() => installPrincipalLinks(null));
+  const sk = await built.skills.create({
+    scopeId: scopeId("personal", "U123"),
+    manifest: { name: "from-slack", description: "d", requiredCapabilities: [], body: "# x" },
+    createdBy: "U123",
+  });
+  await built.skills.archive(sk.id);
+  const archived = await built.app.listSkills({ archivedFor: "Alice@acme.com" });
+  assert.deepEqual(
+    archived.map((skill) => skill.id),
+    [sk.id],
+  );
+  assert.deepEqual(await built.app.listSkills({ archivedFor: "bob@acme.com" }), []);
 });

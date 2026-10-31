@@ -3,6 +3,9 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let started!: () => void;
 let release!: () => void;

@@ -11,6 +11,9 @@ import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
   stopAtEnd(

@@ -5,6 +5,7 @@ import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
+import { contextOutcome } from "./context-request-store.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachEnqueue,
@@ -126,6 +127,7 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
+  const tokenKey = (id: string) => `${currentTenant()}\u0000${id}`;
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
   // deployment these are the only members there are.
@@ -364,19 +366,14 @@ export function createMessagingMethods(
         status: "pending",
         query: storedQuery,
       };
-      await contextRequests.put(request.id, request);
-      if (viewerToken) contextRequestTokens.set(request.id, viewerToken);
+      await contextRequests.create(request);
+      if (viewerToken) contextRequestTokens.set(tokenKey(request.id), viewerToken);
       if (source === "web") {
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
           query,
         ).catch(() => ({ error: "the web conversation couldn't be read" }));
-        await contextRequests.merge(
-          request.id,
-          outcome.error !== undefined
-            ? { status: "failed", error: outcome.error }
-            : { status: "done", result: outcome.result ?? { messages: [] } },
-        );
+        await contextRequests.settle(request.id, contextOutcome(outcome));
         return request;
       }
       for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
@@ -390,30 +387,20 @@ export function createMessagingMethods(
       return contextRequests.get(id);
     },
     async deleteContextRequest(id) {
-      contextRequestTokens.delete(id);
+      contextRequestTokens.delete(tokenKey(id));
       return contextRequests.delete(id);
     },
     async pendingContextRequests(source) {
-      const all = await contextRequests.all();
-      const now = Date.now();
-      const stale = all.filter((r) => r.status === "pending" && now - r.createdAt > CONTEXT_REQUEST_EXPIRY_MS);
-      await Promise.all(stale.map((r) => (contextRequestTokens.delete(r.id), contextRequests.delete(r.id))));
-      return all
-        .filter((r) => r.source === source && r.status === "pending" && now - r.createdAt <= CONTEXT_REQUEST_EXPIRY_MS)
-        .map((r) => {
-          const token = contextRequestTokens.get(r.id);
-          return token ? { ...r, query: { ...r.query, viewerToken: token } } : r;
-        });
+      const cutoff = Date.now() - CONTEXT_REQUEST_EXPIRY_MS;
+      for (const id of await contextRequests.expirePending(cutoff)) contextRequestTokens.delete(tokenKey(id));
+      return (await contextRequests.pending(source, cutoff)).map((r) => {
+        const token = contextRequestTokens.get(tokenKey(r.id));
+        return token ? { ...r, query: { ...r.query, viewerToken: token } } : r;
+      });
     },
     async fulfillContextRequest(id, outcome) {
-      contextRequestTokens.delete(id);
-      const merged = await contextRequests.merge(
-        id,
-        outcome.error !== undefined
-          ? { status: "failed", error: outcome.error }
-          : { status: "done", result: outcome.result ?? { messages: [] } },
-      );
-      return merged != null;
+      contextRequestTokens.delete(tokenKey(id));
+      return contextRequests.settle(id, contextOutcome(outcome));
     },
     async ackDelivery(id, slackApiMs) {
       await deps.deliveries.ack(id, Date.now(), slackApiMs);

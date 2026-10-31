@@ -9,6 +9,9 @@ import { enterTenant } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
   stopAtEnd(

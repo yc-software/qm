@@ -5,11 +5,11 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
@@ -18,7 +18,7 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: testIdentityService(),
   } as unknown as AppDeps);
 }
 
@@ -37,7 +37,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   const auditLog = { record: () => undefined };
   const crons = { ownedBy: async () => [] };
   const webhooks = { ownedBy: async () => [] };
-  const skills = { list: async () => [] };
+  const skills = { inScopes: async () => [] };
   const deploy = { listDeployments: async () => [] };
   return createApp({
     acl,

@@ -10,15 +10,15 @@ import type { ArtifactHome, ArtifactType } from "../src/api/artifact-share.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
 import { splitToScope, triggerBlocksSharedSkill } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 interface FakeState {
@@ -682,7 +682,7 @@ test("splitToScope: tool and route classify identically — a real scope id vs a
 });
 
 test("SkillStore.move changes the home scope in place; org move is refused (use promote)", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = testSkillStore();
   const created = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -697,7 +697,7 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
 });
 
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const store = testSkillStore();
   const src = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -709,6 +709,6 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const second = await store.promote(src.id, TEST_ROOT_SCOPE);
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.list()).filter((x) => x.scopeId === TEST_ROOT_SCOPE && x.status === "published");
+  const orgRecords = (await store.listAll()).filter((x) => x.scopeId === TEST_ROOT_SCOPE && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });

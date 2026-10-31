@@ -11,7 +11,6 @@ import {
   prioritizes,
   triageKeys,
 } from "../../loops/ledger-view.ts";
-import { uiStateId } from "../../surfaces/ui-state.ts";
 import { sendJson } from "../http.ts";
 import { actingPrincipal, canAdministerLoop, loopDeps } from "./loops.ts";
 import { cronSummary } from "./loop-items.ts";
@@ -31,8 +30,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const legacy = await findInboxLoop(deps.store, acting.actorId);
   const migrated = legacy ? await migrateInbox(deps, preferences, legacy, defaults) : true;
   const legacyItems = legacy ? await deps.items.summaries([legacy.id]) : [];
-  const id = uiStateId(acting.actorId, "inbox-loops");
-  const pref = await preferences.putIfAbsent(id, {
+  const pref = await preferences.putIfAbsent(acting.actorId, "inbox-loops", {
     value: [...defaults.map((loop) => loop.id), ...(legacy && (!migrated || legacyItems.length) ? [legacy.id] : [])],
     updatedAt: Date.now(),
   });
@@ -54,7 +52,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     ids = [...new Set(body.loopIds as string[])];
     if (ids.some((value) => !available.some((loop) => loop.id === value)))
       return sendJson(ctx.res, 403, { error: "forbidden" });
-    await preferences.put(id, { value: ids, updatedAt: Date.now() });
+    await preferences.put(acting.actorId, "inbox-loops", { value: ids, updatedAt: Date.now() });
   }
   const selected = ids.flatMap((value) => available.filter((loop) => loop.id === value));
   const selectedIds = selected.map((loop) => loop.id);
@@ -88,7 +86,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const requestedFilter = ctx.url.searchParams.get("filter");
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
     return sendJson(ctx.res, 400, { error: "invalid_filter" });
-  const savedFilter = requestedFilter ?? (await preferences.get(uiStateId(acting.actorId, "inbox-filter")))?.value;
+  const savedFilter = requestedFilter ?? (await preferences.get(acting.actorId, "inbox-filter"))?.value;
   const inboxFilter = savedFilter === "all" || savedFilter === "triaged" ? savedFilter : "human";
   const handled = ctx.url.searchParams.get("view") === "handled";
   const sent = ctx.url.searchParams.get("view") === "sent";

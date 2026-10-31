@@ -11,7 +11,7 @@ import {
   type UiCanvas,
   type UiCanvasPatch,
 } from "../../surfaces/ui-canvas.ts";
-import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
+import { UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
@@ -187,8 +187,8 @@ async function observe(ctx: ApiCtx): Promise<void> {
   if (selector && selector.length > MAX_SELECTOR_CHARS)
     return sendJson(res, 400, { error: "bad_request", message: "selector is too long" });
   const callId = randomUUID();
-  const pendingId = uiStateId(turn.actorId, uiObserveKey(callId));
-  await deps.uiState!.put(pendingId, { value: { runId: turn.runId }, updatedAt: Date.now() });
+  const pendingKey = uiObserveKey(callId);
+  await deps.uiState!.put(turn.actorId, pendingKey, { value: { runId: turn.runId }, updatedAt: Date.now() });
   signalBrowser(ctx, turn, {
     kind: "observe",
     callId,
@@ -200,7 +200,9 @@ async function observe(ctx: ApiCtx): Promise<void> {
   try {
     outcome = await waitForClientResult(deps.signals, turn.runId, callId, { timeoutMs: OBSERVE_TIMEOUT_MS });
   } finally {
-    await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
+    await deps
+      .uiState!.delete(turn.actorId, pendingKey)
+      .catch((error: unknown) => swallow("ui observe pending cleanup", error));
   }
   audit(deps, {
     principalId: turn.actorId,
@@ -225,7 +227,7 @@ async function observeResult(ctx: ApiCtx): Promise<void> {
   if (!principalId || !isObj(b.snapshot))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and snapshot required" });
   if (!deps.uiState || !deps.signals) return sendJson(res, 404, { error: "not_found" });
-  const pending = await deps.uiState.take(uiStateId(principalId, uiObserveKey(params.callId!)));
+  const pending = await deps.uiState.take(principalId, uiObserveKey(params.callId!));
   const runId = isObj(pending?.value) && typeof pending.value.runId === "string" ? pending.value.runId : null;
   const run = runId ? await deps.runs?.get(runId) : null;
   if (!run || !samePerson(run.request.actor.id, principalId)) return sendJson(res, 404, { error: "not_found" });

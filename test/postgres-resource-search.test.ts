@@ -42,19 +42,8 @@ test(
           return pg.q(sql, params, options);
         },
       });
-      for (const kind of ["skills", "deploys"] as const) await store.search(kind, "zanzibar", 50);
+      for (const kind of ["deploys"] as const) await store.search(kind, "zanzibar", 50);
       for (const [table, record] of [
-        [
-          "skills",
-          {
-            manifest: {
-              name: "zanzibar-review",
-              description: "release checklist",
-              body: "privatebody ".repeat(10000),
-              files: [{ content: "asset".repeat(10000) }],
-            },
-          },
-        ],
         [
           "deployments",
           {
@@ -69,7 +58,7 @@ test(
           "hit",
           JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
         ]);
-        const kind = table === "deployments" ? "deploys" : table;
+        const kind = table === "deployments" ? ("deploys" as const) : table;
         const rows = await store.search(kind, "zanz release", 50);
         const actualSql = searchSql;
         const actualParams = searchParams;
@@ -94,7 +83,7 @@ test(
           client.release();
         }
         await pg.q(`UPDATE ${table} SET json = $1 WHERE id = 'hit'`, [
-          JSON.stringify({ id: "hit", title: "other", action: "other", name: "other", manifest: { name: "other" } }),
+          JSON.stringify({ id: "hit", title: "other", action: "other", name: "other" }),
         ]);
         assert.equal((await store.search(kind, "zanzibar", 50)).length, 0);
       }

@@ -26,6 +26,9 @@ function gatewaySettings(config: { url: string; apiKey: string; apiKeyHeader: st
 }
 
 enterTenant(TEST_TENANT);
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const metadata = {
   model_group: "acme/future",

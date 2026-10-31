@@ -265,9 +265,7 @@ export function createSessionMethods(
     const descendantIds = new Set(descendants.map((d) => d.id));
     const approvalRows: PendingApprovalRecord[] = [];
     const approvalIds = [...visibleById.keys(), ...descendantIds];
-    const approvals = approvalIds.length
-      ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: approvalIds } })
-      : [];
+    const approvals = approvalIds.length ? await deps.approvals?.forSessions(approvalIds) : [];
     for (const [, record] of approvals ?? []) {
       const session = visibleById.get(record.sessionId);
       if (
@@ -588,8 +586,7 @@ export function createSessionMethods(
         ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
       };
       if (query.status === "waiting") {
-        const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
-        filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
+        filter.sessionIds = (await deps.approvals?.blockingSessionIds()) ?? [];
       }
       const firstPage = !query.before && query.status !== "archived";
       const [page, pinned, archived] = await Promise.all([
@@ -913,12 +910,12 @@ export function createSessionMethods(
 
     async listScopeResources(principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, crons, webhooks, allDeployments, allSkills] = await Promise.all([
+      const [page, crons, webhooks, allDeployments, scoped] = await Promise.all([
         filesForViewer(principalId, undefined, scope),
         deps.crons.ownedBy(scope),
         deps.webhooks.ownedBy(scope),
         deps.deploy.listDeployments(),
-        deps.skills.list(),
+        deps.skills.inScopes([scope]),
       ]);
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
@@ -946,15 +943,12 @@ export function createSessionMethods(
             }),
         )
       ).filter((d): d is ScopeDeployment => d != null);
-      const skills = allSkills
-        .filter((s) => s.scopeId === scope)
-        .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
       return {
         files,
         webhooks,
         crons,
         deployments,
-        skills,
+        skills: scoped.map(({ id, status, manifest: { name, description } }) => ({ id, name, description, status })),
         manageable: await principalCanManageScope(principalId, scope),
       };
     },

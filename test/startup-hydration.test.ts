@@ -4,7 +4,6 @@ import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMap } from "./support/test-database.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -16,8 +15,8 @@ mock.module("../src/identity/identity-service.ts", {
     createIdentityService: (...args: Parameters<typeof identityModule.createIdentityService>) =>
       identityModule.createIdentityService(
         {
-          ...testMap<identityModule.DeactivationRecord>(),
-          all: async () => {
+          ...args[0],
+          list: async () => {
             reads.identity++;
             throw identityFailure;
           },

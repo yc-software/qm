@@ -11,6 +11,9 @@ import { testTenantSettings } from "./support/build-app.ts";
 function tenantApp() {
   return buildApp(testConfig(), { tenantSettings: testTenantSettings() });
 }
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = tenantApp();

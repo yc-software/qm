@@ -2,8 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Destination, TurnRequest } from "../src/types.ts";
@@ -11,6 +9,7 @@ import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testCronRows } from "./support/typed-stores.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -33,8 +32,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     deliveries,
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: testIdempotencyStore(),
+    identity: testIdentityService(),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);

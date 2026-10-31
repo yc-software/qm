@@ -154,7 +154,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
     const [entries, session] = await Promise.all([
-      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.approvals.forSessions([sessionId]),
       deps.sessions.get(sessionId),
     ]);
     if (!session) return [];

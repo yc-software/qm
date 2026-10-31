@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testCronRows } from "./support/typed-stores.ts";
+import { testIdempotencyStore } from "./support/typed-stores.ts";
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
 
@@ -19,7 +19,7 @@ function deps(fired: string[], turns: TurnRequest[]) {
       ...singleProcessDeps(),
       crons,
       deliveries: { enqueue: async () => ({ id: "d" }) } as never,
-      idempotency: createIdempotencyStore(testMap()),
+      idempotency: testIdempotencyStore(),
       identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
       run: async (req: TurnRequest): Promise<TurnResult> => {
         turns.push(req);
@@ -65,7 +65,7 @@ test("a failing loop fire is recorded on the cron's fire log and the schedule ad
     ...singleProcessDeps(),
     crons,
     deliveries: { enqueue: async () => ({ id: "d" }) } as never,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: testIdempotencyStore(),
     identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
     run: async (req: TurnRequest): Promise<TurnResult> => {
       turns.push(req);
@@ -92,7 +92,7 @@ test("a loop-backed cron fails closed when the loop service is unavailable", asy
     ...singleProcessDeps(),
     crons,
     deliveries: { enqueue: async () => ({ id: "d" }) } as never,
-    idempotency: createIdempotencyStore(testMap()),
+    idempotency: testIdempotencyStore(),
     identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
     run: async (req: TurnRequest): Promise<TurnResult> => {
       turns.push(req);

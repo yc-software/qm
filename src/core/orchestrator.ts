@@ -278,9 +278,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
   const approvalGrantsFor = async (actorId: string) =>
-    (await approvalGrants.select({ where: { field: "actorId", anyOfFold: rosterIds(actorId) } })).filter((grant) =>
-      samePerson(grant.actorId, actorId),
-    );
+    (await approvalGrants.forActors(rosterIds(actorId))).filter((grant) => samePerson(grant.actorId, actorId));
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ agent: deps.agent, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;
