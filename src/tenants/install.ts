@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, ownerDatabaseUrl } from "../persistence/pg-pool.ts";
+import { createPgPool, ownerDatabaseUrl, withPgTransaction } from "../persistence/pg-pool.ts";
 
 export class UnknownTenant extends Error {
   readonly slug: string;
@@ -20,19 +20,21 @@ export async function ensureInstallTenant(
 ): Promise<{ tenant: string; created: boolean }> {
   const db = createPgPool(ownerDatabaseUrl(databaseUrl));
   try {
-    const inserted = await db.q(
-      `INSERT INTO tenants(id, slug, name) SELECT $1, $2, $2 WHERE NOT EXISTS (SELECT 1 FROM tenants)
-       ON CONFLICT (slug) DO NOTHING RETURNING id::text AS id`,
-      [randomUUID(), slug],
-    );
-    const rows = await db.q("SELECT id::text AS id, slug FROM tenants ORDER BY slug");
-    const match = rows.find((row) => row.slug === slug);
-    if (!match)
-      throw new UnknownTenant(
-        slug,
-        rows.map((row) => String(row.slug)),
+    return await withPgTransaction(await db.pool(), async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:install-tenant'))");
+      const inserted = await client.query(
+        `INSERT INTO tenants(id, slug, name) SELECT $1, $2, $2 WHERE NOT EXISTS (SELECT 1 FROM tenants)`,
+        [randomUUID(), slug],
       );
-    return { tenant: String(match.id), created: inserted.length === 1 };
+      const { rows } = await client.query("SELECT id::text AS id, slug FROM tenants ORDER BY slug");
+      const match = rows.find((row) => row.slug === slug);
+      if (!match)
+        throw new UnknownTenant(
+          slug,
+          rows.map((row) => String(row.slug)),
+        );
+      return { tenant: String(match.id), created: inserted.rowCount === 1 };
+    });
   } finally {
     await db.close();
   }

@@ -11,7 +11,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the install tenant test";
 
 test(
-  "a fresh install creates the named tenant once, and a populated one only finds existing slugs",
+  "a fresh install creates exactly one tenant even when installs race with different slugs, and a populated one only finds existing slugs",
   { skip },
   async () => {
     const schema = `install_${randomUUID().replaceAll("-", "")}`;
@@ -26,9 +26,22 @@ test(
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
     try {
+      const raced = await Promise.allSettled(
+        ["acme", "rival"].flatMap((slug) => Array.from({ length: 3 }, () => ensureInstallTenant(url.toString(), slug))),
+      );
+      const won = raced.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const lost = raced.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+      assert.equal(won.length, 3);
+      assert.equal(new Set(won.map((result) => result.tenant)).size, 1);
+      assert.equal(won.filter((result) => result.created).length, 1);
+      assert.ok(lost.every((reason) => reason instanceof UnknownTenant));
+      const { rows: created } = await admin.query(`SELECT slug FROM ${schema}.tenants`);
+      assert.equal(created.length, 1);
+      await admin.query(`UPDATE ${schema}.tenants SET slug = 'acme'`);
       const results = await Promise.all(Array.from({ length: 6 }, () => ensureInstallTenant(url.toString(), "acme")));
       assert.equal(new Set(results.map((result) => result.tenant)).size, 1);
-      assert.equal(results.filter((result) => result.created).length, 1);
+      assert.equal(results[0]!.tenant, won[0]!.tenant);
+      assert.ok(results.every((result) => !result.created));
       assert.deepEqual(await ensureInstallTenant(url.toString(), "acme"), {
         tenant: results[0]!.tenant,
         created: false,
