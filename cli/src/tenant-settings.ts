@@ -8,7 +8,7 @@ import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { isTenantSetting, WEB_UI_ACCESS_KEYS } from "./tenant-setting-names.ts";
+import { isTenantSetting } from "./tenant-setting-names.ts";
 
 function sandboxBackendSetting(config: QmConfig): Record<string, string> {
   const backend =
@@ -45,8 +45,8 @@ function portalSignInSettings(config: QmConfig): Record<string, string> {
 }
 
 function webUiAccess(config: QmConfig): Record<string, string> {
-  if (!config.services.includes("web-ui")) return {};
-  return Object.fromEntries(WEB_UI_ACCESS_KEYS.map((key) => [key, config.env["web-ui"]?.[key] ?? ""]));
+  const loopsUsers = config.services.includes("web-ui") ? config.env["web-ui"]?.LOOPS_USERS : undefined;
+  return loopsUsers ? { LOOPS_USERS: loopsUsers } : {};
 }
 
 export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, string>): Record<string, string> {

@@ -58,5 +58,5 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end -}}
 
 {{- define "qm.webUiAccessKeys" -}}
-WEB_UI_PRINCIPALS LOOPS_USERS WEB_UI_VOICE_USERS
+LOOPS_USERS
 {{- end -}}

@@ -77,13 +77,12 @@ test("Render seeds its sandbox backend with the deployment's workspace and key",
   assert.equal(settings.RENDER_API_KEY, undefined);
 });
 
-test("a deployment running the web UI sends its access lists, empty when unset", () => {
-  const web = config({ services: ["core", "web-ui"], env: { "web-ui": { WEB_UI_VOICE_USERS: "all" } } });
-  const settings = tenantSettingsEnv(web, new Map());
-  assert.equal(settings.WEB_UI_PRINCIPALS, "");
-  assert.equal(settings.LOOPS_USERS, "");
-  assert.equal(settings.WEB_UI_VOICE_USERS, "all");
-  assert.equal(tenantSettingsEnv(config(), new Map()).WEB_UI_PRINCIPALS, undefined);
+test("a deployment running the web UI sends LOOPS_USERS only when set", () => {
+  const listed = config({ services: ["core", "web-ui"], env: { "web-ui": { LOOPS_USERS: "a@example.com" } } });
+  assert.equal(tenantSettingsEnv(listed, new Map()).LOOPS_USERS, "a@example.com");
+  const unset = tenantSettingsEnv(config({ services: ["core", "web-ui"] }), new Map());
+  assert.equal("LOOPS_USERS" in unset, false);
+  assert.equal("LOOPS_USERS" in tenantSettingsEnv(config(), new Map()), false);
 });
 
 function quietly<T>(fn: (lines: string[]) => Promise<T>): Promise<T> {

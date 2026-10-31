@@ -31,7 +31,7 @@
 {{- if and $web $web.enabled }}
 {{- $webEnv := mergeOverwrite (deepCopy (.Values.secretEnv | default dict)) (deepCopy (.Values.env | default dict)) (deepCopy ($web.env | default dict)) }}
 {{- range $key := splitList " " (include "qm.webUiAccessKeys" $) }}
-{{- $_ := set $settings $key (toString (index $webEnv $key | default "")) }}
+{{- with index $webEnv $key }}{{ $_ := set $settings $key (toString .) }}{{ end }}
 {{- end }}
 {{- end }}
 {{- $settings = mergeOverwrite $settings (deepCopy (.Values.tenantSettings | default dict)) }}

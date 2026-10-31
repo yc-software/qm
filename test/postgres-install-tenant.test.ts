@@ -120,7 +120,7 @@ test("a dev instance writes its settings to the main tenant beside an older one,
     assert.deepEqual(phases, [
       "tenant start ",
       `tenant ok using install tenant ${carried}`,
-      "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY, LOOPS_USERS, WEB_UI_PRINCIPALS, WEB_UI_VOICE_USERS to the install tenant",
+      "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY, LOOPS_USERS to the install tenant",
       "tenant start ",
       `tenant ok using install tenant ${carried}`,
     ]);
@@ -132,8 +132,6 @@ test("a dev instance writes its settings to the main tenant beside an older one,
         ANTHROPIC_API_KEY: "sk-dev",
         LOOPS_USERS: "dev@example.com",
         ADMIN_GRANTS: "dev@example.com:org_admin",
-        WEB_UI_PRINCIPALS: "",
-        WEB_UI_VOICE_USERS: "",
       },
     });
     const { rows } = await admin.query(`SELECT slug FROM ${schema}.tenants ORDER BY slug`);

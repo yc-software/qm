@@ -1288,24 +1288,24 @@ test("Render upgrades keep deployed tenant settings until they are imported, the
     PI_MODEL: "portal-model",
     OIDC_PROMPT: "",
   });
-  c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS = "alice@example.com";
+  c.envs.get("srv-acme-web-ui")!.LOOPS_USERS = "alice@example.com";
   await d.backend.up({ dryRun: false });
   assert.equal(c.envs.get("srv-acme-core")!.ANTHROPIC_API_KEY, "sk-deployed");
   assert.equal(c.envs.get("srv-acme-portal")!.OIDC_CLIENT_ID, "client");
-  assert.equal(c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS, "alice@example.com");
+  assert.equal(c.envs.get("srv-acme-web-ui")!.LOOPS_USERS, "alice@example.com");
   const deployed = await hostingProvider("render").deployedTenantEnv!(d.ctx);
   assert.deepEqual(deployed.values, {
     ANTHROPIC_API_KEY: "sk-deployed",
     PI_MODEL: "core-model",
     OIDC_CLIENT_ID: "client",
-    WEB_UI_PRINCIPALS: "alice@example.com",
+    LOOPS_USERS: "alice@example.com",
   });
   assert.deepEqual(await deployed.remove(), [
     "ANTHROPIC_API_KEY",
+    "LOOPS_USERS",
     "OIDC_CLIENT_ID",
     "OIDC_PROMPT",
     "PI_MODEL",
-    "WEB_UI_PRINCIPALS",
   ]);
   assert.deepEqual(tenantKeys(), []);
   await d.backend.up({ dryRun: false });

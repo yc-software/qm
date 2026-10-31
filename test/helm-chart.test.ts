@@ -253,46 +253,34 @@ test("Helm pushes sign-in and admin settings to the install tenant instead of an
   assert.match(push.env.find((entry) => entry.name === "QM_CORE_URL")!.value, /^http:\/\/test-qm-core\./);
 });
 
-test(
-  "Helm imports the web UI's access lists, empty when unset, only when the web UI runs, and keeps them out of service env",
-  options,
-  () => {
-    const access = (env: Record<string, string>) => [env.WEB_UI_PRINCIPALS, env.LOOPS_USERS, env.WEB_UI_VOICE_USERS];
-    assert.deepEqual(access(tenantSettings(render())), ["", "", ""]);
-    const listed = tenantSettings(
-      render({
-        env: { LOOPS_USERS: "a@example.com" },
-        services: {
-          "web-ui": { env: { WEB_UI_PRINCIPALS: "a@example.com,b@example.com", WEB_UI_VOICE_USERS: "all" } },
-        },
-      }),
-    );
-    assert.deepEqual(access(listed), ["a@example.com,b@example.com", "a@example.com", "all"]);
-    const withSecret = render({
-      secretEnv: { WEB_UI_VOICE_USERS: "all", AUTH_CLIENT_SECRET: "client-secret" },
-      services: { "web-ui": { env: { WEB_UI_PRINCIPALS: "a@example.com" } } },
-    });
-    assert.equal(access(tenantSettings(withSecret))[2], "all");
-    for (const service of ["core", "portal", "web-ui"]) {
-      const names = (container(withSecret, service).env ?? []).map((entry) => entry.name);
-      assert.ok(!names.some((name) => /^(WEB_UI_PRINCIPALS|LOOPS_USERS|WEB_UI_VOICE_USERS)$/.test(name)), service);
-    }
-    const envSecret = withSecret.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env");
-    assert.equal(envSecret?.stringData?.AUTH_CLIENT_SECRET, "client-secret");
-    assert.equal(envSecret?.stringData?.WEB_UI_VOICE_USERS, undefined);
-    const without = tenantSettings(
-      render({
-        services: {
-          "web-ui": { enabled: false },
-          portal: { enabled: false },
-          admin: { enabled: false },
-          auth: { enabled: false },
-        },
-      }),
-    );
-    assert.deepEqual(access(without), [undefined, undefined, undefined]);
-  },
-);
+test("Helm imports LOOPS_USERS only when set and the web UI runs, and keeps it out of service env", options, () => {
+  assert.equal(tenantSettings(render()).LOOPS_USERS, undefined);
+  assert.equal(tenantSettings(render({ env: { LOOPS_USERS: "a@example.com" } })).LOOPS_USERS, "a@example.com");
+  const withSecret = render({
+    secretEnv: { LOOPS_USERS: "b@example.com", AUTH_CLIENT_SECRET: "client-secret" },
+    services: { "web-ui": { env: { WEB_UI_PUBLIC_URL: "https://agent.example.com" } } },
+  });
+  assert.equal(tenantSettings(withSecret).LOOPS_USERS, "b@example.com");
+  for (const service of ["core", "portal", "web-ui"]) {
+    const names = (container(withSecret, service).env ?? []).map((entry) => entry.name);
+    assert.ok(!names.includes("LOOPS_USERS"), service);
+  }
+  const envSecret = withSecret.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env");
+  assert.equal(envSecret?.stringData?.AUTH_CLIENT_SECRET, "client-secret");
+  assert.equal(envSecret?.stringData?.LOOPS_USERS, undefined);
+  const without = tenantSettings(
+    render({
+      env: { LOOPS_USERS: "a@example.com" },
+      services: {
+        "web-ui": { enabled: false },
+        portal: { enabled: false },
+        admin: { enabled: false },
+        auth: { enabled: false },
+      },
+    }),
+  );
+  assert.equal(without.LOOPS_USERS, undefined);
+});
 
 test("Helm refuses tenant settings placed in service env", options, () => {
   for (const values of [
