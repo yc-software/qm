@@ -8,7 +8,7 @@ import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { isTenantImport, isTenantSetting, WEB_UI_ACCESS_KEYS } from "./tenant-setting-names.ts";
+import { isTenantSetting, WEB_UI_ACCESS_KEYS } from "./tenant-setting-names.ts";
 
 function sandboxBackendSetting(config: QmConfig): Record<string, string> {
   const backend =
@@ -122,7 +122,7 @@ export async function seedTenantSettings(
   const settings = tenantSettingsEnv(opts.config, values);
   const carried = deployed ? await deployed() : undefined;
   for (const [name, value] of Object.entries(carried?.values ?? {}))
-    if (isTenantImport(name) && !settings[name]?.trim()) settings[name] = value;
+    if (isTenantSetting(name) && !settings[name]?.trim()) settings[name] = value;
   let core: CoreLink;
   try {
     core = await link();

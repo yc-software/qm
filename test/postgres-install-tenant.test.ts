@@ -71,6 +71,7 @@ test(
           DEPLOYMENT_CONTROL_SECRET: "c".repeat(64),
           ANTHROPIC_API_KEY: "sk-dev",
           PI_MODEL: "",
+          LOOPS_USERS: "dev@example.com",
           PORT: "8080",
         },
         ports: { core: (core.address() as AddressInfo).port },
@@ -87,14 +88,20 @@ test(
       assert.deepEqual(phases, [
         "tenant start ",
         `tenant ok using install tenant ${carried}`,
-        "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY to the install tenant",
+        "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY, LOOPS_USERS, WEB_UI_PRINCIPALS, WEB_UI_VOICE_USERS to the install tenant",
         "tenant start ",
         `tenant ok using install tenant ${carried}`,
       ]);
       assert.equal(requests[0]!.path, "/v1/tenant-settings");
       assert.equal(requests[0]!.authorization, `Bearer ${"c".repeat(64)}`);
       assert.deepEqual(JSON.parse(requests[0]!.body), {
-        env: { ANTHROPIC_API_KEY: "sk-dev", ADMIN_GRANTS: "dev@example.com:org_admin" },
+        env: {
+          ANTHROPIC_API_KEY: "sk-dev",
+          LOOPS_USERS: "dev@example.com",
+          ADMIN_GRANTS: "dev@example.com:org_admin",
+          WEB_UI_PRINCIPALS: "",
+          WEB_UI_VOICE_USERS: "",
+        },
       });
       const { rows } = await admin.query(`SELECT id::text AS id, slug FROM ${schema}.tenants`);
       assert.deepEqual(rows, [{ id: carried, slug: "acme" }]);

@@ -63,7 +63,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         CORE_API_URL: `http://localhost:${i.ports.core}`,
         WEB_UI_BASE: i.webUiBasePath,
         ...(i.watch ? { WEB_UI_DEV: "1" } : {}),
-        WEB_UI_PRINCIPALS: "",
         WEB_UI_PUBLIC_URL: `http://localhost:${i.ports.portal}`,
       },
       port: i.ports.web,

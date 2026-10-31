@@ -68,6 +68,10 @@ from `secretEnv` and the auth allowlist into the matching `OIDC_*` settings; an
 explicit `tenantSettings.OIDC_*` value wins. With `envFrom`, set
 `tenantSettings.OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` yourself, since Helm
 cannot read an external Secret.
+The web UI's old access lists (`WEB_UI_PRINCIPALS`, `LOOPS_USERS`,
+`WEB_UI_VOICE_USERS`) are still read from `secretEnv`, `env` or
+`services.web-ui.env` and sent with these settings, empty when unset, so upgrades
+keep the same people's access; they are no longer passed to any service.
 
 Only portal should normally have public ingress. `ingress.service` accepts an
 enabled `portal`, `core` or `web-ui`, not embedded modules or the TCP egress proxy.

@@ -1,5 +1,5 @@
 import { envVars, type RenderRequest } from "./render-api.ts";
-import { isTenantImport, isTenantSetting } from "./tenant-setting-names.ts";
+import { isTenantSetting } from "./tenant-setting-names.ts";
 import type { DeployedTenantEnv } from "./tenant-settings.ts";
 
 const PRECEDENCE = ["core", "portal", "auth"];
@@ -28,7 +28,7 @@ export async function renderDeployedTenantEnv(
     const keys = Object.keys(env).filter(isTenantSetting).sort();
     if (keys.length) found.push({ id, keys });
     for (const [key, value] of Object.entries(env))
-      if (isTenantImport(key) && value.trim() && values[key] === undefined) values[key] = value;
+      if (isTenantSetting(key) && value.trim() && values[key] === undefined) values[key] = value;
   }
   return {
     values,

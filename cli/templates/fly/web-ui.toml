@@ -8,7 +8,6 @@ primary_region = "sjc"
   PORT = "8080"
   CORE_API_URL = "http://qm-core.internal:8080"
   WEB_UI_PUBLIC_URL = "https://agent.example.com"
-  WEB_UI_PRINCIPALS = ""
 
 [http_service]
   internal_port = 8080

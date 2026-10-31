@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { derivedLoginPassword } from "../../../cli/src/database-logins.ts";
 import { operatorInit } from "../../../cli/src/operator-request.ts";
-import { isTenantSetting } from "../../../cli/src/tenant-setting-names.ts";
+import { isTenantSetting, WEB_UI_ACCESS_KEYS } from "../../../cli/src/tenant-setting-names.ts";
 import { ensureInstallTenant } from "../../../src/tenants/install.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -75,7 +75,8 @@ export async function prepareDevTenant(
     Object.entries(inputs.baseEnv).filter(([name, value]) => value.trim() && isTenantSetting(name)),
   );
   if (inputs.adminGrantsSeed) env.ADMIN_GRANTS = inputs.adminGrantsSeed;
-  if (!Object.keys(env).length) return;
+  for (const key of WEB_UI_ACCESS_KEYS) env[key] ??= "";
+  env.WEB_UI_PRINCIPALS = "";
   const path = "/v1/tenant-settings";
   const credentials = {
     signing: inputs.baseEnv.CORE_SIGNING_SECRET ?? "",

@@ -119,6 +119,9 @@ spec:
           {{- end }}
           {{- end }}
           {{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $componentEnv }}
+          {{- range $key := splitList " " (include "qm.webUiAccessKeys" $root) }}
+          {{- $_ := unset $env $key }}
+          {{- end }}
           {{- if eq $name "egress-proxy" }}
           {{- if ne (int $svc.port) 48080 }}
           {{- fail "services.egress-proxy.port must be 48080: the Envoy listener is fixed in the image" }}

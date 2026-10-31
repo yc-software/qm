@@ -30,7 +30,7 @@
 {{- $web := index .Values.services "web-ui" }}
 {{- if and $web $web.enabled }}
 {{- $webEnv := mergeOverwrite (deepCopy (.Values.secretEnv | default dict)) (deepCopy (.Values.env | default dict)) (deepCopy ($web.env | default dict)) }}
-{{- range $key := list "WEB_UI_PRINCIPALS" "LOOPS_USERS" "WEB_UI_VOICE_USERS" }}
+{{- range $key := splitList " " (include "qm.webUiAccessKeys" $) }}
 {{- $_ := set $settings $key (toString (index $webEnv $key | default "")) }}
 {{- end }}
 {{- end }}

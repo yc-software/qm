@@ -56,6 +56,9 @@ const TENANT_SETTING_NAMES: ReadonlySet<string> = new Set([
   "OIDC_ALLOWED_EMAIL_DOMAIN",
   "OIDC_ALLOWED_EMAILS",
   "PORTAL_EXPECTED_TEAM_ID",
+  "WEB_UI_PRINCIPALS",
+  "LOOPS_USERS",
+  "WEB_UI_VOICE_USERS",
 ]);
 
 const OAUTH_CLIENT_SETTING = /^(?:GOOGLE|SLACK|NOTION|LINEAR|DROPBOX|GITHUB|X|ZOOM)_OAUTH_CLIENT_(?:ID|SECRET)$/;
@@ -64,9 +67,6 @@ export const isTenantSetting = (name: string): boolean =>
   TENANT_SETTING_NAMES.has(name) || OAUTH_CLIENT_SETTING.test(name);
 
 export const WEB_UI_ACCESS_KEYS = ["WEB_UI_PRINCIPALS", "LOOPS_USERS", "WEB_UI_VOICE_USERS"] as const;
-
-export const isTenantImport = (name: string): boolean =>
-  isTenantSetting(name) || (WEB_UI_ACCESS_KEYS as readonly string[]).includes(name);
 
 export function withoutTenantSettings(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !isTenantSetting(name)));
