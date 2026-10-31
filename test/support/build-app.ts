@@ -1,5 +1,4 @@
 import type { Config } from "../../src/config.ts";
-import { enterTenant } from "../../src/tenants/context.ts";
 import {
   createTenantSettingsStore,
   type TenantSettingsStore,
@@ -8,11 +7,9 @@ import {
 import { setProviderBaseUrls } from "../../src/model/provider-endpoints.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockHarness } from "./mock-harness.ts";
-import { bindTestTenant } from "./tenant.ts";
+import { TEST_TENANT } from "./tenant.ts";
 
-bindTestTenant();
-
-export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+export { TEST_TENANT };
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
   SECURITY_SCREEN: "enforce",
@@ -29,7 +26,6 @@ export function testTenantSettings(values: TenantSettingValues = {}, harness = "
 }
 
 export function buildApp(config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}): BuiltApp {
-  enterTenant(TEST_TENANT);
   return buildProductionApp(config, {
     tenantSettings: testTenantSettings({}, config.harness),
     ...overrides,

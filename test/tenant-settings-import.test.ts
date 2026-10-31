@@ -4,20 +4,17 @@ import { randomUUID } from "node:crypto";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { tenantRootScope, withTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
-import { scopeId } from "../src/types.ts";
 
 const KEY = "import-test-connector-key-0123456789";
-const root = scopeId("org", "acme");
 
 function deps() {
   return {
     settings: createTenantSettingsStore({ harness: "pi" }),
     modelCredentials: createModelCredentialStore({ backing: memoryModelTables().credentials, keyMaterial: KEY }),
     config: createMemoryConfigStore({ connectorSecretKey: KEY }),
-    rootScope: root,
     actor: "import-test",
   };
 }
@@ -46,10 +43,10 @@ test("the import copies env values into the tenant's settings and the stores tha
     assert.equal(settings.sandboxBackend, "sprites");
     assert.equal(settings.piModel, "claude-opus-5-5");
     assert.equal(await d.modelCredentials.resolve("anthropic"), "anthropic-key");
-    assert.equal(await d.config.getSecurityPostureDurable(root), "strict");
-    assert.equal(await d.config.getSharingPostureDurable(root), "open");
-    assert.deepEqual(await d.config.getBrandingDurable(root), { orgName: "Acme" });
-    const client = await d.config.getConnectorClientSecret(root, "google");
+    assert.equal(await d.config.getSecurityPostureDurable(tenantRootScope()), "strict");
+    assert.equal(await d.config.getSharingPostureDurable(tenantRootScope()), "open");
+    assert.deepEqual(await d.config.getBrandingDurable(tenantRootScope()), { orgName: "Acme" });
+    const client = await d.config.getConnectorClientSecret(tenantRootScope(), "google");
     assert.equal(client?.clientId, "client-id");
     assert.equal(client?.clientSecret, "client-secret");
     assert.equal(client?.hostedDomain, "acme.test");
@@ -83,9 +80,12 @@ test("the import never replaces values an admin already stored", async () => {
   const d = deps();
   await withTenant(randomUUID(), async () => {
     await d.modelCredentials.set("anthropic", "admin-key", "admin");
-    await d.config.setSecurityPosture(root, "strict");
-    await d.config.setBranding(root, { orgName: "Admin Name" });
-    await d.config.setConnectorClient(root, "google", { clientId: "admin-id", clientSecret: "admin-secret" });
+    await d.config.setSecurityPosture(tenantRootScope(), "strict");
+    await d.config.setBranding(tenantRootScope(), { orgName: "Admin Name" });
+    await d.config.setConnectorClient(tenantRootScope(), "google", {
+      clientId: "admin-id",
+      clientSecret: "admin-secret",
+    });
     await importTenantSettings(
       {
         ANTHROPIC_API_KEY: "env-key",
@@ -100,8 +100,11 @@ test("the import never replaces values an admin already stored", async () => {
     );
     assert.equal(await d.modelCredentials.resolve("anthropic"), "admin-key");
     assert.equal(await d.modelCredentials.resolve("openai"), "env-openai");
-    assert.equal(await d.config.getSecurityPostureDurable(root), "strict");
-    assert.deepEqual(await d.config.getBrandingDurable(root), { orgName: "Admin Name", accent: "#ff6600" });
-    assert.equal((await d.config.getConnectorClientSecret(root, "google"))?.clientId, "admin-id");
+    assert.equal(await d.config.getSecurityPostureDurable(tenantRootScope()), "strict");
+    assert.deepEqual(await d.config.getBrandingDurable(tenantRootScope()), {
+      orgName: "Admin Name",
+      accent: "#ff6600",
+    });
+    assert.equal((await d.config.getConnectorClientSecret(tenantRootScope(), "google"))?.clientId, "admin-id");
   });
 });

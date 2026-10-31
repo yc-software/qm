@@ -42,7 +42,6 @@ export interface Config {
   claudeBinPath?: string;
   claudeProcessEnv: NodeJS.ProcessEnv;
   piCaptureRequests: boolean;
-  adminGrants?: string;
   resendApiKey?: string;
   emailFrom?: string;
   rateLimitPerWindow: number;
@@ -950,7 +949,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     deployProvider,
     ...(env.CLAUDE_BIN ? { claudeBinPath: env.CLAUDE_BIN } : {}),
     claudeProcessEnv,
-    ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,

@@ -1,4 +1,4 @@
-import { tenantRootScope, withTenant } from "../../tenants/context.ts";
+import { withTenant } from "../../tenants/context.ts";
 import { importTenantSettings, unknownTenantImportKeys } from "../../tenants/settings-import.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -25,7 +25,6 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
         settings: deps.tenantSettings!,
         modelCredentials: deps.modelCredentials!,
         config: deps.config!,
-        rootScope: tenantRootScope(),
         actor: "operator settings push",
       }),
     );
@@ -36,5 +35,12 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
 }
 
 export const tenantSettingsRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "PUT", path: "/v1/tenant-settings", actor: "system", auth: "source", handle: putTenantSettings },
+  {
+    method: "PUT",
+    path: "/v1/tenant-settings",
+    actor: "system",
+    auth: "source",
+    unbound: true,
+    handle: putTenantSettings,
+  },
 ];
