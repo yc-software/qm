@@ -1,34 +1,22 @@
-import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
-import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { errMessage } from "../util/errors.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
-import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
+import type { Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import {
-  countedClaims,
-  isTerminal,
-  releasesDedupKey,
-  runPriority,
-  stopErrorCode,
-  withTraceCarrier,
-} from "./run-store.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { isTerminal } from "./run-store.ts";
+
+export type RunRows = Omit<RunStore, "enqueue" | "withdraw" | "leaseHeld">;
 
 export interface PostgresRuntime {
-  runs: RunStore;
+  runs: RunRows;
   close(): Promise<void>;
 }
 
-function isUniqueViolation(err: unknown): boolean {
-  return isObj(err) && err.code === "23505";
-}
-
-function rowToRun(r: Record<string, unknown>): Run {
+export function rowToRun(r: Record<string, unknown>): Run {
   const request = JSON.parse(r.request as string) as OrchestratorInput;
   return {
     id: r.id as string,
@@ -45,21 +33,20 @@ function rowToRun(r: Record<string, unknown>): Run {
     priority: Number(r.claim_priority) as RunPriority,
     preemptions: Number(r.preemptions),
     leaseToken: (r.lease_token as string | null) ?? null,
-    leaseExpiresAt: r.lease_expires_at === null ? null : Number(r.lease_expires_at),
     workerId: (r.worker_id as string | null) ?? null,
     createdAt: Number(r.created_at),
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
+    absurdQueue: (r.absurd_queue as string | null) ?? null,
+    absurdTaskId: r.absurd_task_id == null ? null : String(r.absurd_task_id),
+    absurdRunId: r.absurd_run_id == null ? null : String(r.absurd_run_id),
   };
 }
 
-const FENCE_HOLD_MS = 600_000;
 const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
 
-export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
-  const available = createPostgresNotifyBus<null>(connectionString, "qm_run_available", "run availability");
-  const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
+export function createPostgresRunStore(connectionString: string): PostgresRuntime {
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
@@ -116,41 +103,24 @@ END $base_schema$`,
         `DROP TABLE IF EXISTS tool_calls`,
       ],
     },
+    {
+      id: "runs/store/0012-absurd-turns",
+      statements: [
+        `SET LOCAL lock_timeout = '60s'`,
+        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_queue TEXT`,
+        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_task_id UUID`,
+        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_run_id UUID`,
+        `UPDATE runs SET absurd_queue = CASE claim_priority WHEN 0 THEN 'turns_people' WHEN 1 THEN 'turns_delegated' ELSE 'turns_background' END,
+           status = 'queued', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, retry_after = 0,
+           last_stop = CASE WHEN status = 'running' THEN '{"kind":"shutdown"}' ELSE last_stop END
+         WHERE status IN ('pending', 'running') AND absurd_task_id IS NULL`,
+        `DROP INDEX IF EXISTS idx_runs_pending_priority`,
+        `DROP INDEX IF EXISTS idx_runs_session_active_created`,
+        `CREATE INDEX IF NOT EXISTS idx_runs_session_in_flight ON runs(session_id, created_at, seq) WHERE status IN ('queued', 'pending', 'running')`,
+        `CREATE INDEX IF NOT EXISTS idx_runs_session_queued ON runs(session_id, claim_priority, created_at, seq) WHERE status = 'queued'`,
+      ],
+    },
   ]);
-
-  const availabilityListeners = new Map<() => void, number>();
-  let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
-  let availabilityProbe: Promise<void> | null = null;
-  let availabilityClosed = false;
-
-  function watchAvailability(): void {
-    if (availabilityClosed || availabilityListeners.size === 0 || availabilityTimer || availabilityProbe) return;
-    availabilityTimer = setTimeout(
-      () => {
-        availabilityTimer = undefined;
-        availabilityProbe = q(
-          `SELECT EXISTS (
-          SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
-          AND NOT EXISTS (
-            SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
-              AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
-          )
-        ) AS available`,
-          [Date.now()],
-        )
-          .then(({ rows }) => {
-            if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
-          })
-          .catch((error: unknown) => swallow("run availability probe", error))
-          .finally(() => {
-            availabilityProbe = null;
-            watchAvailability();
-          });
-      },
-      Math.min(...availabilityListeners.values()),
-    );
-    availabilityTimer.unref();
-  }
 
   async function getRun(id: string): Promise<Run | null> {
     const { rows } = await q("SELECT * FROM runs WHERE id = $1", [id]);
@@ -162,183 +132,10 @@ END $base_schema$`,
     events.emit(run.id, run);
     for (const listener of terminalListeners) listener(run);
   }
-  async function retire(
-    run: Run,
-    error: string,
-    retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number; stop?: RunStop },
-  ): Promise<{ requeued: boolean; applied: boolean }> {
-    const ifExpiredAt = opts?.ifExpiredAt ?? null;
-    const countsAsError = opts?.countsAsError ?? false;
-    const errorAttemptsAfter = run.errorAttempts + (countsAsError ? 1 : 0);
-    const overClaimed = countedClaims(run) >= maxClaims;
-    if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
-      const { rowCount } = await q(
-        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
-           error_attempts=error_attempts+$4, retry_after=$5, last_stop=$6
-         WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
-        [
-          run.id,
-          run.leaseToken,
-          ifExpiredAt,
-          countsAsError ? 1 : 0,
-          Date.now() + Math.max(0, opts?.retryAfterMs ?? 0),
-          JSON.stringify(opts?.stop ?? (countsAsError ? { kind: "error" } : { kind: "lease_expired" })),
-        ],
-      );
-      return { requeued: rowCount > 0, applied: rowCount > 0 };
-    }
-    const reason =
-      !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
-        ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
-        : error;
-    const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
-    const { rowCount } = await q(
-      `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
-         error_attempts=error_attempts+$6
-       WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
-      [run.id, run.leaseToken, ifExpiredAt, JSON.stringify(result), Date.now(), countsAsError ? 1 : 0],
-    );
-    if (rowCount > 0) settle(await getRun(run.id));
-    return { requeued: false, applied: rowCount > 0 };
-  }
-
-  const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
-    AND NOT EXISTS (
-      SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
-        AND (sibling.status='running' OR (sibling.status='pending'
-          AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
-      OFFSET 0
-    )`;
-
-  async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
-    const token = randomUUID();
-    const now = Date.now();
-    try {
-      const { rows } = await q(
-        `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
-           attempts=attempts+1, started_at=COALESCE(started_at,$4)
-         WHERE id = (
-           SELECT candidate.id FROM runs candidate WHERE ${claimable("$4")}
-             AND ($5::text IS NULL OR candidate.id=$5)
-             AND ($6::text IS NULL OR candidate.session_id=$6)
-           ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT 1
-         ) RETURNING *`,
-        [token, now + ttlMs, workerId, now, runId ?? null, sessionId ?? null],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
-    } catch (err) {
-      if (isUniqueViolation(err)) return null;
-      throw err;
-    }
-  }
-
-  const runs: RunStore = {
-    subscribeAvailable(listener, options) {
-      availabilityListeners.set(listener, options?.pollMs ?? 50);
-      clearTimeout(availabilityTimer);
-      availabilityTimer = undefined;
-      const off = available.subscribe(listener, options);
-      watchAvailability();
-      return () => {
-        off();
-        availabilityListeners.delete(listener);
-        if (availabilityListeners.size === 0) {
-          clearTimeout(availabilityTimer);
-          availabilityTimer = undefined;
-        }
-      };
-    },
-    ...(Number.isFinite(maxClaims) ? { maxClaims } : {}),
-
-    async enqueue({ sessionId, request, dedupKey, maxAttempts = 3 }: EnqueueInput): Promise<EnqueueResult> {
-      const id = randomUUID();
-      const delegating = request.delegatingRunId ? await getRun(request.delegatingRunId) : null;
-      const priority = runPriority(request, delegating?.priority ?? null);
-      for (;;) {
-        const { rows } = await q(
-          `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at, claim_priority)
-           VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
-           ON CONFLICT (idempotency_key) DO NOTHING
-           RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [
-            id,
-            sessionId,
-            jsonbStringify(withTraceCarrier(request)),
-            dedupKey ?? null,
-            maxAttempts,
-            Date.now(),
-            priority,
-          ],
-        );
-        if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
-        const existing = await runs.getByDedupKey(dedupKey!);
-        if (existing) return { run: existing, deduped: true };
-      }
-    },
-
+  const runs: RunRows = {
     async getByDedupKey(dedupKey) {
       const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
       return rows[0] ? rowToRun(rows[0]) : null;
-    },
-
-    claim,
-
-    claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
-    claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
-    async personWaiting(createdBefore) {
-      const { rows } = await q(
-        `SELECT EXISTS (
-           SELECT 1 FROM runs candidate WHERE ${claimable("$2")}
-             AND candidate.claim_priority=0 AND candidate.created_at <= $1
-         ) AS waiting`,
-        [createdBefore, Date.now()],
-      );
-      return rows[0]?.waiting === true;
-    },
-
-    async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
-      const { rowCount } = await q(
-        "UPDATE runs SET lease_expires_at=$1 WHERE id=$2 AND lease_token=$3 AND status='running'",
-        [Date.now() + ttlMs, runId, leaseToken],
-      );
-      return rowCount > 0;
-    },
-
-    async releaseLease(runId, leaseToken, stop): Promise<boolean> {
-      const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4 WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0],
-      );
-      return rowCount > 0;
-    },
-
-    async complete(runId, leaseToken, result): Promise<boolean> {
-      const { rowCount } = await q(
-        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
-           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
-         WHERE id=$3 AND lease_token=$4 RETURNING pg_notify('qm_run_available', 'null')`,
-        [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
-      );
-      if (rowCount > 0) {
-        settle(await getRun(runId));
-        return true;
-      }
-      return false;
-    },
-
-    async fail(runId, leaseToken, error, opts): Promise<{ requeued: boolean }> {
-      const run = await getRun(runId);
-      if (!run || run.leaseToken !== leaseToken) return { requeued: false };
-      return {
-        requeued: (
-          await retire(run, error, opts?.retry !== false, {
-            countsAsError: true,
-            retryAfterMs: opts?.retryAfterMs,
-            ...(opts?.stop ? { stop: opts.stop } : {}),
-          })
-        ).requeued,
-      };
     },
 
     async noteTurnUserSeq(runId: string, seq: number): Promise<boolean> {
@@ -357,7 +154,7 @@ END $base_schema$`,
               [JSON.stringify(state), runId],
             )
           : await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3",
+              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3 AND status='running'",
               [JSON.stringify(state), runId, leaseToken],
             );
       return rowCount > 0;
@@ -396,7 +193,7 @@ END $base_schema$`,
            UNION
            SELECT child.* FROM runs wake JOIN runs child
            ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
-           WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
+           WHERE wake.status IN ('queued','pending') AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
            AND wake.idempotency_key LIKE 'subagent-return:%'
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
@@ -426,12 +223,13 @@ END $base_schema$`,
     onTerminal(listener): void {
       terminalListeners.push(listener);
     },
+    emitTerminal: settle,
 
     get: getRun,
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC LIMIT 1",
         [sessionId],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
@@ -439,7 +237,7 @@ END $base_schema$`,
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC",
         [sessionId],
       );
       return rows.map(rowToRun);
@@ -448,17 +246,9 @@ END $base_schema$`,
     async editPendingText(runId: string, text: string, expectedText: string): Promise<boolean> {
       const { rowCount } = await q(
         `UPDATE runs SET request = (request::jsonb || jsonb_build_object('text', $2::text, 'displayText', $2::text))::text
-         WHERE id = $1 AND status = 'pending' AND attempts = 0 AND turn_user_seq IS NULL
+         WHERE id = $1 AND status IN ('queued','pending') AND attempts = 0 AND turn_user_seq IS NULL
          AND COALESCE(request::jsonb ->> 'displayText', request::jsonb ->> 'text') = $3`,
         [runId, pgTextSafe(text), pgTextSafe(expectedText)],
-      );
-      return (rowCount ?? 0) > 0;
-    },
-
-    async withdraw(runId: string, opts): Promise<boolean> {
-      const { rowCount } = await q(
-        "DELETE FROM runs WHERE id = $1 AND status = 'pending' AND (NOT $2::boolean OR (attempts = 0 AND turn_user_seq IS NULL))",
-        [runId, Boolean(opts?.unstartedOnly)],
       );
       return (rowCount ?? 0) > 0;
     },
@@ -467,9 +257,9 @@ END $base_schema$`,
       await signals.hasDedupeKey(signal.dedupeKey!);
       const { rows } = await q(
         `WITH target AS (
-           SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
+           SELECT id FROM runs WHERE id=$2 AND status IN ('queued','pending','running') FOR UPDATE
          ), moved AS (
-           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
+           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='queued'
            AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
            AND EXISTS (SELECT 1 FROM target) RETURNING id
          ), sent AS (
@@ -490,7 +280,7 @@ END $base_schema$`,
     },
 
     async activeSessionIds(): Promise<string[]> {
-      const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('pending','running')");
+      const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('queued','pending','running')");
       return rows.map((r) => r.session_id as string);
     },
 
@@ -502,44 +292,6 @@ END $base_schema$`,
           )
         : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
-    },
-
-    async reapExpired(
-      onRetired?: (sessionIds: string[]) => Promise<void>,
-      opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-    ): Promise<{ requeued: number; parked: number }> {
-      const now = Date.now();
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
-        [now],
-      );
-      const expired = rows.map(rowToRun);
-      let requeued = 0;
-      let parked = 0;
-      for (const run of expired) {
-        const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
-        const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
-        const fenceToken = randomUUID();
-        const fenced = await q(
-          "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND lease_expires_at <= $4 RETURNING id",
-          [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
-        );
-        if (!fenced.rows[0]) continue;
-        if (onRetired) await onRetired([run.sessionId]);
-        const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
-        if (!r.applied) continue;
-        if (r.requeued) requeued++;
-        else parked++;
-        opts?.onReap?.({
-          runId: run.id,
-          sessionId: run.sessionId,
-          workerId: run.workerId,
-          attempts: run.attempts,
-          errorAttempts: run.errorAttempts,
-          outcome: r.requeued ? "requeued" : "parked",
-        });
-      }
-      return { requeued, parked };
     },
 
     waitFor(runId, timeoutMs = 60_000): Promise<Run> {
@@ -583,11 +335,6 @@ END $base_schema$`,
     },
 
     async close(): Promise<void> {
-      availabilityClosed = true;
-      clearTimeout(availabilityTimer);
-      availabilityListeners.clear();
-      await availabilityProbe;
-      await available.close?.();
       await closePool();
     },
   };

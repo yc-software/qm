@@ -10,7 +10,7 @@ import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
+import { isTerminal, isUnstarted } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
@@ -31,7 +31,6 @@ import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
@@ -93,7 +92,7 @@ export function createTurnMethods(
       const session = await deps.sessions.getByThread(run.sessionId);
       if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
       await signals.send(run.id, { kind: "abort", reason: USER_STOP });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      if (run.status === "queued" || run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
@@ -451,8 +450,6 @@ export function createTurnMethods(
 
       if (replay) dedupKey = replay.signalDedupKey;
 
-      if (origin.kind === "human" && !isSessionTurn(input) && !req.approval) deps.reaperPoke?.();
-
       if (
         req.surface !== "web" &&
         deps.signals &&
@@ -613,7 +610,6 @@ export function createTurnMethods(
       const { run, deduped } = enqueued;
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
-      if (spineRouted) deps.engaged?.engage(conversation.threadRef);
       if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
       if (req.async) return { status: "queued", runId: run.id };
       return drive(run.id);
@@ -692,13 +688,14 @@ export function createTurnMethods(
       const runtime = deps.turnStream?.runtime(runId) ?? run.result?.runtime;
       const firstBlock = deps.turnStream?.firstBlock(runId);
       const surfacePosted = deps.turnStream?.surfacePosted(runId) ?? false;
-      const alive = run.status === "running" && !leaseLapsed(run, Date.now());
+      const alive =
+        run.status === "running" && run.leaseToken !== null && (await deps.runs.leaseHeld(run, run.leaseToken));
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
       const reasoning = deps.turnStream?.reasoning(runId) ?? [];
       const stale =
-        run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
+        run.status === "pending" || run.status === "queued" ? run.attempts > 0 : run.status === "running" && !alive;
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
@@ -855,7 +852,7 @@ export function createTurnMethods(
           queued.request.conversation.threadRef !== run.request.conversation.threadRef
         )
           return { accepted: false, reason: "conversation_mismatch" };
-        if (queued.id === run.id || queued.status !== "pending") return { accepted: false, reason: "queued_started" };
+        if (queued.id === run.id || !isUnstarted(queued)) return { accepted: false, reason: "queued_started" };
         const text = queued.request.displayText ?? queued.request.text;
         signal = {
           ...signal,
@@ -900,7 +897,7 @@ export function createTurnMethods(
         if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
           if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };
           const queued = await deps.runs.get(signal.queuedRunId);
-          return { accepted: false, reason: queued?.status === "pending" ? "queued_changed" : "queued_started" };
+          return { accepted: false, reason: queued && isUnstarted(queued) ? "queued_changed" : "queued_started" };
         }
       } else await deps.signals.send(runId, outbound);
       const after = await deps.runs.get(runId);
