@@ -4,7 +4,7 @@ import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
 import { isResolved } from "./ledger-view.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, perTenant } from "../tenants/context.ts";
 
 export interface InboxRealtimeDeps {
   loops: Pick<LoopStore, "inboxLoops">;
@@ -17,16 +17,16 @@ const LOOP_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxLoops: Array<{ id: string; owner: string; tenantId: string }> = [];
-  let cacheAt = 0;
+  const cache = perTenant(() => ({ loops: [] as Array<{ id: string; owner: string; tenantId: string }>, at: 0 }));
 
-  async function inboxLoops(): Promise<typeof cachedInboxLoops> {
+  async function inboxLoops(): Promise<Array<{ id: string; owner: string; tenantId: string }>> {
     const now = Date.now();
-    if (now - cacheAt > LOOP_CACHE_TTL_MS) {
-      cachedInboxLoops = (await deps.loops.inboxLoops()).map(({ id, owner, tenantId }) => ({ id, owner, tenantId }));
-      cacheAt = now;
+    const cached = cache();
+    if (now - cached.at > LOOP_CACHE_TTL_MS) {
+      cached.loops = (await deps.loops.inboxLoops()).map(({ id, owner, tenantId }) => ({ id, owner, tenantId }));
+      cached.at = now;
     }
-    return cachedInboxLoops;
+    return cached.loops;
   }
 
   return {

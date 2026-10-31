@@ -239,7 +239,10 @@ export function createIdentityService(
     },
     hydrate(): Promise<void> {
       const state = roster();
-      state.hydrateP ??= load(false);
+      state.hydrateP ??= load(false).catch((error: unknown) => {
+        state.hydrateP = null;
+        throw error;
+      });
       return state.hydrateP;
     },
     refresh,

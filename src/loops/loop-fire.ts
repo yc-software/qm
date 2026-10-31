@@ -16,7 +16,7 @@ import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome }
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { fencedCodeBlocks, type FencedCodeBlock } from "../util/markdown.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { promptText } from "../util/text.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { isRunnable, type LoopStore } from "./loop-store.ts";
@@ -956,7 +956,9 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
 
   async function sweepStale(now: number): Promise<void> {
     for (const loop of await deps.loops.staleGoverned(now))
-      await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
+      await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now)).catch(
+        swallowAs("Loop stale governor", undefined),
+      );
   }
 
   async function itemTurn(

@@ -470,14 +470,17 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         await deps.deliveries.pruneCompleted(Date.now() - 30 * 86_400_000);
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources = await deps.sources.enabled();
-      for (const source of sources) await inTenantOf(source.tenantId, () => maintainSource(source));
-      for (const source of sources) {
-        if (source.enabled)
-          await inTenantOf(source.tenantId, () => process(source.id)).catch((error) =>
-            swallow("Loop ingestion", error),
-          );
-      }
+      const byTenant = Map.groupBy(await deps.sources.enabled(), (source) => source.tenantId);
+      await Promise.all(
+        [...byTenant].map(([tenantId, sources]) =>
+          inTenantOf(tenantId, async () => {
+            for (const source of sources)
+              await maintainSource(source).catch((error) => swallow("Loop ingress maintenance", error));
+            for (const source of sources)
+              if (source.enabled) await process(source.id).catch((error) => swallow("Loop ingestion", error));
+          }).catch((error) => swallow("Loop ingress maintenance", error)),
+        ),
+      );
     },
     process,
   };
