@@ -1,5 +1,7 @@
-{{- if hasKey .Values.services "admin" }}
-{{- fail "services.admin no longer exists; admin settings are part of web-ui at /settings. Remove services.admin" }}
+{{- range $name, $_ := .Values.services }}
+{{- if not (has $name (list "core" "auth" "web-ui" "portal" "egress-proxy")) }}
+{{- fail (printf "unknown service %q in services — valid: core, auth, web-ui, portal, egress-proxy" $name) }}
+{{- end }}
 {{- end }}
 {{- if and .Values.services.auth.enabled (not .Values.services.portal.enabled) }}
 {{- fail "auth requires services.portal.enabled=true" }}

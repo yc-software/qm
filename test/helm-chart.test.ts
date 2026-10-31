@@ -209,8 +209,8 @@ test("Helm ingress rejects embedded, missing, worker and disabled targets", opti
   assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
 });
 
-test("Helm rejects the retired admin service", options, () => {
-  assert.throws(() => render({ services: { admin: { enabled: true } } }), /services\.admin no longer exists/);
+test("Helm rejects services it does not know", options, () => {
+  assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
 });
 
 test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {

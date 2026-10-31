@@ -19,6 +19,6 @@ The web-ui server relays administrator requests to core with the signed portal i
 
 Rollback restores the old admin/auth capacity first, then the prior portal/web-ui image digests and routing configuration. This change introduces no database migration and does not rotate authentication keys.
 
-The Helm chart treats the auth entry as module configuration and renders only its hosting workload; it rejects a `services.admin` entry. Existing Helm releases require a reviewed upgrade because removing old Deployment resources happens with that upgrade. The separately deployable legacy image entrypoints remain available for rollback.
+The Helm chart treats the auth entry as module configuration and renders only its hosting workload; it rejects unknown `services` entries. Existing Helm releases require a reviewed upgrade because removing old Deployment resources happens with that upgrade. The separately deployable legacy image entrypoints remain available for rollback.
 
 For source development, install root and web-ui dependencies. Portal-only package checks also need auth dependencies (`npm ci --prefix plugins/auth`). The local dev supervisor runs core, combined web, and portal; its localhost login bypass is for local wiring checks only.
