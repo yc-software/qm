@@ -151,7 +151,7 @@ test("bound approval callbacks retain the caller key when the run store extends 
     actor,
     conversation: { kind: "dm", threadRef: "web:U1:bound" },
     deliveryTarget: "web:U1:bound",
-    deliveryWebhook: { binding: "binding" },
+    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
     text: "continue",
     idempotencyKey: "caller-action",
     async: true,
@@ -176,7 +176,11 @@ test("a scheduled bound turn returns the persisted run needed for its callback",
     triggered: true,
     text: "hello",
     idempotencyKey: "cron:bound:fire",
-    triggerDestination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+    triggerDestination: {
+      type: "webhook",
+      target: "web:U1:bound",
+      webhook: { binding: "binding", url: "https://receiver.example/qm" },
+    },
   };
   const result = await built.app.turn(request);
   const replayed = await built.app.turn(request);

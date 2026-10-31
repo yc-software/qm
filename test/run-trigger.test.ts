@@ -367,7 +367,11 @@ it("leaves a bound scheduled run's outcome to its own run delivery and keeps the
       input: "scheduled task",
       fireKey: "cron:1:fire:1",
       surface: "cron",
-      destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+      destination: {
+        type: "webhook",
+        target: "web:U1:bound",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
       errorNotice: () => "failed",
     });
     assert.deepEqual(await d.deliveries.pending("webhook"), []);
@@ -388,7 +392,11 @@ it("keeps shadow webhook results out of terminal-run recovery", async () => {
     fireKey: "cron:shadow",
     surface: "cron",
     shadow: true,
-    destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+    destination: {
+      type: "webhook",
+      target: "web:U1:bound",
+      webhook: { binding: "binding", url: "https://receiver.example/qm" },
+    },
   });
   assert.ok(request);
   assert.equal(request.deliveryTarget, undefined);

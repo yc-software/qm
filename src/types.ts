@@ -96,7 +96,7 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
-  deliveryWebhook?: { binding: string };
+  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   model?: string;
@@ -197,8 +197,13 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
+export interface DeliveryWebhook {
+  binding: string;
+  url: string;
+}
+
 export interface Destination {
-  webhook?: { binding: string };
+  webhook?: DeliveryWebhook;
   slackAccountId?: string;
   slackTeamId?: string;
   slackPolicyNamespace?: string;
@@ -383,7 +388,7 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
-  deliveryWebhook?: { binding: string };
+  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {

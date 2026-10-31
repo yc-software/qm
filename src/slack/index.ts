@@ -1,4 +1,5 @@
 import { continueInPrivate } from "./private-continuation.ts";
+import { startRelayLoop } from "../delivery/relay.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
 import { registerDeployAccessActions } from "./deploy-access.ts";
@@ -509,44 +510,16 @@ export async function startSlackPlugin(
     emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
   }
 
-  let deliveriesPollInFlight = false;
-  let deliveriesPollAgain = false;
-  let followerRetry: ReturnType<typeof setTimeout> | undefined;
-  const drainDeliveries = (): void => {
-    if (stopped) return;
-    if (deliveriesPollInFlight) {
-      deliveriesPollAgain = true;
-      return;
-    }
-    deliveriesPollInFlight = true;
-    void deliveries
-      .pollDeliveries(app.client)
-      .then((ranAsLeader) => {
-        if (!ranAsLeader && !stopped && !followerRetry) {
-          followerRetry = setTimeout(() => {
-            followerRetry = undefined;
-            drainDeliveries();
-          }, 5_000);
-          followerRetry.unref?.();
-        }
-      })
-      .catch(swallowAs("slack: delivery drain", undefined))
-      .finally(() => {
-        deliveriesPollInFlight = false;
-        if (deliveriesPollAgain) {
-          deliveriesPollAgain = false;
-          drainDeliveries();
-        }
-      });
-  };
   statusSweep.start();
-  let unsubscribeDeliveries = (): void => {};
-  let deliveriesTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON || cfg.externalAccess) {
-    unsubscribeDeliveries = core.onDeliveryEnqueued(drainDeliveries);
-    deliveriesTimer = setInterval(drainDeliveries, 60_000);
-    drainDeliveries();
-  }
+  const deliveryRelay =
+    CORE_SINGLETON || cfg.externalAccess
+      ? startRelayLoop({
+          label: "slack",
+          sweepMs: 60_000,
+          drain: () => deliveries.pollDeliveries(app.client),
+          onEnqueued: (listener) => core.onDeliveryEnqueued(listener),
+        })
+      : undefined;
 
   const contextRequestsInFlight = new Set<string>();
 
@@ -575,13 +548,11 @@ export async function startSlackPlugin(
         return;
       }
       stopped = true;
+      deliveryRelay?.stop();
       if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
       await statusSweep.stop();
       await replaySweeper?.stop();
-      if (deliveriesTimer) clearInterval(deliveriesTimer);
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (followerRetry) clearTimeout(followerRetry);
-      unsubscribeDeliveries();
       unsubscribeContextRequests();
       try {
         await app.stop();

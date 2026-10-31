@@ -152,6 +152,8 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { startOutboundRelay } from "./delivery/relay.ts";
+import { webhookChannel } from "./delivery/webhook-channel.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -2801,6 +2803,7 @@ export function buildApp(
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
+  let webhookRelay: { stop(): void } | undefined;
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
@@ -2844,6 +2847,14 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      if (config.signingSecret)
+        webhookRelay ??= startOutboundRelay(webhookChannel(config.signingSecret), {
+          claim: (type, claimMs) => app.pendingDeliveries(type, claimMs),
+          ack: (id) => app.ackDelivery(id),
+          fail: (id, reason) => app.failDelivery(id, reason),
+          lease: leaderLease,
+          onEnqueued: (listener) => deliveries.onEnqueue(listener),
+        });
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2856,6 +2867,8 @@ export function buildApp(
     backgroundGeneration++;
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
+    webhookRelay?.stop();
+    webhookRelay = undefined;
     const stopping = [
       reaper.stop(),
       processReaper?.stop(),

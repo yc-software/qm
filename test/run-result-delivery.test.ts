@@ -505,11 +505,11 @@ test("webhook run delivery correlates with the original caller request", () => {
     surface: "web",
     origin: { kind: "human" as const },
     idempotencyKey: "external-request-123",
-    deliveryWebhook: { binding: "binding" },
+    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
   };
   const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
   assert.equal(delivery?.destination.type, "webhook");
-  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
   assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
 });
 
@@ -529,7 +529,7 @@ test("bound webhook results identify every terminal outcome for native receiver 
     const request = {
       ...turn("hi", "web:alice:conversation"),
       surface: "web",
-      deliveryWebhook: { binding: "binding" },
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
     };
     const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
     assert.equal(delivery?.provenance.sourceRunId, "r-1");
@@ -539,7 +539,11 @@ test("bound webhook results identify every terminal outcome for native receiver 
   const failed = runResultDelivery(
     run({
       status: "failed",
-      request: { ...turn("hi", "web:alice:conversation"), surface: "web", deliveryWebhook: { binding: "binding" } },
+      request: {
+        ...turn("hi", "web:alice:conversation"),
+        surface: "web",
+        deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
       result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
     }),
     () => "https://portal.example.com/admin",
@@ -555,7 +559,10 @@ test("recovery replays an authorized scheduled webhook result after its caller e
   const request: OrchestratorInput = {
     ...turn("scheduled update", target),
     surface: "cron",
-    origin: { kind: "automation", destination: { type: "webhook", target, webhook: { binding: "binding" } } },
+    origin: {
+      kind: "automation",
+      destination: { type: "webhook", target, webhook: { binding: "binding", url: "https://receiver.example/qm" } },
+    },
   };
   const submitted = (await runs.enqueue({ sessionId: "scheduled", request })).run;
   const claim = await runs.claim("worker", 5_000);
@@ -578,7 +585,11 @@ test("a scheduled approval continuation correlates with the receiver's action re
     surface: "cron",
     origin: {
       kind: "automation" as const,
-      destination: { type: "webhook" as const, target: "web:alice:conversation", webhook: { binding: "binding" } },
+      destination: {
+        type: "webhook" as const,
+        target: "web:alice:conversation",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
     },
     idempotencyKey: "receiver-approval-1",
     approval: { requestId: "approval-1", approved: true },
@@ -587,5 +598,5 @@ test("a scheduled approval continuation correlates with the receiver's action re
   assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
   assert.equal(delivery?.provenance.sourceRunId, "r-1");
   assert.equal(delivery?.destination.target, "web:alice:conversation");
-  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
 });

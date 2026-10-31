@@ -1096,7 +1096,7 @@ test("a cron created and retargeted through capabilities preserves webhook routi
     type: "webhook",
     target: "web:U1:conversation",
     audienceScopeId: scopeId("personal", "U1"),
-    webhook: { binding: "00000000-0000-4000-8000-000000000001" },
+    webhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
   };
   const capability = claims("U1", scopeId("personal", "U1"), {
     destinations: [candidate],

@@ -55,12 +55,14 @@ test("webhook options are validated consistently on turns and steer requests", a
     actor: { externalId: "alice@example.test" },
     conversation: { kind: "dm", threadRef: "web:alice@example.test:conversation" },
     deliveryTarget: "web:alice@example.test:conversation",
-    deliveryWebhook: { binding: "00000000-0000-4000-8000-000000000001" },
+    deliveryWebhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
   };
   const s = start();
   try {
     for (const body of [
-      { ...request, deliveryWebhook: { binding: "bad" } },
+      { ...request, deliveryWebhook: { binding: "bad", url: "https://receiver.example/qm" } },
+      { ...request, deliveryWebhook: { binding: request.deliveryWebhook.binding } },
+      { ...request, deliveryWebhook: { ...request.deliveryWebhook, url: "file:///etc/passwd" } },
       { ...request, deliveryTarget: "different" },
       { ...request, surfaceTools: true },
     ]) {

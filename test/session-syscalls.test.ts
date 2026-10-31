@@ -1222,7 +1222,7 @@ test("a bound delegated follow-up does not overwrite its completed foreground re
     surface: "web",
     idempotencyKey: "foreground-request",
     deliveryTarget: conversation.threadRef,
-    deliveryWebhook: { binding: "bound-conversation" },
+    deliveryWebhook: { binding: "bound-conversation", url: "https://receiver.example/qm" },
   });
   const parent = await r.runs.claimById(r.parent.id, "parent", 60_000);
   await r.runs.complete(r.parent.id, parent!.leaseToken!, { status: "ok", reply: "The delegated task is running." });
@@ -1241,7 +1241,10 @@ test("a bound delegated follow-up does not overwrite its completed foreground re
   const followup = runResultDelivery(completed);
   assert.equal(followup?.provenance.sourceRequestId, undefined);
   assert.equal(followup?.provenance.sourceRunId, wake.id);
-  assert.deepEqual(followup?.destination.webhook, { binding: "bound-conversation" });
+  assert.deepEqual(followup?.destination.webhook, {
+    binding: "bound-conversation",
+    url: "https://receiver.example/qm",
+  });
   const continuation = runResultDelivery({
     ...completed,
     request: {
