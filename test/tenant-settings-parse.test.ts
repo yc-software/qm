@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { configuredModelFor, defaultModelFor, harnessCarriedModelAuthFor } from "../src/model/tenant-models.ts";
 import { DEFAULT_CODEX_MODEL_ID, defaultModelForHarness, defaultModelForProvider } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const parse = (values: Parameters<typeof parseTenantSettings>[0], harness = "pi") =>
   parseTenantSettings(values, harness);
