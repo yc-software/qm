@@ -6,6 +6,9 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;

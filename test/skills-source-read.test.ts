@@ -7,6 +7,7 @@ import type { TurnRequest } from "../src/types.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   await built.deploymentLayerReady;
   for (const actor of ["U1", "U2"]) {
     const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");

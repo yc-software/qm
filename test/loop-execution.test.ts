@@ -12,6 +12,7 @@ import { testMap } from "./support/test-database.ts";
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
     const built = buildApp(testConfig());
+    await built.identity.ready();
     const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
     await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
     const org = scopeId("org", "default-org");

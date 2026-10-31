@@ -20,6 +20,7 @@ import {
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
+import { perTenant } from "../tenants/context.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
@@ -101,7 +102,7 @@ export function modelUnavailableReason(id: string): string | undefined {
 }
 
 export function catalogModelIdTaken(id: string): boolean {
-  return REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || OPENROUTER_CATALOG_MODELS.has(id);
+  return REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || openRouterCatalogModels().has(id);
 }
 
 export function modelIdReserved(id: string): boolean {
@@ -154,10 +155,10 @@ export function fastModeModelIds(): readonly string[] {
 }
 
 const REGISTRY_BY_ID = new Map(MODEL_REGISTRY.map((m) => [m.id, m]));
-const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
+const openRouterCatalogModels = perTenant(() => new Map<string, PiModel>());
 
 export function modelDisplayName(id: string): string {
-  return overlayModel(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
+  return overlayModel(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? openRouterCatalogModels().get(id)?.name ?? id;
 }
 
 export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
@@ -218,7 +219,7 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
     },
   });
   model.input = [...definition.input];
-  OPENROUTER_CATALOG_MODELS.set(model.id, model);
+  openRouterCatalogModels().set(model.id, model);
   return model;
 }
 
@@ -276,7 +277,7 @@ function resolveBaseModel(id: string): PiModel | undefined {
     return modelFromOverlay(overlay, false);
   }
   const custom = resolveCustomModel(id);
-  return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+  return custom ? customPiModel(custom) : openRouterCatalogModels().get(id);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {

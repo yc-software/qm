@@ -15,6 +15,7 @@ import { sleep } from "../src/util/async.ts";
 // the repo's host-backed Sprites transport. This does not test VM isolation.
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
+  await built.identity.ready();
   await built.config.hydrate?.();
   await built.identity.refresh();
   await built.deploymentLayerReady;

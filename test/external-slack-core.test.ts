@@ -50,6 +50,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
       apiBaseUrl: "https://core.example.test",
     }),
   );
+  await b.identity.ready();
   await b.config.hydrate?.();
   await b.identity.refresh();
   await b.deploymentLayerReady;
@@ -275,6 +276,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
+  await b.identity.ready();
   await b.identity.refresh();
   t.after(async () => {
     b.scheduler.stop();

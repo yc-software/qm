@@ -40,6 +40,7 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
   process.env[envName] = "shared-service-token";
   try {
     const ok = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-ok-")) }));
+    await ok.identity.ready();
     assert.equal(
       await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
       null,
@@ -52,6 +53,7 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
         egressServiceHosts: [offending],
       }),
     );
+    await bad.identity.ready();
     assert.equal(
       await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
       "shared-service-token",
@@ -74,6 +76,7 @@ const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "g
 test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
+  await built.identity.ready();
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -108,6 +111,7 @@ test("cross-org — the callback rejects sealed state minted for a different org
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
+  await built.identity.ready();
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -137,6 +141,7 @@ test("empty-token guard — an adapter returning no access token fails the conne
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
+  await built.identity.ready();
   await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
@@ -174,6 +179,7 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const key = envKey("gmail.googleapis.com");
@@ -201,6 +207,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 for (const surface of ["cron", "loop"]) {
   test(`personal ${surface} selects owner credentials without grants`, async () => {
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+    await built.identity.ready();
     await selectDefaultSandbox(built, "U1", "personal:U1");
     await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
     const saved = await built.keychain!.save({
@@ -258,6 +265,7 @@ for (const bulkInventory of [false, true])
       const built = buildApp(
         testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }),
       );
+      await built.identity.ready();
       await selectDefaultSandbox(built, "U1", "personal:U1");
       if (!bulkInventory) delete built.connectorTokens.listConnectorsByOwners;
       const host = "gmail.googleapis.com";
@@ -320,6 +328,7 @@ test("operator fallback forwards metadata without reading secret values", async 
 
 test("explicit default OAuth accounts remain discoverable through bulk metadata", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1 }));
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const host = "gmail.googleapis.com";
   await built.connectorTokens.setConnectorToken(
@@ -346,6 +355,7 @@ for (const mixedOAuth of [false, true, "expired-default"] as const)
   for (const value of [undefined, "operator-fallback-token"]) {
     test(`configured operator fallback is lazy with mixedOAuth=${mixedOAuth} and available=${value !== undefined}`, async () => {
       const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "fallback-catalog-")), maxAttempts: 1 }));
+      await built.identity.ready();
       await selectDefaultSandbox(built, "U1", "personal:U1");
       const host = "gmail.googleapis.com";
       if (mixedOAuth === true)

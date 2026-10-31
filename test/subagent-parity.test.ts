@@ -7,7 +7,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -38,6 +37,7 @@ import {
   testMap,
   testDeployBackings,
   testAdvisoryLock,
+  testIdentity,
 } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -144,7 +144,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,

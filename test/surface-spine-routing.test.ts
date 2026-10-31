@@ -5,16 +5,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, buildLoadedApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function freshApp() {
+async function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildLoadedApp(testConfig({ dataDir }));
 }
 
 const actor = { externalId: "U1" };
@@ -58,7 +58,7 @@ async function pollFor(
 }
 
 test("spine ON: react/edit/delete route through the SAME reach chokepoint to the current conversation", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C5";
@@ -88,7 +88,7 @@ test("spine ON: react/edit/delete route through the SAME reach chokepoint to the
 });
 
 test("spine ON: an @mention engages a sub-conversation session that posts (no separate ambient session)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C1";
@@ -130,7 +130,7 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
 });
 
 test("spine ON: a re-delivered @mention (same idempotencyKey) spawns ONE sub-conversation run, not two", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C3";
   const root = "300.3";
   const key = "evt-abc";
@@ -145,7 +145,7 @@ test("spine ON: a re-delivered @mention (same idempotencyKey) spawns ONE sub-con
 });
 
 test("a replayed/resumed request carries surfaceTools through app.turn (approval-continuation path)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C4";
@@ -161,7 +161,7 @@ test("a replayed/resumed request carries surfaceTools through app.turn (approval
 });
 
 test("response debt: a turn that DID post keeps its monologue shed (no double reply)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!post the actual reply", "C9", "900.1"));
@@ -181,7 +181,7 @@ test("response debt: a turn that DID post keeps its monologue shed (no double re
 });
 
 test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) posts to the trigger destination", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const target = "slack:C7:700.7";
@@ -208,7 +208,7 @@ test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) post
 });
 
 test("a monitor (addressed poll fire) that finishes silently is NOT nudged into a forced reply", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn({
@@ -235,7 +235,7 @@ test("a monitor (addressed poll fire) that finishes silently is NOT nudged into 
 });
 
 test("surfaceTools with NO resolvable destination falls back to the normal auto-reply (never silences into the void)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const principal = { externalId: "U9" };
@@ -256,7 +256,7 @@ test("surfaceTools with NO resolvable destination falls back to the normal auto-
 });
 
 test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation with surface tools", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-follow";
@@ -286,7 +286,7 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
 });
 
 test("addressed + no post → exactly one nudge → the agent posts on the continuation turn", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!silent", "C-nudge", "700.1"));
@@ -301,7 +301,7 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
 });
 
 test("addressed + no post but a final text reply → the reply is delivered directly, no nudge", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!shed", "C-shed", "710.1"));
@@ -327,7 +327,7 @@ test("addressed + no post but a final text reply → the reply is delivered dire
 });
 
 test("addressed + STILL no post after the nudge → the nudge turn's text is delivered as the fallback", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!shedmute", "C-shedmute", "710.3"));
@@ -359,6 +359,7 @@ test("addressed + STILL no post after the nudge → the nudge turn's text is del
 test("reply-or-decline nudge preserves the trigger image and environment", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-spine-image-"));
   const built = buildApp(testConfig({ dataDir, securityPosture: "dangerous" }));
+  await built.identity.ready();
   built.runtime.start();
   try {
     const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -391,7 +392,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
 });
 
 test("the nudge continuation is rebuilt from history containing the first sub-turn", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!post prior", "C-nudge-read", "711.1"));
@@ -415,7 +416,7 @@ test("the nudge continuation is rebuilt from history containing the first sub-tu
 });
 
 test("addressed spine turn: the first text block posts immediately as the ack when real work follows", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!preamble On it — checking the deploy logs.", "C-ack", "720.1"));
@@ -430,7 +431,7 @@ test("addressed spine turn: the first text block posts immediately as the ack wh
 });
 
 test("first action is `post` (speaking deliberately) → the opening text is NOT harvested as an ack", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!speakpost the direct answer", "C-nopreharvest", "730.1"));
@@ -445,7 +446,7 @@ test("first action is `post` (speaking deliberately) → the opening text is NOT
 });
 
 test("addressed + finish_silently → no nudge (explicit decline is accepted)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const res = await built.app.turn({ ...mention("!finish-silent", "C-decline", "700.2"), async: false });
@@ -459,7 +460,7 @@ test("addressed + finish_silently → no nudge (explicit decline is accepted)", 
 });
 
 test("ambient (unaddressed) silence → no nudge (silence stays free)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const res = await built.app.turn({
@@ -481,7 +482,7 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
 });
 
 test("post broadcast:true posts at the channel top level, not in the current thread", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-top";
@@ -504,7 +505,7 @@ test("post broadcast:true posts at the channel top level, not in the current thr
 });
 
 test("post with an explicit ts to the current channel targets exactly <channel>:<ts>", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-top";
@@ -528,7 +529,7 @@ test("post with an explicit ts to the current channel targets exactly <channel>:
 });
 
 test("reach to a named channel resolves it, posts at that channel's top level, and echoes the match", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-top";
@@ -558,7 +559,7 @@ test("reach to a named channel resolves it, posts at that channel's top level, a
 });
 
 test('Door 2: an addressed @mention opens the sub-conversation with a <wake reason="addressed"> envelope', async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-door2";
@@ -584,7 +585,7 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
 });
 
 test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection gate reads raw text)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const channel = "C-follow2";
@@ -619,7 +620,7 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
 
 for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
   test(`surface silence preserves pending approval: ${command}`, async () => {
-    const built = freshApp();
+    const built = await freshApp();
     const result = await built.app.turn({ ...mention(command, "C-approval", command), async: false });
     assert.equal(result.status, "pending_approval");
     assert.equal(result.pendingApprovals?.length, 1);
@@ -628,7 +629,7 @@ for (const command of ["!finish-silent-approval", "!finish-silent-paused"]) {
 }
 
 test("a shared web project turn answers with its final text, not surface tools", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   built.runtime.start();
   try {
     const project = await built.app.createProject("U1", "Launch");

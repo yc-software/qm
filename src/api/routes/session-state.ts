@@ -1,4 +1,5 @@
 import type { BaseCtx, Route } from "./route.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { verifyOrReject } from "../http.ts";
 
@@ -20,6 +21,7 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
     req.resume();
     return;
   }
+  const tenant = currentTenant();
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
@@ -29,7 +31,7 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
   res.write(": open\n\n");
   const unsubscribe = app.subscribeSessionStates(
     (event) => {
-      res.write(`event: session_state\ndata: ${JSON.stringify(event)}\n\n`);
+      res.write(`event: session_state\ndata: ${JSON.stringify({ tenant, ...event })}\n\n`);
     },
     { onResync: () => res.write("event: session_state_resync\ndata: {}\n\n") },
   );
