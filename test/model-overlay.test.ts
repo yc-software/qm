@@ -13,7 +13,12 @@ import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
-  stopAtEnd(buildProductionApp(config, { tenantSettings: testTenantSettings({}, config.databaseUrl), ...overrides }));
+  stopAtEnd(
+    buildProductionApp(config, {
+      ...overrides,
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+    }),
+  );
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const MODEL_ID = "overlay-future-model";

@@ -13,6 +13,7 @@ const scope = scopeId("personal", "U1");
 async function opener() {
   const built = stopAtEnd(buildApp(testConfig(), { tenantSettings: testTenantSettings() }));
   await built.modelCredentials.set("openai", "sk-test", "admin");
+  await built.tenantSettings.get();
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);

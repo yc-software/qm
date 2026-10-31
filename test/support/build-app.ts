@@ -84,9 +84,9 @@ export function buildApp(
   const modelCalls: ModelCall[] = [];
   const app = stopAtEnd(
     buildProductionApp(config, {
-      tenantSettings: testTenantSettings({}, config.databaseUrl),
       agent: recordingModelCalls(createMockAgent(), modelCalls),
       ...overrides,
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
     }),
   );
   return Object.assign(app, { modelCalls });

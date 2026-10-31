@@ -11,7 +11,12 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
-  stopAtEnd(buildProductionApp(config, { tenantSettings: testTenantSettings({}, config.databaseUrl), ...overrides }));
+  stopAtEnd(
+    buildProductionApp(config, {
+      ...overrides,
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+    }),
+  );
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
@@ -32,6 +37,7 @@ test("admin lookup recognizes an existing model without asking for a clone templ
     assert.deepEqual(body.missing, []);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+    await built.runtime.stop();
   }
 });
 
