@@ -11,7 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -41,9 +41,8 @@ async function fixture(secret: string | undefined = controlSecret) {
       method,
       headers: {
         "content-type": "application/json",
-        ...TENANT_HEADERS,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, canonicalPayload(method, path, raw, TEST_TENANT)),
+        "x-signature": signRequest(sourceSecret, ts, canonicalPayload(method, path, raw)),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },
