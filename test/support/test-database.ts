@@ -78,8 +78,8 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
-export function testConfigTables(): ConfigTables {
-  return { ...createPostgresConfigTables(testMigratedDatabaseUrl()), fresh: true };
+export function testConfigTables(databaseUrl: string = testMigratedDatabaseUrl()): ConfigTables {
+  return { ...createPostgresConfigTables(databaseUrl), fresh: true };
 }
 
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
