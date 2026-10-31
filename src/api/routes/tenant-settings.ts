@@ -1,6 +1,7 @@
 import { orgId } from "../../config.ts";
 import { withTenant } from "../../tenants/context.ts";
 import { importTenantSettings, unknownTenantImportKeys } from "../../tenants/settings-import.ts";
+import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
@@ -37,6 +38,15 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
   }
 }
 
+async function getPluginSettings(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.tenantSettings) return sendJson(ctx.res, 404, { error: "not_found" });
+  const { values } = await ctx.deps.tenantSettings.get();
+  return sendJson(ctx.res, 200, {
+    values: Object.fromEntries(PLUGIN_SETTING_KEYS.flatMap((key) => (values[key] ? [[key, values[key]]] : []))),
+  });
+}
+
 export const tenantSettingsRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/plugin-settings", auth: "source", handle: getPluginSettings },
   { method: "PUT", path: "/v1/tenant-settings", actor: "system", auth: "source", handle: putTenantSettings },
 ];
