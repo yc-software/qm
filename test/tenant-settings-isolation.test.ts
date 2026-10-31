@@ -197,10 +197,11 @@ test("a tenant's security screen proxy classifies only that tenant's turns", asy
     SECURITY_SCREEN_PROXY_ENDPOINT: `https://screen-${name}.example.test/classify`,
     SECURITY_SCREEN_PROXY_TOKEN: `screen-token-${name}`,
   });
-  const tenantSettings = testTenantSettings(proxy("a"));
+  const config = testConfig();
+  const tenantSettings = testTenantSettings(proxy("a"), config.databaseUrl);
   await withTenant(TENANT_B, () => tenantSettings.update(proxy("b")));
   await withTenant(TENANT_C, () => tenantSettings.update({ SECURITY_SCREEN: "enforce" }));
-  const built = buildApp(testConfig(), { tenantSettings });
+  const built = buildApp(config, { tenantSettings });
   const screenedTurn = (tenant: string, threadRef: string) =>
     withTenant(tenant, () =>
       built.app.turn({
