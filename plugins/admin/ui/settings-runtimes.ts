@@ -12,7 +12,7 @@ const rows: [key: string, label: string, inherit?: string][] = [
   ["runtime", "Conversation runtime"],
   ["cron-runtime", "Cron runtime", "Job's scope default"],
   ["subagent-runtime", "Subagent runtime", "Child's scope default"],
-  ["fallback-runtime", "Fallback runtime", "Built-in fallback"],
+  ["fallback-runtime", "Fallback runtime", "No fallback"],
 ];
 const RECALL = "memory-embedding-model";
 const keys = [...rows.map(([key]) => key), RECALL];

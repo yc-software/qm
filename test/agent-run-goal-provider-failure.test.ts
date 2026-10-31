@@ -130,7 +130,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ apiKey: "sk-test", resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;

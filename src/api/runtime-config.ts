@@ -27,6 +27,7 @@ import {
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
+import { modelBilling } from "../model/model-route.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -144,7 +145,10 @@ export async function runtimeConfigBody(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
-  const modelCatalog = modelCatalogFor(new Set(models));
+  const billing = (id: string) => modelBilling(!!managedKeys.modelIds?.has(id), !!authorizeChoice);
+  const modelCatalog = Object.fromEntries(
+    Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
+  );
   return {
     scopeId: scope,
     ...(purpose ? { executionPurpose: purpose } : {}),
