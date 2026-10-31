@@ -2,10 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if ((req.url ?? "").startsWith("/v1/files/") && (req.url ?? "").includes("/content")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     return void res.end("<p>hi</p>");

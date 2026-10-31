@@ -5,7 +5,6 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sign.ts";
-import { answerFeatures } from "./core-features.ts";
 
 const secret = "session-read-test";
 let bodyStarted: (() => void) | undefined;
@@ -13,7 +12,6 @@ let bodyClosed: (() => void) | undefined;
 let cancelAttempts = 0;
 const requests: { url: string; headers: IncomingHttpHeaders }[] = [];
 const core = createServer((req, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if (req.url?.startsWith("/v1/sessions/cancel?")) {
     cancelAttempts++;
     res.writeHead(200, { "content-length": "100" });

@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 interface Call {
   method: string;
@@ -11,7 +10,6 @@ interface Call {
 }
 const calls: Call[] = [];
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   req.resume();
   req.on("end", () => {
     const pid = req.headers["x-portal-identity"];

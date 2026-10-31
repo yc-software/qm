@@ -13,13 +13,11 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { orgId } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 
 const SECRET = "web-run-ownership-secret".repeat(2);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "web-run-owner-")) }));
-await built.featureFlags.setEnabled("web_ui", scopeId("org", orgId()), true, "test");
 await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
   featureFlags: built.featureFlags,

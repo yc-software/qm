@@ -52,8 +52,8 @@ export function openaiKey(env: NodeJS.ProcessEnv = process.env): string | undefi
   return env.OPENAI_API_KEY?.trim() || undefined;
 }
 
-export function voiceEnabled(allowed: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(allowed && openaiKey(env) && env.CORE_SIGNING_SECRET?.trim());
+export function voiceEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(openaiKey(env) && env.CORE_SIGNING_SECRET?.trim());
 }
 
 export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, portalVerified: boolean): boolean {

@@ -134,8 +134,7 @@ disposable test deployment: the test redeems real links for its configured admin
   re-checked **per action** at the core — the live boundary. There is **no portal/admin id list**
   anymore; the only place an admin is named is the core's `ADMIN_GRANTS`.
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
-  verified member reaches the web UI, which admits them only when the core's `web_ui` feature flag
-  is on for them or for the org.
+  verified member is a valid user.
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
   to a same-origin path (rejects `//evil`, `/\evil`, `https:/evil`, `%2f%2f`/`%5c`). The one
   exception is an origin listed in `PORTAL_API_ALLOWED_ORIGINS`, and only on the chat API (below).

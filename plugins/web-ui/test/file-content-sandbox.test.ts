@@ -2,10 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (u.startsWith("/v1/files/") && u.includes("/content")) {
     if (u.includes("/v1/files/some-pdf/")) {

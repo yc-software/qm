@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { answerFeatures } from "./core-features.ts";
 
 let loopRequests = 0;
 let autopilotRequests = 0;
 let autopilotBody: unknown;
 const core = createServer((req: IncomingMessage, res) => {
-  const inbox = ["web_ui", "inbox_loops"];
-  if (answerFeatures(req, res, { "Alice@example.com": [...inbox, "loops"], "bob@example.com": inbox })) return;
-  const path = new URL(req.url ?? "/", "http://core").pathname;
+  const url = new URL(req.url ?? "/", "http://core");
+  const path = url.pathname;
   res.setHeader("content-type", "application/json");
+  if (path === "/v1/inbox/access")
+    return void res.end(JSON.stringify({ enabled: url.searchParams.get("principalId") === "Alice@example.com" }));
   if (req.method === "POST" && path === "/v1/session-cap") {
     return void res.end(JSON.stringify({ token: "loops-test-cap" }));
   }
@@ -57,7 +57,7 @@ test.after(() => {
   core.close();
 });
 
-test("a user with the loops flag gets loops permission and loop routes pass through", async () => {
+test("a user with inbox_loops gets loops and inbox and loop routes pass through", async () => {
   const headers = identity("Alice@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
@@ -77,15 +77,15 @@ test("a user with the loops flag gets loops permission and loop routes pass thro
   assert.deepEqual(autopilotBody, { enabled: true });
 });
 
-test("a user without the loops flag lacks the loops permission and loop routes return 403", async () => {
+test("a user without inbox_loops lacks both and loop routes return 403", async () => {
   const headers = identity("bob@example.com");
   const me = await fetch(`${base}/me`, { headers });
   assert.equal(me.status, 200);
-  assert.deepEqual((await me.json()).permissions, ["member", "inbox"]);
+  assert.deepEqual((await me.json()).permissions, ["member"]);
 
   const loops = await fetch(`${base}/api/loops`, { headers });
   assert.equal(loops.status, 403);
-  assert.deepEqual(await loops.json(), { error: "forbidden" });
+  assert.deepEqual(await loops.json(), { error: "feature_disabled" });
   assert.equal(loopRequests, 1);
 
   const autopilot = await fetch(`${base}/api/loops/loop-1/autopilot`, {

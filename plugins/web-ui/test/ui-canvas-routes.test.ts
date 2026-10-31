@@ -3,11 +3,9 @@ import { test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { answerFeatures } from "./core-features.ts";
 
 const seen: Array<{ method: string; url: string; body: string }> = [];
 const core = createServer(async (req, res) => {
-  if (answerFeatures(req, res, { "alice@example.com": ["web_ui"] })) return;
   let body = "";
   for await (const chunk of req) body += chunk;
   seen.push({ method: req.method ?? "", url: req.url ?? "", body });

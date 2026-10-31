@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { answerFeatures } from "./core-features.ts";
 
 let lastMemory: { url: string; portalHeader: string | undefined } | null = null;
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (u.startsWith("/v1/memory")) {
     lastMemory = { url: u, portalHeader: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined };

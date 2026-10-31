@@ -61,9 +61,9 @@ test("retired feature records are not offered as configurable flags", async () =
 
 test("email ids match a person's flags in any case", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  await store.setEnabled("loops", scopeId("personal", "Ada@Example.com"), true, "admin");
-  assert.deepEqual((await store.get("loops"))?.enabledScopes, [scopeId("personal", "ada@example.com")]);
-  assert.ok((await store.enabledFor(scopeId("personal", "ADA@example.COM"))).has("loops"));
-  await store.setEnabled("loops", scopeId("personal", "ada@EXAMPLE.com"), false, "admin");
-  assert.deepEqual((await store.get("loops"))?.enabledScopes, []);
+  await store.setEnabled("inbox_loops", scopeId("personal", "Ada@Example.com"), true, "admin");
+  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, [scopeId("personal", "ada@example.com")]);
+  assert.ok((await store.enabledFor(scopeId("personal", "ADA@example.COM"))).has("inbox_loops"));
+  await store.setEnabled("inbox_loops", scopeId("personal", "ada@EXAMPLE.com"), false, "admin");
+  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, []);
 });

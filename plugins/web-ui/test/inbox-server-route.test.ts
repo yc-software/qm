@@ -19,6 +19,7 @@ interface Call {
 }
 
 const calls: Call[] = [];
+let previewEnabled = true;
 const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
@@ -27,11 +28,7 @@ const core = createServer((req: IncomingMessage, res) => {
     calls.push({ method: req.method ?? "GET", url: req.url ?? "", body });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
-      JSON.stringify(
-        corePath(req.url ?? "") === "/v1/features"
-          ? { enabled: coreQuery(req.url ?? "", "principalId") === "alice" ? ["web_ui", "inbox_loops"] : ["web_ui"] }
-          : { ok: true },
-      ),
+      JSON.stringify(corePath(req.url ?? "") === "/v1/inbox/access" ? { enabled: previewEnabled } : { ok: true }),
     );
   });
 });
@@ -155,16 +152,11 @@ test("an item id that would escape its loop is encoded, not obeyed", async () =>
   );
 });
 
-test("the ledger opens to inbox users; the rest of the loops surface still needs the loops flag", async () => {
+test("an inbox_loops user reaches the ledger and the rest of the loops surface", async () => {
   const ledger = await fetch(`${base}/api/loops/l-2/items`, { headers });
   assert.equal(ledger.status, 200);
-  const admin = await fetch(`${base}/api/loops`, { headers });
-  assert.equal(admin.status, 403);
-});
-
-test("a signed-in user who is not an inbox user cannot read the ledger", async () => {
-  const r = await fetch(`${base}/api/loops/l-2/items`, { headers: headersFor("mallory") });
-  assert.equal(r.status, 403);
+  const loops = await fetch(`${base}/api/loops`, { headers });
+  assert.equal(loops.status, 200);
 });
 
 test("inbox routes refuse anonymous callers", async () => {
@@ -173,13 +165,18 @@ test("inbox routes refuse anonymous callers", async () => {
 });
 
 test("feature flag denial blocks Inbox and Loop API access", async () => {
-  for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {
-    const response = await fetch(`${base}${path}`, {
-      headers: headersFor("mallory"),
-      ...(path.endsWith("selection") ? { method: "POST", body: "{}" } : {}),
-    });
-    assert.equal(response.status, 403);
-    assert.equal((await response.json()).error, "feature_disabled");
+  previewEnabled = false;
+  try {
+    for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {
+      const response = await fetch(`${base}${path}`, {
+        headers,
+        ...(path.endsWith("selection") ? { method: "POST", body: "{}" } : {}),
+      });
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error, "feature_disabled");
+    }
+  } finally {
+    previewEnabled = true;
   }
 });
 

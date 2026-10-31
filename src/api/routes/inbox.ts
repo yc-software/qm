@@ -217,6 +217,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function access(ctx: ApiCtx): Promise<void> {
+  const acting = actingPrincipal(ctx);
+  if (!acting) return;
+  sendJson(ctx.res, 200, {
+    enabled: (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", acting.actorId))) === true,
+  });
+}
+
 async function viewers(ctx: ApiCtx): Promise<void> {
   if (ctx.capability || ctx.actor) return sendJson(ctx.res, 403, { error: "forbidden" });
   const body = isObj(ctx.body) ? ctx.body : {};
@@ -240,5 +248,6 @@ async function viewers(ctx: ApiCtx): Promise<void> {
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
   { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", handle: viewers },
+  { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
 ];

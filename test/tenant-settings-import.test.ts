@@ -107,35 +107,25 @@ test("the import never replaces values an admin already stored", async () => {
   });
 });
 
-test("the import turns the web UI allowlists into access flags once, lowercasing email ids", async () => {
+test("the import adds the listed loops users to inbox_loops and leaves everyone else alone", async () => {
   const d = await deps();
   await withTenant(THIRD_TENANT, async () => {
-    await importTenantSettings(
-      { WEB_UI_PRINCIPALS: "", LOOPS_USERS: "Ada@Example.com, bo@example.com", WEB_UI_VOICE_USERS: "all" },
-      d,
-    );
-    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, [root]);
-    assert.deepEqual((await d.featureFlags.get("loops"))?.enabledScopes, [
+    await d.featureFlags.setEnabled("inbox_loops", scopeId("personal", "kept@example.com"), true, "admin");
+    await importTenantSettings({ LOOPS_USERS: "Ada@Example.com, bo@example.com" }, d);
+    assert.deepEqual((await d.featureFlags.get("inbox_loops"))?.enabledScopes, [
       scopeId("personal", "ada@example.com"),
       scopeId("personal", "bo@example.com"),
+      scopeId("personal", "kept@example.com"),
     ]);
-    assert.deepEqual((await d.featureFlags.get("voice"))?.enabledScopes, [root]);
-    await d.featureFlags.setEnabled("web_ui", root, false, "admin");
-    await importTenantSettings({ WEB_UI_PRINCIPALS: "", LOOPS_USERS: "cy@example.com" }, d);
-    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, []);
-    assert.equal((await d.featureFlags.get("loops"))?.enabledScopes.length, 2);
+    await importTenantSettings({ LOOPS_USERS: "" }, d);
+    assert.equal((await d.featureFlags.get("inbox_loops"))?.enabledScopes.length, 3);
   });
 });
 
-test("a listed web UI allowlist becomes per-person sign-in, and an absent one changes nothing", async () => {
+test("an empty loops list adds nobody", async () => {
   const d = await deps();
   await withTenant(THIRD_TENANT, async () => {
-    await importTenantSettings({ WEB_UI_PRINCIPALS: "Ada@Example.com,U123" }, d);
-    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, [
-      scopeId("personal", "ada@example.com"),
-      scopeId("personal", "u123"),
-    ]);
-    assert.equal(await d.featureFlags.get("voice"), null);
-    assert.equal(await d.featureFlags.get("loops"), null);
+    await importTenantSettings({ LOOPS_USERS: " , " }, d);
+    assert.equal(await d.featureFlags.get("inbox_loops"), null);
   });
 });

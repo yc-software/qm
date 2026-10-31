@@ -3,12 +3,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 const coreTurnBodies: Array<Record<string, unknown>> = [];
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = new URL(req.url ?? "", "http://core");
   const reply = (status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json" });

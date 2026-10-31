@@ -3,7 +3,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 // The scenario Bugbot caught on this feature: a surface instance that saw only the QUEUE
 // submission holds the pending run in its local index and nothing else. Core's durable answer
@@ -18,7 +17,6 @@ let durableHead: string | null = "run-live";
 let queued: Array<{ runId: string; text: string }> = [{ runId: "run-queued", text: "after this" }];
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = new URL(req.url ?? "", "http://core");
   const reply = (status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json" });

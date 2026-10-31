@@ -4,13 +4,11 @@ import assert from "node:assert/strict";
 import { createServer, get as httpGet, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
-import { answerFeatures } from "./core-features.ts";
 
 const PAGE = "<!doctype html><h1>deployed app</h1>";
 let lastCoreRequest: { url: string; principal: string } | null = null;
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   lastCoreRequest = { url: u, principal: String(req.headers["x-as-principal"] ?? "") };
   if (!u.startsWith("/d/")) {

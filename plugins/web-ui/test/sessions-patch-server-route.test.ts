@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { answerFeatures } from "./core-features.ts";
 
 function isNoncedCoreCall(url: string, pathname: string): boolean {
   const u = new URL(url, "http://core");
@@ -22,7 +21,6 @@ interface Call {
 
 const calls: Call[] = [];
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {

@@ -4,13 +4,8 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "../plugins/web-ui/test/core-features.ts";
 
-const core = createHttpServer((req, res) => {
-  if (!answerFeatures(req, res, { alice: ["web_ui"] })) res.writeHead(404).end();
-});
-core.listen(0);
-process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
+process.env.CORE_API_URL = "http://localhost:1";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);
@@ -18,7 +13,6 @@ const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
 
 after(async () => {
   await new Promise<void>((r) => web.close(() => r()));
-  await new Promise<void>((r) => core.close(() => r()));
 });
 
 test("an over-cap request body is rejected with 413 (not buffered unbounded, not a 502)", async () => {

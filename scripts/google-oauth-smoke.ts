@@ -198,7 +198,6 @@ const core = createServer(built.app, {
 let web: ChildProcessWithoutNullStreams | null = null;
 try {
   await new Promise<void>((resolveListen) => core.listen(corePort, "127.0.0.1", () => resolveListen()));
-  await built.featureFlags.setEnabled("web_ui", scopeId("personal", actor), true, "google-oauth-smoke");
   web = spawn(process.execPath, ["plugins/web-ui/server/index.ts"], {
     cwd: process.cwd(),
     env: {

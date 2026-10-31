@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { sendBuffered } from "../../chassis/src/http.ts";
-import { answerFeatures } from "./core-features.ts";
 
 const SECRET = "web-ui-compression-test";
 
@@ -22,7 +21,6 @@ const sessionsPayload = JSON.stringify({
 });
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   req.resume();
   sendBuffered(
     res,

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 const activities = [
   { id: "app", title: "Build a home for my projects", prompt: "Build a private project tracker.", icon: "app" },
@@ -10,7 +9,6 @@ const activities = [
 let generatedRequest: unknown;
 let generation = false;
 const core = createServer(async (req, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if (req.method === "GET" && req.url?.startsWith("/v1/suggested-activities?")) {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ enabled: generation }));

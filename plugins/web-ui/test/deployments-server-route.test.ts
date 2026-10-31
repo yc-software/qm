@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
 function isNoncedCoreCall(url: string, pathname: string): boolean {
   const u = new URL(url, "http://core");
@@ -32,7 +31,6 @@ const deployment = {
   versions: [{ version: 2, createdAt: 123, commit: "abc123" }],
 };
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {

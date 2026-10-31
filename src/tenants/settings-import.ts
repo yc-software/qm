@@ -1,5 +1,5 @@
 import { PROVIDERS } from "../connectors/oauth.ts";
-import type { FeatureFlagStore, FeatureName } from "../feature-flags.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import { MODEL_PROVIDERS, type ModelProvider } from "../model/pi-models.ts";
 import { sanitizeBranding } from "../resolution/branding.ts";
@@ -17,11 +17,6 @@ const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
 
 const BRANDING_ENV = ["ORG_BRAND_ACCENT", "ORG_BRAND_MARK", "ORG_BRAND_SELF_LABEL", "ORG_BRAND_ORG_NAME"] as const;
 const POSTURE_ENV = ["HARNESS_SECURITY_POSTURE", "HARNESS_SHARING_POSTURE"] as const;
-const ACCESS_FLAG_ENV = {
-  WEB_UI_PRINCIPALS: "web_ui",
-  LOOPS_USERS: "loops",
-  WEB_UI_VOICE_USERS: "voice",
-} as const satisfies Record<string, FeatureName>;
 
 function oauthClientEnv(): string[] {
   return [
@@ -36,7 +31,7 @@ export function tenantImportKeys(): string[] {
     ...Object.values(PROVIDER_KEY_ENV),
     ...BRANDING_ENV,
     ...POSTURE_ENV,
-    ...Object.keys(ACCESS_FLAG_ENV),
+    "LOOPS_USERS",
     ...oauthClientEnv(),
   ];
 }
@@ -66,7 +61,7 @@ export function retiredEnvPresent(env: NodeJS.ProcessEnv): string[] {
 export interface TenantSettingsImportDeps {
   settings: TenantSettingsStore;
   modelCredentials: Pick<ModelCredentialStore, "set" | "statuses">;
-  featureFlags: Pick<FeatureFlagStore, "get" | "setEnabled">;
+  featureFlags: Pick<FeatureFlagStore, "setEnabled">;
   config: Pick<
     ScopedConfigStore,
     | "getSecurityPostureOwnDurable"
@@ -132,25 +127,10 @@ async function importOAuthClients(
   }
 }
 
-function accessScopes(key: keyof typeof ACCESS_FLAG_ENV, raw: string, rootScope: ScopeId): ScopeId[] {
-  const ids = raw
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  if (key === "WEB_UI_PRINCIPALS" && ids.length === 0) return [rootScope];
-  if (key === "WEB_UI_VOICE_USERS" && ids.includes("all")) return [rootScope];
-  return ids.map((id) => scopeId("personal", id));
-}
-
-async function importAccessFlags(
-  values: Readonly<Record<string, string | undefined>>,
-  deps: TenantSettingsImportDeps,
-): Promise<void> {
-  for (const [key, feature] of Object.entries(ACCESS_FLAG_ENV) as [keyof typeof ACCESS_FLAG_ENV, FeatureName][]) {
-    const raw = values[key];
-    if (raw === undefined || (await deps.featureFlags.get(feature))) continue;
-    for (const scope of accessScopes(key, raw, deps.rootScope))
-      await deps.featureFlags.setEnabled(feature, scope, true, deps.actor);
+async function importLoopsUsers(raw: string | undefined, deps: TenantSettingsImportDeps): Promise<void> {
+  for (const id of (raw ?? "").split(",")) {
+    const person = id.trim().toLowerCase();
+    if (person) await deps.featureFlags.setEnabled("inbox_loops", scopeId("personal", person), true, deps.actor);
   }
 }
 
@@ -183,6 +163,6 @@ export async function importTenantSettings(
     );
   }
   await importOAuthClients(values, deps);
-  await importAccessFlags(values, deps);
+  await importLoopsUsers(values.LOOPS_USERS, deps);
   return present;
 }

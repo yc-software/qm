@@ -23,19 +23,6 @@ export const FEATURES = {
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
-  web_ui: {
-    label: "Web UI sign-in",
-    hint: "Lets the selected people sign in to the web UI. Enable it for the organization to let every member in. Turning it off signs them out on their next request.",
-  },
-  loops: {
-    label: "Loops workspace (web UI)",
-    personalOnly: true,
-    hint: "Shows the full Loops workspace in the web UI. People also need Inbox Loops; without this flag they get Inbox and the loop ledger only.",
-  },
-  voice: {
-    label: "Voice and dictation (web UI)",
-    hint: "Turns on live voice and dictation in the web UI. The web UI also needs an OpenAI API key, and impersonated sessions never get voice.",
-  },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",
     personalOnly: true,

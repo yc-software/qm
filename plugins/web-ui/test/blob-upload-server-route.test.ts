@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
-import { answerFeatures } from "./core-features.ts";
 
 interface RecordedBlob {
   sha: string;
@@ -22,7 +21,6 @@ const setTurnBody = (b: TurnBody | null): void => {
 };
 
 const core = createServer((req: IncomingMessage, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (req.method === "POST" && u.startsWith("/v1/blobs")) {
     const sha = String(req.headers["x-content-sha256"] ?? "");

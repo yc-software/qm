@@ -149,7 +149,7 @@ let pendingCanvasRestore: Promise<void> | null = null;
 
 setSigninRequiredHandler((detail) => {
   authMode = detail.mode ?? authMode;
-  renderAuthGate(gateFor(authMode, detail.reason));
+  renderAuthGate(gateFor(authMode));
 });
 
 onExitCanvas(() => exitSplitIfActive());
@@ -403,21 +403,6 @@ function portalGate() {
   `);
 }
 
-function deniedGate() {
-  return gateShell(html`
-    <h1>You don't have access</h1>
-    <p class="signin-body">
-      Your account is signed in and verified — it just isn't allowed on this instance. Ask an administrator to add you.
-    </p>
-    <button class="btn" type="button" @click=${signOut}>Sign out</button>
-    ${
-      authMode === "dev"
-        ? html`<div class="hint">An admin turns on <b>Web UI sign-in</b> in Admin → Feature flags.</div>`
-        : nothing
-    }
-  `);
-}
-
 function retryBoot(): void {
   void bootSafely();
 }
@@ -481,10 +466,7 @@ function devGate(gate: { value?: string; error?: string; pending?: boolean }) {
 }
 
 export type AuthGate =
-  | { kind: "portal" }
-  | { kind: "denied" }
-  | { kind: "unreachable" }
-  | { kind: "dev"; value?: string; error?: string; pending?: boolean };
+  { kind: "portal" } | { kind: "unreachable" } | { kind: "dev"; value?: string; error?: string; pending?: boolean };
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
@@ -495,8 +477,6 @@ export function renderAuthGate(gate: AuthGate): void {
     switch (gate.kind) {
       case "portal":
         return portalGate();
-      case "denied":
-        return deniedGate();
       case "unreachable":
         return unreachableGate();
       default:
@@ -506,8 +486,7 @@ export function renderAuthGate(gate: AuthGate): void {
   render(body, appEl as HTMLElement);
 }
 
-function gateFor(mode: AuthMode, reason: "unauthenticated" | "not_allowed" | undefined): AuthGate {
-  if (reason === "not_allowed") return { kind: "denied" };
+function gateFor(mode: AuthMode): AuthGate {
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
@@ -1152,7 +1131,7 @@ export async function boot(): Promise<void> {
   if (r.status === 401) {
     const body = (await r.json().catch(() => ({}))) as SigninRequired;
     authMode = body.mode ?? "portal";
-    renderAuthGate(gateFor(authMode, body.reason));
+    renderAuthGate(gateFor(authMode));
     return;
   }
   if (!r.ok) {

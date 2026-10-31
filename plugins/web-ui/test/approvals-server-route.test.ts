@@ -32,8 +32,8 @@ const core = createServer((req: IncomingMessage, res) => {
       body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
     });
     res.setHeader("content-type", "application/json");
-    if (url.startsWith("/v1/features")) {
-      res.end(JSON.stringify({ enabled: inboxEnabled ? ["web_ui", "inbox_loops"] : ["web_ui"] }));
+    if (url.startsWith("/v1/inbox/access")) {
+      res.end(JSON.stringify({ enabled: inboxEnabled }));
       return;
     }
     if (url.startsWith("/v1/approvals/a-inbox")) {

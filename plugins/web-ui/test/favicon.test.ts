@@ -5,10 +5,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { answerFeatures } from "./core-features.ts";
 
-const core = createServer((req, res) => {
-  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
+const core = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end("{}");
 });

@@ -55,16 +55,14 @@ const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
 const AUTH_MODE = COOKIE_AUTH ? "dev" : "portal";
-async function webFeatures(user: string): Promise<ReadonlySet<string>> {
+async function hasInboxLoopPreview(user: string): Promise<boolean> {
   try {
-    const response = await coreFetch("GET", `/v1/features?principalId=${encodeURIComponent(user)}`, "", 2_000);
-    const enabled: unknown = response.status === 200 ? JSON.parse(response.text).enabled : [];
-    return new Set(Array.isArray(enabled) ? enabled.filter((f) => typeof f === "string") : []);
+    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    return response.status === 200 && JSON.parse(response.text).enabled === true;
   } catch {
-    return new Set();
+    return false;
   }
 }
-const requestFeatures = new WeakMap<IncomingMessage, ReadonlySet<string>>();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
@@ -338,7 +336,7 @@ async function resolveWebConversation(
       message: "you can only chat in your personal context or a shared context you're in",
     };
   }
-  if (threadRef === `web:${user}:inbox` && !(await webFeatures(user)).has("inbox_loops"))
+  if (threadRef === `web:${user}:inbox` && !(await hasInboxLoopPreview(user)))
     return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }
@@ -424,9 +422,7 @@ interface Identity {
   impersonator: string | null;
   portalVerified: boolean;
 }
-type Denial = "unauthenticated" | "not_allowed";
-
-function claimedIdentity(req: IncomingMessage): Identity | null {
+function resolveIdentity(req: IncomingMessage): Identity | null {
   let user: string | null | undefined;
   let name: string | null | undefined;
   let impersonator: string | null | undefined;
@@ -448,26 +444,12 @@ function claimedIdentity(req: IncomingMessage): Identity | null {
   return { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) };
 }
 
-function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
-  const identity = claimedIdentity(req);
-  if (!identity) return { denied: "unauthenticated" };
-  if (!requestFeatures.get(req)?.has("web_ui")) return { denied: "not_allowed" };
-  return { identity };
-}
-
-function resolveIdentity(req: IncomingMessage): Identity | null {
-  const outcome = authenticate(req);
-  return "identity" in outcome ? outcome.identity : null;
-}
-
 function cookieUser(req: IncomingMessage): string | null {
   return resolveIdentity(req)?.user ?? null;
 }
 
-function unauthorized(res: ServerResponse, req: IncomingMessage): void {
-  const outcome = authenticate(req);
-  const denied = "denied" in outcome ? outcome.denied : "unauthenticated";
-  return json(res, 401, { error: "sign in", mode: AUTH_MODE, reason: denied });
+function unauthorized(res: ServerResponse): void {
+  return json(res, 401, { error: "sign in", mode: AUTH_MODE });
 }
 
 const SESSION_TTL_S = 90 * 24 * 60 * 60;
@@ -1436,11 +1418,7 @@ const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      const features = requestFeatures.get(req);
-      if (features?.has("inbox_loops")) {
-        if (features.has("loops")) permissions.push("loops");
-        permissions.push("inbox");
-      }
+      if (await hasInboxLoopPreview(user)) permissions.push("loops", "inbox");
       return json(res, 200, {
         user,
         org: ORG,
@@ -3370,11 +3348,6 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     })();
     if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
-    if (!(await webFeatures(id)).has("web_ui"))
-      return json(res, 403, {
-        error: "not_allowed",
-        message: `${id.slice(0, 120)} can't sign in to this instance. An admin can turn on Web UI sign-in for this person or the whole organization in Admin → Feature flags.`,
-      });
     res.writeHead(200, {
       "set-cookie": sessionCookie(id),
       "content-type": "application/json",
@@ -3458,24 +3431,18 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
-    const features = requestFeatures.get(req)!;
+    if (!user) return unauthorized(res);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
         org: ORG,
         publicUrl: PUBLIC_URL,
-        voice: features.has("voice"),
       });
     }
 
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    if ((inboxPath || loopsPath) && !features.has("inbox_loops")) return json(res, 403, { error: "feature_disabled" });
-    const ledgerPath =
-      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
-    if (loopsPath && !features.has("loops") && !ledgerPath) {
-      return json(res, 403, { error: "forbidden" });
-    }
+    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+      return json(res, 403, { error: "feature_disabled" });
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });
@@ -3483,7 +3450,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
   if (method === "GET" && path.startsWith("/deployments/")) {
     const user = cookieUser(req);
-    if (!user) return unauthorized(res, req);
+    if (!user) return unauthorized(res);
     const rest = path.slice("/deployments/".length);
     const slash = rest.indexOf("/");
     const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
@@ -3543,11 +3510,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await portalTokenStore.run(token, async () => {
-      const claimed = claimedIdentity(req);
-      if (claimed) requestFeatures.set(req, await webFeatures(claimed.user));
-      await routeRequest(req, res);
-    });
+    await portalTokenStore.run(token, () => routeRequest(req, res));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

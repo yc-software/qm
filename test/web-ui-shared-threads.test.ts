@@ -13,13 +13,10 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { orgId } from "../src/config.ts";
-import { scopeId } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) }));
-await built.featureFlags.setEnabled("web_ui", scopeId("org", orgId()), true, "test");
 await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 built.runtime.start();
 const core = createServer(built.app, {
