@@ -619,7 +619,7 @@ async function identity(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, { userId: userIds[0], userIds });
 }
 
-export interface SlackAccountLink {
+interface SlackAccountLink {
   principalId: string;
   accountId: string;
   memberId: string;
@@ -627,6 +627,11 @@ export interface SlackAccountLink {
   teamId: string;
   user: string;
   workspace: string;
+}
+
+export interface SlackAccountRows {
+  get(principalId: string): Promise<SlackAccountLink | null>;
+  put(principalId: string, link: SlackAccountLink): Promise<void>;
 }
 
 async function slackStatus(ctx: ApiCtx): Promise<void> {

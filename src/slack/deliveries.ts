@@ -29,6 +29,7 @@ import {
   applyReactions,
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import { withTenant, withoutTenant } from "../tenants/context.ts";
 import type { Delivery } from "../types.ts";
 import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
@@ -62,28 +63,33 @@ function mergeSlackApiMs(body: unknown, slackApiMs: number | undefined): unknown
   return body;
 }
 
-export function createDeliveryPoller(deps: {
-  clientForAccount?: (accountId: string, teamId?: string) => any;
+export const DEFAULT_SLACK_ACCOUNT = "default";
+
+export interface DeliveryTenant {
+  clientForAccount(accountId: string, teamId?: string): any;
   externalNamespace?: (accountId: string) => string | undefined;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
-  core: SlackCoreClient;
   webUiPublicUrl?: string;
-  flow: TurnFlow;
-  threads: ReturnType<typeof createThreadTracker>;
+  flow: Pick<TurnFlow, "inFlightRuns">;
+  threads: Pick<ReturnType<typeof createThreadTracker>, "mark">;
   clientForIdentity(identity: string): any;
+}
+
+export function createDeliveryPoller(deps: {
+  core: SlackCoreClient;
+  tenant(tenantId: string): DeliveryTenant | undefined;
   claimMs?: number;
   slowDrainMs?: number;
-}): { pollDeliveries(client: any): Promise<boolean> } {
-  const { core, flow, threads, clientForIdentity } = deps;
+}): { pollDeliveries(): Promise<boolean> } {
+  const { core } = deps;
   const claimMs = deps.claimMs ?? DELIVERY_CLAIM_MS;
   const slowDrainMs = deps.slowDrainMs ?? SLOW_DRAIN_ALARM_MS;
   const claimMargin = Math.min(DELIVERY_CLAIM_MARGIN_MS, Math.floor(claimMs / 3));
   const recoveredRow = (d: Delivery): boolean => typeof d.createdAt === "number" && Date.now() - d.createdAt > claimMs;
-  const { inFlightRuns } = flow;
 
   async function drainClaimed(
     types: string[],
-    deliver: (d: Delivery) => Promise<void>,
+    deliver: (d: Delivery, tenant: DeliveryTenant) => Promise<void>,
     leaseLost?: () => boolean,
   ): Promise<number> {
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -95,7 +101,7 @@ export function createDeliveryPoller(deps: {
       let complete = true;
       for (const t of types) {
         try {
-          const claimed = await core.claimDeliveries(t, claimMs);
+          const claimed = await withoutTenant(() => core.claimDeliveries(t, claimMs));
           const at = Date.now();
           for (const r of claimed) expiresAt.set(r.id, at + claimMs);
           rows.push(...claimed);
@@ -150,7 +156,8 @@ export function createDeliveryPoller(deps: {
         console.error("[slack-plugin] delivery dispatch lease lost mid-drain — stopping; rows recover after claim TTL");
         return queue.length;
       }
-      await deliver(d);
+      const tenant = d.tenantId ? deps.tenant(d.tenantId) : undefined;
+      if (tenant) await withTenant(d.tenantId!, () => deliver(d, tenant));
     }
     return queue.length;
   }
@@ -158,8 +165,8 @@ export function createDeliveryPoller(deps: {
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);
 
-  function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
-    const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
+  function deliveryFooter(d: Delivery, tenant: DeliveryTenant): Array<Record<string, unknown>> {
+    const base = tenant.webUiPublicUrl?.trim().replace(/\/+$/, "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
@@ -200,21 +207,17 @@ export function createDeliveryPoller(deps: {
       );
     };
 
-  function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
-    if (deps.clientForAccount)
-      return deps.clientForAccount(destination.slackAccountId ?? "default", destination.slackTeamId);
-    return destination.slackAccountId ? undefined : defaultClient;
-  }
-
-  async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
+  async function deliverToConversations(leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["slack", "group"],
-      async (d) => {
-        const destinationClient = deliveryClient(defaultClient, d.destination);
-        if (!destinationClient) return;
-        const client = destinationClient;
+      async (d, tenant) => {
+        const client = tenant.clientForAccount(
+          d.destination.slackAccountId ?? DEFAULT_SLACK_ACCOUNT,
+          d.destination.slackTeamId,
+        );
+        if (!client) return;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
-        const namespace = deps.externalNamespace?.(d.destination.slackAccountId ?? "default");
+        const namespace = tenant.externalNamespace?.(d.destination.slackAccountId ?? DEFAULT_SLACK_ACCOUNT);
         if (
           namespace &&
           (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
@@ -224,7 +227,7 @@ export function createDeliveryPoller(deps: {
           await ackDelivery(d.id);
           return;
         }
-        if (runId && inFlightRuns.has(runId)) return;
+        if (runId && tenant.flow.inFlightRuns.has(runId)) return;
         if (runId && typeof d.createdAt === "number" && Date.now() - d.createdAt < RUN_RECOVERY_GRACE_MS) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
@@ -238,15 +241,15 @@ export function createDeliveryPoller(deps: {
                 runId &&
                 continuation.task &&
                 d.provenance?.sourceThreadRef.startsWith("external-slack:") &&
-                deps.continuePrivate
+                tenant.continuePrivate
               ) {
-                await deps.continuePrivate(runId, continuation.task);
+                await tenant.continuePrivate(runId, continuation.task);
                 return undefined;
               }
-              const postClient = d.destination.identity ? clientForIdentity(d.destination.identity) : client;
+              const postClient = d.destination.identity ? tenant.clientForIdentity(d.destination.identity) : client;
               const { channel, threadTs } = parseDeliveryTarget(d.destination.target);
               if (d.destination.keychainAskId) {
-                await deliverKeychainCard(core, client, d, channel, threadTs, deps.webUiPublicUrl);
+                await deliverKeychainCard(core, client, d, channel, threadTs, tenant.webUiPublicUrl);
                 return undefined;
               }
               if (d.destination.react) {
@@ -314,7 +317,7 @@ export function createDeliveryPoller(deps: {
                     .catch(swallowAs("slack: post upload-failure note", undefined));
                 }
               };
-              const messageFooter = deliveryFooter(d);
+              const messageFooter = deliveryFooter(d, tenant);
               if (!text.trim() && !messageFooter.length && d.attachments?.length) text = "Files attached.";
               const footer = [
                 ...messageFooter,
@@ -330,7 +333,7 @@ export function createDeliveryPoller(deps: {
                     .catch(swallowAs("slack: delete status placeholder", undefined));
                 }
                 await replayAttachments(threadTs);
-                if (d.attachments?.length && threadTs) threads.mark(channel, threadTs, true);
+                if (d.attachments?.length && threadTs) tenant.threads.mark(channel, threadTs, true);
                 return undefined;
               }
               const verifyOldest = recoveryVerifyOldest(
@@ -357,7 +360,7 @@ export function createDeliveryPoller(deps: {
                     metadata: deliveryMetadata(d.idempotencyKey ?? d.id),
                     ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
                   });
-                  if (threadTs) threads.mark(channel, threadTs, true);
+                  if (threadTs) tenant.threads.mark(channel, threadTs, true);
                   if (!alreadyDelivered) await replayAttachments(threadTs);
                   return undefined;
                 } catch (e) {
@@ -376,7 +379,7 @@ export function createDeliveryPoller(deps: {
                 runId || recoveredRow(d) ? { verifyFirst: true, ...(verifyOldest ? { verifyOldest } : {}) } : undefined,
               );
               const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
-              if (root) threads.mark(channel, root, true);
+              if (root) tenant.threads.mark(channel, root, true);
               if (!res.reused) await replayAttachments(root);
               return undefined;
             } finally {
@@ -394,11 +397,14 @@ export function createDeliveryPoller(deps: {
     );
   }
 
-  async function deliverToPrincipals(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
+  async function deliverToPrincipals(leaseLost?: () => boolean): Promise<number> {
     return drainClaimed(
       ["principal"],
-      async (d) => {
-        const client = deliveryClient(defaultClient, d.destination);
+      async (d, tenant) => {
+        const client = tenant.clientForAccount(
+          d.destination.slackAccountId ?? DEFAULT_SLACK_ACCOUNT,
+          d.destination.slackTeamId,
+        );
         if (!client) return;
         let slackApiMs: number | undefined;
         await deliverWithRetry({
@@ -409,7 +415,7 @@ export function createDeliveryPoller(deps: {
             try {
               if (d.destination.keychainAskId) {
                 const dm = await openConversationFor(client, [d.destination.target]);
-                await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, deps.webUiPublicUrl);
+                await deliverKeychainCard(core, client, d, dm, d.destination.threadTs, tenant.webUiPublicUrl);
                 return undefined;
               }
               const commandApproval = d.destination.commandApprovalId
@@ -433,9 +439,9 @@ export function createDeliveryPoller(deps: {
                   {
                     ...commandApproval,
                     reason: commandApproval.reason ?? "Approval required",
-                    ...(deps.webUiPublicUrl && commandApproval.sessionId
+                    ...(tenant.webUiPublicUrl && commandApproval.sessionId
                       ? {
-                          originUrl: `${deps.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
+                          originUrl: `${tenant.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
                         }
                       : {}),
                   },
@@ -444,7 +450,7 @@ export function createDeliveryPoller(deps: {
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);
               const threadTs = d.destination.threadTs;
-              const footer = deliveryFooter(d);
+              const footer = deliveryFooter(d, tenant);
               if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
               const blocks =
                 card?.blocks ??
@@ -496,7 +502,7 @@ export function createDeliveryPoller(deps: {
     );
   }
 
-  async function pollDeliveries(client: any): Promise<boolean> {
+  async function pollDeliveries(): Promise<boolean> {
     const ran = await core.holdDeliveryDispatch(async (lost) => {
       let lostFlag = false;
       void lost.then(() => {
@@ -504,14 +510,7 @@ export function createDeliveryPoller(deps: {
       });
       const leaseLost = (): boolean => lostFlag;
       const cycleStart = Date.now();
-      const rowCounts = await Promise.all([
-        deliverToConversations(client, leaseLost),
-        deliverToPrincipals(client, leaseLost),
-      ]);
-      if (!lostFlag)
-        await core.taskAcknowledgements
-          ?.reconcile(client)
-          .catch(swallowAs("slack: task ack reconciliation", undefined));
+      const rowCounts = await Promise.all([deliverToConversations(leaseLost), deliverToPrincipals(leaseLost)]);
       const cycleMs = Date.now() - cycleStart;
       if (cycleMs >= slowDrainMs) {
         void core

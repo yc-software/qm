@@ -113,12 +113,7 @@ test("web-only dev instances disable Slack from environment, stored installation
     SLACK_ACCOUNTS: JSON.stringify([{ id: "extra", botToken: "xoxb-extra", appToken: "xapp-extra" }]),
   };
   assert.equal(slackPluginConfigFromEnv(env), null);
-  assert.equal(
-    slackPluginConfigFromEnv(env, () => {
-      throw new Error("disabled receiver must not start");
-    }),
-    null,
-  );
+  assert.equal(slackPluginConfigFromEnv(env, "install-1"), null);
   assert.deepEqual(slackAccountConfigsFromEnv(env), []);
   assert.ok(slackPluginConfigFromEnv({ ...env, DEV_INSTANCE_NO_SLACK: "0" }));
   assert.equal(slackAccountConfigsFromEnv({ ...env, DEV_INSTANCE_NO_SLACK: "0" }).length, 1);

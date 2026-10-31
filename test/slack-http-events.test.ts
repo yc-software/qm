@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
 import { createHttpEventsReceiver, SLACK_EVENTS_PATH } from "../src/slack/http-events.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { boundTenant } from "../src/tenants/context.ts";
+
+const tenantFor = async (body: Record<string, unknown>) =>
+  body.type === "url_verification" || (body.team_id ?? (body.team as { id?: string } | undefined)?.id) === "T1"
+    ? TEST_TENANT
+    : null;
 import { normalizeSlackApiUrl, slackPluginConfigFromEnv } from "../src/slack/index.ts";
 
 const SECRET = "test-signing-secret";
@@ -40,7 +47,7 @@ async function withReceiver(
     ) => Promise<Response>,
   ) => Promise<void>,
 ): Promise<void> {
-  const receiver = createHttpEventsReceiver({ signingSecret: SECRET, port: 0, capMs: 500 });
+  const receiver = createHttpEventsReceiver({ signingSecret: SECRET, port: 0, capMs: 500, tenantFor });
   receiver.init?.({ processEvent } as unknown as BoltApp);
   await receiver.start(0 as never);
   const address = receiver.server.address();
@@ -70,6 +77,7 @@ async function withReceiver(
 
 const messageEnvelope = {
   type: "event_callback",
+  team_id: "T1",
   event_id: "Ev123",
   event: { type: "message", channel: "C1", ts: "1.1", user: "U1", text: "hi" },
 };
@@ -87,6 +95,37 @@ test("rejects an unsigned/tampered POST with 401 without invoking the app", asyn
       assert.equal(processed, 0);
     },
   );
+});
+
+test("a signed envelope from a workspace outside the tenant is refused before the app sees it", async () => {
+  let processed = 0;
+  await withReceiver(
+    async () => {
+      processed += 1;
+    },
+    async (post) => {
+      const res = await post({ ...messageEnvelope, team_id: "T_OTHER" });
+      assert.equal(res.status, 403);
+      assert.deepEqual(await res.json(), { error: "unknown_team" });
+      assert.equal((await post({ ...messageEnvelope, team_id: undefined })).status, 403);
+      assert.equal(processed, 0);
+    },
+  );
+});
+
+test("the app runs inside the tenant its verified workspace resolves to", async () => {
+  const tenants: Array<string | undefined> = [];
+  await withReceiver(
+    async (event) => {
+      tenants.push(boundTenant());
+      await event.ack();
+      (event.customProperties!.ackGate as { persisted(): void }).persisted();
+    },
+    async (post) => {
+      assert.equal((await post(messageEnvelope)).status, 200);
+    },
+  );
+  assert.deepEqual(tenants, [TEST_TENANT]);
 });
 
 test("answers url_verification with the challenge", async () => {
@@ -109,7 +148,7 @@ test("form-encoded interactivity payloads (button clicks) reach the app", async 
     },
     async (post) => {
       const res = await post(
-        { type: "block_actions", actions: [{ action_id: "keychain_allow_always" }] },
+        { type: "block_actions", team: { id: "T1" }, actions: [{ action_id: "keychain_allow_always" }] },
         { form: true },
       );
       assert.equal(res.status, 200);
@@ -155,7 +194,12 @@ test("non-gated envelopes ack immediately even while the handler is still runnin
       await blocked;
     },
     async (post) => {
-      const res = await post({ type: "event_callback", event_id: "Ev9", event: { type: "reaction_added" } });
+      const res = await post({
+        type: "event_callback",
+        team_id: "T1",
+        event_id: "Ev9",
+        event: { type: "reaction_added" },
+      });
       assert.equal(res.status, 200);
       release();
     },
