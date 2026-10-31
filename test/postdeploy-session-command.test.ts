@@ -52,12 +52,14 @@ test("session command preserves archive then database checks with bounded reques
     events.push("persisted");
     return Response.json({ session: { title: "Canary" }, entries: [{ type: "user" }, { type: "assistant" }] });
   });
-  const config = testConfig({
-    databaseUrl: "postgres://unused",
+  const config = {
+    ...testConfig({
+      databaseUrl: "postgres://unused",
+      portalIdentitySecret: "portal-secret",
+      signingSecret: "source-secret",
+    }),
     adminGrants: "admin:org_admin",
-    portalIdentitySecret: "portal-secret",
-    signingSecret: "source-secret",
-  });
+  };
   await runSessionSmoke(config, "http://127.0.0.1:8080");
   assert.deepEqual(events, [
     "model",

@@ -4,6 +4,7 @@ import {
   type TenantSettingKey,
   type TenantSettings,
 } from "../tenants/settings.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import { legacySandboxBackendForScope, type LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { E2bClient } from "./e2b-client.ts";
@@ -41,15 +42,35 @@ export function tenantDefaultSandboxBackend(
   return backend;
 }
 
+export type MisconfiguredSandboxBackends = Partial<Record<SandboxBackendName, string>>;
+
+export function misconfiguredSandboxError(backend: string, reason: string): Error {
+  return new Error(`sandbox backend ${backend} cannot run on this install: ${reason}`);
+}
+
 export function tenantSandboxRouting(
   settings: () => Promise<TenantSettings>,
-  backends: Partial<Record<SandboxBackendName, unknown>>,
+  backends: Partial<Record<SandboxBackendName, { profile: { egressEnforcement?: string } }>>,
   legacyScopeDefaults?: LegacySandboxScopeDefaults,
+  misconfigured: MisconfiguredSandboxBackends = {},
 ) {
-  const constructed = Object.keys(backends) as SandboxBackendName[];
+  const constructed = [...Object.keys(backends), ...Object.keys(misconfigured)] as SandboxBackendName[];
+  const warned = new Set<string>();
   return {
     usable: async () => tenantSandboxBackends(await settings(), constructed),
-    defaultBackend: async () => tenantDefaultSandboxBackend(await settings(), constructed),
+    defaultBackend: async () => {
+      const backend = tenantDefaultSandboxBackend(await settings(), constructed);
+      const reason = misconfigured[backend];
+      if (reason) throw misconfiguredSandboxError(backend, reason);
+      const key = `${currentTenant()}:${backend}`;
+      if (backends[backend]?.profile.egressEnforcement !== "domain" && !warned.has(key)) {
+        warned.add(key);
+        console.warn(
+          `[sandbox] tenant ${currentTenant()} uses ${backend} with NO egress enforcement (fail-open); configure the ${backend} egress proxy to force sandbox traffic through it.`,
+        );
+      }
+      return backend;
+    },
     legacy: async () => {
       const current = await settings();
       const fallback = () => tenantDefaultSandboxBackend(current, constructed);

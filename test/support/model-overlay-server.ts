@@ -7,7 +7,6 @@ import { testConfig } from "./test-config.ts";
 
 const config = testConfig({
   databaseUrl: process.env.MODEL_OVERLAY_TEST_DATABASE_URL,
-  adminGrants: "admin-alice:org_admin",
   harness: "pi",
 });
 const built = buildApp(config, {
@@ -15,6 +14,7 @@ const built = buildApp(config, {
   tenantSettings: testTenantSettings({
     OPENAI_BASE_URL: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1`,
     PI_MODEL: "overlay-pg-model",
+    ADMIN_GRANTS: "admin-alice:org_admin",
   }),
 });
 if (!(await built.modelCredentials.resolve("openai")))

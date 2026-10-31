@@ -10,6 +10,7 @@ import {
   tenantCredential,
   tenantDefaultSandboxBackend,
   tenantSandboxBackends,
+  tenantSandboxRouting,
   tenantSdkClient,
 } from "../src/sandbox/tenant-credentials.ts";
 import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
@@ -153,4 +154,39 @@ test("the default backend and usable backends come from the bound tenant's setti
     withTenant(render, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
     /sandbox backend unavailable: render/,
   );
+});
+
+test("a misconfigured backend stays listed but fails loudly when a tenant selects it", async () => {
+  const store = createTenantSettingsStore({ harness: "pi" });
+  const tenant = randomUUID();
+  await withTenant(tenant, () =>
+    store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
+  );
+  const routing = tenantSandboxRouting(
+    () => store.get(),
+    { sprites: { profile: { egressEnforcement: "domain" } } },
+    undefined,
+    { render: "render requires WORKSPACE_STORE=postgres" },
+  );
+  await withTenant(tenant, async () => {
+    assert.deepEqual(await routing.usable(), ["render"]);
+    await assert.rejects(
+      routing.defaultBackend(),
+      /^Error: sandbox backend render cannot run on this install: render requires WORKSPACE_STORE=postgres$/,
+    );
+  });
+});
+
+test("selecting a backend without egress enforcement warns once per tenant", async (t) => {
+  const store = createTenantSettingsStore({ harness: "pi" });
+  const tenant = randomUUID();
+  await withTenant(tenant, () => store.update({ SANDBOX_BACKEND: "sprites", SPRITES_TOKEN: "t" }));
+  const routing = tenantSandboxRouting(() => store.get(), { sprites: { profile: { egressEnforcement: "none" } } });
+  const warn = t.mock.method(console, "warn", () => undefined);
+  await withTenant(tenant, async () => {
+    assert.equal(await routing.defaultBackend(), "sprites");
+    assert.equal(await routing.defaultBackend(), "sprites");
+  });
+  assert.equal(warn.mock.callCount(), 1);
+  assert.match(String(warn.mock.calls[0]!.arguments[0]), /uses sprites with NO egress enforcement \(fail-open\)/);
 });

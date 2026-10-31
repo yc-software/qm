@@ -1,4 +1,5 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { misconfiguredSandboxError, type MisconfiguredSandboxBackends } from "./tenant-credentials.ts";
 import { randomUUID } from "node:crypto";
 import { boundTenant } from "../tenants/context.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -44,6 +45,7 @@ interface SandboxProviderProfile {
   name: SandboxBackendName;
   spec?: AgentComputerSpec;
   actions: string[];
+  unavailable?: string;
 }
 
 export interface SandboxResources {
@@ -107,6 +109,7 @@ export function createSandboxResources(opts: {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: () => Promise<SandboxBackendName>;
   usableBackends?: () => Promise<readonly SandboxBackendName[]>;
+  misconfigured?: MisconfiguredSandboxBackends;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
@@ -183,7 +186,12 @@ export function createSandboxResources(opts: {
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         actions: actionsFor(backend),
-      }));
+      }))
+      .concat(
+        (Object.entries(opts.misconfigured ?? {}) as Array<[SandboxBackendName, string]>)
+          .filter(([name]) => allowed.includes(name))
+          .map(([name, unavailable]) => ({ name, actions: [], unavailable })),
+      );
   };
   return {
     profiles,
@@ -289,6 +297,8 @@ export function createSandboxResources(opts: {
     async create(actorId, scopeId, backend, name, reservationId, jobOnly) {
       await initialize();
       await authorize(actorId, scopeId);
+      const misconfigured = opts.misconfigured?.[backend as SandboxBackendName];
+      if (misconfigured) throw misconfiguredSandboxError(backend, misconfigured);
       if (
         !Object.hasOwn(opts.backends, backend) ||
         !opts.backends[backend as SandboxBackendName] ||

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant, withTenant } from "./context.ts";
+import { createSweeper } from "../util/sweeper.ts";
+import { currentTenant, onFirstBind, withTenant } from "./context.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
@@ -43,6 +44,7 @@ export const TENANT_SETTING_KEYS = [
   "AUTH_ALLOWED_EMAIL_DOMAIN",
   "TRUSTED_OIDC_ADMIN_ISSUER",
   "SUGGESTED_ACTIVITIES_CONTEXT",
+  "ADMIN_GRANTS",
 ] as const;
 
 export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
@@ -188,6 +190,8 @@ export interface TenantSettingsStore {
   get(): Promise<TenantSettings>;
   peek(): TenantSettings;
   refreshAll(): Promise<void>;
+  start(): void;
+  stop(): Promise<void>;
   onlyTenant(): Promise<string | null>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
@@ -242,8 +246,19 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
     return stale ? Promise.resolve(stale) : settings;
   }
 
-  return {
+  let stopPreload: (() => void) | undefined;
+  const refresher = createSweeper(() => store.refreshAll(), 60_000, { label: "tenant settings refresh" });
+  const store: TenantSettingsStore = {
     get: () => load(currentTenant()),
+    start() {
+      refresher.start();
+      stopPreload ??= onFirstBind((tenant) => load(tenant));
+    },
+    async stop() {
+      stopPreload?.();
+      stopPreload = undefined;
+      await refresher.stop();
+    },
     async onlyTenant() {
       const tenants = await backing.tenants();
       return tenants.length === 1 ? tenants[0]! : null;
@@ -277,4 +292,5 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       return load(tenant, true);
     },
   };
+  return store;
 }

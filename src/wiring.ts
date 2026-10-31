@@ -20,7 +20,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
-import { RENDER_SANDBOX_TTL_SEC } from "./sandbox/render-limits.ts";
+import { renderSandboxProblem } from "./sandbox/render-limits.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -622,9 +622,6 @@ export function buildApp(
           );
       },
     });
-  const tenantSettingsRefresh = createUntrackedSweeper(() => tenantSettings.refreshAll(), 60_000, {
-    label: "tenant settings refresh",
-  });
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: connectorSecretKey,
@@ -1136,7 +1133,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const renderFits = (config.renderSandbox.defaultTimeoutSec ?? 600) + 60 < RENDER_SANDBOX_TTL_SEC;
+  const renderProblem = renderSandboxProblem(config.workspaceStore, config.renderSandbox.defaultTimeoutSec);
   const buildBackend: Partial<Record<SandboxBackendName, () => Sandbox>> = {
     ...(config.localSandbox.image ? { local: buildLocal } : {}),
     sprites: buildSprites,
@@ -1146,17 +1143,19 @@ export function buildApp(
     ...(config.awsSandbox.s3Bucket ? { aws: buildAws } : {}),
     ...(config.porterSandbox.token ? { porter: buildPorter } : {}),
     agent37: buildAgent37,
-    ...(config.workspaceStore === "postgres" && renderFits ? { render: buildRender } : {}),
+    ...(renderProblem ? {} : { render: buildRender }),
     ...(config.superserveSandbox.template ? { superserve: buildSuperserve } : {}),
     "do-managed-agents": buildManagedAgents,
   };
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = Object.fromEntries(
     Object.entries(buildBackend).map(([name, build]) => [name, build()]),
   );
+  const misconfiguredSandboxes = renderProblem ? { render: renderProblem } : {};
   const tenantRouting = tenantSandboxRouting(
     () => tenantSettings.get(),
     sandboxBackends,
     config.legacySandboxScopeDefaults,
+    misconfiguredSandboxes,
   );
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
@@ -1198,6 +1197,7 @@ export function buildApp(
     backends: sandboxBackends,
     defaultBackend: tenantRouting.defaultBackend,
     usableBackends: tenantRouting.usable,
+    misconfigured: misconfiguredSandboxes,
     lock: advisoryLock,
     beforeRetire: async (record) => {
       if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
@@ -1788,7 +1788,8 @@ export function buildApp(
     ? createPostgresAdminGrantStore(config.databaseUrl)
     : createMapAdminGrantPersistence(createMemoryMap<AdminGrant>());
   const adminGrantStore = createAdminGrantStore(adminGrantPersist, {
-    seed: bootAdminGrantSeed(config.adminGrants, config.orgId, !!config.databaseUrl),
+    seed: async () =>
+      bootAdminGrantSeed((await tenantSettings.get()).values.ADMIN_GRANTS, config.orgId, !!config.databaseUrl),
   });
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: async () => (await tenantSettings.get()).trustedOidcAdminIssuer,
@@ -2960,7 +2961,7 @@ export function buildApp(
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
-      tenantSettingsRefresh.start();
+      tenantSettings.start();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -3003,7 +3004,7 @@ export function buildApp(
       await harness.turns.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
-      await tenantSettingsRefresh.stop();
+      await tenantSettings.stop();
       await errors.flush();
     },
   };
@@ -3133,7 +3134,7 @@ export function serverDeps(
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,
-          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`, built.tenantSettings),
         }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,

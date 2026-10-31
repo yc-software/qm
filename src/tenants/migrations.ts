@@ -327,6 +327,7 @@ export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
          auth_allowed_email_domain TEXT,
          trusted_oidc_admin_issuer TEXT,
          suggested_activities_context TEXT,
+         admin_grants TEXT,
          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
        )`,
     ...tenantPolicies("tenant_settings"),
