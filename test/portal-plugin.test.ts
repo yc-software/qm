@@ -9,6 +9,7 @@ import { createAdminGrantStore } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("portal signs /d/ ingress with the principal as the canonical tail (core-verifiable)", () => {
   const secret = "portal-source-auth-secret";
@@ -16,7 +17,7 @@ test("portal signs /d/ ingress with the principal as the canonical tail (core-ve
   const principal = "U00000001";
   const headers = signedHeaders(secret, "GET", path, "", principal);
   const ts = Number(headers["x-timestamp"]);
-  assert.equal(headers["x-signature"], signRequest(secret, ts, canonicalPayload("GET", path, principal)));
+  assert.equal(headers["x-signature"], signRequest(secret, ts, canonicalPayload("GET", path, principal, TEST_TENANT)));
 });
 
 test("portal proxy omits empty URL ports so http.request uses protocol defaults", () => {
