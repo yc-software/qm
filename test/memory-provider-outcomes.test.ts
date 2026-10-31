@@ -6,6 +6,9 @@ import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
+import { searchNotebooks } from "../src/memory/cross-scope.ts";
+import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const notebook: MemoryService = {
@@ -338,4 +341,42 @@ test("ending a session never turns a good call into a failure", async (t) => {
       !options.stateless,
     );
   }
+});
+
+test("a notebook failure in another scope still fails a search that a strict provider failed first", async () => {
+  const notebooks: MemoryService = {
+    ...notebook,
+    async query(scope) {
+      if (scope !== "org:acme") return ["notebook hit"];
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      throw new Error("org notebook offline");
+    },
+  };
+  const refusing: MemoryService = {
+    ...notebook,
+    async query() {
+      throw new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebooks, knowledge: refusing },
+    routes: [
+      { provider: "default", scopes: ["personal", "org"] },
+      { provider: "knowledge", scopes: ["personal"], manage: false, failOpen: false },
+    ],
+  });
+  const { outcomes, report } = sink();
+  await assert.rejects(
+    withProviders("search", (r) =>
+      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, "U1", (outcome) => {
+        report(outcome);
+        r(outcome);
+      }),
+    ),
+  );
+  assert.deepEqual(outcomes.map(({ provider, scope, outcome }) => [provider, scope, outcome]).sort(), [
+    ["default", "org:acme", "failed"],
+    ["default", "personal:U1", "ok"],
+    ["knowledge", "personal:U1", "denied"],
+  ]);
 });

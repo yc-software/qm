@@ -58,13 +58,18 @@ export function createMcpMemoryProvider(opts: {
 
   return {
     async recall(scopeId, context) {
-      const text = (await read(scopeId, context?.query ?? "", context)).trim();
-      return text ? [{ text, score: 0.2 }] : [];
+      const text = await read(scopeId, context?.query ?? "", context);
+      return text
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => ({ text: line, score: 0.2 }));
     },
 
     async capture(scopeId, facts, at, author, context) {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
+      const actor = context?.actorId ?? author;
+      if (opts.attestActor && actor === undefined) return 0;
       const args: Record<string, unknown> = { [op.contentArg ?? "content"]: facts.join("\n") };
       if (context?.input && op.inputArg) args[op.inputArg] = context.input;
       if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;
@@ -72,7 +77,7 @@ export function createMcpMemoryProvider(opts: {
       if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
       if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      const { code } = mcpEnvelope(await call(op, args, context?.actorId ?? author));
+      const { code } = mcpEnvelope(await call(op, args, actor));
       if (code && DENIED_CODES.has(code))
         throw new McpCallError(`memory provider refused the write (${code})`, { code });
       return facts.length;

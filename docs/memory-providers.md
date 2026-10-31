@@ -12,12 +12,13 @@ reference data, never instructions: QM escapes triple backticks and closing tags
 block, end the `<environment>` section or pose as a heading. With PostgreSQL and an embedding
 model, facts are ranked by exact cosine similarity to the current message and recent
 dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
-Provider rows without fact ids are compared line by line by content hash, so a provider should
-return one self-contained fact per line: only new lines are added, a line already shown stays
-counted while its provider keeps answering, and a line that drops out is never announced as
-removed. When a provider that showed
-lines earlier refuses the member, is withheld from the conversation or is no longer routed,
-the turn adds one note not to rely on memory from sources that are not currently authorized.
+Provider rows without fact ids are compared by content hash. An MCP provider's answer becomes one
+row per line, so it should return one self-contained fact per line; a `memorable` procedure block
+stays one row. Only new rows are added, a row already shown stays counted while its provider keeps
+answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
+refusal is still noted), and a row that drops out is never announced as removed. When a provider
+that showed rows earlier refuses the member, is withheld from the conversation or is no longer
+routed, the turn adds one note not to rely on memory from sources that are not currently authorized.
 
 Choose the model with the org setting `memory-embedding-model`
 (`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
@@ -100,11 +101,11 @@ Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `id
 
 By default an MCP provider learns who is asking only from the actor argument (`acting_user`), which it cannot tell apart from any other argument. Set `"attestActor": true` on an `mcp` provider to also send the member's canonical QM person id in the `x-qm-actor` HTTP header on every request of each call; linked principals fold into one id, as described in [principal-links.md](./principal-links.md). The model cannot set this header. The actor argument is still sent, with the same value. The field defaults to `false`, applies to reads and writes, and is rejected on `memorable` providers or when it is not a boolean. A provider should honour the header only from OAuth clients it has granted an attest right.
 
-QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the same rule the credential broker and attested MCP connectors apply. When the member's canonical id breaks it, QM makes no call and records the outcome as `denied` with code `invalid_actor`; link the member to a conforming principal id with `POST /v1/admin/principal-links`.
+QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the same rule the credential broker and attested MCP connectors apply. When the member's canonical id breaks it, QM makes no call and records the outcome as `denied` with code `invalid_actor`; link the member to a conforming principal id with `POST /v1/admin/principal-links`. On a strict route that denial fails every recall the route serves for that member, so keep attested routes fail-open until every member is linked. A write that carries no member at all, such as QM's own note about missing channel history, is not sent to an attested provider.
 
 ## Provider outcomes
 
-Every recall, search and explicit write records one outcome per provider and scope:
+Every recall and search, and every explicit write through the memory tool or `POST /v1/memory/facts`, records one outcome per provider and scope. A `memorable` provider reports a CLI failure or timeout as `empty`, because its CLI returns nothing in both cases.
 
 | Outcome                | Meaning                                                                                                                                                                                                   |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

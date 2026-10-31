@@ -29,7 +29,9 @@ export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((f
 const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
   !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
 
-const keyOf = ({ scope, id, hash }: Shown) => JSON.stringify([scope, id ?? null, hash]);
+const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
+
+const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider ?? null]);
 
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
@@ -49,6 +51,10 @@ export function memoryRecallDelta(
   const now = new Set(current.map(keyOf));
   const added = recalled.filter((_, index) => !before.has(keyOf(current[index]!)));
   const withdrawn = new Map<string, number>();
+  const answered = new Map<string, number>();
+  for (const shown of current)
+    if (shown.id === undefined) answered.set(sourceOf(shown), (answered.get(sourceOf(shown)) ?? 0) + 1);
+  const kept = new Map<string, number>();
   let unauthorized = false;
   for (const [key, shown] of before) {
     if (now.has(key)) continue;
@@ -59,8 +65,13 @@ export function memoryRecallDelta(
       else withdrawn.set(shown.scope, (withdrawn.get(shown.scope) ?? 0) + 1);
     } else {
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
+      const source = sourceOf(shown);
+      const room = outcome?.outcome === "ok" ? Math.max(1, answered.get(source) ?? 0) : Infinity;
       if (!outcome || outcome.outcome === "denied" || DENIED_CODES.has(outcome.code ?? "")) unauthorized = true;
-      else record.shown.push(shown);
+      else if ((kept.get(source) ?? 0) < room) {
+        record.shown.push(shown);
+        kept.set(source, (kept.get(source) ?? 0) + 1);
+      }
     }
   }
   return {

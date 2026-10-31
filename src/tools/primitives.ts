@@ -59,6 +59,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
+import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
@@ -1138,8 +1139,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         deps.context && deps.memoryAccess?.read.includes(target)
           ? await deps.context.readMemory(target)
           : await readNotebook(memory, target);
-      if (body === null) return null;
-      return scope !== undefined ? `### ${target}\n${body}` : body;
+      if (body === null || !body.trim()) return body;
+      return scope !== undefined ? `### ${target}\n${quotedData(body)}` : quotedData(body);
     },
 
     async memoryAdd(facts: string[]) {

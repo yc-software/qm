@@ -123,7 +123,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
         reportEnvelope({ code: "actor_unlinked" });
         return [];
       }
-      return [{ text: Array.from({ length: 6 }, (_, k) => line(window + k)).join("\n"), score: 0.2 }];
+      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k), score: 0.2 }));
     },
     async capture() {
       return 0;
@@ -210,4 +210,82 @@ test("a provider line recorded before lines were keyed by provider is flagged, n
     memoryRecallDelta([], [entry(legacy)], all).text,
     "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
   );
+});
+
+const provided = (provider: string, text: string) => ({ scope: alice, text, source: { provider, label: provider } });
+const answers = (...answered: Array<[string, MemoryProviderOutcome["outcome"]]>): MemoryProviderOutcome[] =>
+  answered.map(([provider, outcome]) => ({ provider, scope: alice, outcome, ms: 1 }));
+
+test("a multi-line provider block that shares a line with an earlier one is injected whole", async () => {
+  let block = "Procedure: deploy staging\n1. Back up the database\n2. Deploy to staging";
+  const procedures: MemoryService = {
+    async recall() {
+      return [{ text: block, score: 0.2 }];
+    },
+    async capture() {
+      return 0;
+    },
+    async query() {
+      return [];
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: createPostgresMemoryService(testDatabaseUrl()), procedures },
+    routes: [
+      { provider: "default", scopes: ["personal"] },
+      { provider: "procedures", scopes: ["personal"], manage: false, label: "Procedures" },
+    ],
+  });
+  const history: SessionEntry[] = [];
+  const turn = async () => {
+    const outcomes: MemoryProviderOutcome[] = [];
+    const recalled = await recallAcrossScopes(memory, [alice], {
+      query: "deploy",
+      report: (o) => void outcomes.push(o),
+    });
+    const delta = memoryRecallDelta(recalled, history, new Map([[alice, new Map()]]), new Map(), outcomes);
+    history.push(entry(delta.record, history.length + 1));
+    return delta.text;
+  };
+  await turn();
+  block = "Procedure: deploy production\n1. Back up the database\n2. Deploy to production";
+  assert.equal(
+    await turn(),
+    "New or updated memory facts:\n\n### personal:alice · Procedures\n```untrusted-data\nProcedure: deploy production\n1. Back up the database\n2. Deploy to production\n```",
+  );
+});
+
+test("identical text from another provider never hides a refusal or keeps the old attribution", () => {
+  const first = memoryRecallDelta(
+    [provided("alpha", "SHIPS ON FRIDAYS")],
+    [],
+    all,
+    new Map(),
+    answers(["alpha", "ok"]),
+  );
+  const second = memoryRecallDelta(
+    [provided("beta", "SHIPS ON FRIDAYS")],
+    [entry(first.record)],
+    all,
+    new Map(),
+    answers(["alpha", "denied"], ["beta", "ok"]),
+  );
+  assert.equal(
+    second.text,
+    "New or updated memory facts:\n\n### personal:alice · beta\n```untrusted-data\nSHIPS ON FRIDAYS\n```\n\nSome previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
+});
+
+test("the checkpoint keeps no more earlier provider lines than the latest answer showed", () => {
+  const history: SessionEntry[] = [];
+  let record: { shown: unknown[] } = { shown: [] };
+  for (let turn = 0; turn < 60; turn++) {
+    const recalled = Array.from({ length: 40 }, (_, k) => provided("knowledge", `turn ${turn} line ${k}`));
+    record = memoryRecallDelta(recalled, history, all, new Map(), answers(["knowledge", "ok"])).record;
+    history.push(entry(record, turn + 1));
+  }
+  assert.ok(record.shown.length <= 80, `checkpoint holds ${record.shown.length} rows`);
 });

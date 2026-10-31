@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
-import { factLine, type MemoryCandidate, type MemorySource } from "./facts.ts";
+import { factLine, type MemorySource } from "./facts.ts";
 import { quotedData, untrustedText } from "../util/text.ts";
 
 export interface RecalledFact {
@@ -24,13 +24,6 @@ const BLOCK_FRAME = quotedData("").length;
 
 const quotedLength = (text: string) => quotedData(text).length - BLOCK_FRAME;
 
-const lines = <T extends MemoryCandidate>(row: T, origin: number) =>
-  (row.id === undefined ? row.text.split("\n").filter((line) => line.trim()) : [row.text]).map((text) => ({
-    ...row,
-    text,
-    origin,
-  }));
-
 export async function recallAcrossScopes(
   memory: MemoryService,
   scopes: readonly ScopeId[],
@@ -43,17 +36,14 @@ export async function recallAcrossScopes(
   const batches = await Promise.all(
     unique.map(async (scope) => (await memory.recall(scope, context)).map((row) => ({ ...row, scope }))),
   );
-  const ranked = batches
-    .flat()
-    .flatMap(lines)
-    .sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
+  const ranked = batches.flat().sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
   const picked: RecalledFact[] = [];
   const blocks = new Set<string>();
-  const seen = new Map<string, number>();
+  const seen = new Set<string>();
   let size = 0;
   for (const row of ranked) {
-    const { scope, id, text: full, source, origin } = row;
-    if (!full.trim() || (seen.get(full) ?? origin) !== origin) continue;
+    const { scope, id, text: full, source } = row;
+    if (!full.trim() || seen.has(full)) continue;
     const overhead = blocks.has(blockKey(row))
       ? 1
       : (blocks.size ? 2 : 0) + heading(row, labels).length + 1 + BLOCK_FRAME;
@@ -63,7 +53,7 @@ export async function recallAcrossScopes(
     const cost = quotedLength(text) + overhead;
     if (!text.trim() || size + cost > budget) continue;
     size += cost;
-    seen.set(full, origin);
+    seen.add(full);
     blocks.add(blockKey(row));
     picked.push({ scope, ...(id !== undefined ? { id } : {}), text, ...(source ? { source } : {}) });
   }
@@ -92,7 +82,11 @@ export async function searchAcrossScopes(
 ): Promise<Array<{ scopeId: ScopeId; fact: string }>> {
   const count = Number.isFinite(limit) ? Math.max(1, Math.min(50, Math.floor(limit))) : 20;
   const unique = [...new Set(scopes)];
-  const batches = await Promise.all(unique.map((scope) => memory.query(scope, query, count, context)));
+  const settled = await Promise.allSettled(unique.map((scope) => memory.query(scope, query, count, context)));
+  const batches = settled.map((result) => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  });
   const out: Array<{ scopeId: ScopeId; fact: string }> = [];
   for (let i = 0; i < count && out.length < count; i++) {
     for (let j = 0; j < unique.length && out.length < count; j++) {
