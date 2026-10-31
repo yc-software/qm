@@ -5,13 +5,12 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
@@ -40,8 +39,8 @@ function fixture() {
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    idempotency: createIdempotencyStore(testMap()),
+    identity: testIdentityService(),
+    idempotency: testIdempotencyStore(),
     skipFire: (cron) => service.skipFire(cron),
     run: async (request) => {
       calls.push(request);

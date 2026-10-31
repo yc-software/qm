@@ -16,6 +16,9 @@ import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -49,10 +52,10 @@ mock.module("./support/mock-agent.ts", {
   },
 });
 const wiring = await import("./support/build-app.ts");
-const { orgId } = await import("../src/config.ts");
+const { tenantRootScope } = await import("../src/tenants/context.ts");
 const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
   const built = wiring.buildApp(...args);
-  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
+  void built.featureFlags.setEnabled("swarms", tenantRootScope(), true, "test");
   return built;
 };
 test.after(() => fake.cleanup());

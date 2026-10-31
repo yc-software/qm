@@ -265,9 +265,7 @@ export function createSessionMethods(
     const descendantIds = new Set(descendants.map((d) => d.id));
     const approvalRows: PendingApprovalRecord[] = [];
     const approvalIds = [...visibleById.keys(), ...descendantIds];
-    const approvals = approvalIds.length
-      ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: approvalIds } })
-      : [];
+    const approvals = approvalIds.length ? await deps.approvals?.forSessions(approvalIds) : [];
     for (const [, record] of approvals ?? []) {
       const session = visibleById.get(record.sessionId);
       if (
@@ -588,8 +586,7 @@ export function createSessionMethods(
         ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
       };
       if (query.status === "waiting") {
-        const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
-        filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
+        filter.sessionIds = (await deps.approvals?.blockingSessionIds()) ?? [];
       }
       const firstPage = !query.before && query.status !== "archived";
       const [page, pinned, archived] = await Promise.all([
@@ -787,7 +784,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const directoryMember = await h.directoryMember(memberId);
       const principal = deps.identity.classify(memberId);
       if (!directoryMember || directoryMember.type !== "internal" || !deps.identity.isInternal(principal))
@@ -813,7 +810,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.removeMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -835,7 +832,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       let link: { channelId: string; channelName: string } | null = null;
       if (channel !== null) {
         const wanted = channel.trim().replace(/^#/, "");
@@ -894,7 +891,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.rename(id, principalId, name, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -913,12 +910,12 @@ export function createSessionMethods(
 
     async listScopeResources(principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
+      const [page, allCrons, allWebhooks, allDeployments, scoped] = await Promise.all([
         filesForViewer(principalId, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listDeployments(),
-        deps.skills.list(),
+        deps.skills.inScopes([scope]),
       ]);
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
@@ -946,15 +943,12 @@ export function createSessionMethods(
             }),
         )
       ).filter((d): d is ScopeDeployment => d != null);
-      const skills = allSkills
-        .filter((s) => s.scopeId === scope)
-        .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
       return {
         files,
         webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
         crons: allCrons.filter((c) => c.ownerScopeId === scope),
         deployments,
-        skills,
+        skills: scoped.map(({ id, status, manifest: { name, description } }) => ({ id, name, description, status })),
         manageable: await principalCanManageScope(principalId, scope),
       };
     },
@@ -1120,8 +1114,7 @@ export function createSessionMethods(
       if (!projectId) return fork();
       const projects = deps.projects;
       if (!projects) return null;
-      return projects.withRosterLock(projectId, async (project) => {
-        if (project.orgId !== orgIdOf()) return null;
+      return projects.withRosterLock(projectId, async () => {
         const members = await projects.members(parsed.ref);
         if (!members?.includes(principalId)) return null;
         return fork(members);
@@ -1159,7 +1152,6 @@ export function createSessionMethods(
         const projects = deps.projects;
         if (!projects) return null;
         return projects.withRosterLock(projectId, async (project) => {
-          if (project.orgId !== orgIdOf()) return null;
           const members = await projects.members(parsed.ref);
           if (!members?.includes(principalId)) return null;
           return create(members, project.name);

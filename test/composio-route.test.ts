@@ -14,6 +14,7 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresPrincipalLinkStore, createPrincipalLinkService } from "../src/identity/principal-links.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -418,9 +419,11 @@ test("connections require credential access and fail visibly on upstream errors"
 test("Slack connection links verified workspace identity to the web owner and persists status", async () => {
   const f = fixture();
   await f.own();
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
-  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(
+    createPostgresPrincipalLinkStore(testDatabaseUrl()),
+    testAdvisoryLock(),
+  );
   installPrincipalLinks(f.deps.principalLinks);
   f.deps.slackAccounts = testMap();
   f.deps.signingSecret = "qa-slack-link-secret";
@@ -461,7 +464,6 @@ test("Slack connection links verified workspace identity to the web owner and pe
 });
 
 test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
   for (const scenario of [
     "expired",
@@ -478,7 +480,10 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own();
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
-    f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    f.deps.principalLinks = createPrincipalLinkService(
+      createPostgresPrincipalLinkStore(testDatabaseUrl()),
+      testAdvisoryLock(),
+    );
     f.deps.slackAccounts = testMap();
     f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
     await f.deps.directory.replace([
@@ -812,11 +817,10 @@ test("expired callback returns are discarded after successful browser verificati
 });
 
 test("linked aliases can execute their existing accounts until the identity link is removed", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(createPostgresPrincipalLinkStore(testDatabaseUrl()), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const aliasUserId = composioUserId(orgId(), aliasId);
@@ -848,11 +852,10 @@ test("linked aliases can execute their existing accounts until the identity link
 });
 
 test("linked account discovery and Slack status preserve historical aliases without exposing other owners", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(createPostgresPrincipalLinkStore(testDatabaseUrl()), testAdvisoryLock());
   f.deps.principalLinks = links;
   f.deps.slackAccounts = testMap();
   installPrincipalLinks(links);
@@ -904,11 +907,10 @@ test("linked account discovery and Slack status preserve historical aliases with
 });
 
 test("unlinking an account owner during tool lookup prevents provider execution", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(createPostgresPrincipalLinkStore(testDatabaseUrl()), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   try {
@@ -931,11 +933,10 @@ test("unlinking an account owner during tool lookup prevents provider execution"
 });
 
 test("consent and browser verification use the canonical identity when signed in through an alias", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  const links = createPrincipalLinkService(createPostgresPrincipalLinkStore(testDatabaseUrl()), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(orgId(), "alice");
@@ -961,11 +962,13 @@ test("consent and browser verification use the canonical identity when signed in
 });
 
 test("linked identities retain provider accounts and Slack status until unlinked", async () => {
-  const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  f.deps.principalLinks = createPrincipalLinkService(
+    createPostgresPrincipalLinkStore(testDatabaseUrl()),
+    testAdvisoryLock(),
+  );
   f.deps.slackAccounts = testMap();
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(orgId(), "alice");

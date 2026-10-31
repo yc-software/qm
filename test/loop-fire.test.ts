@@ -11,7 +11,6 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
@@ -20,6 +19,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testIdempotencyStore } from "./support/typed-stores.ts";
 
 function fakeIdentity() {
   return {
@@ -63,7 +63,7 @@ function service(
   const grants = overrides?.grants ?? createShipGrantStore(testMap());
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
-  const idempotency = createIdempotencyStore(testMap());
+  const idempotency = testIdempotencyStore();
   const fire = createLoopFireService({
     admittedWork: overrides?.admittedWork,
     crons,

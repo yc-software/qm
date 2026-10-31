@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
@@ -77,16 +77,33 @@ export interface SkillResolution {
 
 export interface SkillStoreOptions {
   signingSecret?: string;
-  backing: DurableMap<Skill>;
   advisoryLock: AdvisoryLock;
 }
 
-export interface SkillStore {
+export type SkillListing = { scope: ScopeId } | { packIds: readonly string[] } | { archivedFor: string };
+
+interface SkillQueries {
+  get(id: string): Promise<Skill | null>;
+  inScopes(scopes: readonly ScopeId[], name?: string): Promise<Skill[]>;
+  publishedNamed(names: readonly string[]): Promise<Skill[]>;
+  fromPacks(packIds: readonly string[]): Promise<Skill[]>;
+  activePackIds(): Promise<string[]>;
+  archivedFor(scopes: readonly ScopeId[], creators: readonly string[]): Promise<Skill[]>;
+  search(query: string, limit: number): Promise<Skill[]>;
+  listAll(): Promise<Skill[]>;
+}
+
+export interface SkillRows extends SkillQueries {
+  save(skill: Skill): Promise<void>;
+  delete(id: string): Promise<void>;
+  touch(id: string, at: number): Promise<void>;
+  close?(): Promise<void>;
+}
+
+export interface SkillStore extends SkillQueries {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
   withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
-  get(id: string): Promise<Skill | null>;
-  list(): Promise<Skill[]>;
   verify(skill: Skill): boolean;
   review(id: string, reviewer: string, grantCapabilities: string[]): Promise<Skill>;
   publish(id: string): Promise<Skill>;
@@ -98,6 +115,7 @@ export interface SkillStore {
   visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
+  close?(): Promise<void>;
 }
 
 function scopeKind(scopeId: ScopeId): string {
@@ -167,17 +185,11 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
-export function createSkillStore(opts: SkillStoreOptions): SkillStore {
-  const skills = opts.backing;
-  const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
-    const wanted = new Set<string>(scopes);
-    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
-    return rows.filter((skill) => wanted.has(skill.scopeId));
-  };
+export function skillStore(skills: SkillRows, opts: SkillStoreOptions): SkillStore {
   const secret = opts.signingSecret ?? randomUUID();
   const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
-    advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
+    advisoryLock.withLock(`skill-name:${currentTenant()}:${scopeId}:${name}`, fn);
 
   function sign(manifest: SkillManifest): string {
     const files = canonicalFiles(manifest.files);
@@ -210,7 +222,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         updatedAt: at,
         ...(input.pack ? { pack: input.pack } : {}),
       };
-      await skills.put(skill.id, skill);
+      await skills.save(skill);
       return skill;
     },
     async update(id, manifest) {
@@ -223,12 +235,19 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
       s.version += 1;
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await skills.save(s);
       return s;
     },
 
     get: (id) => skills.get(id),
-    list: () => skills.all(),
+    inScopes: (scopes, name) => skills.inScopes(scopes, name),
+    publishedNamed: (names) => skills.publishedNamed(names),
+    fromPacks: (packIds) => skills.fromPacks(packIds),
+    activePackIds: () => skills.activePackIds(),
+    archivedFor: (scopes, creators) => skills.archivedFor(scopes, creators),
+    search: (query, limit) => skills.search(query, limit),
+    listAll: () => skills.listAll(),
+    ...(skills.close ? { close: skills.close } : {}),
 
     verify(skill) {
       return sign(skill.manifest) === skill.signature;
@@ -243,7 +262,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
       s.status = "reviewed";
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await skills.save(s);
       return s;
     },
 
@@ -256,7 +275,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
       s.status = "published";
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await skills.save(s);
       return s;
     },
 
@@ -269,14 +288,14 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         if (s.status === "archived") return s;
         s.status = "archived";
         s.updatedAt = Date.now();
-        await skills.put(s.id, s);
+        await skills.save(s);
         return s;
       });
     },
 
     async restore(skill) {
       assertSafeSkillName(skill.manifest.name);
-      await skills.put(skill.id, structuredClone(skill));
+      await skills.save(structuredClone(skill));
     },
 
     async delete(id) {
@@ -284,15 +303,16 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async recordUse(id, at) {
-      await skills.merge(id, { lastUsedAt: at ?? Date.now() });
+      await skills.touch(id, at ?? Date.now());
     },
 
     async resolve(name, orderedScopes) {
-      return resolveFromIndex(publishedByScopeAndName(await inScopes(orderedScopes)), name, orderedScopes);
+      if (!isSafeSkillName(name)) return { skill: null, shadowed: [] };
+      return resolveFromIndex(publishedByScopeAndName(await skills.inScopes(orderedScopes, name)), name, orderedScopes);
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
+      const all = await skills.inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
       return visibleSkillRows(all, orderedScopes, granted);
     },
 
@@ -302,9 +322,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
-      const existing = (await skills.all()).find(
-        (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
-      );
+      const existing = (await skills.inScopes([targetScopeId], s.manifest.name)).find((x) => x.status === "published");
       const at = Date.now();
       const promoted: Skill = {
         id: existing?.id ?? randomUUID(),
@@ -319,7 +337,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         createdAt: at,
         updatedAt: at,
       };
-      await skills.put(promoted.id, promoted);
+      await skills.save(promoted);
       return promoted;
     },
 
@@ -332,7 +350,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       }
       s.scopeId = toScopeId;
       s.updatedAt = Date.now();
-      await skills.put(s.id, s);
+      await skills.save(s);
       return s;
     },
   };

@@ -6,6 +6,9 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {

@@ -154,7 +154,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
     const [entries, session] = await Promise.all([
-      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.approvals.forSessions([sessionId]),
       deps.sessions.get(sessionId),
     ]);
     if (!session) return [];
@@ -289,7 +289,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (kind !== "group" || projectIdFromGroupRef(ref) === null) return undefined;
     if (!deps.projects) return false;
     const project = await deps.projects.get(projectIdFromGroupRef(ref)!);
-    if (!project || project.orgId !== orgIdOf()) return false;
+    if (!project) return false;
     if (!deps.identity.isInternal(deps.identity.classify(project.ownerId))) return false;
     if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
     return (await deps.projects.membership(ref, principalId).catch(() => false)) === true;

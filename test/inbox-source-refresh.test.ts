@@ -5,6 +5,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testFeatureFlagStore } from "./support/typed-stores.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
   const items = createLoopItemLedger(testMap());
@@ -700,8 +701,7 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
 });
 
 test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
-  const { createFeatureFlagStore } = await import("../src/feature-flags.ts");
-  const flags = createFeatureFlagStore(testMap());
+  const flags = testFeatureFlagStore();
   await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
   for (const mode of [undefined, "avatars"] as const) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });

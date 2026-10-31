@@ -7,7 +7,6 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
 import { type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -18,6 +17,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -63,7 +63,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     listByParticipant: async () => [] as { scopeId: string }[],
     participantScopes: async () => [] as { scopeId: string }[],
   };
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = testSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return {

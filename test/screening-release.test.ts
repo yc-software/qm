@@ -6,6 +6,9 @@ import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let executions = 0;
 let observedRelease = "";

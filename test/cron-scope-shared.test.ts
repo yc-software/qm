@@ -4,10 +4,8 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { composeCronEditNotice, notifyOwnerOfCronEdit, type CronEditNoticeSink } from "../src/triggers/edit-notice.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const members = [
   { id: "U-carol", type: "internal" as const },
@@ -24,8 +22,8 @@ function captureDeps(): { deps: TriggerDeps; seen: TurnRequest[] } {
   return {
     deps: {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(testMap()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run,
     },
     seen,
