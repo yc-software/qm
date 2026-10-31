@@ -37,7 +37,7 @@ export async function withTypedTableDb<S extends Closable>(
     await migrateRegisteredPgSchemas(ownerUrl.toString());
     await owner.close?.();
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`);
-    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
     const existing = (await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0]?.id as string | undefined;
     const tenant = existing ?? randomUUID();
     if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);

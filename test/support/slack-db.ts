@@ -44,7 +44,7 @@ export async function withSlackDb(
     const first = String((await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0].id);
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`);
-    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO qm_app`);
     store = createSlackTables(appUrl.toString());
     await fn({ store, owner, admin, tenant: first, otherTenant });

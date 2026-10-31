@@ -42,6 +42,28 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 export const ownerDatabaseUrl = (connectionString: string): string =>
   connectionString === poolingConfig.databaseUrl && poolingConfig.ownerUrl ? poolingConfig.ownerUrl : connectionString;
 
+function sameDatabase(a: string, b: string): boolean {
+  const left = new URL(a);
+  const right = new URL(b);
+  return (
+    left.host === right.host &&
+    left.pathname === right.pathname &&
+    left.searchParams.get("options") === right.searchParams.get("options")
+  );
+}
+
+export function migrationDatabaseUrl(connectionString: string): string {
+  const { databaseUrl, ownerUrl } = poolingConfig;
+  if (!databaseUrl) return connectionString;
+  if (!ownerUrl) throw new Error("Schema migrations need DATABASE_OWNER_URL");
+  if (sameDatabase(connectionString, ownerUrl)) return ownerUrl;
+  const owner = new URL(ownerUrl);
+  const other = new URL(connectionString);
+  other.username = owner.username;
+  other.password = owner.password;
+  return other.toString();
+}
+
 function ownerLogin(connectionString: string): string {
   const { databaseUrl, ownerUrl } = poolingConfig;
   if (!ownerUrl || (connectionString !== databaseUrl && connectionString !== ownerUrl))
@@ -424,9 +446,10 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     : [...registeredMigrations.entries()];
   for (const [databaseUrl, registered] of databases) {
     if (!registered?.size) continue;
-    await migrationQueue(databaseUrl, async () => {
+    const url = migrationDatabaseUrl(databaseUrl);
+    await migrationQueue(url, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool(pgConnectionOptions(ownerDatabaseUrl(databaseUrl))));
+      const pool = guardedPool(new pg.Pool(pgConnectionOptions(url)));
       try {
         await applyPgMigrations(
           pool,
@@ -455,12 +478,13 @@ export function createPgPool(
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(ownerDatabaseUrl(connectionString), "migration");
+    const url = migrationDatabaseUrl(connectionString);
+    return migrationQueue(url, async () => {
+      const instance = await retainPool(url, "migration");
       try {
         return await fn(instance);
       } finally {
-        await releasePool(ownerDatabaseUrl(connectionString), instance, "migration");
+        await releasePool(url, instance, "migration");
       }
     });
   }
