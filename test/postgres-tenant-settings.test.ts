@@ -86,8 +86,9 @@ test("a sealed secret copied into another tenant's row does not open there", { s
         WHERE tenant_id = $2`,
       [a, b],
     );
+    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi" });
     await assert.rejects(
-      withTenant(b, () => store.get()),
+      withTenant(b, () => reader.get()),
       /Unsupported state or unable to authenticate data/,
     );
     assert.equal((await withTenant(a, () => store.get())).values.SPRITES_TOKEN, "sprites-a");
