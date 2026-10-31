@@ -10,16 +10,16 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -30,7 +30,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createE2bSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "e2b-ws-"))), {
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
@@ -64,7 +64,7 @@ test("provision runs commands with env and cwd", async () => {
 });
 
 test("two cores provisioning the same stopped computer create one sandbox", async () => {
-  const advisoryLock = createMemoryAdvisoryLock();
+  const advisoryLock = testAdvisoryLock();
   await Promise.all([make({ advisoryLock }).provision(layers), make({ advisoryLock }).provision(layers)]);
   assert.equal(fake.createdCount(scopeName()), 1);
 });
@@ -162,7 +162,7 @@ test("an existing live sandbox tagged with the scope name is adopted after a res
 });
 
 test("the durable store reconnects the same sandbox across backend instances", async () => {
-  const store: DurableMap<StoredE2bSandbox> = createMemoryMap();
+  const store: DurableMap<StoredE2bSandbox> = testMap();
   const s1 = make({ store });
   const a = await s1.provision(layers);
   await s1.writeFile(a, "keep.txt", "resident\n");
@@ -363,7 +363,7 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
 });
 
 test("native pause skips tar checkpoints and status does not wake a paused sandbox", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const portable = instrumentedSnapshotStore();
   const client = {
     ...fake.client,
@@ -388,7 +388,7 @@ test("native pause skips tar checkpoints and status does not wake a paused sandb
 });
 
 test("legacy metadata adopts paused native state without reading a broken portable snapshot", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const portable = instrumentedSnapshotStore();
   const first = make({ store, snapshots: portable.store });
   const handle = await first.provision(layers);
@@ -415,7 +415,7 @@ test("legacy metadata adopts paused native state without reading a broken portab
 });
 
 test("pause failures are durable and visible and leave the source available for retry", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   let fail = true;
   const client = {
     ...fake.client,
@@ -443,7 +443,7 @@ test("pause failures are durable and visible and leave the source available for 
 });
 
 test("a lost native E2B sandbox without a recovery snapshot requires explicit recovery instead of a blank replacement", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const errors: string[] = [];
   const client = {
     ...nativeClient(),
@@ -472,7 +472,7 @@ test("a lost native E2B sandbox without a recovery snapshot requires explicit re
 });
 
 test("a lost native E2B sandbox is replaced from its persistent recovery snapshot", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const client = nativeClient();
   const first = make({ client, store });
   const handle = await first.provision(layers);
@@ -496,7 +496,7 @@ test("a lost native E2B sandbox is replaced from its persistent recovery snapsho
 });
 
 test("recovery snapshots follow the native interval and supersede the previous capture", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const client = { ...fake.client, nativePause: true };
   const throttled = make({ client, store, nativeSnapshotIntervalMs: 60 * 60_000 });
   const a = await throttled.provision(layers);
@@ -518,7 +518,7 @@ test("recovery snapshots follow the native interval and supersede the previous c
 });
 
 test("a job computer on native E2B gets no recovery snapshot and no portable checkpoint", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const counting = instrumentedSnapshotStore();
   const s = make({
     client: { ...fake.client, nativePause: true },
@@ -545,7 +545,7 @@ test("legacy keepWarm teardown still takes its portable checkpoint", async () =>
 });
 
 test("a failing snapshot delete never wedges destroy", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const client = {
     ...nativeClient(),
     async deleteSnapshot(): Promise<void> {
@@ -616,7 +616,7 @@ test("computerStatus reports provider metrics and the profile learns the sandbox
 });
 
 test("legacy pause preserves dirty home after failed portable checkpoint and retries on an unused turn", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const portable = instrumentedSnapshotStore();
   const first = make({ store, snapshots: portable.store });
   const handle = await first.provision(layers);
@@ -634,7 +634,7 @@ test("legacy pause preserves dirty home after failed portable checkpoint and ret
 });
 
 test("legacy pause preserves dirty home while portable checkpoints are throttled", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const portable = instrumentedSnapshotStore();
   const first = make({ store, snapshots: portable.store, snapshotIntervalMs: 60_000 });
   const handle = await first.provision(layers);
@@ -647,7 +647,7 @@ test("legacy pause preserves dirty home while portable checkpoints are throttled
 });
 
 test("destroyScope deletes paused native state without resuming and retains metadata on failure", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const record: StoredE2bSandbox = {
     sandboxId: "paused-machine",
     createdAtMs: 0,
@@ -687,7 +687,7 @@ test("destroyScope deletes paused native state without resuming and retains meta
 });
 
 test("destroyScope clears a live E2B session cache after deleting its stored machine", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const backend = make({ store });
   const first = await backend.provision(layers);
   const firstId = (await store.get(scope))!.sandboxId;
@@ -700,7 +700,7 @@ test("destroyScope clears a live E2B session cache after deleting its stored mac
 });
 
 test("repeated destroy teardown never targets an unrelated default scope", async () => {
-  const store = createMemoryMap<StoredE2bSandbox>();
+  const store = testMap<StoredE2bSandbox>();
   const backend = make({ store });
   await backend.provision([]);
   const defaultRecord = await store.get("default");

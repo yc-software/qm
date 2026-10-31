@@ -1,0 +1,38 @@
+import type { RuntimeChoice } from "./agent.ts";
+import type { SessionEntry } from "../types.ts";
+import { isObj } from "../util/objects.ts";
+
+export function recoveredRuntime(
+  entries: readonly SessionEntry[],
+  runId: string,
+  actorId: string,
+): { choice: RuntimeChoice; lifetime: "task" | "scope" } | undefined {
+  for (const entry of [...entries].reverse()) {
+    const p = entry.payload;
+    if (
+      entry.type !== "tool_result" ||
+      !isObj(p) ||
+      p.tool !== "runtime" ||
+      p.runId !== runId ||
+      p.actorId !== actorId ||
+      !isObj(p.runtimeHandoff)
+    )
+      continue;
+    const choice = p.runtimeHandoff.choice;
+    if (
+      isObj(choice) &&
+      typeof choice.modelId === "string" &&
+      (choice.effortLevel === undefined || typeof choice.effortLevel === "string") &&
+      (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
+    )
+      return {
+        choice: {
+          modelId: choice.modelId,
+          ...(choice.effortLevel === undefined ? {} : { effortLevel: choice.effortLevel }),
+          ...(choice.fastMode === undefined ? {} : { fastMode: choice.fastMode }),
+        },
+        lifetime: p.runtimeHandoff.lifetime === "scope" ? "scope" : "task",
+      };
+  }
+  return undefined;
+}

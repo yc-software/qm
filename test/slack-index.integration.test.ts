@@ -2,9 +2,6 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 type Handler = (args: any) => Promise<void>;
 
@@ -356,6 +353,7 @@ class FakeCore implements SlackCoreClient {
     return [];
   }
   async ackDelivery(): Promise<void> {}
+  async failDelivery(): Promise<void> {}
   deliverySubscriptions = 0;
   onDeliveryEnqueued(): () => void {
     this.deliverySubscriptions++;

@@ -3,9 +3,6 @@ import { mock, test } from "node:test";
 import { S3Client } from "@aws-sdk/client-s3";
 import * as toolOutput from "../src/sessions/tool-output.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 type ToolOutputOptions = Parameters<typeof toolOutput.createPostgresToolOutputStore>[0];
 let bytesFor: ToolOutputOptions["bytesFor"] | undefined;
@@ -15,7 +12,7 @@ mock.module("../src/sessions/tool-output.ts", {
     ...toolOutput,
     createPostgresToolOutputStore: (options: ToolOutputOptions) => {
       bytesFor = options.bytesFor;
-      return toolOutput.createMemoryToolOutputStore();
+      return toolOutput.createPostgresToolOutputStore(options);
     },
   },
 });
@@ -38,8 +35,6 @@ test("parked tool output uses the configured S3 endpoint and bucket path", async
   });
   const config = testConfig({
     sandboxBackend: "local",
-    databaseUrl: "postgres://unused/unused",
-    sessionStore: "postgres",
     snapshotStore: "s3",
     s3Bucket: "qm-storage",
     s3Region: "us-east-1",

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import { createGrindMeter } from "../src/harness/grind.ts";
-import { harnessToolContext } from "../src/harness/harness-shared.ts";
-import { emptyEndingNote } from "../src/harness/pi-harness.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { createGrindMeter } from "../src/agent/goal.ts";
+import { turnToolContext } from "../src/agent/turn-support.ts";
+import { emptyEndingNote } from "../src/agent/agent-run.ts";
 import {
   GovernorUndecided,
   supersedeGoal,
@@ -12,7 +12,7 @@ import {
   goalFloorUnmet,
   openGoal,
   type GoalRecord,
-} from "../src/harness/goal.ts";
+} from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
@@ -526,7 +526,7 @@ test("a turn resumed mid-way cannot cancel: it is not answering a fresh message 
   const resumed = nextTurn(first.ref.goal!);
   Object.assign(
     resumed.ref,
-    harnessToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
+    turnToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
     { goal: resumed.ref.goal },
   );
   const result = await resumed.update.execute("u1", { status: "cancel", note: "user: cancel" });

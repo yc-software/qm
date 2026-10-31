@@ -9,7 +9,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
   if (req.url?.startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(
-      JSON.stringify({ webuiModels: [], baseModel: "m", harnessId: "pi", modelProviderConfigured: providerConfigured }),
+      JSON.stringify({ webuiModels: [], baseModel: "m", modelProviderConfigured: providerConfigured }),
     );
   }
   if (req.url === "/api/whoami") {

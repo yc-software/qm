@@ -38,7 +38,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
 
-// A turn-local view, never a reusable capability or a cross-turn cache.
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
   const sharingSources = input.external

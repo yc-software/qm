@@ -9,16 +9,19 @@ import {
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
-  parseRegisteredModel,
   isEmbeddingModel,
-  type RegisteredModel,
+  overlayModel,
+  overlayModels,
+  overlaysVersion,
+  overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
   type ModelOverlay,
 } from "./model-overlay.ts";
+import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 import { perTenant } from "../tenants/context.ts";
+import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -45,8 +48,6 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "claude"] as const;
-export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
   return (
@@ -64,21 +65,13 @@ export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "co
   );
 }
 
-export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
+export function thinkingLevelsFor(modelId?: string): readonly string[] {
   const model = modelId ? resolveModel(modelId) : undefined;
   return THINKING_LEVELS.filter((level) => {
-    if (level === "adaptive")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
-    if (level === "default")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return level !== "ultracode";
-    return level === "auto";
+    if (level === "adaptive") return !modelId || (!!model && modelSupportsAdaptiveThinking(model));
+    if (level === "default") return !modelId || (!!model && modelSupportsProviderDefault(model));
+    return true;
   });
-}
-
-export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
-  return harnessId === "pi" || harnessId === "claude";
 }
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
@@ -87,407 +80,43 @@ export function isModelProvider(value: unknown): value is ModelProvider {
   return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
 }
 
-export function isHarnessId(value: unknown): value is HarnessId {
-  return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
-}
-
-export function harnessIdOrPi(value: unknown): HarnessId {
-  return isHarnessId(value) ? value : "pi";
-}
-
 type PiModel = Model<Api>;
 
-interface ModelEntry {
-  id: string;
-  name: string;
-  fastMode: boolean;
-  label?: string;
-  buttonLabel?: string;
-  webui: boolean;
-  base: boolean;
-  auxiliary?: boolean;
-  request?: { model: string; service_tier: "ultrafast" };
-  clone?: {
-    template: string;
-    input: number;
-    output: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextWindow: number;
-    maxTokens: number;
-    thinkingLevelMap?: PiModel["thinkingLevelMap"];
-
-    tiers?: ReadonlyArray<{
-      inputTokensAbove: number;
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-    }>;
-  };
-}
-
-const GPT_56_CLONE = {
-  template: "gpt-5.5",
-  contextWindow: 1_050_000,
-  maxTokens: 128_000,
-  thinkingLevelMap: { max: "max" },
-} as const;
-
-export const MODEL_REGISTRY: readonly ModelEntry[] = [
-  {
-    id: "claude-opus-5-5",
-    name: "Claude Opus 5.5",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      template: "claude-opus-4-8",
-      thinkingLevelMap: { off: null },
-      input: 4,
-      output: 20,
-      cacheRead: 0.2,
-      cacheWrite: 5,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-  },
-  {
-    id: "claude-fable-5-1",
-    name: "Claude Fable 5.1",
-    fastMode: false,
-    webui: true,
-    base: true,
-    clone: {
-      template: "claude-fable-5",
-      input: 10,
-      output: 50,
-      cacheRead: 0.25,
-      cacheWrite: 12.5,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-  },
-  { id: "claude-fable-5", name: "Claude Fable 5", fastMode: false, webui: true, base: true },
-  {
-    id: "claude-opus-5",
-    name: "Claude Opus 5",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      template: "claude-opus-4-8",
-      input: 5,
-      output: 25,
-      cacheWrite: 6.25,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-  },
-  { id: "claude-opus-4-8", name: "Claude Opus 4.8", fastMode: true, webui: true, base: true },
-  {
-    id: "claude-sonnet-5-5",
-    name: "Claude Sonnet 5.5",
-    fastMode: false,
-    webui: true,
-    base: true,
-    clone: {
-      template: "claude-opus-4-8",
-      thinkingLevelMap: { off: null },
-      input: 2,
-      output: 10,
-      cacheRead: 0.1,
-      cacheWrite: 2.5,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-  },
-  { id: "claude-sonnet-5", name: "Claude Sonnet 5", fastMode: false, webui: true, base: true },
-  {
-    id: "claude-haiku-5-5",
-    name: "Claude Haiku 5.5",
-    fastMode: false,
-    webui: true,
-    base: true,
-    auxiliary: true,
-    clone: {
-      template: "claude-opus-4-8",
-      input: 0.1,
-      output: 0.5,
-      cacheRead: 0.01,
-      cacheWrite: 0.125,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      tiers: [{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
-    },
-  },
-  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", fastMode: false, webui: true, base: true },
-  {
-    id: "gpt-5.6-sol",
-    buttonLabel: "5.6 Sol",
-    name: "GPT-5.6 Sol",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 4,
-      output: 20,
-      cacheWrite: 5,
-      tiers: [{ inputTokensAbove: 272_000, input: 8, output: 30, cacheRead: 0.8, cacheWrite: 10 }],
-    },
-  },
-  {
-    id: "gpt-5.6-terra",
-    buttonLabel: "5.6 Terra",
-    name: "GPT-5.6 Terra",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 2,
-      output: 12,
-      cacheWrite: 2.5,
-      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 5 }],
-    },
-  },
-  {
-    id: "gpt-5.6-luna",
-    buttonLabel: "5.6 Luna",
-    name: "GPT-5.6 Luna",
-    fastMode: true,
-    webui: true,
-    base: true,
-    auxiliary: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 0.2,
-      output: 1.2,
-      cacheWrite: 0.25,
-      tiers: [{ inputTokensAbove: 272_000, input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5 }],
-    },
-  },
-  {
-    id: "gpt-6-astra",
-    buttonLabel: "Astra",
-    name: "GPT-6 Astra",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
-      input: 10,
-      output: 50,
-      cacheRead: 1,
-      cacheWrite: 12.5,
-      tiers: [{ inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }],
-    },
-  },
-  {
-    id: "gpt-6-astra-ultrafast",
-    buttonLabel: "Astra Ultrafast",
-    name: "GPT-6 Astra · Ultrafast (6× cost)",
-    fastMode: false,
-    webui: true,
-    base: true,
-    request: { model: "gpt-6-astra", service_tier: "ultrafast" },
-    clone: {
-      ...GPT_56_CLONE,
-      thinkingLevelMap: { ...GPT_56_CLONE.thinkingLevelMap, off: null },
-      input: 60,
-      output: 300,
-      cacheRead: 6,
-      cacheWrite: 75,
-      tiers: [{ inputTokensAbove: 272_000, input: 120, output: 450, cacheRead: 12, cacheWrite: 150 }],
-    },
-  },
-  {
-    id: "gpt-6.1-sol",
-    buttonLabel: "6.1 Sol",
-    name: "GPT-6.1 Sol",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      thinkingLevelMap: { off: null, minimal: null, max: "max" },
-      input: 2,
-      output: 10,
-      cacheRead: 0.1,
-      cacheWrite: 2.5,
-      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }],
-    },
-  },
-  {
-    id: "gpt-6.1-sol-ultrafast",
-    buttonLabel: "6.1 Sol Ultrafast",
-    name: "GPT-6.1 Sol · Ultrafast (6× cost)",
-    fastMode: false,
-    webui: true,
-    base: true,
-    request: { model: "gpt-6.1-sol", service_tier: "ultrafast" },
-    clone: {
-      ...GPT_56_CLONE,
-      thinkingLevelMap: { off: null, minimal: null, max: "max" },
-      input: 12,
-      output: 60,
-      cacheRead: 0.6,
-      cacheWrite: 15,
-      tiers: [{ inputTokensAbove: 272_000, input: 24, output: 90, cacheRead: 1.2, cacheWrite: 30 }],
-    },
-  },
-  {
-    id: "gpt-6.1-terra",
-    buttonLabel: "6.1 Terra",
-    name: "GPT-6.1 Terra",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 1,
-      output: 5,
-      cacheRead: 0.05,
-      cacheWrite: 1.25,
-      tiers: [{ inputTokensAbove: 272_000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5 }],
-    },
-  },
-  {
-    id: "gpt-6-sol",
-    buttonLabel: "6 Sol",
-    name: "GPT-6 Sol",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 2,
-      output: 10,
-      cacheWrite: 2.5,
-      tiers: [{ inputTokensAbove: 272_000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }],
-    },
-  },
-  {
-    id: "gpt-6-luna",
-    buttonLabel: "6 Luna",
-    name: "GPT-6 Luna",
-    fastMode: true,
-    webui: true,
-    base: true,
-    clone: {
-      ...GPT_56_CLONE,
-      input: 0.1,
-      output: 0.5,
-      cacheWrite: 0.125,
-      tiers: [{ inputTokensAbove: 272_000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
-    },
-  },
-  { id: "openrouter/auto", name: "OpenRouter Auto", fastMode: false, webui: true, base: true },
-  { id: "claude-opus-4-7", name: "Claude Opus 4.7", fastMode: false, webui: false, base: false },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", fastMode: false, webui: false, base: false },
-];
-
-const overlayState = perTenant(() => ({
-  overlays: new Map<string, RegisteredModel>(),
-  unavailable: new Map<string, string>(),
-  version: 0,
-  snapshot: JSON.stringify([[], [], []]),
-  openRouter: new Map<string, PiModel>(),
-}));
-
 export function modelOverlayVersion(): number {
-  return overlayState().version + gatewayModelsVersion();
+  return overlaysVersion() + gatewayModelsVersion();
 }
 
 export function isOverlayModel(id: string): boolean {
-  return overlayState().overlays.has(id);
+  return overlayModel(id) !== undefined;
 }
 
 export function modelOfferedInWebui(id: string): boolean {
-  const model = overlayState().overlays.get(id);
+  const model = overlayModel(id);
   return model && isEmbeddingModel(model) ? false : (model?.webui ?? true);
 }
 
 export function modelUnavailableReason(id: string): string | undefined {
   if (isGatewayModelId(id) && !resolveGatewayModel(id) && !resolveGatewayEmbeddingModel(id))
     return "Gateway model is unavailable; select another model or retry after discovery recovers";
-  return overlayState().unavailable.get(id);
+  return overlayUnavailableReason(id);
+}
+
+export function catalogModelIdTaken(id: string): boolean {
+  return REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || openRouterCatalogModels().has(id);
 }
 
 export function modelIdReserved(id: string): boolean {
   return (
     isGatewayModelId(id) ||
     id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ||
-    REGISTRY_BY_ID.has(id) ||
-    Boolean(builtinModel(id)) ||
-    overlayState().overlays.has(id) ||
-    overlayState().unavailable.has(id) ||
-    overlayState().openRouter.has(id)
+    catalogModelIdTaken(id) ||
+    overlayModel(id) !== undefined ||
+    overlayUnavailableReason(id) !== undefined
   );
 }
 
-export function validateModelOverlay(value: unknown): RegisteredModel {
-  const spec = parseRegisteredModel(value);
-  if (REGISTRY_BY_ID.has(spec.id) || builtinModel(spec.id) || overlayState().openRouter.has(spec.id))
-    throw new Error("model id is already registered");
-  if (isEmbeddingModel(spec)) return spec;
-  const template = resolveBuiltinModel(spec.template);
-  if (!template || template.provider !== spec.provider)
-    throw new Error("template must be a builtin model of the declared provider");
-  return spec;
-}
-
-export function setModelOverlays(
-  specs: readonly unknown[],
-  deleted: string[] = [],
-  verificationFailures: ReadonlyMap<string, string> = new Map(),
-): void {
-  const next = new Map<string, RegisteredModel>();
-  const unavailable = new Map(deleted.map((id) => [id, "Model has been deleted; select another model"]));
-  for (const value of specs) {
-    const id =
-      value && typeof value === "object" && "id" in value && typeof value.id === "string" ? value.id : undefined;
-    if (!id) continue;
-    try {
-      const spec = parseRegisteredModel(value);
-      const builtin = resolveBuiltinModel(id);
-      if (builtin) {
-        if (builtin.provider !== spec.provider)
-          unavailable.set(id, "Builtin provider differs from the stored model; choose another model");
-        continue;
-      }
-      if (isEmbeddingModel(spec)) {
-        if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
-        else next.set(id, spec);
-        continue;
-      }
-      const template = resolveBuiltinModel(spec.template);
-      if (!template || template.provider !== spec.provider) {
-        unavailable.set(
-          id,
-          "Builtin template is unavailable or has a different provider; ask an administrator to repair this model",
-        );
-      } else if (overlayState().openRouter.has(id)) {
-        unavailable.set(id, "Model id conflicts with another provider; ask an administrator to repair this model");
-      } else if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
-      else next.set(id, spec);
-    } catch {
-      unavailable.set(id, "Stored model definition is invalid; ask an administrator to repair this model");
-    }
-  }
-  const snapshot = JSON.stringify([[...next], [...unavailable], deleted]);
-  const state = overlayState();
-  if (snapshot === state.snapshot) return;
-  state.overlays = next;
-  state.unavailable = unavailable;
-  state.snapshot = snapshot;
-  state.version += 1;
-}
-
 function chatOverlays(): ModelOverlay[] {
-  return [...overlayState().overlays.values()].filter((model): model is ModelOverlay => !isEmbeddingModel(model));
+  return overlayModels().filter((model): model is ModelOverlay => !isEmbeddingModel(model));
 }
 
 export function selectableBaseModels(includeAliased = false): ReadonlyArray<{ id: string; name: string }> {
@@ -526,10 +155,10 @@ export function fastModeModelIds(): readonly string[] {
 }
 
 const REGISTRY_BY_ID = new Map(MODEL_REGISTRY.map((m) => [m.id, m]));
+const openRouterCatalogModels = perTenant(() => new Map<string, PiModel>());
 
 export function modelDisplayName(id: string): string {
-  const { overlays, openRouter } = overlayState();
-  return overlays.get(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? openRouter.get(id)?.name ?? id;
+  return overlayModel(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? openRouterCatalogModels().get(id)?.name ?? id;
 }
 
 export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
@@ -563,7 +192,7 @@ function cloneModel(model: PiModel, id: string, name: string, overrides: Partial
   };
 }
 
-export interface OpenRouterCatalogModel {
+interface OpenRouterCatalogModel {
   id: string;
   name: string;
   contextWindow: number;
@@ -590,7 +219,7 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
     },
   });
   model.input = [...definition.input];
-  overlayState().openRouter.set(model.id, model);
+  openRouterCatalogModels().set(model.id, model);
   return model;
 }
 
@@ -640,15 +269,15 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
 
 function resolveBaseModel(id: string): PiModel | undefined {
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
-  if (overlayState().unavailable.has(id)) return undefined;
+  if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
   if (builtin) return builtin;
-  const overlay = overlayState().overlays.get(id);
+  const overlay = overlayModel(id);
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
   const custom = resolveCustomModel(id);
-  return custom ? customPiModel(custom) : overlayState().openRouter.get(id);
+  return custom ? customPiModel(custom) : openRouterCatalogModels().get(id);
 }
 
 function customPiModel(custom: CustomRuntimeModel): PiModel {
@@ -683,7 +312,7 @@ export function resolveModel(id: string, useOrgEndpoints = true): PiModel | unde
 }
 
 export function auxiliaryModelForProvider(provider: string): string | undefined {
-  return [...MODEL_REGISTRY, ...overlayState().overlays.values()].find(
+  return [...MODEL_REGISTRY, ...overlayModels()].find(
     (m) => !isEmbeddingModel(m) && m.auxiliary && resolveModel(m.id)?.provider === provider,
   )?.id;
 }
@@ -710,27 +339,20 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
   return model.cost.input > 0 || model.cost.output > 0;
 }
 
-export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
-  if (id && modelRequestOverrides(id)) return harness === "pi";
-  if (id && isGatewayModelId(id)) return harness === "pi" && Boolean(resolveGatewayModel(id));
-  if (!id || overlayState().unavailable.has(id)) return false;
-  if (overlayState().overlays.has(id)) return !isEmbeddingModel(overlayState().overlays.get(id)!) && harness === "pi";
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi";
-  if (harness === "pi") return Boolean(resolveModel(id));
-  const provider = resolveModel(id)?.provider;
-  if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
-  return false;
+export function modelSupported(id: string | undefined): boolean {
+  if (id && modelRequestOverrides(id)) return true;
+  if (id && isGatewayModelId(id)) return Boolean(resolveGatewayModel(id));
+  if (!id || overlayUnavailableReason(id) !== undefined) return false;
+  const overlay = overlayModel(id);
+  if (overlay) return !isEmbeddingModel(overlay);
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
+  return Boolean(resolveModel(id));
 }
 
-export function defaultModelForHarness(
-  harness: string,
-  configured?: string,
-  providers?: ModelProviderAvailability,
-): string {
-  if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
-    return configured;
+export function defaultModel(configured?: string, providers?: ModelProviderAvailability): string {
+  if (configured && (modelUnavailableReason(configured) || modelSupported(configured))) return configured;
   if (!providers) return DEFAULT_AGENT_MODEL_ID;
-  const billable = (id: string) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers);
+  const billable = (id: string) => modelSupported(id) && modelServiceable(id, providers);
   return (
     PROVIDER_DEFAULT_MODEL_IDS.find(billable) ??
     selectableBaseModels(true)
@@ -777,24 +399,14 @@ export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = {
   codexOAuth: true,
 };
 
-export function modelProviderAvailabilityFor(
-  harness: string,
-  configKeys: ModelProviderAvailability,
-  managedKeys: ModelProviderAvailability = configKeys,
-): ModelProviderAvailability {
-  if (harness === "pi") return managedKeys;
-  return ALL_PROVIDERS_AVAILABLE;
-}
-
 export function onlyProvider(provider: ModelProvider): ModelProviderAvailability {
   return { anthropic: false, openai: false, openrouter: false, [provider]: true };
 }
 
-export function defaultModelForProvider(harness: string, provider: ModelProvider): string | undefined {
+export function defaultModelForProvider(provider: ModelProvider): string | undefined {
   const only = onlyProvider(provider);
-  if (!modelProviderAvailabilityFor(harness, only)[provider]) return undefined;
-  const model = defaultModelForHarness(harness, undefined, only);
-  return modelSupportedByHarness(model, harness) && modelServiceable(model, only) ? model : undefined;
+  const model = defaultModel(undefined, only);
+  return modelSupported(model) && modelServiceable(model, only) ? model : undefined;
 }
 
 export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
@@ -805,8 +417,8 @@ export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
 
 export function modelSupportsFastMode(modelId: string | undefined): boolean {
   if (!modelId) return false;
-  if (overlayState().unavailable.has(modelId)) return false;
-  const overlay = overlayState().overlays.get(modelId);
+  if (overlayUnavailableReason(modelId) !== undefined) return false;
+  const overlay = overlayModel(modelId);
   return (
     (overlay && !isEmbeddingModel(overlay) ? overlay.fastMode : undefined) ??
     REGISTRY_BY_ID.get(modelId)?.fastMode ??
@@ -828,7 +440,7 @@ export function safeModelMetadata(id: string) {
   if (!model) return undefined;
   const entry = REGISTRY_BY_ID.get(id);
   const name = modelDisplayName(id) === id ? model.name : modelDisplayName(id);
-  const label = entry?.label ?? (entry ? name.replace(/^Claude /, "") : name);
+  const label = entry ? name.replace(/^Claude /, "") : name;
   const buttonLabel = entry?.buttonLabel ?? label;
   return {
     id,
@@ -843,9 +455,7 @@ export function safeModelMetadata(id: string) {
     maxTokens: model.maxTokens,
     cost: structuredClone(model.cost),
     fastMode: modelSupportsFastMode(id),
-    effortLevelsByHarness: Object.fromEntries(
-      HARNESS_IDS.map((harness) => [harness, thinkingLevelsForHarness(harness, id)]),
-    ),
+    effortLevels: thinkingLevelsFor(id),
   };
 }
 
@@ -863,15 +473,15 @@ export function embeddingModelFromDefinition(model: EmbeddingModelDefinition): E
 }
 
 export function resolveEmbeddingModel(id: string): EmbeddingModel | undefined {
-  if (overlayState().unavailable.has(id)) return undefined;
+  if (overlayUnavailableReason(id) !== undefined) return undefined;
   const gateway = resolveGatewayEmbeddingModel(id);
   if (gateway) return gateway;
-  const model = overlayState().overlays.get(id);
+  const model = overlayModel(id);
   return model && isEmbeddingModel(model) ? embeddingModelFromDefinition(model) : undefined;
 }
 
 export function embeddingModelCatalog(): Array<Omit<EmbeddingModel, "baseUrl">> {
-  return [...overlayState().overlays.keys(), ...gatewayEmbeddingModelIds()].flatMap((id) => {
+  return [...overlayModels().map((model) => model.id), ...gatewayEmbeddingModelIds()].flatMap((id) => {
     const model = resolveEmbeddingModel(id);
     return model ? [{ kind: model.kind, id: model.id, name: model.name, provider: model.provider }] : [];
   });

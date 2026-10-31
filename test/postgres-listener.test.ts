@@ -24,7 +24,7 @@ test("channels share a backend, recover after termination, and release it after 
   const pids = async () =>
     (
       await observer.query(
-        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN consolidation_%' AND pid<>pg_backend_pid()",
+        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%LISTEN consolidation_%' AND pid<>pg_backend_pid()",
       )
     ).rows.map((r) => r.pid);
   try {

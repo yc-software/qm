@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { createDrainController } from "../src/runs/drain.ts";
 import type { InstanceRegistry } from "../src/runs/instance-registry.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -18,7 +19,7 @@ const turn: OrchestratorInput = {
 const ok: TurnResult = { status: "ok", reply: "done" };
 
 test("a superseded worker stops claiming; in-flight turns finish; claiming resumes when the newer build dies", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   let superseded = false;
   const registry: InstanceRegistry = { beat: async () => superseded };
   const drain = createDrainController({ registry, sweepMs: 10 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isObj } from "../../src/util/objects.ts";
 
-export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; modelId: string } {
+export function assertRuntimeHandoff(entries: unknown[]): { modelId: string } {
   const calls = new Map<string, { action: string; index: number }>();
   const results: Array<{ index: number; action: string; payload: Record<string, unknown> }> = [];
   for (const [index, entry] of entries.entries()) {
@@ -28,7 +28,6 @@ export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; m
   const { lifetime, choice } = handoff.payload.runtimeHandoff;
   assert.equal(lifetime, "task");
   assert.ok(isObj(choice));
-  assert.equal(choice.harnessId, "pi");
   assert.ok(typeof choice.modelId === "string" && choice.modelId.length > 0);
   const verification = results.find(
     (result) => result.index > handoff.index && result.action === "get" && isObj(result.payload.runtimeActive),
@@ -38,6 +37,5 @@ export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; m
     "no successful runtime inspection after handoff",
   );
   assert.equal(verification.payload.runtimeActive.modelId, choice.modelId);
-  assert.equal(verification.payload.runtimeActive.harnessId, choice.harnessId);
-  return { harnessId: "pi", modelId: choice.modelId };
+  return { modelId: choice.modelId };
 }

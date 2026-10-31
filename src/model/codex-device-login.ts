@@ -11,6 +11,7 @@ const START_TIMEOUT_MS = 30_000;
 const DEVICE_CODE_METHOD = "device_code";
 
 interface PendingLogin {
+  owner: string;
   tenant: string;
   abort: AbortController;
   expiresAt: number;
@@ -45,7 +46,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
   };
 
   return {
-    async start(): Promise<ChatGPTDevicePrompt> {
+    async start(owner: string): Promise<ChatGPTDevicePrompt> {
       const tenant = currentTenant();
       sweep();
       const oauth = opts.oauth ?? openaiCodexProvider().auth.oauth;
@@ -82,7 +83,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
         ]);
         const loginId = randomUUID();
         const expiresAt = Date.now() + Math.min(LOGIN_TTL_MS, (event.expiresInSeconds ?? Infinity) * 1000);
-        const login: PendingLogin = { tenant, abort, expiresAt, outcome, settled: false };
+        const login: PendingLogin = { owner, tenant, abort, expiresAt, outcome, settled: false };
         void outcome
           .catch(() => undefined)
           .finally(() => {
@@ -104,11 +105,11 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
       }
     },
 
-    async poll(loginId: string): Promise<UserOAuthTokens | "pending"> {
+    async poll(loginId: string, owner: string): Promise<UserOAuthTokens | "pending" | "unknown"> {
       const tenant = currentTenant();
       sweep();
       const login = pending.get(loginId);
-      if (!login || login.tenant !== tenant) throw new Error("login expired or unknown — start again");
+      if (!login || login.owner !== owner || login.tenant !== tenant) return "unknown";
       if (!login.settled) return "pending";
       try {
         return await login.outcome;

@@ -8,9 +8,6 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
@@ -30,7 +27,7 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
   };
 }
 
-test("readiness is public and ready without a configured database", async () => {
+test("readiness is public and ready", async () => {
   const srv = await fixture();
   try {
     const response = await srv.get("/readyz");

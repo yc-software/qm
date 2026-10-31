@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { LoopItem, LoopSourcePayload } from "../src/types.ts";
+import type { LoopItem, LoopSourcePayload } from "../src/loops/types.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/sources/gmail.ts";
 import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/loops/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 import { adapterForItem } from "../src/loops/sources/index.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
   return {

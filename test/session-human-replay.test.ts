@@ -5,13 +5,10 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
-  await built.config.setApprovedHarnesses(["pi"]);
+  t.after(() => built.runtime.stop());
   await built.app.upsertDirectory(
     ["owner", "sender", "new-member"].map((principalId) => ({
       principalId,
@@ -42,7 +39,6 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
   const options = {
     model: "gpt-5.5",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     timezone: "Europe/London",
@@ -107,6 +103,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
 
 test("late child signals remain pending behind approval and requestless steers replay once", async (t) => {
   const built = buildApp(testConfig());
+  t.after(() => built.runtime.stop());
   const actor: Principal = { id: "sender", type: "internal" };
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-review", "dm", "personal:sender");
   const conversation: Conversation = { kind: "dm", threadRef: child.threadRef, audience: [actor] };
@@ -116,7 +113,14 @@ test("late child signals remain pending behind approval and requestless steers r
   });
   const claimed = await built.runs.claimById(run.id, "test", 30_000);
   assert.ok(claimed?.leaseToken);
+  const terminalHookSettled = new Promise<void>((resolve) =>
+    built.runs.onTerminal((done) => {
+      if (done.id === run.id) resolve();
+    }),
+  );
   await built.runs.complete(run.id, claimed.leaseToken, { status: "ok" });
+  await terminalHookSettled;
+  await built.app.replayOrphanedRunSignals(run.id);
   await built.signals.send(run.id, {
     kind: "steer",
     text: "human followup",

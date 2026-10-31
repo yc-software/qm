@@ -22,9 +22,6 @@ import {
   scopeSurfaceUrl,
   onBotJoinedChannel,
 } from "../src/slack/lib.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("slackReplyArgs keeps channel replies thread-only and never broadcasts them", () => {
   assert.deepEqual(slackReplyArgs("C1", "reply", "123.45", { threadOnly: true }), {

@@ -76,6 +76,19 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Reuse the exact successful PR tree
         if: needs.reuse.outputs.reusable == 'true'
@@ -103,6 +116,14 @@ jobs:
           sha256sum -c helm-v3.19.0-linux-amd64.tar.gz.sha256sum
           tar -xzf helm-v3.19.0-linux-amd64.tar.gz
           sudo install linux-amd64/helm /usr/local/bin/helm
+      - name: Configure test Postgres
+        if: needs.reuse.outputs.reusable != 'true'
+        run: |
+          for setting in "max_connections = 1000" "fsync = off" "synchronous_commit = off" "full_page_writes = off"; do
+            docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET $setting"
+          done
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - name: Verify root test shard plan
         if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
         run: npm run test:root:shard:check
@@ -110,10 +131,13 @@ jobs:
         if: needs.reuse.outputs.reusable != 'true'
         env:
           CORE_TEST_SHARD: ${{ matrix.shard }}/5
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
         run: npm run test:root:shard
       - name: Render runner tests as root
         if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
-        run: sudo env "PATH=$PATH" node --experimental-test-module-mocks --test test/render-deploy-runner.test.ts
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
+        run: sudo env "PATH=$PATH" "DATABASE_URL=$DATABASE_URL" node scripts/run-pg-tests.mjs test/render-deploy-runner.test.ts
 
   core:
     name: Core
@@ -300,16 +324,6 @@ jobs:
       - name: Build connector SDK
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run build:connector-sdk
-      - name: Postgres-backed tests (durability + cross-process)
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: npm run test:pg
-      - name: Swarm HTTP runtime tests
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          SWARM_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/qm
-        run: node --experimental-test-module-mocks --test test/swarm-orchestrator.test.ts
       - name: Model registry cross-process tests
         if: needs.reuse.outputs.reusable != 'true'
         env:

@@ -13,9 +13,6 @@ import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function loadViewerCacheHelpers(): {
   callCacheUsage: (q: unknown) => { cacheRead: number; cacheWrite: number; uncachedInput: number } | null;

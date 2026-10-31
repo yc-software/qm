@@ -7,6 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { boundTenant, perTenant } from "../tenants/context.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import type { AddressFetch } from "../util/network.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const COLD_TOOL_WAIT_MS = 1_000;
@@ -166,6 +167,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  fetch?: AddressFetch;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
@@ -201,7 +203,7 @@ export function createMcpToolService(opts: {
     const { clients } = tenantState();
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({ url: server.url, auth: authOf(server) });
+    const client = createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch });
     clients.set(server.id, { client, server });
     return client;
   }
@@ -221,7 +223,7 @@ export function createMcpToolService(opts: {
       if (server.auth === "oauth-user") throw new SignInRequired(signInMessage(server));
       throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
     }
-    return createMcpClient({ url: server.url, auth: { mode: "bearer", token } });
+    return createMcpClient({ url: server.url, auth: { mode: "bearer", token }, fetch: opts.fetch });
   }
 
   async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
@@ -443,7 +445,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      return createMcpClient({ url: server.url, auth: authOf(server) }).listTools({
+      return createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });

@@ -3,9 +3,6 @@ import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource; swept: string[] } {
   const swept: string[] = [];

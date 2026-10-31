@@ -1,6 +1,7 @@
 import { perTenant } from "../tenants/context.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createTtlRefresh } from "../util/async.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -41,16 +42,11 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(
-  backing?: DurableMap<PrincipalLink>,
-  lock: AdvisoryLock = createMemoryAdvisoryLock(),
-): PrincipalLinkService {
-  const store = backing ?? createMemoryMap<PrincipalLink>();
+export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
   const links = perTenant(() => ({
     byAlias: new Map<string, PrincipalLink>(),
     byCanonical: new Map<string, PrincipalLink[]>(),
-    refreshedAt: 0,
-    refreshP: null as Promise<void> | null,
+    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all())),
   }));
 
   function index(rows: PrincipalLink[]): void {
@@ -66,22 +62,7 @@ export function createPrincipalLinkService(
     }
   }
 
-  async function refresh(force = false): Promise<void> {
-    const state = links();
-    if (state.refreshP && !force) return state.refreshP;
-    while (state.refreshP) await state.refreshP;
-    if (!force && Date.now() - state.refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    state.refreshP = store
-      .all()
-      .then(index)
-      .then(() => {
-        state.refreshedAt = Date.now();
-      })
-      .finally(() => {
-        state.refreshP = null;
-      });
-    return state.refreshP;
-  }
+  const refresh = (force?: boolean): Promise<void> => links().refresh(force);
 
   return {
     canonical(key) {

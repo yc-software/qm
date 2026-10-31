@@ -12,9 +12,6 @@ import {
   inlineCode,
 } from "../src/slack/lib.ts";
 import { resolveMentions } from "../src/slack/mrkdwn.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
   const clamped = inlineCode("`echo hi`" + "y".repeat(60000));

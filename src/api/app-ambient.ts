@@ -14,7 +14,7 @@ import {
 } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import { buildWakeEnvelope } from "../core/wake-envelope.ts";
+import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";

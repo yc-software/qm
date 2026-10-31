@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import {
   runResultDelivery,
@@ -12,6 +11,9 @@ import type { Run } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -225,7 +227,7 @@ test("runResultDelivery skips terminal results that cannot be safely replayed", 
 });
 
 test("wired stores: a completed turn lands in the outbox unless the live path acked it", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries);
 
@@ -253,7 +255,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
 });
 
 test("sweep enqueues the recovery delivery for a terminal run whose outbox row never landed", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const claimed = await runs.claim("w1", 5_000);
@@ -271,7 +273,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
 });
 
 test("sweep leaves runs alone when their delivery already exists, was acked live, or is still inside the grace window", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
@@ -308,7 +310,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
 });
 
 test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finished = new Set<string>();
@@ -327,7 +329,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
 });
 
 test("wired stores: a parked run lands a durable, non-ackable failure note", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries);
 
@@ -347,8 +349,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
 });
 
 const failureSessions = async () => {
-  const { createMemorySessionStore } = await import("../src/sessions/memory-session-store.ts");
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
@@ -419,7 +420,7 @@ test("a done run records nothing", async () => {
 
 test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
   const { sessions, session } = await failureSessions();
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 

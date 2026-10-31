@@ -6,6 +6,7 @@ import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts"
 import { reportFailureAs, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { perTenant } from "../tenants/context.ts";
+import { publicFetch } from "../util/network.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -71,7 +72,7 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
-const realFetch: FetchLike = (url, init) => fetch(url, init);
+const realFetch: FetchLike = (url, init) => publicFetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
 
 function parseScopes(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) return raw.map(String);
@@ -283,7 +284,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
         "Add the redirect URI shown below to 'Authorized redirect URIs' on YOUR client.",
         "Enable the Gmail, Calendar, Drive, Sheets, Docs, Slides, and Tasks APIs for the project.",
         "Choose admin-consent (domain-wide) vs per-user consent on the OAuth consent screen.",
-        "Paste the Client ID + Client secret below; we validate by dry-running the consent URL.",
+        "Paste the Client ID + Client secret below.",
       ],
       scopesRationale:
         "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; openid+email identify the account.",
@@ -736,7 +737,7 @@ export async function exchangeCode(
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
   for (const [name, config] of [...Object.entries(PROVIDERS), ...publicOAuth().providers]) {
-    if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
+    if (config.hosts.includes(host)) return { name, config };
   }
   return null;
 }

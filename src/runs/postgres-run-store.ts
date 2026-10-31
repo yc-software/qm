@@ -2,8 +2,7 @@ import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { jsonbStringify } from "../persistence/durable-map.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
@@ -56,6 +55,7 @@ function rowToRun(r: Record<string, unknown>): Run {
 }
 
 const FENCE_HOLD_MS = 600_000;
+const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
   const available = createPostgresNotifyBus<null>(connectionString, "qm_run_available", "run availability");
@@ -65,101 +65,56 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
   const { query: q, close: closePool } = createPgPool(connectionString, [
     {
-      id: "runs/store/0001",
-      expectedChecksum: "07a121d0fa4e8ae4049e0574939dbf938c8615dc39ce29b74805a7e8ccb4ad0f",
+      id: "runs/store/0011-base-schema",
+      expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
       statements: [
-        `CREATE TABLE IF NOT EXISTS runs(
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL,
-        request TEXT NOT NULL, result TEXT, idempotency_key TEXT UNIQUE,
-        attempts INT NOT NULL DEFAULT 0, max_attempts INT NOT NULL DEFAULT 3,
-        lease_token TEXT, lease_expires_at BIGINT, worker_id TEXT,
-        created_at BIGINT NOT NULL, started_at BIGINT, finished_at BIGINT
-      )`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_state TEXT`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_attempts INT NOT NULL DEFAULT 0`,
-        `CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at)`,
-        `CREATE INDEX IF NOT EXISTS idx_runs_session_active_created
-        ON runs(session_id, created_at DESC) WHERE status IN ('pending','running')`,
-        `DROP INDEX IF EXISTS idx_runs_status_priority_created`,
-        `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL
-      WHERE status='running' AND id IN (
-        SELECT id FROM (
-          SELECT id, row_number() OVER (PARTITION BY session_id ORDER BY started_at ASC NULLS LAST, id) AS rn
-          FROM runs WHERE status='running'
-        ) dup WHERE dup.rn > 1
-      )`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_running_per_session ON runs(session_id) WHERE status='running'`,
-        `CREATE TABLE IF NOT EXISTS tool_calls(
-        run_id TEXT NOT NULL, attempt INT NOT NULL DEFAULT 1, call_index INT NOT NULL,
-        output TEXT NOT NULL, created_at BIGINT NOT NULL,
-        PRIMARY KEY(run_id, attempt, call_index)
-      )`,
-        `ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1`,
-        `ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey`,
-        `ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index)`,
+        `SET LOCAL lock_timeout = '60s'`,
+        `DO $base_schema$
+BEGIN
+  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${PREVIOUS_SCHEMA}') THEN
+    RETURN;
+  END IF;
+  IF to_regclass('runs') IS NOT NULL THEN
+    RAISE EXCEPTION 'This database has a runs table from a release older than ${PREVIOUS_SCHEMA}. Start a release that applies ${PREVIOUS_SCHEMA} but predates the base schema, then upgrade.';
+  END IF;
+  CREATE TABLE runs(
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request TEXT NOT NULL,
+    result TEXT,
+    idempotency_key TEXT UNIQUE,
+    attempts INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 3,
+    lease_token TEXT,
+    lease_expires_at BIGINT,
+    worker_id TEXT,
+    created_at BIGINT NOT NULL,
+    started_at BIGINT,
+    finished_at BIGINT,
+    delivery_state TEXT,
+    error_attempts INT NOT NULL DEFAULT 0,
+    seq BIGSERIAL,
+    turn_user_seq BIGINT,
+    retry_after BIGINT NOT NULL DEFAULT 0,
+    returned_at BIGINT,
+    last_stop TEXT,
+    claim_priority SMALLINT NOT NULL DEFAULT 2,
+    preemptions INT NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_runs_status_created ON runs(status, created_at);
+  CREATE INDEX idx_runs_status_created_seq ON runs(status, created_at, seq);
+  CREATE INDEX idx_runs_session_active_created ON runs(session_id, created_at DESC) WHERE status IN ('pending', 'running');
+  CREATE UNIQUE INDEX idx_runs_one_running_per_session ON runs(session_id) WHERE status = 'running';
+  CREATE INDEX idx_runs_pending_child_returns ON runs(id)
+    WHERE status IN ('done', 'failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%';
+  CREATE INDEX idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC);
+  CREATE INDEX idx_runs_created ON runs(created_at DESC);
+  CREATE INDEX idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done', 'failed');
+  CREATE INDEX idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status = 'pending';
+END $base_schema$`,
+        `DROP TABLE IF EXISTS tool_calls`,
       ],
-    },
-    {
-      id: "runs/store/0002",
-      expectedChecksum: "c0fc23238fbe0ace56a28278bcb6cadfb100eb2c24ee83ce873588d466930270",
-      statements: [
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL`,
-        `CREATE INDEX IF NOT EXISTS idx_runs_status_created_seq ON runs(status, created_at, seq)`,
-      ],
-    },
-    {
-      id: "runs/store/0003",
-      expectedChecksum: "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
-      statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT`],
-    },
-    {
-      id: "runs/store/0004",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0`,
-      ],
-    },
-    {
-      id: "runs/store/0004-subagent-returns",
-      statements: [
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS returned_at BIGINT`,
-        `CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'`,
-      ],
-    },
-    {
-      id: "runs/store/0005-session-history",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC)`,
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)`,
-      ],
-    },
-    {
-      id: "runs/store/0006-terminal-finished",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
-      ],
-    },
-    {
-      id: "runs/store/0007-last-stop",
-      statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_stop TEXT`],
-    },
-    {
-      id: "runs/store/0008-claim-priority",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS claim_priority SMALLINT NOT NULL DEFAULT 2`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS preemptions INT NOT NULL DEFAULT 0`,
-      ],
-    },
-    {
-      id: "runs/store/0009-claim-priority-index",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'`,
-      ],
-    },
-    {
-      id: "runs/store/0010-drop-turn-metrics",
-      statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
     },
   ]);
 

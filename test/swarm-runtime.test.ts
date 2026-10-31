@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 async function runFor(f: Awaited<ReturnType<typeof swarmFixture>>, memberId: string) {
   const swarm = (await f.store.get(f.root.id))!;

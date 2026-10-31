@@ -1,0 +1,1108 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { zstdDecompressSync } from "node:zlib";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import {
+  buildDetectionPrompt,
+  createAgent,
+  oneShot,
+  parseDetectVerdict,
+  agentConfigOptions,
+  piLastAssistantTextOrThrow,
+  piTurnError,
+  refusalFallbackNote,
+  refusalFallbackModelId,
+  REFUSAL_FALLBACK_MODEL_IDS,
+  renderDetectPrompt,
+  resolveConfiguredModelId,
+  seedRawMessagesIntoSession,
+  toPiMessage,
+} from "../src/agent/agent-run.ts";
+import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
+import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
+import type { SessionEntry } from "../src/types.ts";
+import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
+import { testConfig } from "./support/test-config.ts";
+import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
+import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+
+function countTempDirs(prefix: string): number {
+  return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
+}
+
+test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
+  const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
+  assert.equal("usage" in user, false, "user seeds carry no usage (Pi UserMessage has none)");
+
+  const asst = toPiMessage({ role: "assistant", text: "done" }) as {
+    stopReason?: string;
+    usage?: { totalTokens: number };
+  };
+  assert.equal(asst.stopReason, "stop");
+  assert.ok(asst.usage, "assistant seed has a usage block");
+  assert.equal(asst.usage!.totalTokens, 0);
+});
+
+test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists", () => {
+  const liveMessages: unknown[] = [];
+  const persisted: unknown[] = [];
+  const stubSession = {
+    agent: { state: { messages: liveMessages } },
+    sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
+  };
+  const history: SessionEntry[] = [
+    {
+      sessionId: "s",
+      seq: 1,
+      parentSeq: null,
+      type: "user",
+      payload: { text: "sign up" },
+      scopeLabel: "org:default-org",
+      createdAt: 1,
+    },
+    {
+      sessionId: "s",
+      seq: 2,
+      parentSeq: null,
+      type: "tool_call",
+      payload: { tool: "execute", command: "browse", callId: "c1" },
+      scopeLabel: "org:default-org",
+      createdAt: 2,
+    },
+    {
+      sessionId: "s",
+      seq: 3,
+      parentSeq: null,
+      type: "tool_result",
+      payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
+      scopeLabel: "org:default-org",
+      createdAt: 3,
+    },
+    {
+      sessionId: "s",
+      seq: 4,
+      parentSeq: null,
+      type: "assistant",
+      payload: { text: "done" },
+      scopeLabel: "org:default-org",
+      createdAt: 4,
+    },
+  ];
+  seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
+
+  assert.deepEqual(
+    (liveMessages as Array<{ role: string }>).map((m) => m.role),
+    ["user", "assistant", "toolResult", "assistant"],
+  );
+  assert.deepEqual(persisted, liveMessages);
+  const toolResult = liveMessages[2] as { role: string; toolCallId: string; content: Array<{ text: string }> };
+  assert.equal(toolResult.toolCallId, "c1");
+  assert.match(toolResult.content[0]!.text, /pass: b/);
+});
+
+test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefully without Pi internals", () => {
+  seedRawMessagesIntoSession({ agent: { state: { messages: [] } } }, []);
+  assert.doesNotThrow(() => seedRawMessagesIntoSession({}, reconstructMessagesFromHistory([])));
+});
+
+test("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
+  const opts = agentConfigOptions(
+    testConfig({
+      modelId: "model-base",
+      detectModelId: "model-detect",
+      titleModelId: "model-title",
+      anthropicApiKey: "sk-test",
+      modelGateway: {
+        url: "http://gateway.internal:8080",
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-opus-5": "router/opus" },
+      },
+      captureLlmRequests: false,
+
+      reachExecEnabled: true,
+      signingSecret: "sek",
+      apiBaseUrl: "https://core.test",
+      turnWallClockMs: 111_000,
+      execTimeoutDefaultMs: 22_000,
+      execTimeoutMaxMs: 33_000,
+      backgroundJobTtlMs: 44_000,
+      backgroundJobTtlMaxMs: 55_000,
+      sandboxCapabilityTtlMs: 66_000,
+    }),
+  );
+  assert.deepEqual(opts, {
+    defaultModelId: "model-base",
+    detectModelId: "model-detect",
+    titleModelId: "model-title",
+    apiKey: "sk-test",
+    modelGateway: {
+      url: "http://gateway.internal:8080",
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-opus-5": "router/opus" },
+    },
+    captureRequests: false,
+    sandboxResources: true,
+    reachExec: true,
+    controlTools: true,
+    turnWallClockMs: 111_000,
+    execTimeoutMs: 22_000,
+    execTimeoutCeilingMs: 33_000,
+    backgroundJobTtlMs: 44_000,
+    backgroundJobTtlMaxMs: 55_000,
+    sandboxCapabilityTtlMs: 66_000,
+  });
+});
+
+test("agentConfigOptions leaves controlTools off unless a self-API (signing secret + api base) is configured", () => {
+  assert.equal(agentConfigOptions(testConfig()).controlTools, false);
+  assert.equal(
+    agentConfigOptions(testConfig({ signingSecret: "sek" })).controlTools,
+    false,
+    "secret alone isn't enough",
+  );
+  assert.equal(
+    agentConfigOptions(testConfig({ apiBaseUrl: "https://core.test" })).controlTools,
+    false,
+    "api base alone isn't enough",
+  );
+  assert.equal(
+    agentConfigOptions(testConfig({ signingSecret: "sek", apiBaseUrl: "https://core.test" })).controlTools,
+    true,
+  );
+});
+
+test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
+  const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
+  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
+  assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
+});
+
+test("Pi title generation returns no title without an auxiliary-model credential", async () => {
+  const agent = createAgent({
+    defaultModelId: "gpt-5.6-sol",
+    resolveProviderKeys: async () => ({}),
+  });
+  assert.equal(await agent.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
+});
+
+test("Pi title generation surfaces provider failures to its caller", async (t) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "title model rejected request" } }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const agent = createAgent({
+    defaultModelId: "claude-opus-4-8",
+    titleModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "title-model" },
+    },
+  });
+
+  await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"));
+});
+
+test("Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text", async (t) => {
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_title",
+            type: "message",
+            role: "assistant",
+            model: "title-model",
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sorry, I can't summarize that" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]) {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const agent = createAgent({
+    defaultModelId: "claude-opus-4-8",
+    titleModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "title-model" },
+    },
+  });
+
+  await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
+    name: "TitleRejected",
+    rule: "reply_opener",
+    message: 'reply_opener: "Sorry, I can\'t summarize that"',
+  });
+});
+
+test("Pi title generation accepts the prompted NONE sentinel without reporting a failure", async (t) => {
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_title",
+            type: "message",
+            role: "assistant",
+            model: "title-model",
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " NONE\n" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]) {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const agent = createAgent({
+    defaultModelId: "claude-opus-4-8",
+    titleModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "title-model" },
+    },
+  });
+
+  assert.equal(await agent.generateTitle!("User:\nHello"), undefined);
+});
+
+type DetectAttempt = { reply: string; stopReason: string } | "overloaded";
+
+async function detectAgainst(
+  t: { after(fn: () => Promise<void>): void },
+  attempts: readonly DetectAttempt[],
+): Promise<{ outcome: string; rows: TurnLlmRequestRecord[] }> {
+  let served = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const attempt = attempts[Math.min(served++, attempts.length - 1)]!;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const start = {
+        type: "message_start",
+        message: {
+          id: `msg_detect_${served}`,
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1200, output_tokens: 0 },
+        },
+      };
+      const events =
+        attempt === "overloaded"
+          ? [start, { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }]
+          : [
+              start,
+              { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: attempt.reply } },
+              { type: "content_block_stop", index: 0 },
+              {
+                type: "message_delta",
+                delta: { stop_reason: attempt.stopReason, stop_sequence: null },
+                usage: { output_tokens: 8 },
+              },
+              { type: "message_stop" },
+            ];
+      for (const event of events) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const agent = createAgent({
+    defaultModelId: "claude-opus-4-8",
+    detectModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "detect-model" },
+    },
+  });
+  const rows: TurnLlmRequestRecord[] = [];
+  const outcome = await agent.shouldRespond!({
+    session: { id: "session-1" } as DetectInput["session"],
+    message: "hey bot, can you check this?",
+    recentContext: "",
+    systemPrompt: "be brief",
+    history: [],
+    recordModelCall: () => {},
+    recordLlmRequest: async (rec) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      rows.push(rec);
+    },
+  }).then(
+    (verdict) => (verdict.respond ? "respond" : "decline"),
+    (error: unknown) => (error instanceof ProviderTurnError ? error.code : "error"),
+  );
+  return { outcome, rows };
+}
+
+test(
+  "Pi turn detection records each model call it was billed for, refused or retried, for the session's ledger",
+  { timeout: 20_000 },
+  async (t) => {
+    const card = getRequiredModel("claude-haiku-4-5").cost;
+    const yes = { reply: "YES — they asked the assistant", stopReason: "end_turn" };
+    for (const [attempts, expected, outputs] of [
+      [[{ reply: "", stopReason: "refusal" }], "refusal", [8]],
+      [["overloaded", yes], "respond", [0, 8]],
+    ] as const) {
+      const { outcome, rows } = await detectAgainst(t, attempts);
+      assert.equal(outcome, expected);
+      assert.equal(rows.length, outputs.length);
+      for (const [step, output] of outputs.entries()) {
+        const { usage, ...row } = rows[step]!;
+        assert.deepEqual(row, { turnSeq: null, step, model: "claude-haiku-4-5", truncated: false });
+        const { costUsd, ...tokens } = usage!;
+        assert.deepEqual(tokens, { input: 1200, output, cacheRead: 0, cacheWrite: 0, totalTokens: 1200 + output });
+        assert.ok(Math.abs(costUsd - (1200 * card.input + output * card.output) / 1_000_000) < 1e-12);
+      }
+    }
+  },
+);
+
+test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
+  const opts = agentConfigOptions(testConfig());
+  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+    assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
+  }
+});
+
+test("oneShot removes its temp dirs even when the session call throws", async () => {
+  const prefix = "pi-onesh-test";
+  const before = countTempDirs(`${prefix}-agent-`);
+
+  const fakeModel = { id: "claude-sonnet-4-5" } as unknown as Parameters<typeof oneShot>[1];
+
+  await assert.rejects(oneShot(prefix, fakeModel, "test-key", "system", "prompt"));
+
+  const after = countTempDirs(`${prefix}-agent-`);
+  assert.equal(after, before, "oneShot must leave no agent dirs behind");
+});
+
+test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
+  let apiKey: string | undefined;
+  let requestBody = "";
+  const server = createServer((request, response) => {
+    apiKey = request.headers["x-api-key"] as string | undefined;
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      requestBody += String(chunk);
+    });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: "claude-haiku-4-5",
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "working" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ];
+      for (const event of events) {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+  assert(baseModel);
+  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+
+  assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello"), "working");
+  assert.equal(apiKey, "test-key");
+  assert.match(requestBody, /system/);
+  assert.match(requestBody, /hello/);
+});
+
+test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
+  let lastBody = "";
+  let stopReason = "end_turn";
+  const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += String(chunk);
+    });
+    request.on("end", () => {
+      lastBody = body;
+      const requestModel = (JSON.parse(body) as { model?: string }).model;
+      requests.push({
+        ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
+        ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
+        ...(requestModel ? { model: requestModel } : {}),
+        ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
+      });
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_gateway",
+            type: "message",
+            role: "assistant",
+            model: requestModel,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "gateway" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: stopReason, stop_sequence: null },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]) {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const modelGateway = {
+    url: `http://127.0.0.1:${address.port}`,
+    apiKey: "gateway-secret",
+    apiKeyHeader: "api-key",
+    models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
+  };
+  const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
+  assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
+  const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
+  await assert.rejects(
+    oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
+    /No API key found|Provider is not configured/,
+  );
+
+  assert.equal(
+    await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
+    "gateway",
+  );
+  assert.deepEqual(requests, [
+    { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
+    { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
+  ]);
+  const routed = modelGatewayRequest(modelGateway, model);
+  assert.equal(routed?.model.id, "claude-haiku-4-5");
+  assert.equal(routed?.target, "router/haiku");
+  assert.deepEqual(transportFromModel(model), {
+    modelId: "claude-haiku-4-5",
+    headers: { "x-model-marker": "preserved" },
+  });
+  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const compact = agent.compactHistory!;
+  const input: Parameters<typeof compact>[0] = {
+    session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+    history: [
+      {
+        sessionId: "summary-session",
+        seq: 136,
+        parentSeq: null,
+        type: "user",
+        payload: { text: "what? local recovery what?" },
+        scopeLabel: "personal:test",
+        createdAt: 0,
+      },
+    ],
+    recordModelCall: () => {},
+  };
+  assert.equal(await compact(input), "gateway");
+  assert.deepEqual(requests.at(-1), {
+    gatewayKey: "gateway-secret",
+    providerKey: "gateway-secret",
+    model: "router/haiku",
+  });
+  const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
+  const prompt = body.messages
+    .flatMap((message) => message.content)
+    .map((block) => block.text ?? "")
+    .join("\n");
+  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
+  assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
+  stopReason = "max_tokens";
+  await assert.rejects(compact(input), /did not complete \(length\)/);
+});
+
+test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {
+  const session = {
+    getLastAssistantText: () => undefined,
+    messages: [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "provider quota exhausted",
+        content: [],
+      },
+    ],
+  } as unknown as Parameters<typeof piLastAssistantTextOrThrow>[0];
+
+  assert.throws(() => piLastAssistantTextOrThrow(session), /provider quota exhausted/);
+});
+
+type FailedFields = { errorMessage?: string; providerError?: unknown; rawStopReason?: string };
+const failedSession = (...messages: FailedFields[]) =>
+  ({
+    getLastAssistantText: () => undefined,
+    messages: messages.map((m) => ({ role: "assistant", stopReason: "error", content: [], ...m })),
+  }) as unknown as Parameters<typeof piTurnError>[0];
+const overloaded = {
+  errorMessage: "529 Overloaded",
+  providerError: {
+    status: 529,
+    type: "overloaded_error",
+    body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+  },
+};
+
+test("Pi provider errors are surfaced from the structured body as readable chat errors", () => {
+  const session = failedSession({
+    errorMessage: "400 Your credit balance is too low.",
+    providerError: {
+      status: 400,
+      type: "invalid_request_error",
+      body: { type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low." } },
+    },
+  });
+  assert.throws(
+    () => piLastAssistantTextOrThrow(session),
+    /Model provider API error \(invalid_request_error\): Your credit balance is too low\./,
+  );
+});
+
+test("piTurnError recovers the session's structured error when the agent loop rejects generically", () => {
+  const err = piTurnError(failedSession(overloaded), new Error("An unknown error occurred"));
+  assert.match(err.message, /Model provider API error \(overloaded_error\): Overloaded/);
+});
+
+test("Pi retryability comes from status and type, never errorMessage", () => {
+  const retryable: FailedFields[] = [
+    overloaded,
+    { errorMessage: "500", providerError: { status: 500, type: "api_error" } },
+    { errorMessage: "429", providerError: { status: 429 } },
+    { errorMessage: "fetch failed" },
+  ];
+  for (const fields of retryable) {
+    const err = piTurnError(failedSession(fields), new Error("x"));
+    assert.ok(err instanceof ProviderTurnError && err.retryable, JSON.stringify(fields));
+    assert.equal(turnFailureMessage(err), err.message);
+    assert.throws(() => piLastAssistantTextOrThrow(failedSession(fields)), ProviderTurnError);
+  }
+  const terminal: FailedFields[] = [
+    { errorMessage: "429 overloaded, retry", providerError: { status: 429, code: "insufficient_quota" } },
+    { errorMessage: "rate limit", providerError: { status: 400, type: "invalid_request_error" } },
+    { errorMessage: "503", providerError: { status: 400, code: "context_length_exceeded" } },
+    { errorMessage: "overloaded", providerError: { status: 401, type: "authentication_error" } },
+    { errorMessage: "network error", rawStopReason: "refusal" },
+  ];
+  for (const fields of terminal) {
+    const err = piTurnError(failedSession(fields), new Error("x"));
+    assert.ok(err instanceof ProviderTurnError && !err.retryable, JSON.stringify(fields));
+  }
+});
+
+test("piTurnError falls back to the thrown error when the session has no structured error", () => {
+  const session = {
+    getLastAssistantText: () => undefined,
+    messages: [{ role: "assistant", stopReason: "stop", content: [] }],
+  } as unknown as Parameters<typeof piTurnError>[0];
+
+  assert.equal(piTurnError(session, new Error("socket hang up")).message, "socket hang up");
+  assert.equal(piTurnError(session, "boom").message, "boom");
+});
+
+test("piTurnError ignores a PRIOR turn's stale error when nothing new was appended this prompt", () => {
+  const session = failedSession(overloaded);
+  const err = piTurnError(session, new Error("socket hang up"), 1);
+  assert.equal(err.message, "socket hang up");
+  const recovered = piTurnError(session, new Error("An unknown error occurred"), 0);
+  assert.match(recovered.message, /Model provider API error \(overloaded_error\): Overloaded/);
+});
+
+test("parseDetectVerdict: a YES whose rationale contains 'no' still replies (anchored on the verdict token)", () => {
+  assert.equal(parseDetectVerdict("YES (a direct answer to you, no mention needed)", false).respond, true);
+  assert.equal(parseDetectVerdict("YES — no question mark, but it's feedback aimed at you", true).respond, true);
+  assert.equal(parseDetectVerdict("Verdict: YES (no mention needed)", false).respond, true);
+  assert.equal(parseDetectVerdict("**YES** — follow-up to your work", false).respond, true);
+});
+
+test("parseDetectVerdict: NO verdicts stay silent even when the rationale contains 'yes'", () => {
+  assert.equal(parseDetectVerdict("NO (they said yes to each other, not to you)", false).respond, false);
+  assert.equal(parseDetectVerdict("Answer: no — chit-chat", false).respond, false);
+  assert.equal(parseDetectVerdict("", false).respond, false);
+  assert.equal(parseDetectVerdict("Maybe?", false).respond, false, "an unrecognized verdict fails quiet");
+  assert.equal(parseDetectVerdict("Eyes on this one", false).respond, false, "'yes' inside a word does not count");
+});
+
+test("parseDetectVerdict: REACT verdicts return reactions without replying", () => {
+  const r = parseDetectVerdict("REACT :pray:", true);
+  assert.equal(r.respond, false);
+  assert.deepEqual(r.reactions, ["pray"]);
+  const noEmoji = parseDetectVerdict("REACT", true);
+  assert.equal(noEmoji.respond, false);
+  assert.equal(noEmoji.reactions, undefined);
+  assert.equal(parseDetectVerdict("REACT :pray:", false).respond, false, "reactions disabled → REACT is not a YES");
+});
+
+test("turn-detection prompt treats plain-text assistant handle + sensitive question as a reply", () => {
+  const prompt = buildDetectionPrompt("Use :pray: for thanks.");
+  assert.match(prompt, /plain-text assistant name\/handle/);
+  assert.match(prompt, /"agent prod"/);
+  assert.match(prompt, /Do NOT choose NO just because the topic is legal/);
+});
+
+test("turn-detection prompt says conversational flow can imply the assistant should answer", () => {
+  const prompt = buildDetectionPrompt();
+  assert.match(prompt, /conversation flow/);
+  assert.match(prompt, /no mention needed/);
+  assert.match(prompt, /can you send the chart/);
+});
+
+test("turn-detection prompt treats implied assistant-target follow-ups as addressed", () => {
+  const prompt = buildDetectionPrompt();
+  assert.match(prompt, /implied target is the assistant/);
+  assert.match(prompt, /even if the assistant is not explicitly mentioned/);
+  assert.match(prompt, /what do you mean by that\?/);
+  assert.match(prompt, /what is available now\?/);
+  assert.match(prompt, /<@U123> what do you mean by that\?[^]*NO/);
+});
+
+test("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
+  const payload = {
+    model: "claude-opus-4-8",
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  };
+
+  const { envelope, truncated } = sanitizeLlmPayload(payload);
+  assert.equal(truncated, false);
+  assert.deepEqual(envelope, {
+    model: "claude-opus-4-8",
+    system: [{ type: "text", text: "be helpful" }],
+    tools: [{ name: "execute" }],
+  });
+});
+
+const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+
+test("trimPayloadToByteBudget returns the payload untouched when it fits", () => {
+  const payload = { messages: [{ role: "user", content: [imageBlock("AAAA".repeat(100))] }] };
+  assert.equal(trimPayloadToByteBudget(payload, 10_000_000), payload, "same reference — no clone, no cache churn");
+  assert.equal(trimPayloadToByteBudget(null, 10), null);
+  assert.equal(trimPayloadToByteBudget("nope", 10), "nope");
+});
+
+test("trimPayloadToByteBudget sheds the OLDEST images first and keeps the newest", () => {
+  const big = "AAAA".repeat(2_000_000);
+  const payload = {
+    messages: [
+      { role: "user", content: [{ type: "text", text: "first" }, imageBlock(big)] },
+      { role: "user", content: [imageBlock(big)] },
+      { role: "user", content: [imageBlock(big)] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.notEqual(out, payload);
+  assert.equal(out.messages[0].content[1].type, "text", "oldest image replaced with a placeholder");
+  assert.match(out.messages[0].content[1].text, /image removed/);
+  assert.equal(out.messages[1].content[0].type, "text", "second-oldest also shed to reach slack headroom");
+  assert.equal(out.messages[2].content[0].type, "image", "newest image survives");
+  assert.ok(JSON.stringify(out).length <= 18_000_000, "result fits the budget");
+  assert.equal((payload.messages[0]!.content[1] as any).type, "image", "input payload not mutated");
+});
+
+test("trimPayloadToByteBudget reaches images nested in tool_result content", () => {
+  const big = "AAAA".repeat(5_000_000);
+  const payload = {
+    messages: [
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [imageBlock(big)] }] },
+      { role: "user", content: [{ type: "text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  const inner = out.messages[0].content[0].content[0];
+  assert.equal(inner.type, "text");
+  assert.match(inner.text, /image removed/);
+  assert.equal(out.messages[0].content[0].tool_use_id, "t1", "tool_result envelope preserved");
+  assert.ok(JSON.stringify(out).length <= 18_000_000);
+});
+
+test("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () => {
+  const dataUrl = `data:image/png;base64,${"AAAA".repeat(5_000_000)}`;
+  const payload = {
+    input: [
+      { role: "user", content: [{ type: "input_image", detail: "auto", image_url: dataUrl }] },
+      { role: "user", content: [{ type: "input_text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.deepEqual(out.input[0].content[0], {
+    type: "input_text",
+    text: out.input[0].content[0].text,
+  });
+  assert.match(out.input[0].content[0].text, /image removed/);
+  assert.ok(JSON.stringify(out).length <= 18_000_000);
+});
+
+test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {
+  const big = "AAAA".repeat(5_000_000);
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: big },
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "latest" }] },
+    ],
+  };
+  const out = trimPayloadToByteBudget(payload, 18_000_000) as any;
+  assert.deepEqual(out.messages[0].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(out.messages[0].content[0].type, "text");
+});
+
+test("transportFromModel keeps the model id + string headers (the anthropic-beta that the body omits)", () => {
+  const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast,interleaved", "x-num": 7 } };
+  assert.deepEqual(
+    transportFromModel(model),
+    {
+      modelId: "claude-opus-4-8",
+      headers: { "anthropic-beta": "fast,interleaved" },
+    },
+    "non-string header values are dropped",
+  );
+  assert.equal(transportFromModel({}), undefined, "no id and no headers → no transport");
+  assert.equal(transportFromModel(null), undefined, "no model → no transport");
+});
+
+test("sanitizeLlmPayload attaches transport from the model arg alongside the redacted body", () => {
+  const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } };
+  const out = sanitizeLlmPayload({ messages: [{ role: "user", content: "hi" }] }, model);
+  assert.deepEqual(out.transport, { modelId: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } });
+  assert.equal(out.truncated, false);
+  assert.equal(sanitizeLlmPayload({ messages: [] }).transport, undefined);
+});
+
+test("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
+  const big = "AAAA".repeat(2000);
+  const payload = {
+    system: [{ type: "image", source: { type: "base64", media_type: "image/png", data: big } }],
+    messages: [],
+  };
+
+  const { envelope } = sanitizeLlmPayload(payload);
+  const block = (envelope as any).system[0];
+  assert.match(block.source.data, /<base64 image\/png omitted: \d+ chars>/, "image bytes never persist");
+});
+
+test("renderDetectPrompt uses prior assistant replies, not assembled prior user prompts", () => {
+  const prompt = renderDetectPrompt({
+    session: {} as any,
+    message: "yes, send it",
+    recentContext: "carol: Can you send the chart?",
+    systemPrompt: "You are Agent Prod.",
+    history: [
+      {
+        type: "user",
+        payload: { text: "## The conversation right now\nnoisy rendered Slack block\n\nCan you send the chart?" },
+      },
+      {
+        type: "assistant",
+        payload: { text: "I can send the chart if you share it again." },
+      },
+    ] as any,
+    recordModelCall() {},
+  });
+
+  assert.match(prompt, /Your earlier replies in this thread/);
+  assert.match(prompt, /I can send the chart if you share it again/);
+  assert.doesNotMatch(prompt, /noisy rendered Slack block/);
+  assert.match(prompt, /NEWEST message:\nyes, send it/);
+});
+
+test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {
+  assert.equal(resolveConfiguredModelId("claude-opus-4-8"), "claude-opus-4-8");
+  assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
+  assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai"), DEFAULT_AGENT_MODEL_ID);
+  assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
+});
+
+test("Pi provider errors are classified once into a typed code from structured fields", () => {
+  const classify = (fields: FailedFields) => piTurnError(failedSession(fields), new Error("x")) as ProviderTurnError;
+  const budget = classify({
+    errorMessage: "429: Budget has been exceeded! Limit=$1000.00",
+    providerError: {
+      status: 429,
+      type: "budget_exceeded",
+      code: "400",
+      body: { message: "Budget has been exceeded! Limit=$1000.00", type: "budget_exceeded" },
+    },
+  });
+  assert.deepEqual([budget.code, budget.status, budget.retryable], ["model_budget", 429, false]);
+  assert.match(budget.raw, /Limit=\$1000\.00/, "the gateway's full text is kept for operators");
+  assert.match(budget.message, /Budget has been exceeded/);
+  const cases: Array<[FailedFields, string, number | undefined]> = [
+    [{ providerError: { status: 429, type: "rate_limit_error" } }, "rate_limit", 429],
+    [{ providerError: { status: 401, type: "authentication_error" } }, "auth", 401],
+    [{ providerError: { status: 403 } }, "auth", 403],
+    [{ providerError: { status: 400, code: "context_length_exceeded" } }, "context_too_long", 400],
+    [{ providerError: { status: 529, type: "overloaded_error" } }, "transient", 529],
+    [{ rawStopReason: "refusal" }, "refusal", undefined],
+    // Anthropic documents prompt-too-long only as a 400 invalid_request_error, so it is a bad_request, not context_too_long.
+    [
+      {
+        errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+        providerError: { status: 400, type: "invalid_request_error" },
+      },
+      "bad_request",
+      400,
+    ],
+    [{ errorMessage: "The model refused to complete the request" }, "unknown", undefined],
+  ];
+  for (const [fields, code, status] of cases) {
+    const err = classify(fields);
+    assert.equal(err.code, code, JSON.stringify(fields));
+    assert.equal(err.status, status, JSON.stringify(fields));
+  }
+});
+
+test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {
+  const note = refusalFallbackNote(
+    "Claude Fable 5",
+    "Claude Opus 4.8",
+    "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering.",
+  );
+  assert.match(note, /Claude Fable 5/);
+  assert.match(note, /Claude Opus 4.8/);
+  assert.match(note, /restrictions on reverse engineering/);
+  assert.match(note, /telling the user/);
+});
+
+test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
+  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
+  assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
+  assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
+  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
+  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
+  assert.equal(
+    refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
+    "claude-sonnet-5",
+  );
+  for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
+    assert.notEqual(refusalFallbackModelId(id), id);
+    assert.equal(resolveModel(id)?.provider, "anthropic");
+  }
+});
+
+test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {
+  assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+  assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+  assert.doesNotThrow(() =>
+    getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
+  );
+});
+
+test("Pi judge uses supported reasoning effort when configured with Astra", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let request: { model?: string; reasoning?: { effort?: string } } | undefined;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const encoded = new Headers(init?.headers).get("content-encoding") === "zstd";
+    const text = encoded ? zstdDecompressSync(init?.body as Uint8Array).toString() : String(init?.body);
+    request = JSON.parse(text);
+    return new Response(JSON.stringify({ error: { message: "offline judge test" } }), { status: 400 });
+  }) as typeof fetch;
+  const agent = createAgent({
+    judgeModelId: "gpt-6-astra",
+    resolveProviderKeys: async () => ({ openai: "sk-offline-test-key" }),
+  });
+  await assert.rejects(agent.judge!("Judge the answer.", "answer"), /offline judge test/);
+  assert.ok(request);
+  assert.equal(request.model, "gpt-6-astra");
+  assert.equal(request.reasoning?.effort, "low");
+});
+
+test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
+  let requests = 0;
+  const server = createServer((request) => {
+    requests += 1;
+    request.resume();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+  assert(baseModel);
+  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const subscribe = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    subscribe(...args);
+    controller.abort();
+  }) as AbortSignal["addEventListener"];
+
+  const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
+    (text) => ({ text }),
+    (error: unknown) => ({ error }),
+  );
+
+  assert.deepEqual(outcome, { text: undefined });
+  assert.equal(requests, 0);
+});

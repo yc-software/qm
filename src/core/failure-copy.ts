@@ -2,8 +2,6 @@ import type { TurnResult } from "../types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
 import { GENERIC_FAILURE_CLAUSE, userFacingFailureText } from "../../plugins/chassis/src/failure-copy.ts";
 
-export { userFacingFailureText } from "../../plugins/chassis/src/failure-copy.ts";
-
 export const SESSION_BUSY_USER_TEXT =
   "Give me a moment — I'm still finishing something else in this conversation. Send that again in a minute and I'll pick it up.";
 

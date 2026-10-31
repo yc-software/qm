@@ -1,14 +1,10 @@
-import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
+import type { EventBus } from "../util/event-bus.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { tenantScopedBus } from "../tenants/bus.ts";
 import type { TurnStream } from "./turn-stream.ts";
 
-export function createRunStreamBus(databaseUrl?: string): EventBus<RunStreamEvent> {
-  return tenantScopedBus(
-    databaseUrl
-      ? createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream")
-      : createMemoryEventBus<RunStreamEvent>("run-stream"),
-  );
+export function createRunStreamBus(databaseUrl: string): EventBus<RunStreamEvent> {
+  return tenantScopedBus(createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream"));
 }
 
 export type RunStreamEvent = { tenant?: string } & (
@@ -65,6 +61,5 @@ export function reasoningKey(block: { step: string; index: number }): string {
 }
 
 function* notifyChunks(text: string): Generator<[number, string]> {
-  // JSON escaping can cost six bytes per UTF-16 unit; stay below NOTIFY's byte limit.
   for (let at = 0; at < text.length; at += 1_000) yield [at, text.slice(at, at + 1_000)];
 }

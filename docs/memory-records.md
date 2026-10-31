@@ -80,7 +80,7 @@ audience's conversation.
 
 A durable session checkpoint records the destination/audience identity hash and a
 replay cutoff. An actual audience change advances the cutoff: earlier model
-history, summaries, native harness state, retries, approvals and historical tape
+history, summaries, retries, approvals and historical tape
 cannot re-enter the next turn. Later turns retain post-cutoff context normally.
 An absent checkpoint establishes a baseline rather than deleting old context.
 Project conversations keep their existing member-inherits-history behavior.

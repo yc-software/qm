@@ -74,7 +74,7 @@ export function createPostgresTeamStore(
   flags: Pick<FeatureFlagStore, "enabled">,
   orgScope: ScopeId,
 ): TeamStore {
-  const { q, pool } = createPgPool(connectionString, "teams/0001", SCHEMA);
+  const { q, pool } = createPgPool(connectionString, [{ id: "teams/0001", statements: SCHEMA }]);
   const enabled = () => flags.enabled("team_scopes", orgScope);
   return {
     async list() {

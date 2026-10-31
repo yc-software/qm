@@ -7,25 +7,25 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
+import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
-    store: createLoopStore(),
-    items: createLoopItemLedger(),
-    outputs: createLoopOutputStore(),
-    grants: createShipGrantStore(),
-    crons: createCronStore(),
-    config: createMemoryConfigStore("org"),
+    store: createLoopStore(testMap()),
+    items: createLoopItemLedger(testMap()),
+    outputs: createLoopOutputStore(testMap()),
+    grants: createShipGrantStore(testMap()),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    config: testConfigStore("org"),
   };
-  const uiState = createMemoryMap<PersistedUiState>();
+  const uiState = testMap<PersistedUiState>();
   const call = async (method = "GET", body: unknown = null, query = "", actor = "alice") => {
     let status = 0;
     let data: any;
@@ -604,7 +604,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
 });
 
 test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
-  const store = createLoopStore();
+  const store = createLoopStore(testMap());
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
     ...base,

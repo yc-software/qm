@@ -8,13 +8,15 @@ import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-function harness(failRestore = false) {
+function agent(failRestore = false) {
   let applies = 0;
   let destroys = 0;
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => {
@@ -27,14 +29,14 @@ function harness(failRestore = false) {
       },
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-")),
   });
   return { deploy, counts: () => ({ applies, destroys }) };
 }
 
 function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint" | "setStatus" | "setAppliedVersion") {
-  const base = createDeployStore();
+  const base = createDeployStore(testDeployBackings());
   let armed = false;
   let failed = false;
   const store = new Proxy(base, {
@@ -62,7 +64,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
       },
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-persistence-")),
   });
   return {
@@ -75,7 +77,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
 }
 
 test("restore reapplies the archived current version before marking it running", async () => {
-  const { deploy, counts } = harness();
+  const { deploy, counts } = agent();
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -93,7 +95,7 @@ test("restore reapplies the archived current version before marking it running",
 });
 
 test("a failed restore leaves the deployment archived and unreachable", async () => {
-  const { deploy } = harness(true);
+  const { deploy } = agent(true);
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -110,7 +112,7 @@ test("a failed restore leaves the deployment archived and unreachable", async ()
 });
 
 test("restore is idempotent for retries and concurrent callers", async () => {
-  const { deploy } = harness();
+  const { deploy } = agent();
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

@@ -5,9 +5,6 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const BASE = process.env.DATABASE_URL;
 const skip = BASE ? false : "set DATABASE_URL (a Postgres) to run the ACL file-ID migration test";
