@@ -44,6 +44,7 @@ test(
       join(dep, ".env"),
       [
         `CORE_SIGNING_SECRET=${sentinel}`,
+        `DEPLOYMENT_CONTROL_SECRET=${sentinel}-control`,
         `PUBLIC_API_URL=http://qm-${org}-core:8080`,
         `CAPABILITY_SECRET=${sentinel}-capability`,
         `CONNECTOR_SECRET_KEY=${sentinel}-connector`,
@@ -57,7 +58,7 @@ test(
       ].join("\n"),
     );
     writeConfig(dep, {
-      orgId: org,
+      deploymentId: org,
       target: "docker",
       basePort,
       services: [...SERVICES],
@@ -127,14 +128,14 @@ test(
         assert.equal(apiUrl, `http://qm-${org}-core:8080`);
       });
 
-      await t.test("the configured bot identity reaches the core container and only the core container", () => {
+      await t.test("the configured bot identity is a tenant setting and reaches no container env", () => {
         const names = deploymentContainers(org);
         const printenv = (container: string, name: string): string =>
           execFileSync("docker", ["exec", container, "printenv", name], { encoding: "utf8" }).trim();
         const core = suffix(names, "core")!;
-        assert.equal(printenv(core, "ORG_BRAND_SELF_LABEL"), "straylight");
-        assert.equal(printenv(core, "ORG_BRAND_ORG_NAME"), "Straylight Industries");
-        assert.throws(() => printenv(suffix(names, "web-ui")!, "ORG_BRAND_SELF_LABEL"));
+        for (const container of [core, suffix(names, "web-ui")!])
+          for (const name of ["ORG_BRAND_SELF_LABEL", "ORG_BRAND_ORG_NAME"])
+            assert.throws(() => printenv(container, name), `${name} is a tenant setting, not ${container} env`);
       });
 
       await t.test("status enumerates exactly this deployment's containers with ports", () => {
@@ -213,7 +214,7 @@ test(
     const org = `qm-e2e-dl-empty-${process.pid}`;
     const dep = tmp("dl-empty");
     try {
-      writeConfig(dep, { orgId: org, target: "docker", services: ["core"] });
+      writeConfig(dep, { deploymentId: org, target: "docker", services: ["core"] });
       const r = runCli(["status"], { cwd: dep });
       assert.equal(r.code, 0, r.out);
       assert.match(r.out, /qm status/);
@@ -232,7 +233,7 @@ test(
     const org = `qm-e2e-dl-noop-${process.pid}`;
     const dep = tmp("dl-noop");
     try {
-      writeConfig(dep, { orgId: org, target: "docker", services: ["core"] });
+      writeConfig(dep, { deploymentId: org, target: "docker", services: ["core"] });
       const r = runCli(["down"], { cwd: dep });
       assert.equal(r.code, 0, r.out);
       assert.match(r.out, /down\./);

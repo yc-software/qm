@@ -8,7 +8,7 @@ import type { QmConfig } from "../src/config.ts";
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
   services: ["core", "web-ui"],

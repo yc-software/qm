@@ -23,6 +23,7 @@ mock.module("../src/persistence/pg-pool.ts", {
         },
       };
     },
+    ownerDatabaseUrl: (url: string) => url,
   },
 });
 

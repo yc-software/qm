@@ -7,9 +7,11 @@ import { TEST_ADMIN_GRANTS, testMigratedDatabaseUrl } from "./test-database.ts";
 export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress-auth";
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
+  const databaseUrl = overrides.databaseUrl ?? testMigratedDatabaseUrl();
   return {
     ...loadConfig({}),
-    databaseUrl: overrides.databaseUrl ?? testMigratedDatabaseUrl(),
+    databaseUrl,
+    databaseOwnerUrl: databaseUrl,
     adminGrants: TEST_ADMIN_GRANTS,
     databasePoolMax: 4,
     databaseDirectPoolMax: 8,

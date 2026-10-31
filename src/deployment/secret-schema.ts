@@ -2,6 +2,7 @@ import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 
 type SecretGate =
   | "production"
+  | "postgres"
   | "background-work-control"
   | "sprites"
   | "smolmachines"
@@ -48,6 +49,12 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
     reason:
       "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
   },
+  {
+    name: "DATABASE_OWNER_URL",
+    requiredWhen: "postgres",
+    reason: "migrations and cross-tenant claims run as the table owner while requests use the row-level-secured login",
+  },
+  { name: "DATABASE_READER_URL", requiredWhen: "production" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
@@ -72,6 +79,7 @@ function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolea
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
+  postgres: (env) => Boolean(env.DATABASE_URL?.trim()),
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
   sprites: (env) => sandboxBackendSelected(env, "sprites"),
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),

@@ -132,7 +132,7 @@ export function deploymentLayerBody(sandboxDir: string): string {
   return body;
 }
 
-function signingHeaders(secret: string, method: string, path: string, body: string): Record<string, string> {
+export function signingHeaders(secret: string, method: string, path: string, body: string): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000);
   const canonical = `${method}\n${path}\n${body}`;
   const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${canonical}`).digest("hex");
@@ -168,7 +168,7 @@ export const CONNECTIVITY_CODES = new Set([
 export const DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS = 5;
 const DEPLOYMENT_LAYER_UNAVAILABLE_BACKOFF_MS = 2_000;
 
-function isCoreUnreachable(error: unknown): boolean {
+export function isCoreUnreachable(error: unknown): boolean {
   if (error instanceof CoreUnreachableError) return true;
   if (error instanceof CliError) return false;
   for (let e: unknown = error; e instanceof Error; e = e.cause) {

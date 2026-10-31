@@ -65,7 +65,7 @@ test("the command uses deployment config and local secrets without contacting a 
       join(dir, "qm.config.jsonc"),
       JSON.stringify({
         contract: 1,
-        orgId: "acme",
+        deploymentId: "acme",
         publicUrl: settings.publicUrl,
         target: "docker",
         services: ["core", "web-ui", "admin", "portal", "auth"],

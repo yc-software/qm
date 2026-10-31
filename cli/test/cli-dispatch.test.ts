@@ -76,7 +76,7 @@ test("layer sync exposes deployment-layer reconciliation", async () => {
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -98,7 +98,7 @@ test("check --json reports failures under a stable contract clause id", async ()
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 2,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -134,7 +134,7 @@ test("check --json reserves exit 2 for an unsupported live invocation", async ()
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -157,7 +157,7 @@ test("check flag typos are invocation errors and never print a success first", a
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -186,7 +186,7 @@ test("non-JSON check --live fails when the target has no live drift implementati
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -218,7 +218,7 @@ else console.log("{}");
   chmodSync(aws, 0o755);
   const config = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://agent.acme.example",
     target: "aws",
     services: ["core"],
@@ -260,7 +260,7 @@ test("successful check --json --live reports the live-drift clause", async (t) =
   const digest = `sha256:${"a".repeat(64)}`;
   const raw = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],
@@ -389,7 +389,7 @@ test("--tail must be a non-negative integer", async () => {
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -411,7 +411,7 @@ test("--env-file that does not exist is an error", async () => {
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -439,7 +439,7 @@ test("docker --only is rejected explicitly instead of silently restarting the fu
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -476,7 +476,7 @@ test("infra delete-task-definitions requires explicit destructive confirmation",
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "https://agent.acme.example",
       target: "aws",
       services: ["core"],
@@ -547,7 +547,7 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
     join(deployDir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "flagged",
+      deploymentId: "flagged",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -590,7 +590,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -598,7 +598,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     }),
   );
   try {
-    const scalar = await run(["config", "get", "orgId"], dir);
+    const scalar = await run(["config", "get", "deploymentId"], dir);
     assert.equal(scalar.exitCode, null, scalar.out);
     assert.equal(scalar.out, "acme", "scalars print raw, with no quotes");
 
@@ -629,7 +629,7 @@ test("--target revalidates the effective provider config", async () => {
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -648,7 +648,7 @@ test("--target revalidates the effective provider config", async () => {
 test("check --json routes failures on structured clause data, not message sniffing", async () => {
   const base = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "http://localhost:8080",
     target: "docker",
     services: ["core"],
@@ -704,7 +704,7 @@ test("check --json groups a multi-clause failure under each error's own clause, 
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],

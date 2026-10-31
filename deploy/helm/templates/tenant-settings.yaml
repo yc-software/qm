@@ -1,0 +1,122 @@
+{{- $tenantKeys := list "ADMIN_GRANTS" "AUTH_ALLOWED_EMAILS" "AUTH_ALLOWED_EMAIL_DOMAIN" "OIDC_ISSUER" "OIDC_AUTH_ENDPOINT" "OIDC_TOKEN_ENDPOINT" "OIDC_USERINFO_ENDPOINT" "OIDC_JWKS_URI" "OIDC_CLIENT_ID" "OIDC_CLIENT_SECRET" "OIDC_SCOPES" "OIDC_PROMPT" "OIDC_PRINCIPAL_CLAIM" "OIDC_ALLOWED_EMAIL_DOMAIN" "OIDC_ALLOWED_EMAILS" "PORTAL_EXPECTED_TEAM_ID" }}
+{{- $sources := dict "env" (.Values.env | default dict) "secretEnv" (.Values.secretEnv | default dict) }}
+{{- range $name, $svc := .Values.services }}
+{{- $_ := set $sources (printf "services.%s.env" $name) ($svc.env | default dict) }}
+{{- end }}
+{{- range $source, $values := $sources }}
+{{- range $key := $tenantKeys }}
+{{- if index $values $key }}
+{{- fail (printf "%s.%s is a tenant setting; move it to tenantSettings.%s" $source $key $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $core := index .Values.services "core" }}
+{{- if $core.enabled }}
+{{- $settings := dict }}
+{{- if (index .Values.services "auth").enabled }}
+{{- $issuer := printf "%s/idp" (trimSuffix "/" (.Values.publicUrl | default "")) }}
+{{- $_ := set $settings "OIDC_ISSUER" $issuer }}
+{{- $_ := set $settings "OIDC_AUTH_ENDPOINT" (printf "%s/authorize" $issuer) }}
+{{- $_ := set $settings "OIDC_TOKEN_ENDPOINT" "http://127.0.0.1:8099/token" }}
+{{- $_ := set $settings "OIDC_USERINFO_ENDPOINT" "http://127.0.0.1:8099/userinfo" }}
+{{- $_ := set $settings "OIDC_JWKS_URI" "http://127.0.0.1:8099/.well-known/jwks.json" }}
+{{- $_ := set $settings "OIDC_SCOPES" "openid email" }}
+{{- $_ := set $settings "OIDC_PRINCIPAL_CLAIM" "email" }}
+{{- with .Values.secretEnv.AUTH_CLIENT_ID }}{{ $_ := set $settings "OIDC_CLIENT_ID" . }}{{ end }}
+{{- with .Values.secretEnv.AUTH_CLIENT_SECRET }}{{ $_ := set $settings "OIDC_CLIENT_SECRET" . }}{{ end }}
+{{- with .Values.tenantSettings.AUTH_ALLOWED_EMAILS }}{{ $_ := set $settings "OIDC_ALLOWED_EMAILS" . }}{{ end }}
+{{- with .Values.tenantSettings.AUTH_ALLOWED_EMAIL_DOMAIN }}{{ $_ := set $settings "OIDC_ALLOWED_EMAIL_DOMAIN" . }}{{ end }}
+{{- end }}
+{{- $web := index .Values.services "web-ui" }}
+{{- if and $web $web.enabled }}
+{{- $webEnv := mergeOverwrite (deepCopy (.Values.secretEnv | default dict)) (deepCopy (.Values.env | default dict)) (deepCopy ($web.env | default dict)) }}
+{{- range $key := splitList " " (include "qm.webUiAccessKeys" $) }}
+{{- with index $webEnv $key }}{{ $_ := set $settings $key (toString .) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- $settings = mergeOverwrite $settings (deepCopy (.Values.tenantSettings | default dict)) }}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" (toString .Values.tenant)) }}
+{{- fail "tenant must be a tenant slug: lowercase letters, digits and inner hyphens" }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "qm.fullname" . }}-tenant-settings
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+type: Opaque
+stringData:
+  settings.json: {{ dict "tenant" .Values.tenant "env" $settings | toJson | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "qm.fullname" . }}-tenant-settings
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "qm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tenant-settings
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "qm.serviceAccountName" . }}
+      volumes:
+        - name: tenant-settings
+          secret:
+            secretName: {{ include "qm.fullname" . }}-tenant-settings
+      containers:
+        - name: tenant-settings
+          image: {{ include "qm.image" (dict "root" . "name" "core" "service" $core) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if or (include "qm.hasSecretEnv" .) .Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" . }}
+            - secretRef:
+                name: {{ include "qm.fullname" . }}-env
+            {{- end }}
+            {{- with .Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          env:
+            - name: QM_CORE_URL
+              value: {{ printf "http://%s-core.%s.svc.cluster.local:%v" (include "qm.fullname" .) .Release.Namespace $core.port | quote }}
+          volumeMounts:
+            - name: tenant-settings
+              mountPath: /tenant
+              readOnly: true
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { readFileSync } from "node:fs";
+              import { signedRequestHeaders } from "/app/plugins/chassis/src/source-auth-sign.ts";
+              async function put(path, body) {
+                const headers = signedRequestHeaders(process.env.CORE_SIGNING_SECRET, "PUT", path, body, {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${process.env.DEPLOYMENT_CONTROL_SECRET}`,
+                });
+                const response = await fetch(`${process.env.QM_CORE_URL}${path}`, { method: "PUT", headers, body });
+                if (!response.ok) throw new Error(`${path} returned ${response.status}: ${await response.text()}`);
+              }
+              const settings = readFileSync("/tenant/settings.json", "utf8");
+              await put("/v1/install/tenant", JSON.stringify({ tenant: JSON.parse(settings).tenant }));
+              await put("/v1/tenant-settings", settings);
+{{- end }}

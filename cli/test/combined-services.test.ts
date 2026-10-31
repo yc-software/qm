@@ -35,7 +35,7 @@ test("broker stays private inside portal and keeps its public issuer and callbac
   assert.equal(env.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
 });
 
-test("broker client secret keeps both required names on portal", () => {
+test("the broker client secret reaches the portal only under its own name", () => {
   const destinations = secretDestinations({
     name: "AUTH_CLIENT_SECRET",
     services: ["auth"],
@@ -44,5 +44,5 @@ test("broker client secret keeps both required names on portal", () => {
     required: true,
     managedBy: "operator",
   });
-  assert.deepEqual([...destinations], [["portal", new Set(["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"])]]);
+  assert.deepEqual([...destinations], [["portal", new Set(["AUTH_CLIENT_SECRET"])]]);
 });

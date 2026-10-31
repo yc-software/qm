@@ -1,6 +1,6 @@
 {
   "contract": 1,
-  "orgId": "beta",
+  "deploymentId": "beta",
   "publicUrl": "https://beta.example.com",
   "target": "fly",
   "appPrefix": "beta",

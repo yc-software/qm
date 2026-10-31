@@ -49,10 +49,10 @@ test("outputs refuses a manifest that predates a botName change until slack rend
   const org = `qm-e2e-id-${process.pid}`;
   const services: QmConfig["services"] = ["core", "web-ui", "admin", "portal", "slack"];
   try {
-    writeConfig(dep, { orgId: org, target: "docker", services });
+    writeConfig(dep, { deploymentId: org, target: "docker", services });
     assert.equal(runCli(["slack", "render"], { cwd: dep }).code, 0);
 
-    writeConfig(dep, { orgId: org, target: "docker", services, botName: "straylight" });
+    writeConfig(dep, { deploymentId: org, target: "docker", services, botName: "straylight" });
     const stale = runCli(["outputs"], { cwd: dep });
     assert.equal(stale.code, 1);
     assert.match(stale.out, /Slack manifests do not match the current configuration; run `qm slack render`/);

@@ -16,7 +16,7 @@ const DEPLOY_IMAGE = "acme-qm-sandbox";
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
   services: ["core"],
@@ -44,7 +44,7 @@ const mainTf = readFileSync(new URL("../templates/aws/main.tf", import.meta.url)
 
 test("declaredVariables reads the scaffolded variables.tf", () => {
   for (const name of [
-    "org_id",
+    "deployment_id",
     "account_id",
     "certificate_arn",
     "core_public_hosts",
@@ -891,4 +891,20 @@ test("dedicated ALBs retain direct core app routing when portal declares the sam
     rendered,
     /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
   );
+});
+
+test("infra render refuses a vendored AWS scaffold that still hands core the table owner", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-terraform-logins-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(join(infra, "variables.tf"), 'variable "org_id" { type = string }\n');
+    writeFileSync(join(infra, "main.tf"), 'resource "aws_secretsmanager_secret_version" "database" {}\n');
+    assert.throws(() => renderTerraformVars(config, dir), /predates the split database logins/);
+    writeFileSync(join(infra, "variables.tf"), 'variable "deployment_id" { type = string }\n');
+    assert.throws(() => renderTerraformVars(config, dir), /predates the split database logins/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

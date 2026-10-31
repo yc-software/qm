@@ -9,7 +9,7 @@ import { isServiceName, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
-  "org_id",
+  "deployment_id",
   "account_id",
   "region",
   "cluster_name",
@@ -189,7 +189,7 @@ function derivedValues(
   const secrets = computedSecrets(config);
   return {
     strings: {
-      org_id: config.orgId,
+      deployment_id: config.deploymentId,
       account_id: aws.accountId,
       region: aws.region,
       cluster_name: aws.cluster,
@@ -200,7 +200,7 @@ function derivedValues(
       ...(declared.includes("github_environment") ? { github_environment: aws.deployEnvironment ?? "" } : {}),
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
-      deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
+      deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.deploymentId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
       ...(declared.includes("db_instance_class") && aws.dbInstanceClass
@@ -219,12 +219,12 @@ export function awsObjectStoreBucket(config: QmConfig): string {
   const aws = config.aws;
   if (!aws) throw new CliError("object-store naming requires target aws and an aws block");
   if (aws.objectStoreBucket) return aws.objectStoreBucket;
-  const org = config.orgId.slice(0, 30).replace(/-+$/, "");
+  const prefix = config.deploymentId.slice(0, 30).replace(/-+$/, "");
   const suffix = createHash("sha256")
     .update(`${aws.accountId}:${aws.region}:${aws.cluster}`)
     .digest("hex")
     .slice(0, 12);
-  return `qm-${org}-${suffix}`;
+  return `qm-${prefix}-${suffix}`;
 }
 
 export function terraformVars(
@@ -275,6 +275,17 @@ function declaredInDir(configDir: string): string[] | undefined {
   return existsSync(path) ? declaredVariables(readFileSync(path, "utf8")) : undefined;
 }
 
+function assertTerraformScaffoldSplitsDatabaseLogins(configDir: string): void {
+  const read = (name: string): string | undefined =>
+    existsSync(join(configDir, "infra", name)) ? readFileSync(join(configDir, "infra", name), "utf8") : undefined;
+  const [variables, main] = [read("variables.tf"), read("main.tf")];
+  if (variables === undefined || main === undefined) return;
+  if (!/variable\s+"deployment_id"/.test(variables) || !/database_logins\s*=/.test(main))
+    throw new CliError(
+      "the vendored AWS scaffold predates the split database logins; update infra/variables.tf and infra/main.tf from the current scaffold so core stops running as the table owner",
+    );
+}
+
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
   const services = Object.values(config.aws?.services ?? {});
   const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
@@ -322,6 +333,7 @@ export function renderTerraformVars(config: QmConfig, configDir: string): void {
   const path = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(path)) throw new CliError(`${path} does not exist; scaffold it with qm init --target aws`);
   assertTerraformScaffoldSupportsConfig(config, configDir);
+  assertTerraformScaffoldSplitsDatabaseLogins(configDir);
   const existing = readFileSync(path, "utf8");
   const declared = declaredInDir(configDir);
   writeFileSync(path, terraformVars(config, existing, ...(declared ? [declared] : [])));

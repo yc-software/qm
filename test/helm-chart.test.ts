@@ -209,52 +209,85 @@ test("Helm ingress rejects embedded, missing, worker and disabled targets", opti
   assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
 });
 
-test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {
-  const auth = { AUTH_ALLOWED_EMAILS: "member@example.com", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" };
-  for (const values of [{ env: auth }, { services: { auth: { env: auth } } }, { secretEnv: auth }]) {
-    const portal = env(render(values));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, auth.AUTH_ALLOWED_EMAIL_DOMAIN);
-  }
-  const secretBacked = render({ secretEnv: auth });
-  assert.ok(!container(secretBacked, "portal").env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
-  const values = { env: { AUTH_ALLOWED_EMAILS: "global@example.com" }, services: { auth: { env: auth } } };
-  assert.equal(env(render(values)).OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
-  const explicit = { OIDC_ALLOWED_EMAILS: "other@example.org", OIDC_ALLOWED_EMAIL_DOMAIN: "example.org" };
-  for (const overrides of [
-    { env: explicit },
-    { secretEnv: explicit },
-    { services: { auth: { env: auth }, portal: { env: explicit } } },
-  ]) {
-    const portal = env(render({ services: { auth: { env: auth } }, ...overrides }));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, explicit.OIDC_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, explicit.OIDC_ALLOWED_EMAIL_DOMAIN);
-  }
-  assert.equal(env(render({ services: { auth: { enabled: false } }, env: auth })).OIDC_ALLOWED_EMAILS, undefined);
+function tenantImport(resources: Resource[]): { tenant: string; env: Record<string, string> } {
+  const secret = resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-tenant-settings");
+  assert.ok(secret?.stringData?.["settings.json"], "missing tenant settings secret");
+  return JSON.parse(secret.stringData["settings.json"]) as { tenant: string; env: Record<string, string> };
+}
+
+const tenantSettings = (resources: Resource[]): Record<string, string> => tenantImport(resources).env;
+
+test("Helm sends the configured tenant slug and refuses an invalid one", options, () => {
+  assert.equal(tenantImport(render()).tenant, "main");
+  assert.equal(tenantImport(render({ tenant: "acme" })).tenant, "acme");
+  assert.throws(() => render({ tenant: "Acme" }), /tenant must be a tenant slug/);
 });
 
-test("Helm does not shadow an external OIDC allowlist with a derived value", options, () => {
-  const envFrom = [{ secretRef: { name: "narrow-oidc-policy" } }];
-  for (const [authKey, oidcKey, broad, narrow] of [
-    ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS", "alice@example.com,bob@example.com", "alice@example.com"],
-    ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN", "example.com", "staff.example.com"],
-  ] as const) {
-    for (const source of [{ env: { [authKey]: broad } }, { services: { auth: { env: { [authKey]: broad } } } }]) {
-      assert.ok(!container(render({ ...source, envFrom }), "portal").env.some((entry) => entry.name === oidcKey));
-      assert.equal(env(render({ ...source, envFrom, secretEnv: { [oidcKey]: narrow } }))[oidcKey], narrow);
-      assert.equal(
-        env(
-          render({
-            ...source,
-            envFrom,
-            services: { auth: { env: { [authKey]: broad } }, portal: { env: { [oidcKey]: narrow } } },
-          }),
-        )[oidcKey],
-        narrow,
-      );
-    }
-    assert.equal(env(render({ envFrom, env: { [authKey]: broad, [oidcKey]: narrow } }))[oidcKey], narrow);
+test("Helm pushes sign-in and admin settings to the install tenant instead of any service env", options, () => {
+  const resources = render({
+    publicUrl: "https://qm.example.com",
+    secretEnv: { AUTH_CLIENT_ID: "qm-portal", AUTH_CLIENT_SECRET: "client-secret" },
+    tenantSettings: { AUTH_ALLOWED_EMAILS: "member@example.com", ADMIN_GRANTS: "member@example.com:org_admin" },
+  });
+  for (const service of ["core", "portal", "web-ui"]) {
+    const names = (container(resources, service).env ?? []).map((entry) => entry.name);
+    assert.ok(!names.some((name) => /^OIDC_|^AUTH_ALLOWED_|^ADMIN_GRANTS$/.test(name)), service);
   }
-  const externalOnly = container(render({ envFrom }), "portal").env;
-  assert.ok(!externalOnly.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
+  const settings = tenantSettings(resources);
+  assert.equal(settings.ADMIN_GRANTS, "member@example.com:org_admin");
+  assert.equal(settings.OIDC_ALLOWED_EMAILS, "member@example.com");
+  assert.equal(settings.OIDC_ISSUER, "https://qm.example.com/idp");
+  assert.equal(settings.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(settings.OIDC_CLIENT_ID, "qm-portal");
+  assert.equal(settings.OIDC_CLIENT_SECRET, "client-secret");
+  const explicit = tenantSettings(
+    render({ tenantSettings: { AUTH_ALLOWED_EMAILS: "member@example.com", OIDC_ALLOWED_EMAILS: "other@example.org" } }),
+  );
+  assert.equal(explicit.OIDC_ALLOWED_EMAILS, "other@example.org");
+  const external = tenantSettings(render({ services: { auth: { enabled: false } } }));
+  assert.equal(external.OIDC_ISSUER, undefined);
+  const job = resources.find((r) => r.kind === "Job" && r.metadata.name === "test-qm-tenant-settings");
+  assert.equal(job?.metadata.annotations?.["helm.sh/hook"], "post-install,post-upgrade");
+  const push = job!.spec.template.spec.containers[0]!;
+  assert.equal(push.image, container(resources, "core").image);
+  assert.match(push.env.find((entry) => entry.name === "QM_CORE_URL")!.value, /^http:\/\/test-qm-core\./);
+});
+
+test("Helm imports LOOPS_USERS only when set and the web UI runs, and keeps it out of service env", options, () => {
+  assert.equal(tenantSettings(render()).LOOPS_USERS, undefined);
+  assert.equal(tenantSettings(render({ env: { LOOPS_USERS: "a@example.com" } })).LOOPS_USERS, "a@example.com");
+  const withSecret = render({
+    secretEnv: { LOOPS_USERS: "b@example.com", AUTH_CLIENT_SECRET: "client-secret" },
+    services: { "web-ui": { env: { WEB_UI_PUBLIC_URL: "https://agent.example.com" } } },
+  });
+  assert.equal(tenantSettings(withSecret).LOOPS_USERS, "b@example.com");
+  for (const service of ["core", "portal", "web-ui"]) {
+    const names = (container(withSecret, service).env ?? []).map((entry) => entry.name);
+    assert.ok(!names.includes("LOOPS_USERS"), service);
+  }
+  const envSecret = withSecret.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env");
+  assert.equal(envSecret?.stringData?.AUTH_CLIENT_SECRET, "client-secret");
+  assert.equal(envSecret?.stringData?.LOOPS_USERS, undefined);
+  const without = tenantSettings(
+    render({
+      env: { LOOPS_USERS: "a@example.com" },
+      services: {
+        "web-ui": { enabled: false },
+        portal: { enabled: false },
+        admin: { enabled: false },
+        auth: { enabled: false },
+      },
+    }),
+  );
+  assert.equal(without.LOOPS_USERS, undefined);
+});
+
+test("Helm refuses tenant settings placed in service env", options, () => {
+  for (const values of [
+    { env: { AUTH_ALLOWED_EMAILS: "member@example.com" } },
+    { secretEnv: { ADMIN_GRANTS: "member@example.com:org_admin" } },
+    { services: { auth: { env: { AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } } },
+    { services: { portal: { env: { OIDC_ALLOWED_EMAILS: "member@example.com" } } } },
+  ])
+    assert.throws(() => render(values), /is a tenant setting; move it to tenantSettings/);
 });

@@ -165,3 +165,11 @@ export async function list<T>(request: RenderRequest, path: string, key: string)
     cursor = next;
   }
 }
+export async function envVars(request: RenderRequest, id: string): Promise<Record<string, string>> {
+  return Object.fromEntries(
+    (await list<{ key: string; value: string }>(request, `/services/${id}/env-vars`, "envVar")).map((item) => [
+      item.key,
+      item.value,
+    ]),
+  );
+}
