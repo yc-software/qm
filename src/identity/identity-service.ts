@@ -52,6 +52,7 @@ export function createIdentityService(
     principalLinks?: { refresh(force?: boolean): Promise<void> };
   } = {},
 ): IdentityService {
+  const ownsStorage = !backing && !opts.externalMembers && !opts.principalLinks;
   const store = backing ?? createMemoryMap<DeactivationRecord>();
   const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
   const roster = perTenant(() => ({
@@ -60,6 +61,7 @@ export function createIdentityService(
     refreshedAt: 0,
     refreshP: null as Promise<void> | null,
     hydrateP: null as Promise<void> | null,
+    loaded: ownsStorage,
   }));
   const directorySyncProtected = opts.directorySyncProtected ?? [];
   const REFRESH_TTL_MS = 10_000;
@@ -69,7 +71,8 @@ export function createIdentityService(
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
 
   async function load(overwrite: boolean): Promise<void> {
-    const { deactivated, externals } = roster();
+    const state = roster();
+    const { deactivated, externals } = state;
     await opts.principalLinks?.refresh(true);
     const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
     if (overwrite) {
@@ -85,13 +88,21 @@ export function createIdentityService(
       const key = personKey(m.email);
       if (overwrite || !externals.has(key)) externals.set(key, m);
     }
+    state.loaded = true;
+  }
+
+  function loadedRoster() {
+    const state = roster();
+    if (!state.loaded) throw new Error("The identity roster for this tenant has not loaded");
+    return state;
   }
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
-    const record = roster().deactivated.get(key);
-    const external = roster().externals.get(key);
+    const { deactivated, externals } = loadedRoster();
+    const record = deactivated.get(key);
+    const external = externals.get(key);
     const inactive =
       record?.source === "manual" ||
       (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
@@ -132,10 +143,11 @@ export function createIdentityService(
     classify,
     deactivate,
     deactivationSource(externalId: string): DeactivationSource | undefined {
-      return roster().deactivated.get(personKey(externalId))?.source;
+      return loadedRoster().deactivated.get(personKey(externalId))?.source;
     },
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
+      await refresh();
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
       for (const id of removedIds) {
         if (keptByDirectorySync(personKey(id)) || roster().deactivated.has(personKey(id))) continue;
@@ -154,7 +166,7 @@ export function createIdentityService(
       return [...roster().externals.values()];
     },
     externalMember(principalId: string): ExternalMember | undefined {
-      return roster().externals.get(personKey(principalId));
+      return loadedRoster().externals.get(personKey(principalId));
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
       roster().externals.set(personKey(m.email), m);
@@ -166,7 +178,10 @@ export function createIdentityService(
     },
     hydrate(): Promise<void> {
       const state = roster();
-      state.hydrateP ??= load(false);
+      state.hydrateP ??= load(false).catch((error: unknown) => {
+        state.hydrateP = null;
+        throw error;
+      });
       return state.hydrateP;
     },
     refresh,

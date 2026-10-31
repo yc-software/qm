@@ -33,9 +33,9 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, portalTenant, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
-import { boundTenant, currentTenant, perTenant, withTenant } from "../../../src/tenants/context.ts";
+import { boundTenant, currentTenant, perTenant } from "../../../src/tenants/context.ts";
 import { activeRuns, forgetRun, rememberRun } from "./active-runs.ts";
 import { addDeliveryClient, connectedUsers, deliveryClientsOf, everyDeliveryClient } from "./delivery-clients.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
@@ -3537,10 +3537,8 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("x-frame-options", "DENY");
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  const tenant = portalTenant(token, PORTAL_IDENTITY_SECRET, Date.now());
-  const route = () => portalTokenStore.run(token, () => routeRequest(req, res));
   try {
-    await (tenant ? withTenant(tenant, route) : route());
+    await portalTokenStore.run(token, () => routeRequest(req, res));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

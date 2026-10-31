@@ -15,6 +15,7 @@ type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
 async function setup() {
   const built = buildApp(testConfig());
+  await built.identity.hydrate();
   await built.config.setApprovedHarnesses(["pi", "claude"]);
   const server = createInsecureTestServer(built.app, {
     config: built.config,

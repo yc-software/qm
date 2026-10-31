@@ -73,7 +73,7 @@ export interface McpToolDescriptor {
 
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
-  toolDefs(): McpToolDescriptor[];
+  toolDefs(): Promise<McpToolDescriptor[]>;
   toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
@@ -397,11 +397,7 @@ export function createMcpToolService(opts: {
   if (boundTenant()) refreshIfStale(tenantState());
 
   return {
-    toolDefs: () => {
-      const state = tenantState();
-      refreshIfStale(state);
-      return state.snapshot;
-    },
+    toolDefs: async () => (await loaded()).snapshot,
     toolDefsFor,
     async needsApproval(name, args, principalId) {
       const def = (await loaded()).snapshot.find((t) => t.name === name);

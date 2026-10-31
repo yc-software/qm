@@ -75,6 +75,7 @@ describe("a published app's broker token follows the app it was minted for, on e
     } as unknown as App;
     const deps = {
       identity: {
+        hydrate: async () => {},
         refresh: async () => {},
         classify: () => ({ type: offboarded ? "offboarded" : "internal" }),
       },

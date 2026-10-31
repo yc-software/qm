@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { boundTenant, perTenant, withTenant } from "../src/tenants/context.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
-import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { createMemorySessionStateBus } from "../src/runs/session-state-bus.ts";
 import { createMemoryLedgerEventBus } from "../src/loops/ledger-events.ts";
 import {
@@ -33,6 +32,7 @@ function tenantRows<T>(): DurableMap<T> {
 
 test("identity roster is cached per tenant", async () => {
   const identity = createIdentityService(tenantRows(), { externalMembers: tenantRows() });
+  await withTenant(A, () => identity.hydrate());
   await withTenant(A, () => identity.deactivate("dana@example.com"));
   await withTenant(B, () => identity.refresh(true));
   assert.equal(
@@ -57,6 +57,30 @@ test("identity roster is cached per tenant", async () => {
   assert.throws(() => identity.classify("dana@example.com"), /No tenant is bound/);
 });
 
+test("a tenant's roster must load before it classifies anyone, and loads once", async () => {
+  let loads = 0;
+  const rows = tenantRows<DeactivationRecord>();
+  const deactivations = new Proxy(rows, {
+    get: (target, key) =>
+      key === "all"
+        ? () => {
+            loads++;
+            return target.all();
+          }
+        : Reflect.get(target, key),
+  });
+  const identity = createIdentityService(deactivations, { externalMembers: tenantRows() });
+  assert.throws(() => withTenant(A, () => identity.classify("erin@example.com")), /has not loaded/);
+  await withTenant(A, () => Promise.all([identity.hydrate(), identity.hydrate()]));
+  await withTenant(A, () => identity.hydrate());
+  assert.equal(loads, 1);
+  assert.equal(
+    withTenant(A, () => identity.classify("erin@example.com").type),
+    "internal",
+  );
+  assert.throws(() => withTenant(B, () => identity.classify("erin@example.com")), /has not loaded/);
+});
+
 test("principal links resolve per tenant", async () => {
   const links = createPrincipalLinkService(tenantRows());
   await withTenant(A, () =>
@@ -72,22 +96,6 @@ test("principal links resolve per tenant", async () => {
     undefined,
   );
   assert.throws(() => links.canonical("U1"), /No tenant is bound/);
-});
-
-test("engaged threads are tracked per tenant", () => {
-  const engaged = createEngagedRegistry();
-  withTenant(A, () => engaged.engage("thread-1"));
-  withTenant(B, () => engaged.engage("thread-1"));
-  withTenant(A, () => engaged.settle("thread-1"));
-  assert.deepEqual(
-    withTenant(A, () => engaged.list()),
-    [],
-  );
-  assert.deepEqual(
-    withTenant(B, () => engaged.list()),
-    ["thread-1"],
-  );
-  assert.throws(() => engaged.list(), /No tenant is bound/);
 });
 
 test("event buses deliver only to subscribers of the emitting tenant", () => {

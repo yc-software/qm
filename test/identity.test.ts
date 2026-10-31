@@ -81,7 +81,7 @@ test("deactivation is durable: a fresh service over the same backing rehydrates 
   await first.deactivate("U-leaver");
 
   const second = createIdentityService(backing);
-  assert.equal(second.classify("U-leaver").type, "internal");
+  assert.throws(() => second.classify("U-leaver"), /has not loaded/);
   await second.hydrate();
   assert.equal(second.classify("U-leaver").type, "guest");
 });

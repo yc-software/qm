@@ -24,6 +24,7 @@ async function withServer<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "paging-")) }));
+  await built.identity.hydrate();
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

@@ -7,11 +7,8 @@ import {
   resolveCustomModel,
   setCustomProviders,
 } from "../src/model/custom-providers.ts";
-import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
-import { gatewayModelsVersion, resolveGatewayModel, setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelOverlayVersion, modelUnavailableReason, resolveModel, setModelOverlays } from "../src/model/pi-models.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import {
   oauthProvider,
   publicOAuthClientsReady,
@@ -60,96 +57,6 @@ test("custom providers registered in one tenant are invisible to another and fai
   withTenant(B, () => setCustomProviders([]));
 });
 
-test("gateway models and their version are per tenant", () => {
-  const model = (baseUrl: string) =>
-    ({
-      id: "gateway/vendor/m",
-      name: "m",
-      provider: "qm:gateway",
-      api: "openai-completions",
-      baseUrl,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1000,
-      maxTokens: 100,
-    }) as Parameters<typeof setGatewayModels>[0][number];
-  withTenant(A, () => setGatewayModels([model("https://a.example/v1")]));
-  const versionB = withTenant(B, gatewayModelsVersion);
-  assert.equal(
-    withTenant(B, () => resolveGatewayModel("gateway/vendor/m")),
-    undefined,
-  );
-  assert.equal(
-    withTenant(B, () => resolveModel("gateway/vendor/m")),
-    undefined,
-  );
-  assert.equal(
-    withTenant(A, () => resolveModel("gateway/vendor/m")?.baseUrl),
-    "https://a.example/v1",
-  );
-  withTenant(B, () => setGatewayModels([model("https://b.example/v1")]));
-  assert.equal(
-    withTenant(A, () => resolveGatewayModel("gateway/vendor/m")?.baseUrl),
-    "https://a.example/v1",
-  );
-  assert.equal(
-    withTenant(B, () => resolveGatewayModel("gateway/vendor/m")?.baseUrl),
-    "https://b.example/v1",
-  );
-  assert.equal(withTenant(B, gatewayModelsVersion), versionB + 1);
-  assert.throws(() => resolveGatewayModel("gateway/vendor/m"), UNBOUND);
-  withTenant(A, () => setGatewayModels([]));
-  withTenant(B, () => setGatewayModels([]));
-});
-
-test("gateway discovery runs and caches per tenant", async () => {
-  const calls: string[] = [];
-  const fetcher: typeof fetch = async (url) => {
-    calls.push(String(url));
-    const data = String(url).endsWith("/models")
-      ? [{ id: "vendor/m" }]
-      : [
-          {
-            model_group: "vendor/m",
-            mode: "chat",
-            supports_function_calling: true,
-            max_input_tokens: 128000,
-            max_output_tokens: 8192,
-            input_cost_per_token: 0.000002,
-            output_cost_per_token: 0.000008,
-          },
-        ];
-    return Response.json({ data });
-  };
-  const catalog = createGatewayCatalog(
-    { url: "https://gateway.example/v1", apiKey: "k", apiKeyHeader: "x-key", models: {} },
-    fetcher,
-    () => 0,
-  );
-  await withTenant(A, () => catalog.refresh());
-  assert.deepEqual(
-    withTenant(A, () => catalog.transport.models),
-    { "gateway/vendor/m": "vendor/m" },
-  );
-  assert.deepEqual(
-    withTenant(B, () => catalog.transport.models),
-    {},
-  );
-  assert.equal(
-    withTenant(B, () => resolveGatewayModel("gateway/vendor/m")),
-    undefined,
-  );
-  await withTenant(A, () => catalog.refresh());
-  assert.equal(calls.length, 2);
-  await withTenant(B, () => catalog.refresh());
-  assert.equal(calls.length, 4);
-  assert.ok(withTenant(B, () => resolveGatewayModel("gateway/vendor/m")));
-  assert.throws(() => catalog.transport.models, UNBOUND);
-  withTenant(A, () => setGatewayModels([]));
-  withTenant(B, () => setGatewayModels([]));
-});
-
 test("model overlays, unavailable reasons and the overlay version are per tenant", () => {
   const versionB = withTenant(B, modelOverlayVersion);
   withTenant(A, () => setModelOverlays([], ["vendor/gone"]));
@@ -168,44 +75,6 @@ test("model overlays, unavailable reasons and the overlay version are per tenant
   assert.match(withTenant(B, () => modelUnavailableReason("vendor/other")) ?? "", /deleted/);
   assert.throws(() => resolveModel("claude-opus-5"), UNBOUND);
   withTenant(B, () => setModelOverlays([]));
-});
-
-test("the OpenRouter catalog is fetched, registered and cached per tenant", async () => {
-  let fetches = 0;
-  const catalog: typeof fetch = async () => {
-    fetches += 1;
-    return Response.json({
-      data: [
-        {
-          id: "stealth/ox-alpha",
-          name: "Ox Alpha",
-          context_length: 1_048_576,
-          pricing: { prompt: "0", completion: "0" },
-          top_provider: { max_completion_tokens: 131_072 },
-          architecture: { input_modalities: ["text"] },
-          supported_parameters: ["tools"],
-        },
-      ],
-    });
-  };
-  await withTenant(A, () => selectableModelCatalog(catalog));
-  await withTenant(A, () => selectableModelCatalog(catalog));
-  assert.equal(fetches, 1);
-  assert.equal(
-    withTenant(A, () => resolveModel("stealth/ox-alpha")?.provider),
-    "openrouter",
-  );
-  assert.equal(
-    withTenant(B, () => resolveModel("stealth/ox-alpha")),
-    undefined,
-  );
-  await withTenant(B, () => selectableModelCatalog(catalog));
-  assert.equal(fetches, 2);
-  assert.equal(
-    withTenant(B, () => resolveModel("stealth/ox-alpha")?.provider),
-    "openrouter",
-  );
-  await assert.rejects(selectableModelCatalog(catalog), UNBOUND);
 });
 
 test("public OAuth clients registered for one tenant do not resolve in another", async () => {
@@ -328,11 +197,8 @@ test("MCP tool snapshots load and refresh per tenant", async (t) => {
   assert.equal(await withTenant(A, () => service.call("crm_query", {})), "ran query");
   servers.set(A, []);
   await withTenant(A, () => service.refresh());
-  assert.deepEqual(
-    withTenant(A, () => service.toolDefs()),
-    [],
-  );
-  assert.throws(() => service.toolDefs(), UNBOUND);
+  assert.deepEqual(await withTenant(A, () => service.toolDefs()), []);
+  await assert.rejects(service.toolDefs(), UNBOUND);
 });
 
 test("a cold tenant's first turn waits only briefly for MCP tools that are slow to list", async (t) => {

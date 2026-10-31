@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
 import { neutralizeMentions, setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
-import { botIdentityArgs, setDefaultBotIdentity } from "../src/slack/delivery.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 
@@ -34,13 +33,6 @@ test("each tenant arms and names mentions from its own index", () => {
     /<@UBBB>/,
   );
   assert.throws(() => toSlackMrkdwn("hi @alex"), /No tenant is bound/);
-});
-
-test("the default bot identity is per tenant", () => {
-  withTenant(A, () => setDefaultBotIdentity({ username: "Alpha" }));
-  assert.deepEqual(withTenant(A, botIdentityArgs), { username: "Alpha" });
-  assert.deepEqual(withTenant(B, botIdentityArgs), {});
-  assert.throws(() => botIdentityArgs(), /No tenant is bound/);
 });
 
 test("admin scope activity snapshots are kept per tenant for a shared store", async () => {

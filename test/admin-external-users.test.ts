@@ -102,6 +102,7 @@ const capFor = (actorId: string) =>
 
 test("broker admission preserves configured email members without external invitations", async (t) => {
   const s = start({ signed: true, emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
+  await s.built.identity.hydrate();
   t.after(s.close);
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
     assert.equal(s.built.identity.externalMember(email), undefined);
@@ -125,6 +126,7 @@ test("broker admission preserves configured email members without external invit
 
 test("inviting an external user stores the record, lists it as active, audits, and reports the missing mailer", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const expiresAt = new Date(Date.now() + 30 * DAY_MS).toISOString();
     const r = await invite(s.base, { email: "  Pat@Partner.example  ", expiresAt });
@@ -170,6 +172,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
 
 test("role org_admin grants admin; member revokes it; DELETE drops the grant and expires the record", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const expiresAt = Date.now() + 7 * DAY_MS;
     const isAdmin = async (email: string) => adminStatusFromGrants(await s.built.admin.listGrants(), email).isAdmin;
@@ -234,6 +237,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
 
 test("an address that already belongs to an org member cannot be invited", async () => {
   const s = start({ emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
+  await s.built.identity.hydrate();
   try {
     const expiresAt = Date.now() + DAY_MS;
     const alice = s.built.admin.resolveActor(ALICE)!;
@@ -287,6 +291,7 @@ test("an address that already belongs to an org member cannot be invited", async
 
 test("an expired external org admin no longer passes the admin authorizer", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     assert.equal(
       (await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt: Date.now() + DAY_MS }))
@@ -309,6 +314,7 @@ test("an expired external org admin no longer passes the admin authorizer", asyn
 
 test("revoking the last org admin is refused and leaves the external record untouched", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const expiresAt = Date.now() + DAY_MS;
     assert.equal((await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt })).status, 200);
@@ -335,6 +341,7 @@ test("revoking the last org admin is refused and leaves the external record unto
 
 test("invite validation: past expiry, missing expiry, bad email, and bad role are 400", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const cases: unknown[] = [
       { email: "a@b.example", expiresAt: Date.now() - 1000 },
@@ -360,6 +367,7 @@ test("invite validation: past expiry, missing expiry, bad email, and bad role ar
 test("with a mailer the invitation goes out carrying the sign-in URL and brand; a send failure still saves the record", async () => {
   const ok = stubMailer();
   const s = start({ mailer: ok.mailer });
+  await s.built.identity.hydrate();
   try {
     const expiresAt = Date.now() + 14 * DAY_MS;
     const r: any = await (await invite(s.base, { email: "pat@partner.example", expiresAt })).json();
@@ -395,6 +403,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
 
   const broken = stubMailer("Resend rejected the message: HTTP 403 domain not verified");
   const f = start({ mailer: broken.mailer });
+  await f.built.identity.hydrate();
   try {
     const r: any = await (
       await invite(f.base, { email: "sam@partner.example", expiresAt: Date.now() + DAY_MS })
@@ -426,6 +435,7 @@ test("renderInviteEmail escapes HTML and names the sign-in URL and expiry", () =
 
 test("an agent token may invite a member but never grant, demote, or revoke an org_admin external", async () => {
   const s = start({ signed: true });
+  await s.built.identity.hydrate();
   try {
     const cap = { "x-agent-capability": await capFor("admin-alice") };
     const expiresAt = Date.now() + DAY_MS;
@@ -497,6 +507,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 
 test("expiry classifies an external as guest, and the signed broker check answers accordingly", async () => {
   const s = start({ signed: true });
+  await s.built.identity.hydrate();
   try {
     const now = Date.now();
     const record = (email: string, expiresAt: number) => ({
@@ -539,6 +550,7 @@ test("expiry classifies an external as guest, and the signed broker check answer
 
 test("the directory resolves participants without loading their session windows", async (t) => {
   const s = start();
+  await s.built.identity.hydrate();
   t.after(s.close);
   for (const thread of ["first", "second"]) {
     const session = await s.built.sessions.getOrCreateByThread(thread, "dm", "personal:alice");
@@ -558,6 +570,7 @@ test("the directory resolves participants without loading their session windows"
 
 test("the directory resolves an active external member and not an expired one", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const now = Date.now();
     const record = (email: string, expiresAt: number) => ({
@@ -595,6 +608,7 @@ test("the directory resolves an active external member and not an expired one", 
 
 test("directory sync never deactivates an external member; manual deactivation still wins", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     const now = Date.now();
     await s.built.identity.putExternalMember({
@@ -625,6 +639,7 @@ const inviteTeammate = (base: string, body: unknown, headers: Record<string, str
 test("teammates receive permanent access and appear before their first session", async () => {
   const { sent, mailer } = stubMailer();
   const s = start({ mailer, emailAuthDomain: "corp.example" });
+  await s.built.identity.hydrate();
   try {
     const r = await inviteTeammate(s.base, { email: " Engineer@Corp.example " });
     assert.equal(r.status, 200);
@@ -652,6 +667,7 @@ test("teammates receive permanent access and appear before their first session",
 
 test("teammate invitations validate expiry, require admin, and do not demote existing admins", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   try {
     assert.equal((await inviteTeammate(s.base, { email: "a@corp.example" }, { "x-admin-actor": NOBODY })).status, 403);
     assert.equal((await inviteTeammate(s.base, { email: "invalid" })).status, 400);
@@ -673,6 +689,7 @@ test("teammate invitations validate expiry, require admin, and do not demote exi
 
 test("agent capabilities cannot create permanent teammate access", async () => {
   const s = start({ signed: true });
+  await s.built.identity.hydrate();
   try {
     const r = await inviteTeammate(
       s.base,
@@ -688,6 +705,7 @@ test("agent capabilities cannot create permanent teammate access", async () => {
 
 test("invitation links work without email delivery and are single use, scoped, and revocable", async () => {
   const s = start();
+  await s.built.identity.hydrate();
   const redeem = (token: string) =>
     fetch(`${s.base}/v1/auth/invitations/redeem`, {
       method: "POST",
@@ -729,6 +747,7 @@ test("invitation links work without email delivery and are single use, scoped, a
 
 test("invitation redemption requires source authentication before consuming a valid invitation", async () => {
   const s = start({ signed: true });
+  await s.built.identity.hydrate();
   try {
     const now = Date.now();
     const inviteId = randomUUID();
@@ -787,6 +806,7 @@ test("invitation redemption requires source authentication before consuming a va
 test("teammate invites reject manual deactivation before changing access or sending mail", async () => {
   const { sent, mailer } = stubMailer();
   const s = start({ mailer });
+  await s.built.identity.hydrate();
   const email = "inactive@corp.example";
   try {
     await s.built.identity.deactivate(email);

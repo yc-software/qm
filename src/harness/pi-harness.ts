@@ -134,7 +134,6 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { perTenant } from "../tenants/context.ts";
 import { createGrindMeter, meterGrindCall } from "./grind.ts";
 import {
   createFloorCapPolicy,
@@ -1027,13 +1026,14 @@ export interface ProviderKeys {
   anthropic?: string;
   openai?: string;
   openrouter?: string;
+  /** Admin-registered custom providers, keyed by provider slug. */
   [provider: string]: string | undefined;
 }
 
-const cachedCustomModels = perTenant(() => ({ version: -1, path: null as string | null }));
+let cachedCustomModels: { version: number; path: string | null } | null = null;
 function customModelsPath(): string | null {
   const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels().version === version) return cachedCustomModels().path;
+  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -1041,7 +1041,8 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  return Object.assign(cachedCustomModels(), { version, path }).path;
+  cachedCustomModels = { version, path };
+  return path;
 }
 
 export async function buildModelRuntime(

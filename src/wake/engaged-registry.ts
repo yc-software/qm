@@ -1,5 +1,3 @@
-import { perTenant } from "../tenants/context.ts";
-
 export interface EngagedRegistry {
   engage(threadRef: string): void;
   settle(threadRef: string): void;
@@ -7,10 +5,10 @@ export interface EngagedRegistry {
 }
 
 export function createEngagedRegistry(): EngagedRegistry {
-  const engaged = perTenant(() => new Set<string>());
+  const engaged = new Set<string>();
   return {
-    engage: (threadRef) => void engaged().add(threadRef),
-    settle: (threadRef) => void engaged().delete(threadRef),
-    list: () => [...engaged()],
+    engage: (threadRef) => void engaged.add(threadRef),
+    settle: (threadRef) => void engaged.delete(threadRef),
+    list: () => [...engaged],
   };
 }
