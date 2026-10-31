@@ -2,14 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryMap, createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
+import { createMemoryCronRows } from "../src/cron/cron-table.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import type { Cron } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 
+bindTestTenant();
+
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
-  const map = createMemoryMap<Cron>();
-  const s1 = createCronStore(map);
+  const rows = createMemoryCronRows();
+  const s1 = createCronStore(rows);
   const c = await s1.create({
     schedule: { everyMs: 60_000 },
     action: "summarize signups",
@@ -20,7 +23,7 @@ test("crons persist to the backing map (a second store instance reads them back)
   });
   await s1.markFired(c.id, 123);
 
-  const s2 = createCronStore(map);
+  const s2 = createCronStore(rows);
   const got = await s2.get(c.id);
   assert.equal(got?.action, "summarize signups");
   assert.equal(got?.lastFiredAt, 123);
@@ -87,7 +90,7 @@ test("deployments persist with immutable versions across store instances", async
 });
 
 test("a fresh in-memory map is the unchanged default (ephemeral, no durability required)", async () => {
-  const s = createCronStore(createMemoryMap<Cron>());
+  const s = createCronStore();
   const c = await s.create({
     schedule: { everyMs: 1000 },
     action: "x",

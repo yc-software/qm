@@ -28,7 +28,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -62,7 +62,7 @@ let callSeq = 0;
 async function scenario() {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
+  const mailbox = createSessionMailbox();
   const featureFlags = createFeatureFlagStore(createMemoryMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({

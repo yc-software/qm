@@ -12,8 +12,8 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 bindTestTenant();
 

@@ -38,12 +38,18 @@ import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
-import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
+import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
-import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
+import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
+import { createLoopTables } from "./loops/tables.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
-import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
-import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
+import { createSuggestedActivityService } from "./suggestions/activities.ts";
+import { createMemoryTidyService, withMemoryTidy } from "./memory/tidy.ts";
+import {
+  createMemorySuggestedActivityProfiles,
+  createPostgresSuggestedActivityProfiles,
+} from "./suggestions/activity-profiles.ts";
+import { createMemoryTidyProfiles, createPostgresMemoryTidyProfiles } from "./memory/tidy-profiles.ts";
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
@@ -118,19 +124,12 @@ import {
 } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
-  Cron,
-  Loop,
-  LoopItem,
-  LoopOutput,
-  Monitor,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,
   SurfaceContextRequest,
   TurnRequest,
   TurnResult,
-  Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
@@ -141,8 +140,8 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { createBudgetTracker, estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
+import { createCronStore, type CronStore } from "./cron/cron-store.ts";
+import { createMemoryCronRows, createPostgresCronRows } from "./cron/cron-table.ts";
 import { LEGACY_HARNESS_MIGRATION } from "./model/legacy-harness-migration.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -174,7 +173,8 @@ import {
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
+import { createWebhookStore } from "./webhooks/webhook-store.ts";
+import { createMemoryWebhookRows, createPostgresWebhookRows } from "./webhooks/webhook-table.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
@@ -336,6 +336,7 @@ import {
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
+import { createMemoryMonitorRows, createPostgresMonitorRows } from "./monitors/monitor-table.ts";
 import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
@@ -347,7 +348,8 @@ import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
+import { createSwarmStore } from "./swarms/swarm-store.ts";
+import { createMemorySwarmRows, createPostgresSwarmRows } from "./swarms/swarm-table.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -1567,11 +1569,11 @@ export function buildApp(
     config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
           defaults: config.swarmDefaults,
-          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
-            runs,
-            sessions,
-            ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
-          }),
+          store: createSwarmStore(
+            config.databaseUrl
+              ? createPostgresSwarmRows(config.databaseUrl)
+              : createMemorySwarmRows({ runs, sessions }),
+          ),
           sessions,
           runs,
           sandboxes: sandboxResources,
@@ -1876,9 +1878,11 @@ export function buildApp(
   const environments = config.databaseUrl
     ? createPostgresEnvironmentStore(config.databaseUrl)
     : createMemoryEnvironmentStore();
-  const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
-  const loopStore = createLoopStore(artifactMap<Loop>("loops"));
-  const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
+  const monitors = createMonitorStore(
+    config.databaseUrl ? createPostgresMonitorRows(config.databaseUrl) : createMemoryMonitorRows(),
+  );
+  const loopTables = createLoopTables(config.databaseUrl);
+  const loopStore = createLoopStore(loopTables.loops);
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
@@ -1890,23 +1894,26 @@ export function buildApp(
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
   };
-  const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
+  const loopItems = createLoopItemLedger(loopTables.items, publishLoopEvent, {
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
       return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
     },
   });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
+  const loopOutputs = createLoopOutputStore(loopTables.outputs, (output) =>
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
-  const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
+  const loopGrants = createShipGrantStore(loopTables.grants);
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
-  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
-    staleRunningMs: config.runMaxAgeMs,
-    fires: cronFires,
-  });
+  const cronsBase = createCronStore(
+    config.databaseUrl ? createPostgresCronRows(config.databaseUrl) : createMemoryCronRows(),
+    {
+      staleRunningMs: config.runMaxAgeMs,
+      fires: cronFires,
+    },
+  );
   const crons: CronStore = {
     ...cronsBase,
     async create(input) {
@@ -1924,8 +1931,6 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
-  pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap?.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
     statements: [
@@ -1952,27 +1957,9 @@ export function buildApp(
     ],
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
-  pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'`,
-      `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
-    ],
-  });
   const webhooks = createWebhookStore(
-    artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
-    artifactMap<WebhookHistory>("webhook_history"),
+    config.databaseUrl ? createPostgresWebhookRows(config.databaseUrl) : createMemoryWebhookRows(),
   );
-  pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
-    ],
-  });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
   const screenProxies = new Map<string, { fingerprint: string; screener: SecurityScreener }>();
   const securityScreener = async (): Promise<SecurityScreener | undefined> => {
@@ -2028,7 +2015,7 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const sessionMailbox = config.databaseUrl ? createPostgresSessionMailbox(config.databaseUrl) : createSessionMailbox();
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     enabled: async (actorId) =>
@@ -2580,8 +2567,8 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
-    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
+    sources: loopTables.sources,
+    deliveries: loopTables.deliveries,
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,
@@ -2604,9 +2591,11 @@ export function buildApp(
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
   let ingressMaintenance: Promise<void> | undefined;
-  const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
+  const suggestedActivityProfiles = config.databaseUrl
+    ? createPostgresSuggestedActivityProfiles(config.databaseUrl)
+    : createMemorySuggestedActivityProfiles();
   const memoryTidy = createMemoryTidyService({
-    store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
+    store: config.databaseUrl ? createPostgresMemoryTidyProfiles(config.databaseUrl) : createMemoryTidyProfiles(),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
     crons,

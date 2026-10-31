@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createSuggestedActivityService } from "../src/suggestions/activities.ts";
+import { createMemorySuggestedActivityProfiles } from "../src/suggestions/activity-profiles.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -10,6 +11,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+
+bindTestTenant();
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -21,7 +24,7 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 function fixture() {
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = createMemoryMap<SuggestedActivityProfile>();
+  const store = createMemorySuggestedActivityProfiles();
   const sessions = createMemorySessionStore();
   const crons = createCronStore();
   const deliveries = createDeliveryStore();

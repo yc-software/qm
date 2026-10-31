@@ -34,8 +34,8 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   };
   const sessions = { listByParticipant: async (_p: string) => [], participantScopes: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
-  const crons = { list: async () => [] };
-  const webhooks = { list: async () => [] };
+  const crons = { ownedBy: async () => [] };
+  const webhooks = { ownedBy: async () => [] };
   const skills = { list: async () => [] };
   const deploy = { listDeployments: async () => [] };
   return createApp({

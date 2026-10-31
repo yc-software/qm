@@ -7,6 +7,9 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Cron, Destination, TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const recipient: Destination = {
   type: "principal",

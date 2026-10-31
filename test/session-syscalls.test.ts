@@ -2,7 +2,6 @@ import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
@@ -26,6 +25,9 @@ import { scopeId, type Conversation, type Principal, type ScopeId, type Session 
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -47,7 +49,7 @@ async function rig(opts?: {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
+  const mailbox = createSessionMailbox();
   const factory = createSessionSyscalls({
     mailbox,
     sessions,
@@ -839,9 +841,8 @@ test("follow-up retries recover the accepted run before checking full capacity",
   assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 2);
 });
 
-test("mailbox survives recreation and rejects acknowledgements for another recipient", async () => {
-  const backing = createMemoryMap<SessionMessage>();
-  const mail = createSessionMailbox(backing);
+test("mailbox keeps the first send and rejects acknowledgements for another recipient", async () => {
+  const mail = createSessionMailbox();
   const message: SessionMessage = {
     id: "one",
     senderId: "sender",
@@ -853,10 +854,9 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
   };
   await mail.send(message);
   await mail.send({ ...message, text: "replacement" });
-  const restarted = createSessionMailbox(backing);
-  await restarted.acknowledge("wrong", [message.id]);
-  assert.equal((await restarted.pending("recipient"))[0]!.text, "data");
-  await restarted.acknowledge("recipient", [message.id]);
+  await mail.acknowledge("wrong", [message.id]);
+  assert.equal((await mail.pending("recipient"))[0]!.text, "data");
+  await mail.acknowledge("recipient", [message.id]);
   assert.deepEqual(await mail.pending("recipient"), []);
 });
 
@@ -1711,7 +1711,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    mailbox: createSessionMailbox(),
     sessions,
     runs,
     signals: createMemoryRunSignalStore(),
@@ -1764,7 +1764,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
   await sessions.addParticipant(room.id, guest.id);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    mailbox: createSessionMailbox(),
     sessions,
     runs,
     signals: createMemoryRunSignalStore(),

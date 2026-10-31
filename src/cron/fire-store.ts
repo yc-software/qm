@@ -17,7 +17,6 @@ export interface CronFireStore {
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
-  backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
   listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
   listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
   latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
@@ -28,11 +27,6 @@ function fireOrder(a: CronFireLogEntry, b: CronFireLogEntry): number {
   if (a.fireKey < b.fireKey) return -1;
   if (a.fireKey > b.fireKey) return 1;
   return 0;
-}
-
-function backfillMayReplace(existing: CronFireLogEntry, incoming: CronFireLogEntry): boolean {
-  if (incoming.firedAt < existing.firedAt) return false;
-  return existing.endedAt === undefined || incoming.endedAt !== undefined;
 }
 
 export function createMemoryCronFireStore(): CronFireStore {
@@ -82,14 +76,6 @@ export function createMemoryCronFireStore(): CronFireStore {
         }
       }
       return pruned;
-    },
-    async backfill(cronId, entries) {
-      const fires = firesOf(cronId);
-      for (const entry of entries) {
-        const existing = fires.get(entry.fireKey);
-        if (existing && !backfillMayReplace(existing, entry)) continue;
-        fires.set(entry.fireKey, { ...entry });
-      }
     },
     async listByCron(cronId, opts) {
       const all = [...(byCron.get(cronId)?.values() ?? [])].sort(fireOrder).map((entry) => ({ ...entry }));
@@ -143,8 +129,6 @@ const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
-
-const BACKFILL_CHUNK = 500;
 
 function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
@@ -233,21 +217,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         [keepPerCron, endedBefore],
       );
       return result.rowCount;
-    },
-    async backfill(cronId, entries) {
-      for (let start = 0; start < entries.length; start += BACKFILL_CHUNK) {
-        const chunk = entries.slice(start, start + BACKFILL_CHUNK);
-        await query(
-          `INSERT INTO cron_fires (${FIRE_COLUMNS})
-           SELECT * FROM unnest(${FIRE_COLUMN_DEFS.map((c, i) => `$${i + 1}::${c.cast}[]`).join(", ")})
-           ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
-             SET ${UPSERT_SET}
-           WHERE EXCLUDED.fired_at >= cron_fires.fired_at
-             AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
-             AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`,
-          FIRE_COLUMN_DEFS.map((c) => chunk.map((entry) => c.value(cronId, entry))),
-        );
-      }
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {

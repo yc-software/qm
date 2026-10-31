@@ -29,7 +29,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
@@ -70,7 +70,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
-    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
+    mailbox: createSessionMailbox(),
     signals: createMemoryRunSignalStore(),
     maxAttempts: 1,
     conversations: {

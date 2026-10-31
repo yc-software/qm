@@ -1,11 +1,9 @@
 import type { GoalCreateInput } from "../harness/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
-import type { RunStore, Run } from "../runs/run-store.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
-import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
+import type { SwarmRunFence } from "./swarm-fence.ts";
+import type { SwarmRows } from "./swarm-table.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -82,7 +80,7 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
-  pending(afterId?: string): Promise<Swarm[]>;
+  pending(afterId?: string): Promise<Array<Swarm & { tenantId: string }>>;
 }
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {
@@ -109,65 +107,10 @@ function decode(swarm: SwarmStorage): Swarm {
   });
 }
 
-export function createSwarmStore(
-  backing: DurableMap<SwarmStorage>,
-  authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
-): SwarmStore {
-  if (!backing.update) throw new Error("swarm storage requires atomic updates");
-  async function fencedWrite(
-    id: string,
-    mutate: (value: SwarmStorage | null) => SwarmStorage,
-    fence: SwarmRunFence,
-  ): Promise<SwarmStorage> {
-    if (!authority) throw new Error("swarm run validation unavailable");
-    const pg = authority.pg;
-    if (pg) {
-      await backing.get(id);
-      return withPgTransaction(await pg.pool(), async (client) => {
-        await client.query("SET LOCAL lock_timeout = '10s'");
-        await client.query("SET LOCAL statement_timeout = '15s'");
-        const result = await client.query<Run>(
-          `SELECT status, attempts, lease_token AS "leaseToken", lease_expires_at::double precision AS "leaseExpiresAt", session_id AS "sessionId", request::jsonb AS request FROM runs WHERE id=$1 FOR UPDATE`,
-          [fence.runId],
-        );
-        const run = result.rows[0] ?? null;
-        assertSwarmRun(fence, run);
-        const session = await client.query(
-          "SELECT id FROM sessions WHERE id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
-          [fence.sessionId, fence.scopeId, fence.threadRef],
-        );
-        if (!session.rowCount) throw new Error("capability session mismatch");
-        await client.query(
-          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tbl) DO UPDATE SET v=durable_map_versions.v+1",
-        );
-        const current = await client.query<{ json: SwarmStorage }>("SELECT json FROM swarms WHERE id=$1 FOR UPDATE", [
-          id,
-        ]);
-        const next = mutate(current.rows[0]?.json ?? null);
-        await client.query(
-          "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json",
-          [id, jsonbStringify(next)],
-        );
-        assertSwarmRun(fence, run);
-        return next;
-      });
-    }
-    const session = await authority.sessions.get(fence.sessionId);
-    if (!session || session.scopeId !== fence.scopeId || session.threadRef !== fence.threadRef)
-      throw new Error("capability session mismatch");
-    const run = await authority.runs.get(fence.runId);
-    assertSwarmRun(fence, run);
-    const updated = await backing.update!(id, (current) => {
-      assertSwarmRun(fence, run);
-      return mutate(current);
-    });
-    if (updated) return updated;
-    assertSwarmRun(fence, run);
-    return backing.putIfAbsent(id, mutate(null));
-  }
+export function createSwarmStore(rows: SwarmRows): SwarmStore {
   return {
     async get(id) {
-      const row = await backing.get(id);
+      const row = await rows.get(id);
       return row ? decode(row) : null;
     },
     async create(swarm, fence) {
@@ -176,8 +119,7 @@ export function createSwarmStore(
         assertSwarmOpen(swarm);
         return encode(swarm);
       };
-      if (fence) return decode(await fencedWrite(swarm.id, create, fence));
-      return decode(await backing.putIfAbsent(swarm.id, create(null)));
+      return decode(await rows.write(swarm.id, create, fence));
     },
     async update(id, mutate, fence) {
       const apply = (value: SwarmStorage | null) => {
@@ -191,18 +133,11 @@ export function createSwarmStore(
           );
         return encode(next);
       };
-      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update!(id, apply);
-      if (!updated) throw new Error("swarm not found");
-      return decode(updated);
+      return decode(await rows.write(id, apply, fence));
     },
     async pending(afterId) {
-      return (
-        await backing.select({
-          where: { field: "pending", anyOfFold: ["true"] },
-          limit: SWARM_LIMITS.sweepBatch,
-          afterId,
-        })
-      ).map(decode);
+      const batch = await rows.pending(afterId, SWARM_LIMITS.sweepBatch);
+      return batch.map(({ tenantId, ...row }) => ({ ...decode(row), tenantId }));
     },
   };
 }

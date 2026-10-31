@@ -462,7 +462,7 @@ export interface App {
   ): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
-  listCrons(): Promise<Cron[]>;
+  listCrons(ownerScopeId?: ScopeId): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
   updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;
@@ -476,7 +476,7 @@ export interface App {
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
-  listWebhooks(): Promise<Webhook[]>;
+  listWebhooks(ownerScopeId?: ScopeId): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;

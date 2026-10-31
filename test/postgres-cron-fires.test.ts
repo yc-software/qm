@@ -1,10 +1,10 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { createMemoryCronRows } from "../src/cron/cron-table.ts";
 
 bindTestTenant();
 
@@ -16,7 +16,7 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS cron_fires, fire_test_crons, durable_map_versions CASCADE");
+  await p.query("DROP TABLE IF EXISTS cron_fires, durable_map_versions CASCADE");
   await p.end();
 });
 
@@ -111,26 +111,6 @@ test("pg cron_fires: thread-ref lookups hit the indexed columns across crons", {
   assert.deepEqual(await fires.listByThreadRefs([]), []);
 });
 
-test(
-  "pg cron_fires: backfill is an idempotent guarded upsert that never regresses an ended row",
-  { skip },
-  async () => {
-    const fires = createPostgresCronFireStore(URL!);
-    const entries = [
-      { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" as const },
-      { fireKey: "k2", threadRef: "t2", firedAt: 2_000, endedAt: 3_000, status: "ok" as const, reply: "two" },
-    ];
-    await fires.backfill("c-bf", entries);
-    await fires.backfill("c-bf", entries);
-    assert.equal((await fires.listByCron("c-bf")).total, 2);
-    await fires.record("c-bf", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 9_000, status: "ok" });
-    await fires.backfill("c-bf", entries);
-    const { runs } = await fires.listByCron("c-bf");
-    assert.equal(runs.find((r) => r.fireKey === "k1")?.status, "ok", "the stale running snapshot must not win");
-    assert.equal(runs.find((r) => r.fireKey === "k1")?.endedAt, 9_000);
-  },
-);
-
 test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NULs stripped)", { skip }, async () => {
   const fires = createPostgresCronFireStore(URL!);
   await fires.record("c-nul", {
@@ -146,29 +126,15 @@ test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NUL
 
 test("pg cron_fires: the cron store writes the table only and reads back through it", { skip }, async () => {
   const fires = createPostgresCronFireStore(URL!);
-  const backing = createPostgresMapFactory(URL!).map<Cron>("fire_test_crons");
-  const store = createCronStore(backing, { fires });
+  const store = createCronStore(createMemoryCronRows(), { fires });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
   await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
   await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
-  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is no longer written");
   const { runs, total } = await store.listFires(cron.id);
   assert.equal(total, 1);
   assert.equal(runs[0]!.status, "ok");
   await store.delete(cron.id);
   assert.equal((await store.listFires(cron.id)).total, 1, "fires outlive the deleted cron");
-});
-
-test("pg cron_fires: backfill never clobbers a newer retry of the same fireKey", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
-  await fires.record("c-retry-slot", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
-  await fires.backfill("c-retry-slot", [
-    { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
-  ]);
-  const { runs } = await fires.listByCron("c-retry-slot");
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0]!.firedAt, 3_000, "the older ended snapshot must not clobber the live retry");
-  assert.equal(runs[0]!.status, "running");
 });
 
 test(

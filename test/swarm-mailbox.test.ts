@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/harness/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("an agent's messages wait in each recipient's mailbox whatever their lineage; notify:true wakes", async () => {
   const f = await swarmFixture();

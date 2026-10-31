@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { scopeId, type Webhook } from "../src/types.ts";
+import { createMemoryWebhookRows } from "../src/webhooks/webhook-table.ts";
+import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = {
   ownerScopeId: scopeId("personal", "U1"),
@@ -102,11 +105,11 @@ test("a duplicate create returns the existing record WITHOUT clobbering its fire
 });
 
 test("create dedup survives a 'restart': a fresh store over the same backing still matches", async () => {
-  const backing = createMemoryMap<Webhook>();
+  const backing = createMemoryWebhookRows();
   const a = await createWebhookStore(backing).create(base);
   const b = await createWebhookStore(backing).create(base);
   assert.equal(b.id, a.id, "the content-keyed id dedups across a process restart");
-  assert.equal((await backing.all()).length, 1);
+  assert.equal((await backing.list()).length, 1);
 });
 
 test("re-creating a byte-identical disabled webhook re-enables it", async () => {
@@ -127,13 +130,12 @@ test("re-creating a byte-identical disabled webhook re-enables it", async () => 
 });
 
 test("history survives reconstruction without entering webhook listings", async () => {
-  const history = createMemoryMap<import("../src/webhooks/webhook-store.ts").WebhookHistory>();
-  const backing = createMemoryMap<Webhook>();
-  const store = createWebhookStore(backing, history);
+  const backing = createMemoryWebhookRows();
+  const store = createWebhookStore(backing);
   const wh = await store.create(base);
   const event = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, event);
-  const restored = createWebhookStore(backing, history);
+  const restored = createWebhookStore(backing);
   assert.deepEqual(await restored.listEvents(wh.id), [event]);
   assert.equal(JSON.stringify(await restored.list()).includes("hello"), false);
   assert.deepEqual(await restored.listEvents("unknown"), []);
