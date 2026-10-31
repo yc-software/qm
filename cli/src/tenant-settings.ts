@@ -1,0 +1,105 @@
+import { sandboxCoreEnv, securityScreenEnv, type QmConfig } from "./config.ts";
+import { CoreUnreachableError } from "./deployment-layer.ts";
+import { CliError, errMessage, step, warn } from "./log.ts";
+import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
+import { computedSecrets } from "./secrets.ts";
+import { serviceHost } from "./services.ts";
+import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
+import { deploymentSecretValue, readEnvFile } from "./util.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { isTenantSetting } from "./tenant-setting-names.ts";
+
+function sandboxBackendSetting(config: QmConfig): Record<string, string> {
+  const backend =
+    config.target === "render"
+      ? "render"
+      : config.env.core?.SANDBOX_BACKEND?.trim() ||
+        sandboxCoreEnv(config).env.SANDBOX_BACKEND ||
+        config.sandbox?.backend ||
+        TARGET_ENV_DEFAULTS[config.target](config, "core", "SANDBOX_BACKEND");
+  return backend ? { SANDBOX_BACKEND: backend } : {};
+}
+
+export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, string>): Record<string, string> {
+  const secret = (name: string): string | undefined => deploymentSecretValue(name, values.get(name));
+  const fromSecrets: Record<string, string> = {};
+  for (const { name, services, aliases } of computedSecrets(config)) {
+    const value = secret(name);
+    if (value === undefined) continue;
+    if (services.some((service) => serviceHost(service) === "core")) fromSecrets[name] = value;
+    for (const alias of aliases ?? []) if (serviceHost(alias.service) === "core") fromSecrets[alias.name] = value;
+  }
+  const renderSandbox =
+    config.target === "render" && config.render
+      ? {
+          RENDER_SANDBOX_WORKSPACE_ID: config.render.workspaceId,
+          ...(secret("RENDER_API_KEY") ? { RENDER_SANDBOX_API_KEY: secret("RENDER_API_KEY")! } : {}),
+        }
+      : {};
+  const authDomain = config.services.includes("auth") ? config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN : undefined;
+  const env: Record<string, string> = {
+    ...sandboxBackendSetting(config),
+    ...(config.model ? { PI_MODEL: config.model } : {}),
+    ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
+    ...(config.botName ? { ORG_BRAND_SELF_LABEL: config.botName } : {}),
+    ...(config.orgName ? { ORG_BRAND_ORG_NAME: config.orgName } : {}),
+    ...(authDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: authDomain } : {}),
+    ...config.env.core,
+    ...securityScreenEnv(config),
+    ...renderSandbox,
+    ...fromSecrets,
+  };
+  return Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name)));
+}
+
+export async function seedTenantSettings(
+  opts: { config: QmConfig; configDir: string; envFile?: string },
+  link: () => Promise<CoreLink>,
+  fallback?: (name: string) => string | undefined,
+  mode: "up" | "push" = "push",
+): Promise<void> {
+  const envPath = opts.envFile ?? join(opts.configDir, ".env");
+  const values = new Map(existsSync(envPath) ? readEnvFile(envPath) : []);
+  for (const { name, aliases } of fallback ? computedSecrets(opts.config) : []) {
+    if (deploymentSecretValue(name, values.get(name)) !== undefined) continue;
+    if (!isTenantSetting(name) && !(aliases ?? []).some((alias) => isTenantSetting(alias.name))) continue;
+    try {
+      const stored = fallback!(name);
+      if (stored) values.set(name, stored);
+    } catch {
+      continue;
+    }
+  }
+  let credentials: ReturnType<typeof operatorCredentials>;
+  try {
+    credentials = operatorCredentials(values, fallback);
+  } catch (error) {
+    if (mode === "push") throw error;
+    warn(`tenant settings: skipped (${errMessage(error)}); run \`qm settings push\` with them in .env`);
+    return;
+  }
+  const settings = tenantSettingsEnv(opts.config, values);
+  let core: CoreLink;
+  try {
+    core = await link();
+  } catch (error) {
+    if (!(error instanceof CoreUnreachableError)) throw error;
+    warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
+    return;
+  }
+  try {
+    for (const [path, body] of [
+      ["/v1/install/tenant", {}],
+      ["/v1/tenant-settings", { env: settings }],
+    ] as const) {
+      const text = JSON.stringify(body);
+      const response = await core.request(path, operatorInit(credentials, "PUT", path, text));
+      if (response.status < 200 || response.status >= 300)
+        throw new CliError(`${path} failed (${response.status}): ${response.body.slice(0, 300)}`);
+    }
+  } finally {
+    core.close();
+  }
+  step(`tenant settings: ${Object.keys(settings).sort().join(", ") || "nothing to seed"}`);
+}

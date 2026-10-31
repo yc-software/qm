@@ -1,4 +1,6 @@
-import { securityScreenEnv, type QmConfig, type RenderConfig } from "./config.ts";
+import type { QmConfig, RenderConfig } from "./config.ts";
+import { databaseLoginEnv } from "./database-logins.ts";
+import { withoutTenantSettings } from "./tenant-setting-names.ts";
 import { CliError } from "./log.ts";
 import { discoverPlugins, type ResolvedPlugin } from "./plugins.ts";
 import type { ServiceType } from "./render-api.ts";
@@ -8,7 +10,7 @@ import {
   brokerWiring,
   hostedServiceEnv,
   ordered,
-  orgEnv,
+  serviceUrlEnv,
   runnableServices,
   virtualServiceEnv,
 } from "./services.ts";
@@ -82,7 +84,7 @@ export function renderServiceEnv(
   service: string,
   values: ReadonlyMap<string, string>,
   connections: {
-    databaseUrl: string;
+    databaseOwnerUrl: string;
     coreUrl: string;
     webUiUrl?: string;
     projectId?: string;
@@ -100,7 +102,7 @@ export function renderServiceEnv(
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...serviceUrlEnv(service, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
     PORT: "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };
@@ -116,7 +118,7 @@ export function renderServiceEnv(
       }),
     );
   const managedValues: Record<string, string> = {
-    ...(coreAccess ? { DATABASE_URL: connections.databaseUrl } : {}),
+    ...(coreAccess ? databaseLoginEnv(connections.databaseOwnerUrl) : {}),
     PUBLIC_API_URL: config.apiUrl ?? config.publicUrl,
   };
   for (const secret of computedSecrets(config)) {
@@ -132,7 +134,6 @@ export function renderServiceEnv(
   if (service === "core")
     Object.assign(out, {
       HARNESS: config.env.core?.HARNESS ?? "pi",
-      ...securityScreenEnv(config),
       ...renderManagedCoreEnv(render),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),
@@ -141,14 +142,8 @@ export function renderServiceEnv(
       RENDER_DEPLOY_REPO: render.source.repo,
       RENDER_DEPLOY_BRANCH: render.source.branch,
       ...(connections.commit ? { GIT_SHA: connections.commit } : {}),
-      ...(config.model ? { PI_MODEL: config.model } : {}),
-      ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
     });
   if (service === "core") {
-    out.AUTH_ALLOWED_EMAIL_DOMAIN =
-      (config.services.includes("auth") ? config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN : undefined) ??
-      config.env.core?.AUTH_ALLOWED_EMAIL_DOMAIN ??
-      "";
     if (!config.services.includes("slack")) {
       for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) out[key] = "";
     }
@@ -178,5 +173,5 @@ export function renderServiceEnv(
         out[key] = config.env.portal?.[key] ?? value;
     }
   }
-  return out;
+  return service === "core" ? withoutTenantSettings(out) : out;
 }

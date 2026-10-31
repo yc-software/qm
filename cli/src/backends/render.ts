@@ -456,7 +456,7 @@ async function provision(
   return postgres;
 }
 interface Connections {
-  databaseUrl: string;
+  databaseOwnerUrl: string;
   commit: string;
   storage?: { endpoint: string; secretKey: string };
 }
@@ -683,7 +683,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
         if (!info.internalConnectionString)
           throw new CliError("Render returned no internal Postgres connection string");
         const connections: Connections = {
-          databaseUrl: info.internalConnectionString,
+          databaseOwnerUrl: info.internalConnectionString,
           commit,
         };
         const { services } = bound;
@@ -959,7 +959,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           if (bound.postgres) await request(`/postgres/${bound.postgres.id}`, "DELETE");
           saveState(ctx, {
             version: 1,
-            orgId: state.orgId,
+            deploymentId: state.deploymentId,
             workspaceId: state.workspaceId,
             region: state.region,
             appPrefix: state.appPrefix,

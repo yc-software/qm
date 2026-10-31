@@ -30,6 +30,12 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
     reason:
       "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
   },
+  {
+    name: "DATABASE_OWNER_URL",
+    requiredWhen: "production",
+    reason: "migrations and cross-tenant claims run as the table owner while requests use the row-level-secured login",
+  },
+  { name: "DATABASE_READER_URL", requiredWhen: "production" },
   { name: "RENDER_API_KEY", requiredWhen: "render" },
   { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: "porter-deploy" },
   { name: "E2B_API_KEY", requiredWhen: "e2b-deploy" },

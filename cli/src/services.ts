@@ -68,7 +68,6 @@ export interface LogOpts {
 
 export interface ServiceCtx {
   appPrefix: string;
-  orgId: string;
   deployAppPrefix: string;
   publicUrl: string;
   hasPortal: boolean;
@@ -119,31 +118,20 @@ export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv 
     ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
     : undefined;
 
-export function orgEnv(
+export function serviceUrlEnv(
   service: string,
-  orgId: string,
   publicUrl: string,
   hasPortal: boolean,
   brand?: BrandEnv,
 ): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
-  const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
-  const webUiUrl = base;
-  if (service === "core") {
-    return {
-      ...identity,
-      PUBLIC_WEB_URL: base,
-      WEB_UI_PUBLIC_URL: webUiUrl,
-      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName } : {}),
-      ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
-    };
-  }
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl, ADMIN_BASE_PATH: "/admin" };
-  if (service === "portal")
-    return { ...identity, PORTAL_PUBLIC_URL: base, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
-  if (service === "admin" && hasPortal) return { ...identity, ADMIN_BASE_PATH: "/admin" };
-  if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
-  return identity;
+  const brandName: Record<string, string> = brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {};
+  if (service === "core") return { PUBLIC_WEB_URL: base, WEB_UI_PUBLIC_URL: base };
+  if (service === "web-ui") return { WEB_UI_PUBLIC_URL: base, ADMIN_BASE_PATH: "/admin" };
+  if (service === "portal") return { PORTAL_PUBLIC_URL: base, ...brandName };
+  if (service === "admin" && hasPortal) return { ADMIN_BASE_PATH: "/admin" };
+  if (service === "auth") return brandName;
+  return {};
 }
 
 const AUTH_PATH_PREFIX = "/idp";
@@ -210,7 +198,7 @@ const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
 
 const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
   CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
+  ...serviceUrlEnv(service, s.publicUrl, s.hasPortal, s.brand),
   ...brokerEnv(service, s),
 });
 
@@ -223,19 +211,11 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
       managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
+        ...serviceUrlEnv("core", s.publicUrl, s.hasPortal, s.brand),
         ...brokerEnv("core", s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
-      stackKeys: [
-        "SNAPSHOT_STORE",
-        "TRANSFER_STORE",
-        "S3_BUCKET",
-        "S3_REGION",
-        "PUBLIC_WEB_URL",
-        "FLY_ORG",
-        "PI_DETECT_MODEL",
-      ],
+      stackKeys: ["SNAPSHOT_STORE", "TRANSFER_STORE", "S3_BUCKET", "S3_REGION", "PUBLIC_WEB_URL", "FLY_ORG"],
       deployFlags: ["--ha=false"],
     },
   },

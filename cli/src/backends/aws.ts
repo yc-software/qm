@@ -30,7 +30,6 @@ import {
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
-  securityScreenEnv,
   type AwsConfig,
   type QmConfig,
 } from "../config.ts";
@@ -42,10 +41,11 @@ import {
   secretsForService,
   type ComputedSecret,
 } from "../secrets.ts";
+import { withoutTenantSettings } from "../tenant-setting-names.ts";
 import {
   brokerWiring,
   brandEnvOf,
-  orgEnv,
+  serviceUrlEnv,
   runnableServices,
   hostedServiceEnv,
   serviceHost,
@@ -310,7 +310,7 @@ function registerTaskDefinition(config: QmConfig, file: string): string {
     "--tags",
     JSON.stringify([
       { key: "ManagedBy", value: "qm-cli" },
-      { key: "Deployment", value: config.orgId },
+      { key: "Deployment", value: config.deploymentId },
     ]),
     "--query",
     "taskDefinition.taskDefinitionArn",
@@ -379,16 +379,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   const aws = requireAws(config);
   const def = serviceDef(service);
   const coreUrl = `http://core.${aws.networking.cloudMapNamespace}:8080`;
-  const coreEnv =
-    service === "core"
-      ? {
-          ...(config.model ? { PI_MODEL: config.model } : {}),
-          ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
-          ...virtualServiceEnv(config.services, config.env),
-        }
-      : {};
+  const coreEnv = service === "core" ? virtualServiceEnv(config.services, config.env) : {};
   const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...serviceUrlEnv(service, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
     ...(service === "core"
       ? {}
       : {
@@ -397,7 +390,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }),
     ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
     const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
@@ -434,7 +426,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     );
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
-  return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
+  return Object.fromEntries(Object.entries(withoutTenantSettings(env)).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function workloadEnvironment(
@@ -457,7 +449,7 @@ function workloadEnvironment(
       ...(plugin?.coreAccess === false
         ? {}
         : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      ...serviceUrlEnv(workload, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -871,7 +863,7 @@ async function runAwsCandidateMigration(
       writeFileSync(definitionPath, JSON.stringify(definition));
       taskDefinition = registerTaskDefinition(config, definitionPath);
     }
-    header(`qm migrate — ${config.orgId} (AWS candidate ${label})`);
+    header(`qm migrate — ${config.deploymentId} (AWS candidate ${label})`);
     const started = awsJson<{
       tasks?: Array<{ taskArn?: string }>;
       failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
@@ -1471,9 +1463,9 @@ function assertOwnedServices(config: QmConfig, states: Map<string, EcsServiceSta
     const tags = Object.fromEntries(
       (service.tags ?? []).flatMap((tag) => (tag.key && tag.value ? [[tag.key, tag.value] as const] : [])),
     );
-    if (tags["Deployment"] !== config.orgId || tags["ManagedBy"] !== "terraform") {
+    if (tags["Deployment"] !== config.deploymentId || tags["ManagedBy"] !== "terraform") {
       throw new CliError(
-        `refusing to mutate ${service.serviceName ?? workload}: ownership tags do not match deployment ${config.orgId}`,
+        `refusing to mutate ${service.serviceName ?? workload}: ownership tags do not match deployment ${config.deploymentId}`,
       );
     }
   }
@@ -2227,10 +2219,14 @@ function deploymentProgress(
   return (targets) => {
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temporary, JSON.stringify({ phase: "monitoring", token, orgId: config.orgId, targets }), {
-        flag: "wx",
-        mode: 0o600,
-      });
+      writeFileSync(
+        temporary,
+        JSON.stringify({ phase: "monitoring", token, deploymentId: config.deploymentId, targets }),
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      );
       linkSync(temporary, file);
     } catch (error) {
       warn(`could not publish deployment progress: ${errMessage(error)}`);
@@ -2284,7 +2280,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
   if (opts.buildOnly) {
     assertAwsCallerAccount(aws);
-    header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.orgId} (aws candidate ${opts.imageLabel})`);
+    header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.deploymentId} (aws candidate ${opts.imageLabel})`);
     if (opts.dryRun) {
       for (const service of services) step(`${service}: build immutable candidate image`);
       note(`Plan only. Candidate manifest would be written to ${opts.candidateOut}.`);
@@ -2351,7 +2347,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
-  header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
+  header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.deploymentId} (aws)`);
   const allServices = topology.workloads;
   assertOwnedServices(config, describedServices(config, allServices), allServices);
   const arns = secretArns(config);
@@ -2686,7 +2682,7 @@ export function awsStatus(config: QmConfig, configDir = process.cwd()): void {
   const { aws, workloads } = awsTopology(config, configDir);
   assertAwsCallerAccount(aws);
   const result = describedServices(config, workloads);
-  header(`qm status — ${config.orgId} (aws)`);
+  header(`qm status — ${config.deploymentId} (aws)`);
   for (const workload of workloads) {
     const service = result.get(workload)!;
     note(`${service.serviceName}: ${service.runningCount}/${service.desiredCount} running · ${service.taskDefinition}`);
@@ -2895,7 +2891,7 @@ export async function awsRollback(
   } finally {
     releaseLease(aws, lease);
   }
-  ok(`rolled back ${config.orgId}`);
+  ok(`rolled back ${config.deploymentId}`);
 }
 
 export function taskDefinitionForBackgroundWork(
@@ -4436,7 +4432,7 @@ export function probeAwsSecretStore(
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
   const { aws } = awsTopology(config, configDir);
-  header(`qm doctor — ${config.orgId} (aws)`);
+  header(`qm doctor — ${config.deploymentId} (aws)`);
   assertAwsCallerAccount(aws);
   step("AWS caller account: ok");
   const failures: string[] = [];

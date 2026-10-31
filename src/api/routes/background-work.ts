@@ -28,14 +28,7 @@ export function requireOperatorControl(ctx: ApiCtx, unavailable = "operator_cont
     sendJson(ctx.res, 503, { error: unavailable });
     return false;
   }
-  const bearer = ctx.req.headers.authorization;
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const supplied = Buffer.from(typeof bearer === "string" ? bearer : "");
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    sendJson(ctx.res, 401, { error: "unauthorized" });
-    return false;
-  }
-  return true;
+  return requireOperatorControl(ctx, "background_control_unavailable");
 }
 
 export function requireDeploymentControl(ctx: ApiCtx): boolean {

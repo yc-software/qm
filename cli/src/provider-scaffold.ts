@@ -11,7 +11,7 @@ interface ScaffoldFile {
 
 export interface ProviderScaffold {
   renderConfig(
-    orgId: string,
+    deploymentId: string,
     modelProvider: ModelProvider,
     emailTransport: EmailTransport,
     source?: { repo: string; branch: string },
@@ -35,13 +35,13 @@ interface ConfigValues {
   sandbox: string;
 }
 
-function renderConfig(orgId: string, values: ConfigValues): string {
+function renderConfig(deploymentId: string, values: ConfigValues): string {
   return `{
   // The deployment contract major this directory conforms to.
   "contract": 1,
 
   // Short identifier for your organization; app and container names derive from it.
-  "orgId": ${JSON.stringify(orgId)},
+  "deploymentId": ${JSON.stringify(deploymentId)},
 
   // The one public address of the deployment; the service URLs derive from it.
   "publicUrl": ${JSON.stringify(values.publicUrl)},
@@ -95,11 +95,11 @@ ${values.providerFields}
 `;
 }
 
-function clusterName(orgId: string): string {
-  const full = `${orgId}-qm`;
+function clusterName(deploymentId: string): string {
+  const full = `${deploymentId}-qm`;
   return full.length <= 49
     ? full
-    : `${orgId.slice(0, 40).replace(/-+$/, "")}-${createHash("sha256").update(full).digest("hex").slice(0, 8)}`;
+    : `${deploymentId.slice(0, 40).replace(/-+$/, "")}-${createHash("sha256").update(full).digest("hex").slice(0, 8)}`;
 }
 
 function template(rel: string): string {
@@ -163,8 +163,8 @@ cannot deregister or delete task definitions.
 const noFiles = (): ScaffoldFile[] => [];
 
 export const dockerScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider) =>
-    renderConfig(orgId, {
+  renderConfig: (deploymentId, modelProvider) =>
+    renderConfig(deploymentId, {
       target: "docker",
       modelProvider,
       publicUrl: "http://localhost:8082",
@@ -183,21 +183,21 @@ export const dockerScaffold: ProviderScaffold = {
 };
 
 export const flyScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider, emailTransport) =>
-    renderConfig(orgId, {
+  renderConfig: (deploymentId, modelProvider, emailTransport) =>
+    renderConfig(deploymentId, {
       target: "fly",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.fly.dev`,
+      publicUrl: `https://${deploymentId}-portal.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
-  "appPrefix": ${JSON.stringify(orgId)},
+  "appPrefix": ${JSON.stringify(deploymentId)},
 
   // Fly region and org to deploy into ("personal" is every Fly account's default org).
   "region": "sjc",
   "flyOrg": "personal",
 `,
       services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${deploymentId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.
@@ -213,8 +213,8 @@ export const flyScaffold: ProviderScaffold = {
 };
 
 export const awsScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider, emailTransport) => {
-    const cluster = clusterName(orgId);
+  renderConfig: (deploymentId, modelProvider, emailTransport) => {
+    const cluster = clusterName(deploymentId);
     const services = Object.fromEntries(
       [
         ["core", 2048, 4096],
@@ -223,17 +223,17 @@ export const awsScaffold: ProviderScaffold = {
       ].map(([name, cpu, memory]) => [
         name,
         {
-          ecrRepository: `${orgId}-qm-${name}`,
+          ecrRepository: `${deploymentId}-qm-${name}`,
           ecsService: `${cluster}-${name}`,
           cpu,
           memory,
         },
       ]),
     );
-    return renderConfig(orgId, {
+    return renderConfig(deploymentId, {
       target: "aws",
       modelProvider,
-      publicUrl: `https://${orgId}.example.com`,
+      publicUrl: `https://${deploymentId}.example.com`,
       providerFields: `
   // AWS coordinates. Replace the account id and public URL before applying infra/.
   // imageLabel identifies the deployment manifest used by rollback and live checks.
@@ -242,9 +242,9 @@ export const awsScaffold: ProviderScaffold = {
     "region": "us-west-2",
     "cluster": ${JSON.stringify(cluster)},
     "deployRoleArn": ${JSON.stringify(`arn:aws:iam::000000000000:role/${cluster}-github-deploy`)},
-    "secretsPrefix": ${JSON.stringify(`${orgId}/qm/`)},
+    "secretsPrefix": ${JSON.stringify(`${deploymentId}/qm/`)},
     "imageLabel": "latest",
-    "networking": { "cloudMapNamespace": ${JSON.stringify(`${orgId}.internal`)} },
+    "networking": { "cloudMapNamespace": ${JSON.stringify(`${deploymentId}.internal`)} },
     "services": ${JSON.stringify(services, null, 6).replace(/^/gm, "    ").trimStart()}
   },
 `,
@@ -292,15 +292,15 @@ export const awsScaffold: ProviderScaffold = {
 };
 
 export const renderScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider, emailTransport, source) =>
-    renderConfig(orgId, {
+  renderConfig: (deploymentId, modelProvider, emailTransport, source) =>
+    renderConfig(deploymentId, {
       target: "render",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.onrender.com`,
+      publicUrl: `https://${deploymentId}-portal.onrender.com`,
       providerFields: `
   // The core API address. Render assigns both URLs and qm up rewrites them here.
   // Set your own HTTPS origins instead to use custom domains; see the Render reference.
-  "apiUrl": ${JSON.stringify(`https://${orgId}-core.onrender.com`)},
+  "apiUrl": ${JSON.stringify(`https://${deploymentId}-core.onrender.com`)},
 
   "render": {
     "workspaceId": "tea-replaceme",

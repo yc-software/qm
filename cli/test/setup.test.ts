@@ -24,7 +24,7 @@ function configFor(
     writeFileSync(
       join(dir, CONFIG_FILENAME),
       `{
-      "contract": 1, "orgId": "acme", "publicUrl": "http://localhost:8082", "target": "docker",
+      "contract": 1, "deploymentId": "acme", "publicUrl": "http://localhost:8082", "target": "docker",
       "model": "claude-opus-4-8", "services": ${JSON.stringify(services)}, "plugins": [], "skills": [],
       "env": ${env}, "sandbox": { "app": "acme-sandboxes" }${extra}
     }`,

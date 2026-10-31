@@ -15,6 +15,7 @@ import {
   flyUp,
   verifyLocalFlyTokens,
 } from "../src/backends/fly.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import type { ResolvedPlugin } from "../src/plugins.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -23,7 +24,7 @@ test("Fly runs the live session smoke inside the private core machine", () => {
   assert.equal(flyLiveSessionCommand(), "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080");
 });
 
-test("the fly target routes security screen proxy configuration only to core", () => {
+test("the fly target keeps security screen configuration out of every app env", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
   const screened: QmConfig = {
     ...config,
@@ -40,12 +41,9 @@ test("the fly target routes security screen proxy configuration only to core", (
         name.startsWith("SECURITY_SCREEN_"),
       ),
     ),
-    {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
-      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-    },
+    {},
   );
+  assert.equal(tenantSettingsEnv(screened, new Map()).SECURITY_SCREEN_PROXY_PROVIDER, "example-screen");
   assert.deepEqual(
     Object.keys(generatedEnv(derivedTomlFor(screened, "admin", repoRoot))).filter((name) =>
       name.startsWith("SECURITY_SCREEN_"),
@@ -57,7 +55,7 @@ test("the fly target routes security screen proxy configuration only to core", (
 test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", () => {
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     appPrefix: "qm",
@@ -75,7 +73,7 @@ test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", 
   assert.match(toml, /app = "qm-linear"/, "app is <appPrefix>-<name>");
   assert.match(toml, /primary_region = "sjc"/);
   assert.match(toml, /CORE_API_URL = "http:\/\/qm-core\.internal:8080"/, "plugin reaches core over 6PN");
-  assert.match(toml, /CORE_ORG_ID = "acme"/);
+  assert.doesNotMatch(toml, /ORG_ID/);
   assert.match(toml, /PORT = "8080"/);
   assert.match(toml, /LINEAR_REGION = "us"/, "the entry's non-secret env is forwarded");
   assert.match(
@@ -89,7 +87,7 @@ test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", 
 test("a plugin's entry env can override the injected wiring (entry env wins)", () => {
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     appPrefix: "qm",
@@ -108,7 +106,7 @@ test("a plugin's entry env can override the injected wiring (entry env wins)", (
 test("a coreless plugin gets no core endpoint", () => {
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     appPrefix: "qm",
@@ -129,13 +127,13 @@ test("a coreless plugin gets no core endpoint", () => {
   };
   const toml = derivedPluginTomlFor(config, plugin);
   assert.doesNotMatch(toml, /CORE_API_URL/);
-  assert.match(toml, /CORE_ORG_ID = "acme"/);
+  assert.doesNotMatch(toml, /ORG_ID/);
 });
 
 test("a plugin env value with quotes/backslashes is escaped into valid TOML", () => {
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     appPrefix: "qm",
@@ -155,7 +153,7 @@ test("a plugin env value with quotes/backslashes is escaped into valid TOML", ()
 test("--only rejects a name that is neither a service nor a plugin (before any Fly call)", async () => {
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     appPrefix: "qm",
@@ -231,11 +229,11 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
   }
 });
 
-test("fly secrets push stages core, virtual-service and plugin secrets and no sandbox-wide copies", async () => {
+test("fly secrets push stages a dual-role tenant secret only under its sandbox name on the core app", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -259,6 +257,7 @@ test("fly secrets push stages core, virtual-service and plugin secrets and no sa
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
       "PUBLIC_API_URL=https://core.example.test",
       "SLACK_BOT_TOKEN=xoxb",
       "SLACK_APP_TOKEN=xapp",
@@ -276,8 +275,8 @@ test("fly secrets push stages core, virtual-service and plugin secrets and no sa
     await flySecretsPush(config, dir);
     const calls = readFileSync(fake.log, "utf8");
     assert.ok(
-      calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"),
-      "plain name for the core process",
+      !calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"),
+      "the core process reads its model key from tenant settings",
     );
     assert.ok(!calls.includes("FLY_RESIDENT_ENV_"), "no deployment-wide sandbox secret is staged");
     assert.ok(
@@ -319,7 +318,7 @@ test("fly secrets push warns that staged secrets are not live when machines are 
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-warn-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -340,6 +339,7 @@ test("fly secrets push warns that staged secrets are not live when machines are 
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
   );
@@ -376,7 +376,7 @@ test("fly secrets push stays quiet about staging when no machines are running", 
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-staged-quiet-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -397,6 +397,7 @@ test("fly secrets push stays quiet about staging when no machines are running", 
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
       "FLY_SANDBOX_API_TOKEN=fly",
     ].join("\n"),
   );
@@ -429,7 +430,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-publisher-off-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -450,6 +451,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=portal-identity-secret-that-is-long-enough",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -475,7 +477,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-blank-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -495,6 +497,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
       "CORE_SIGNING_SECRET=",
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -521,7 +524,7 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -582,7 +585,7 @@ test("fly live readiness rejects the wrong organization identity, region, and re
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-identity-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -628,7 +631,7 @@ test("fly live readiness rejects the wrong region after deployment identity matc
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-region-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -665,7 +668,7 @@ test("fly live readiness rejects rendered environment drift after identity and r
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-env-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -702,7 +705,7 @@ test("fly live readiness requires the generated TCP check for plugins", async ()
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-plugin-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -749,7 +752,7 @@ test("fly live readiness rejects a plugin whose TCP check is not passing", async
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-plugin-failed-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -793,7 +796,7 @@ test("fly live readiness fails when core cannot round-trip durable object storag
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-storage-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -831,7 +834,7 @@ test("fly live readiness rejects a healthy machine on the wrong configured image
   const running = `registry.fly.io/acme-core@sha256:${"b".repeat(64)}`;
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -867,7 +870,7 @@ test("fly live readiness resolves deployment tags to their immutable image diges
   const digest = `sha256:${"a".repeat(64)}`;
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -902,7 +905,7 @@ test("fly live check rejects stopped workloads even when the public endpoint res
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -932,7 +935,7 @@ test("fly live check rejects a configured workload with no deployed machine", as
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-live-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.test",
     target: "fly",
     region: "sjc",
@@ -962,7 +965,7 @@ test("fly secrets push rejects weak signing keys before staging anything", async
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-weak-secret-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -975,7 +978,7 @@ test("fly secrets push rejects weak signing keys before staging anything", async
   };
   writeFileSync(
     join(dir, ".env"),
-    `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\n`,
+    `CAPABILITY_SECRET=cap\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nCORE_SIGNING_SECRET=short\nSKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}\nDEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}\n`,
   );
   const fake = fakeFly(dir, "");
   try {
@@ -991,7 +994,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-owner-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -1011,6 +1014,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       `PORTAL_IDENTITY_SECRET=${"identity".repeat(4)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -1037,7 +1041,7 @@ test("fly secrets push refuses a same-named app outside the configured Fly organ
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-wrong-org-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -1057,6 +1061,7 @@ test("fly secrets push refuses a same-named app outside the configured Fly organ
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       `PORTAL_IDENTITY_SECRET=${"identity".repeat(4)}`,
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
     ].join("\n"),
   );
   const fake = fakeFly(
@@ -1086,7 +1091,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-alias-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "fly",
     region: "sjc",
@@ -1107,6 +1112,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
       "PORTAL_IDENTITY_SECRET=identity",
       `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
+      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
       "ADMIN_GRANTS=admin@example.com:org_admin",
       "OIDC_CLIENT_ID=client",
       "OIDC_CLIENT_SECRET=oidc",

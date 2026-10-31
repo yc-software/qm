@@ -12,7 +12,7 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
     join(dir, CONFIG_FILENAME),
     JSON.stringify({
       contract: 1,
-      orgId: "wiretest",
+      deploymentId: "wiretest",
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -108,11 +108,11 @@ test("--sandbox-dir sources the layer from a shared dir while config stays in th
   }
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
+test("model stays out of core env and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
   const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
   try {
     const out = await plan(dir);
-    assert.match(out, /PI_MODEL/);
+    assert.doesNotMatch(out, /PI_MODEL/);
     assert.match(out, /host :8080/);
     assert.match(out, /host :8081/);
     assert.match(out, /host :8082/);

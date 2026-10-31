@@ -132,6 +132,7 @@ import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
 import { memoryRowTenants, ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
+import { ensureInstallTenant } from "./tenants/install.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -582,6 +583,8 @@ export function buildApp(
   if (!connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     ...(config.databaseUrl ? { databaseUrl: config.databaseUrl } : {}),
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
+    ...(config.databaseReaderUrl ? { readerUrl: config.databaseReaderUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
@@ -2970,6 +2973,7 @@ export function serverDeps(
       : {}),
     ...(config.deploymentControlSecret ? { deploymentControlSecret: config.deploymentControlSecret } : {}),
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
+    ...(config.databaseUrl ? { installTenant: () => ensureInstallTenant(config.databaseUrl!) } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,

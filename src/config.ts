@@ -30,10 +30,11 @@ export interface Config {
   dataDir: string;
   sessionStore: "memory" | "postgres";
   databaseUrl?: string;
+  databaseOwnerUrl?: string;
+  databaseReaderUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
   databasePoolUrl?: string;
-  databaseOwnerUrl?: string;
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
@@ -936,8 +937,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     sessionStore,
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
-    ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
+    ...(env.DATABASE_READER_URL ? { databaseReaderUrl: env.DATABASE_READER_URL } : {}),
+    ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
     ...(env.DATABASE_DIRECT_POOL_MAX
