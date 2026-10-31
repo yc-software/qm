@@ -13,7 +13,14 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { bindTestTenant, boundUrl, seedTenant, seedTestTenants, TEST_TENANT } from "./support/tenant.ts";
+import {
+  bindTestTenant,
+  boundUrl,
+  seedTenant,
+  seedTestTenants,
+  TEST_TENANT,
+  testTenantsSeeded,
+} from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -23,6 +30,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres st
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
+  await testTenantsSeeded();
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP SCHEMA public CASCADE");
   await p.query("CREATE SCHEMA public");

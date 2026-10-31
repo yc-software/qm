@@ -7,7 +7,7 @@ import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -15,6 +15,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: boundUrl(URL!) });

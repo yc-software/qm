@@ -7,7 +7,7 @@ import {
   exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -15,6 +15,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

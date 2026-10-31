@@ -2,7 +2,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -10,6 +10,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres error-log tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: boundUrl(URL!) });
