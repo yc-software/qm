@@ -10,7 +10,12 @@ import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
-import { createPrincipalLinkService, PrincipalLinkError, type PrincipalLink } from "../src/identity/principal-links.ts";
+import {
+  createPrincipalLinkService,
+  createPrincipalLinkStore,
+  PrincipalLinkError,
+  type PrincipalLink,
+} from "../src/identity/principal-links.ts";
 import {
   canonicalPerson,
   installPrincipalLinks,
@@ -20,7 +25,7 @@ import {
   samePersonInDirectory,
 } from "../src/directory/person.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createDeactivationStore, createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
@@ -100,11 +105,11 @@ describe("principal link service: one person, several sign-ins", () => {
   });
 
   it("reads links written by another process on refresh", async () => {
-    const backing = createMemoryMap<PrincipalLink>();
-    const links = createPrincipalLinkService(backing);
+    const store = createPrincipalLinkStore();
+    const links = createPrincipalLinkService(store);
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), undefined);
-    await backing.put(OIDC, {
+    await store.insertIfAbsent({
       principalId: OIDC,
       canonicalId: EMAIL,
       evidence: EVIDENCE,
@@ -152,7 +157,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     const links = createPrincipalLinkService();
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
-    const identity = createIdentityService(undefined, { principalLinks: links });
+    const identity = createIdentityService({ principalLinks: links });
     await identity.refresh(true);
     assert.equal(identity.classify(OIDC).id, EMAIL);
     assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
@@ -166,7 +171,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
     const links = createPrincipalLinkService();
-    const identity = createIdentityService(undefined, { principalLinks: links });
+    const identity = createIdentityService({ principalLinks: links });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
       email: "guest@partner.test",
@@ -437,7 +442,7 @@ describe("link mutation serialization", () => {
   });
   it("does not reuse a snapshot begun before the mutation lock", async () => {
     const { createMemoryAdvisoryLock } = await import("../src/persistence/advisory-lock.ts");
-    const backing = createMemoryMap<PrincipalLink>();
+    const backing = createPrincipalLinkStore();
     const lock = createMemoryAdvisoryLock();
     const delayed = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
@@ -445,8 +450,8 @@ describe("link mutation serialization", () => {
     const a = createPrincipalLinkService(
       {
         ...backing,
-        async all() {
-          const rows = await backing.all();
+        async list() {
+          const rows = await backing.list();
           if (delay) {
             delay = false;
             started.resolve();
@@ -472,13 +477,14 @@ describe("link mutation serialization", () => {
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {
-        const store = createMemoryMap<import("../src/identity/identity-service.ts").DeactivationRecord>();
+        const deactivations = createDeactivationStore();
         const rows: import("../src/identity/identity-service.ts").DeactivationRecord[] = [
           { principalId: "A", source: reverse ? "directory-sync" : "manual", at: 1 },
           { principalId: "B", source: reverse ? "manual" : "directory-sync", at: 2 },
         ];
-        for (const row of reverse ? rows.reverse() : rows) await store.put(row.principalId, row);
-        const identity = createIdentityService(store, {
+        for (const row of reverse ? rows.reverse() : rows) await deactivations.put(row);
+        const identity = createIdentityService({
+          deactivations,
           principalLinks: links,
           directorySyncProtected: async () => ["B"],
         });

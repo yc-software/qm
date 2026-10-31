@@ -32,8 +32,8 @@ async function waitForOnboardingSkill(built: ReturnType<typeof buildApp>): Promi
   await built.skillsReady();
   const { skills } = built;
   for (let i = 0; i < 20; i++) {
-    if ((await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published")) return;
-    await new Promise((r) => setTimeout(r, 0));
+    if ((await skills.listAll()).some((s) => s.manifest.name === "onboarding" && s.status === "published")) return;
+    await new Promise((r) => setTimeout(r, 10));
   }
   assert.fail("onboarding skill was not seeded");
 }

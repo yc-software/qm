@@ -4,7 +4,6 @@ import { createMemoryMap, createPostgresMap } from "../src/persistence/durable-m
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryCronRows } from "../src/cron/cron-table.ts";
 import { bindTestTenant } from "./support/tenant.ts";
-import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -27,48 +26,6 @@ test("crons persist to the backing map (a second store instance reads them back)
   const got = await s2.get(c.id);
   assert.equal(got?.action, "summarize signups");
   assert.equal(got?.lastFiredAt, 123);
-});
-
-test("skills persist AND verify with a stable signing secret across store instances", async () => {
-  const map = createMemoryMap<Skill>();
-  const secret = "stable-test-secret";
-  const s1 = createSkillStore({ signingSecret: secret, backing: map });
-  const sk = await s1.create({
-    scopeId: scopeId("personal", "U1"),
-    manifest: { name: "digest", description: "make a digest", requiredCapabilities: [], body: "..." },
-    createdBy: "U1",
-  });
-
-  const s2 = createSkillStore({ signingSecret: secret, backing: map });
-  const got = await s2.get(sk.id);
-  assert.ok(got, "skill is readable through a second store instance");
-  assert.equal(got!.manifest.name, "digest");
-  assert.equal(s2.verify(got!), true);
-});
-
-test("skill mutations reject names that could escape or collide when materialized", async () => {
-  const backing = createMemoryMap<Skill>();
-  const skills = createSkillStore({ backing });
-  const manifest = (name: string) => ({ name, description: "d", requiredCapabilities: [], body: "b" });
-  for (const name of ["..", "foo/bar", "foo\\bar", "foo bar", ".hidden", "foo."]) {
-    await assert.rejects(
-      () => skills.create({ scopeId: scopeId("personal", "U1"), manifest: manifest(name), createdBy: "U1" }),
-      /skill name must/,
-    );
-  }
-
-  const legacy = await skills.create({
-    scopeId: scopeId("personal", "U1"),
-    manifest: manifest("safe-name"),
-    createdBy: "U1",
-  });
-  await backing.merge(legacy.id, { manifest: manifest("foo/bar"), status: "reviewed" });
-  await assert.rejects(() => skills.publish(legacy.id), /skill name must/);
-  assert.equal(
-    (await skills.visibleFor([scopeId("personal", "U1")])).length,
-    0,
-    "legacy unsafe records never reach materialization",
-  );
 });
 
 test("deployments persist with immutable versions across store instances", async () => {

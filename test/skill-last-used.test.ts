@@ -5,6 +5,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
 

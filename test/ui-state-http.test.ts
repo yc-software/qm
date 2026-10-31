@@ -131,3 +131,20 @@ test("ui-state measures the cap in bytes, races atomically, and clamps future cl
     await s.close();
   }
 });
+
+test("ui-state stores client clocks as whole non-negative milliseconds", async () => {
+  const s = start();
+  try {
+    const put = (key: string, updatedAt: number) =>
+      fetch(`${s.base}/v1/ui-state`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U4", key, value: { key }, updatedAt }),
+      });
+    assert.equal((await json(await put("fractional", 2222.9))).updatedAt, 2222);
+    assert.equal((await json(await fetch(`${s.base}/v1/ui-state?principalId=U4&key=fractional`))).updatedAt, 2222);
+    assert.equal((await json(await put("negative", -1e300))).updatedAt, 0);
+  } finally {
+    await s.close();
+  }
+});

@@ -1,14 +1,13 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { errMessage } from "../util/errors.ts";
-
-export interface IdempotencyRecord {
-  key: string;
-  at: number;
-}
 
 export interface IdempotencyStore {
   once(key: string, fn: () => Promise<void>): Promise<boolean>;
   committed(key: string): Promise<boolean>;
+  close?(): Promise<void>;
 }
 
 export interface IdempotencyStoreOptions {
@@ -17,42 +16,52 @@ export interface IdempotencyStoreOptions {
   now?: () => number;
 }
 
+interface CommitLog {
+  committedAt(key: string): Promise<number | null>;
+  commit(key: string, at: number): Promise<void>;
+  prune(cutoff: number): Promise<void>;
+}
+
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const DEFAULT_PRUNE_INTERVAL_MS = 60 * 60_000;
 
-export function createIdempotencyStore(
-  backing?: DurableMap<IdempotencyRecord>,
-  opts: IdempotencyStoreOptions = {},
-): IdempotencyStore {
+const IDEMPOTENCY_MIGRATION = typedTableMigration({
+  table: "idempotency",
+  columns: ["key TEXT NOT NULL", "committed_at BIGINT NOT NULL"],
+  primaryKey: ["key"],
+  backfill: { key: "id", committed_at: "round((json->>'at')::numeric)::bigint" },
+  where: "json->>'at' IS NOT NULL",
+  indexes: ["CREATE INDEX idempotency_by_committed_at ON idempotency(tenant_id, committed_at)"],
+});
+
+function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOptions): IdempotencyStore {
   const retentionMs = opts.retentionMs ?? DEFAULT_RETENTION_MS;
   const pruneIntervalMs = opts.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
   const now = opts.now ?? Date.now;
   const done = new Map<string, number>();
   const inflight = new Set<string>();
-  let lastPruneAt = now();
+  const lastPruneAt = new Map<string, number>();
+  const startedAt = now();
+  const tenantKey = (key: string) => `${currentTenant()}\u0000${key}`;
 
   function pruneIfDue(t: number): void {
-    if (t - lastPruneAt < pruneIntervalMs) return;
-    lastPruneAt = t;
+    const tenant = currentTenant();
+    if (t - (lastPruneAt.get(tenant) ?? startedAt) < pruneIntervalMs) return;
+    lastPruneAt.set(tenant, t);
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    if (!backing) return;
-    void (async () => {
-      for (const r of await backing.all()) {
-        if (r.at < cutoff) await backing.delete(r.key);
-      }
-    })().catch((e: unknown) => {
+    log?.prune(cutoff).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
 
   const isCommitted = async (key: string): Promise<boolean> => {
     const cutoff = now() - retentionMs;
-    const cached = done.get(key);
+    const cached = done.get(tenantKey(key));
     if (cached != null && cached >= cutoff) return true;
-    const record = backing ? await backing.get(key) : null;
-    if (record != null && record.at >= cutoff) {
-      done.set(record.key, record.at);
+    const at = log ? await log.committedAt(key) : null;
+    if (at != null && at >= cutoff) {
+      done.set(tenantKey(key), at);
       return true;
     }
     return false;
@@ -60,20 +69,49 @@ export function createIdempotencyStore(
 
   return {
     async once(key, fn) {
-      if (inflight.has(key)) return false;
-      inflight.add(key);
+      const slot = tenantKey(key);
+      if (inflight.has(slot)) return false;
+      inflight.add(slot);
       try {
         if (await isCommitted(key)) return false;
         await fn();
         const at = now();
-        await backing?.put(key, { key, at });
-        done.set(key, at);
+        await log?.commit(key, at);
+        done.set(slot, at);
         pruneIfDue(at);
         return true;
       } finally {
-        inflight.delete(key);
+        inflight.delete(slot);
       }
     },
     committed: isCommitted,
   };
+}
+
+export function createIdempotencyStore(opts: IdempotencyStoreOptions = {}): IdempotencyStore {
+  return idempotencyStore(undefined, opts);
+}
+
+export function createPostgresIdempotencyStore(
+  connectionString: string,
+  opts: IdempotencyStoreOptions = {},
+): IdempotencyStore {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, IDEMPOTENCY_MIGRATION]);
+  const log: CommitLog = {
+    async committedAt(key) {
+      const rows = await q(`SELECT committed_at FROM idempotency WHERE tenant_id = ${TENANT} AND key = $1`, [key]);
+      return rows[0] ? Number(rows[0].committed_at) : null;
+    },
+    async commit(key, at) {
+      await q(
+        `INSERT INTO idempotency(key, committed_at) VALUES ($1, $2)
+         ON CONFLICT (tenant_id, key) DO UPDATE SET committed_at = EXCLUDED.committed_at`,
+        [key, at],
+      );
+    },
+    async prune(cutoff) {
+      await q(`DELETE FROM idempotency WHERE tenant_id = ${TENANT} AND committed_at < $1`, [cutoff]);
+    },
+  };
+  return { ...idempotencyStore(log, opts), close };
 }

@@ -6,12 +6,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createSessionShareStore, sharedMessages } from "../src/sessions/session-share.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -87,7 +89,7 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = createMemoryMap<SessionShare>();
+  const store = createSessionShareStore();
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
   const countedBytes = {

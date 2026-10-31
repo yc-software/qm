@@ -64,7 +64,7 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const featureFlags = createFeatureFlagStore();
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({

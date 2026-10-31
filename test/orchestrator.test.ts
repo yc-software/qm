@@ -28,7 +28,6 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
@@ -943,7 +942,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     const out = await runTrigger(
       {
         deliveries,
-        idempotency: createIdempotencyStore(createMemoryMap()),
+        idempotency: createIdempotencyStore(),
         identity,
         run: (req) => app.turn(req),
         directory,

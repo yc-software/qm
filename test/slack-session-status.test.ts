@@ -24,7 +24,7 @@ function deferred() {
 function fixture() {
   let at = 1_000;
   const store = createMemoryMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(createMemoryMap());
+  const flags = createFeatureFlagStore();
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];

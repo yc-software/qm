@@ -14,6 +14,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
 const md = (front: string) => `---\n${front}\n---\n# Body\ntext`;
@@ -521,7 +523,7 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
     assert.equal(stale.status, 500);
     assert.equal((await json(stale)).message, "internal server error");
     assert.equal((await s.built.skillBundles.get(id))?.commit, newestCommit);
-    const stored = (await s.built.skills.list()).find(
+    const stored = (await s.built.skills.listAll()).find(
       (skill) => skill.createdBy === `pack:${id}` && skill.manifest.name === "reg-alpha",
     );
     assert.equal(stored?.manifest.description, "newest");

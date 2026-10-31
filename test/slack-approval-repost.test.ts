@@ -5,6 +5,9 @@ import { createTurnFlow } from "../src/slack/turn-flow.ts";
 import { createThreadTracker } from "../src/slack/lib.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type ActionHandler = (args: any) => Promise<void>;
 

@@ -23,6 +23,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const org = TEST_ROOT_SCOPE;
 
 test("Auto flagger config survives restart and reset", async () => {

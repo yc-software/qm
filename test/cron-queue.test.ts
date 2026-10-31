@@ -6,7 +6,7 @@ import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createPostgresCronRows } from "../src/cron/cron-table.ts";
 import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -19,14 +19,13 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
 
 const SCHEMA = "pgboss_cron_queue_test";
-const IDEM_TABLE = "cron_queue_test_idempotency";
+const idempotency = createIdempotencyStore();
 
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${IDEM_TABLE}`);
   await p.end();
 });
 
@@ -47,7 +46,7 @@ function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { sc
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
+    idempotency,
     identity: createIdentityService(),
     run,
     jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),

@@ -18,6 +18,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");

@@ -3,10 +3,17 @@ import assert from "node:assert/strict";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, skillRef, parseRef } from "../src/acl/resource-ref.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createSkillStore, type Skill, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
+import {
+  createSkillStore,
+  skillStore,
+  type SkillManifest,
+  type SkillRows,
+  type SkillStore,
+} from "../src/skills/skill-store.ts";
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 bindTestTenant();
 
@@ -117,26 +124,28 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
 });
 
 test("visibleFor reads only the requested scopes in one query instead of one per published name", async () => {
-  const backing = createMemoryMap<Skill>();
+  const base = createSkillStore({ signingSecret: "snapshot-test" });
   let allCalls = 0;
   let getCalls = 0;
   let selects: string[][] = [];
-  const counted: DurableMap<Skill> = {
-    ...backing,
-    all: () => {
+  const rows: SkillRows = {
+    ...base,
+    listAll: () => {
       allCalls += 1;
-      return backing.all();
+      return base.listAll();
     },
-    select: (query) => {
-      selects.push([...(query.where?.anyOfFold ?? [])]);
-      return backing.select(query);
+    inScopes: (scopes, name) => {
+      selects.push([...scopes]);
+      return base.inScopes(scopes, name);
     },
     get: (id) => {
       getCalls += 1;
-      return backing.get(id);
+      return base.get(id);
     },
+    save: () => Promise.reject(new Error("read-only")),
+    touch: () => Promise.reject(new Error("read-only")),
   };
-  const store = createSkillStore({ signingSecret: "snapshot-test", backing: counted });
+  const store = base;
   const orgAlpha = await publishedSkill(store, ORG, "alpha-skill");
   for (const name of ["beta-skill", "gamma-skill"]) await publishedSkill(store, ORG, name);
   const own = await publishedSkill(store, ERIC, "alpha-skill");
@@ -145,15 +154,18 @@ test("visibleFor reads only the requested scopes in one query instead of one per
   allCalls = 0;
   getCalls = 0;
   selects = [];
-  const rows = await store.visibleFor([ERIC, ORG], [{ id: granted.id, ownerScopeId: JOSH }]);
+  const visible = await skillStore(rows, { signingSecret: "snapshot-test" }).visibleFor(
+    [ERIC, ORG],
+    [{ id: granted.id, ownerScopeId: JOSH }],
+  );
   assert.equal(allCalls, 0);
   assert.equal(getCalls, 0);
   assert.deepEqual(
-    selects.map((scopes) => scopes.sort()),
-    [[ERIC, JOSH, ORG].map((scope) => scope.toLowerCase()).sort()],
+    selects.map((scopes) => [...scopes].sort()),
+    [[ERIC, JOSH, ORG].sort()],
   );
 
-  const byName = new Map(rows.map((r) => [r.skill!.manifest.name, r]));
+  const byName = new Map(visible.map((r) => [r.skill!.manifest.name, r]));
   assert.deepEqual([...byName.keys()].sort(), ["alpha-skill", "beta-skill", "delta-skill", "gamma-skill"]);
   assert.equal(byName.get("alpha-skill")!.skill!.id, own.id);
   assert.deepEqual(

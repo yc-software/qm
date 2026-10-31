@@ -53,7 +53,7 @@ async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.hydrate();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,

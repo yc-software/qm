@@ -24,6 +24,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ALICE = "admin-alice";
 const NOBODY = "user-uma";
 const SECRET = "external-users-test-secret".repeat(2);

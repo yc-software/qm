@@ -63,7 +63,7 @@ async function scenario() {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const mailbox = createSessionMailbox();
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const featureFlags = createFeatureFlagStore();
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,

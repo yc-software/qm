@@ -17,8 +17,7 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
 
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
@@ -94,7 +93,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
     createdInScope: scopeId("channel", "CBUILT"),
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
-  const featureFlags = createFeatureFlagStore(createMemoryMap<FeatureFlagRecord>());
+  const featureFlags = createFeatureFlagStore();
   const server = createInsecureTestServer(app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",

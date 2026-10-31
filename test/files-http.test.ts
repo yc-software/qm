@@ -36,7 +36,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   const auditLog = { record: () => undefined };
   const crons = { ownedBy: async () => [] };
   const webhooks = { ownedBy: async () => [] };
-  const skills = { list: async () => [] };
+  const skills = { inScopes: async () => [] };
   const deploy = { listDeployments: async () => [] };
   return createApp({
     acl,

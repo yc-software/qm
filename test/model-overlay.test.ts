@@ -24,6 +24,8 @@ import { bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 const MODEL_ID = "overlay-future-model";
 

@@ -84,7 +84,7 @@ test("importPack publishes eligible skills with provenance + assets; native publ
   const res = await importPack(repo(), store, { pack, selected: "all", nativeNames: new Set(["publish"]) });
   assert.deepEqual(res.imported.sort(), ["both-skill", "company-directory", "no-scope", "with-asset"]);
 
-  const published = (await store.list()).filter((s) => s.status === "published");
+  const published = (await store.listAll()).filter((s) => s.status === "published");
   const imported = published.find((s) => s.manifest.name === "with-asset")!;
   assert.equal(imported.createdBy, `pack:${pack.id}`);
   assert.deepEqual(imported.pack, { packId: pack.id, commit: "abc1234", upstreamName: "with-asset" });
@@ -141,5 +141,5 @@ test("a shared bundle cannot clobber a skill record in another scope", async () 
     }),
     /skills\/existing\/helpers\/run\.ts \(owned by skill existing in org:acme\)/,
   );
-  assert.equal((await store.list()).length, 0);
+  assert.equal((await store.listAll()).length, 0);
 });

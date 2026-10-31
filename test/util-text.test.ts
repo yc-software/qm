@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, hasLoneSurrogate } from "../src/util/text.ts";
+import { headSlice, tailSlice, hasLoneSurrogate, pgJsonText } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -22,4 +22,13 @@ test("headSlice and tailSlice never strand half a surrogate pair", () => {
     assert.ok(!hasLoneSurrogate(headSlice(s, n)), `headSlice at ${n}`);
     assert.ok(!hasLoneSurrogate(tailSlice(s, n)), `tailSlice at ${n}`);
   }
+});
+
+test("pgJsonText strips NULs and lone surrogates from keys and values at every depth and keeps toJSON", () => {
+  const text = pgJsonText({ "a\u0000b": "x\u0000", nested: [{ "\ud800k": "\udfffv" }], when: new Date(0) });
+  assert.deepEqual(JSON.parse(text), {
+    ab: "x",
+    nested: [{ "\ufffdk": "\ufffdv" }],
+    when: "1970-01-01T00:00:00.000Z",
+  });
 });

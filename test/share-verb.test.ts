@@ -20,6 +20,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 interface FakeState {
   artifacts: Record<string, ArtifactHome & { type: ArtifactType }>;
   scopesByPrincipal: Record<string, ScopeId[]>;
@@ -708,6 +710,6 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const second = await store.promote(src.id, TEST_ROOT_SCOPE);
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.list()).filter((x) => x.scopeId === TEST_ROOT_SCOPE && x.status === "published");
+  const orgRecords = (await store.listAll()).filter((x) => x.scopeId === TEST_ROOT_SCOPE && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });
