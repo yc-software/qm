@@ -78,6 +78,7 @@ export interface SandboxResources {
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
   defaultBackend(): SandboxBackendName;
+  providerNameFor(backend: SandboxBackendName, backingScopeId: string): Promise<string | null>;
 }
 
 export class SandboxAccessError extends Error {}
@@ -97,6 +98,8 @@ export async function accessConversationSandbox(
     throw new SandboxAccessError("sandbox access is no longer authorized in this conversation");
   return resource;
 }
+
+const namedBackends = new WeakSet<Sandbox>();
 
 export function createSandboxResources(opts: {
   records: SandboxResourceRecords;
@@ -118,6 +121,13 @@ export function createSandboxResources(opts: {
       ...(backend.destroyScope ? ["retire"] : []),
     ];
   };
+  const providerNameFor = (backend: SandboxBackendName, backingScopeId: string) =>
+    opts.records.providerName(backend, backingScopeId);
+  for (const [name, backend] of Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox | undefined]>) {
+    if (!backend?.useStoredNames || namedBackends.has(backend)) continue;
+    namedBackends.add(backend);
+    backend.useStoredNames((scopeId) => providerNameFor(name, scopeId));
+  }
   const authorize = async (actorId: string, scopeId: ScopeId): Promise<void> => {
     if (!parseScopeId(scopeId).kind || !(await opts.canUseScope(actorId, scopeId)))
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
@@ -171,6 +181,7 @@ export function createSandboxResources(opts: {
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     defaultBackend: () => opts.defaultBackend,
+    providerNameFor,
     get,
     use,
     async hold(id, runId) {
@@ -279,6 +290,8 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
       };
+      const providerName = opts.backends[record.backend]?.scopeName?.(record.backingScopeId);
+      if (providerName) record.providerName = providerName;
       return opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const existing = await opts.records.get(id);
         if (existing) {

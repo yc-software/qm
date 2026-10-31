@@ -11,6 +11,7 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { backfillProviderNames } from "./sandbox/provider-name-backfill.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { instanceTenant } from "./tenants/instance.ts";
 import { enterTenant } from "./tenants/context.ts";
@@ -19,6 +20,7 @@ const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await backfillProviderNames(config);
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
 const backfilledFires = await built.crons.backfillFires();
