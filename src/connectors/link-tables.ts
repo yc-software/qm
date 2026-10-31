@@ -20,7 +20,7 @@ export interface SecretDropRows extends OneTimeRows<SecretDropRecord> {
   deleteCreatedBefore(cutoff: number): Promise<void>;
 }
 
-export interface ComposioReturn {
+interface ComposioReturn {
   url: string | null;
   toolkit: string;
   expiresAt: number;
