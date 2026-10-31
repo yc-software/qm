@@ -4,6 +4,7 @@ import { reportFailure } from "../util/errors.ts";
 
 const CLAIM_MARGIN_MS = 2_000;
 const FOLLOWER_RETRY_MS = 5_000;
+const RETRY_MS = 5_000;
 
 export async function drainClaimedDeliveries(opts: {
   claim: (type: string, claimMs: number) => Promise<Delivery[]>;
@@ -148,37 +149,57 @@ export function startOutboundRelay(
     fail: (id: string, reason: string) => Promise<unknown>;
     lease: LeaderLease;
     onEnqueued: (listener: () => void) => () => void;
+    retryMs?: number;
   },
 ): { stop(): void } {
   const label = `${channel.type}-relay`;
+  let stopped = false;
+  let leaseLost = (): boolean => false;
   const deliver = async (d: Delivery): Promise<void> => {
-    const outcome = await channel.send(d);
+    let outcome: { refused: string } | void;
+    for (;;) {
+      try {
+        outcome = await channel.send(d);
+        break;
+      } catch (error) {
+        if (stopped || leaseLost()) throw error;
+        reportFailure(`${label}: delivery ${d.id} not accepted yet; retrying in order`, error);
+        await new Promise((r) => setTimeout(r, deps.retryMs ?? RETRY_MS));
+      }
+    }
     if (outcome) {
       console.error(`[${label}] delivery ${d.id} refused permanently (${outcome.refused}) — failing it, no retry`);
       await deps.fail(d.id, outcome.refused);
     } else await deps.ack(d.id);
   };
-  return startRelayLoop({
+  const loop = startRelayLoop({
     label,
     sweepMs: 60_000,
     onEnqueued: deps.onEnqueued,
     drain: async () => {
       const held = await deps.lease.hold(`${channel.type}:delivery-dispatch`, async (lost) => {
-        let leaseLost = false;
+        let lostFlag = false;
         void lost.then(() => {
-          leaseLost = true;
+          lostFlag = true;
         });
+        leaseLost = () => lostFlag;
         await drainClaimedDeliveries({
           claim: deps.claim,
           claimMs: 30_000,
           types: [channel.type],
           deliver,
           label,
-          leaseLost: () => leaseLost,
+          leaseLost,
         });
         return true;
       });
       return held === true;
     },
   });
+  return {
+    stop() {
+      stopped = true;
+      loop.stop();
+    },
+  };
 }

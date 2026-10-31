@@ -42,6 +42,7 @@ async function relay(statuses: number[], rows: Delivery[]) {
     fail: async (id, reason) => void failed.push([id, reason]),
     lease: createNoopLeaderLease(),
     onEnqueued: () => () => {},
+    retryMs: 1,
   });
   await Promise.race([done, new Promise((r) => setTimeout(r, 200))]);
   handle.stop();
@@ -60,11 +61,16 @@ test("the webhook relay signs each delivery for its bound receiver and acks acce
   assert.equal(post.headers.get("x-signature"), signRequest(secret, ts, `POST\n/qm/deliveries?v=1\n${body}`));
 });
 
-test("a refused delivery is failed with its reason and an unavailable receiver stops the drain in order", async () => {
+test("a refused delivery is failed with its reason and an unavailable receiver is retried before later deliveries", async () => {
   const refused = await relay([422, 200], [row("d1"), row("d2")]);
   assert.deepEqual(refused.failed, [["d1", "receiver returned HTTP 422"]]);
   assert.deepEqual(refused.acked, ["d2"]);
-  const down = await relay([503, 200], [row("d1"), row("d2")]);
-  assert.equal(down.posts.length, 1);
-  assert.deepEqual([...down.acked, ...down.failed], []);
+  const down = await relay([503, 503, 200, 200], [row("d1"), row("d2")]);
+  assert.deepEqual(await Promise.all(down.posts.map(async (p) => JSON.parse(await p.text()).id)), [
+    "d1",
+    "d1",
+    "d1",
+    "d2",
+  ]);
+  assert.deepEqual(down.acked, ["d1", "d2"]);
 });
