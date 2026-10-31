@@ -2,8 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { Run } from "../src/runs/run-store.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { claimTurn, endTurn, finishTurn, retryTurn, testRunStore } from "./support/turns.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;
@@ -120,28 +119,28 @@ test("terminal listener reports only exhausted failures and accepted completions
     events.push(JSON.parse(String(init?.body)).event);
     return new Response("ok");
   });
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs, ledger } = testRunStore();
   runs.onTerminal((run) => {
     void analytics.responseFinished(run);
   });
   const request = (await humanRun()).request;
   const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
-  let claimed = (await runs.claim("worker", 10_000))!;
-  await runs.fail(run.id, claimed.leaseToken!, "private first error");
+  let claimed = (await claimTurn(ledger, run.id))!;
+  await retryTurn(claimed);
   assert.deepEqual(events, []);
-  claimed = (await runs.claim("worker", 10_000))!;
-  assert.equal(await runs.complete(run.id, "stale-lease", { status: "ok" }), false);
+  claimed = (await claimTurn(ledger, run.id))!;
+  assert.equal(await finishTurn({ ...claimed, token: "stale-lease" }, { status: "ok" }), false);
   assert.deepEqual(events, []);
-  await runs.fail(run.id, claimed.leaseToken!, "private final error");
+  await endTurn(claimed, { status: "failed", sessionId: run.sessionId, reason: "private final error" });
   assert.deepEqual(events, ["response_failed"]);
-  await runs.enqueue({ sessionId: "thread", request });
-  claimed = (await runs.claim("worker", 10_000))!;
-  await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
+  const { run: next } = await runs.enqueue({ sessionId: "thread", request });
+  claimed = (await claimTurn(ledger, next.id))!;
+  await endTurn(claimed, { status: "ok" });
   assert.deepEqual(events, ["response_failed", "response_completed"]);
 });
 
 async function humanRun(): Promise<Run> {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   const { run } = await runs.enqueue({
     sessionId: "thread",
     request: {

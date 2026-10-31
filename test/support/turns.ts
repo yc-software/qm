@@ -149,3 +149,8 @@ export function startTurnRunner(
   after(() => runner.stopClaims());
   return runner;
 }
+
+/** Hands a claimed turn back after an error, as the runner does before a retry. */
+export async function retryTurn(claimed: ClaimedTurn, delayMs = 0): Promise<boolean> {
+  return claimed.ledger.handBack(claimed.run, claimed.token, { stop: { kind: "error" }, delayMs, countsAsError: true });
+}

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn } from "./support/turns.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 const actor = { externalId: "U1" };
@@ -24,7 +25,9 @@ function slackTurn(text: string, ts: string, threadRef = "ch:C1:t1"): TurnReques
 }
 
 function fresh() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rd-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rd-")) });
+  const built = buildApp(config);
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 test("a redelivered Slack message collapses onto the run its first delivery enqueued", async () => {
@@ -59,8 +62,8 @@ test("a redelivered message that folded into a live run as a steer is injected o
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    assert.equal(claimed?.id, runId);
+    const claimed = await claimTurn(built.ledger);
+    assert.equal(claimed?.run.id, runId);
     const steer = await built.app.turn(slackTurn("also this", "t2"));
     const replay = await built.app.turn(slackTurn("also this", "t2"));
     assert.equal((steer as { steered?: boolean }).steered, true);
@@ -77,8 +80,8 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    assert.equal(claimed?.id, runId);
+    const claimed = await claimTurn(built.ledger);
+    assert.equal(claimed?.run.id, runId);
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
     assert.equal((await built.signals.takePending(runId)).length, 0, "the agent is not fed its own prompt as a steer");
@@ -92,10 +95,10 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await claimTurn(built.ledger);
     await built.app.turn(slackTurn("fold me", "t2"));
     assert.equal((await built.signals.takePending(runId)).length, 1);
-    await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
+    await endTurn(claimed!, { status: "silent" });
     const late = await built.app.turn(slackTurn("fold me", "t2"));
     assert.equal(late.status, "silent");
     assert.equal(await built.runs.activeForThread("ch:C1:t1"), null, "no second run was enqueued");
@@ -128,7 +131,7 @@ test("a redelivery that slips past the lookup still cannot steer the run it belo
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    await built.runs.claim("w1", 30_000);
+    assert.ok(await claimTurn(built.ledger));
     const real = built.runs.getByDedupKey.bind(built.runs);
     let misses = 1;
     built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
@@ -145,8 +148,8 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    await built.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "the answer" });
+    const claimed = await claimTurn(built.ledger);
+    await endTurn(claimed!, { status: "ok", reply: "the answer" });
     const again = await built.app.turn({ ...slackTurn("hello", "t1"), async: false });
     assert.equal(again.status, "silent");
   } finally {

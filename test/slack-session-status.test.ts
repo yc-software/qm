@@ -26,7 +26,9 @@ function fixture() {
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];
+  const lapsed = new Set<string>();
   const runs = {
+    leaseHeld: async (run: Run, token: string) => run.leaseToken === token && !lapsed.has(token),
     get: async (id: string) => records.get(id) ?? null,
     inFlightForThread: async (threadRef: string) =>
       [...records.values()].filter((run) => run.sessionId === threadRef && !isTerminal(run.status)),
@@ -58,7 +60,7 @@ function fixture() {
       sessionId: "ch:C1:1.0",
       createdAt: at,
       status: "running",
-      leaseExpiresAt: Number.MAX_SAFE_INTEGER,
+      leaseToken: `lease:${id}`,
       deliveryState: { replying: true },
       request: { conversation: { kind: "channel", channelRef: "C1", threadRef: "ch:C1:1.0" }, actor: { id: "U1" } },
     } as Run;
@@ -97,6 +99,7 @@ function fixture() {
     store,
     flags,
     records,
+    lapsed,
     runs,
     cards,
     client,
@@ -161,14 +164,14 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   const restarted = f.manager();
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 1);
-  run.leaseExpiresAt = 0;
+  f.lapsed.add(run.leaseToken!);
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Waiting to resume");
   run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
   run.status = "running";
-  run.leaseExpiresAt = Number.MAX_SAFE_INTEGER;
+  f.lapsed.delete(run.leaseToken!);
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Working");
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));
