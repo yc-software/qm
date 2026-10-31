@@ -38,7 +38,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { boundTenant, perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope } from "./tenants/context.ts";
+import { boundTenant, perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope, onFirstBind, withTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox } from "./sessions/session-mailbox.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
@@ -2610,11 +2610,13 @@ export function buildApp(
       ...workers.map((w) => w.releaseInFlight()),
     ]);
   }
+  let stopIdentityPreload: (() => void) | undefined;
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       tenantSettings.start();
+      stopIdentityPreload ??= onFirstBind((tenant) => withTenant(tenant, () => identity.ready()));
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -2658,6 +2660,8 @@ export function buildApp(
       await semanticMemory.close();
       await flyTunnel?.stop();
       await tenantSettings.stop();
+      stopIdentityPreload?.();
+      stopIdentityPreload = undefined;
       await errors.flush();
     },
   };
