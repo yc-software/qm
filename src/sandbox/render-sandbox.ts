@@ -6,9 +6,8 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { AWS_CLI_ENSURE } from "./aws-cli.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import {
@@ -27,7 +26,8 @@ import {
   type SandboxHandle,
 } from "./sandbox.ts";
 import type { RenderClient, RenderSandboxInfo, RenderSnapshot } from "./render-client.ts";
-import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import type { RenderBase } from "./render-base.ts";
+import { RENDER_COMPUTER_LIFETIME_SEC, RENDER_IDLE_STOP_MS, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 
 interface RenderSandboxResources {
   sandboxId?: string;
@@ -38,6 +38,8 @@ export interface StoredRenderSandbox extends RenderSandboxResources {
   sandboxId: string;
   expiresAtMs: number;
   lastActivityMs: number;
+  baseImage: string;
+  stopped?: boolean;
   homeDirty?: boolean;
   savedAtMs?: number;
   retiredResources?: RenderSandboxResources[];
@@ -56,6 +58,7 @@ export interface StoredRenderCleanup {
 
 export interface RenderSandboxOptions extends BlobStagingOptions {
   client: RenderClient;
+  base: RenderBase;
   store: DurableMap<StoredRenderSandbox>;
   scratchStore: DurableMap<StoredRenderScratch>;
   cleanupStore: DurableMap<StoredRenderCleanup>;
@@ -71,13 +74,11 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
 }
 
 export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandboxOptions): Sandbox {
-  const { client, store, scratchStore, cleanupStore, advisoryLock } = opts;
+  const { client, store, scratchStore, cleanupStore, advisoryLock, base: goldens } = opts;
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
-  const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
-  const expiryCheckpointWindowMs = Math.max(rotationMarginMs, 20 * 60_000);
   const scratch = new Map<string, RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   const lifecycleKey = (name: string): string => `render-sandbox:${name}`;
@@ -132,16 +133,6 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
     const result = await client.runScript(await idFor(name, true), script, timeoutSec);
     return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut: result.exitCode === 124 };
-  };
-  const installTools = async (sandboxId: string): Promise<void> => {
-    const installed = await client.runScript(sandboxId, AWS_CLI_ENSURE, 300);
-    if (installed.exitCode !== 0)
-      reportError(
-        "aws_cli_install_failed",
-        new Error(
-          `Render sandbox ${sandboxId} could not install the AWS CLI (exit ${installed.exitCode}): ${installed.stderr.slice(-300)} ${installed.stdout.slice(-300)}`.trim(),
-        ),
-      );
   };
   const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> =>
     client.writeFileBytes(await idFor(name, true), path, data);
@@ -260,14 +251,6 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     if (stored) stored = await cleanupRetired(scope, stored);
     const info = stored ? await client.get(stored.sandboxId) : null;
     if (!stored || info?.status !== "running") return withUse(name, () => replace(scope, stored, info, onStatus));
-    const running = stored;
-    const rotated =
-      info.expiresAtMs > Date.now() + rotationMarginMs
-        ? null
-        : await tryUse(name, async () =>
-            (await hasLiveProcesses(info.id)) ? null : replace(scope, running, info, onStatus),
-          );
-    if (rotated) return rotated;
     await store.merge(scope, { lastActivityMs: Date.now() });
     return { coldStart: false };
   }
@@ -301,33 +284,64 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         );
       }
     }
+    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await goldens.ready(onStatus);
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
-    await start(scope, stored, snapshotId);
+    await start(scope, stored, source);
     return { coldStart: !stored };
   }
 
-  async function start(scope: string, stored: StoredRenderSandbox | null, from: string | undefined): Promise<void> {
-    const created = await client.create(from);
+  async function start(
+    scope: string,
+    stored: StoredRenderSandbox | null,
+    source: { ref: string; snapshotId: string },
+  ): Promise<void> {
+    const created = await client.create({
+      snapshotId: source.snapshotId,
+      lifetimeSec: RENDER_COMPUTER_LIFETIME_SEC,
+      onCreated: (sandboxId) => holdForCleanup(scope, sandboxId),
+    });
     try {
-      if (created.expiresAtMs <= Date.now() + rotationMarginMs) {
-        throw new Error("Render sandbox lifetime must exceed the command timeout by at least 60 seconds");
-      }
-      await installTools(created.id);
-      if (from) {
+      if (stored) {
         const scrub = await client.runScript(created.id, `rm -rf /tmp/agent-creds ${shq(homeDir)}/.cred-state*`, 30);
         if (scrub.exitCode !== 0)
           throw new Error(`Render sandbox could not clear expired credentials: ${scrub.stderr}`);
       }
+      await releaseFromCleanup(scope, created.id);
       await store.put(scope, {
         ...stored,
         sandboxId: created.id,
         expiresAtMs: created.expiresAtMs,
         lastActivityMs: Date.now(),
+        baseImage: source.ref,
+        stopped: undefined,
       });
     } catch (error) {
-      await client.terminate(created.id).catch(swallowAs("render-sandbox: discard untracked sandbox", undefined));
+      await client
+        .terminate(created.id)
+        .then(
+          () => releaseFromCleanup(scope, created.id),
+          async (terminateError: unknown) => {
+            swallow(`render-sandbox: terminate untracked sandbox ${created.id}`, terminateError);
+            if ((await store.get(scope))?.sandboxId !== created.id) await holdForCleanup(scope, created.id);
+          },
+        )
+        .catch(swallowAs("render-sandbox: discard untracked sandbox", undefined));
       throw error;
     }
+  }
+
+  async function holdForCleanup(scope: string, sandboxId: string): Promise<void> {
+    const pending = await cleanupStore.get(scope);
+    if (pending?.resources.some((resources) => resources.sandboxId === sandboxId)) return;
+    await cleanupStore.put(scope, { ...pending, resources: [...(pending?.resources ?? []), { sandboxId }] });
+  }
+
+  async function releaseFromCleanup(scope: string, sandboxId: string): Promise<void> {
+    const pending = await cleanupStore.get(scope);
+    if (!pending) return;
+    const resources = pending.resources.filter((resources) => resources.sandboxId !== sandboxId);
+    if (resources.length) await cleanupStore.put(scope, { ...pending, resources });
+    else await cleanupStore.delete(scope);
   }
 
   async function finishCleanup(scope: string): Promise<void> {
@@ -393,7 +407,10 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     ensureResident,
     isProvisioned: (name) => scratch.has(name),
     async recreateScratch(name) {
-      const temporary = await client.create();
+      const temporary = await client.create({
+        snapshotId: (await goldens.ready()).snapshotId,
+        lifetimeSec: RENDER_SANDBOX_TTL_SEC,
+      });
       scratch.set(name, temporary);
       try {
         await scratchStore.put(name, temporary);
@@ -407,7 +424,6 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         }
         throw error;
       }
-      await installTools(temporary.id);
     },
     async deleteInstance(name) {
       const scope = base.scopeFor(name);
@@ -437,18 +453,29 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
       processSessions: true,
       egressEnforcement: "none",
       spec: {
-        os: `Debian 12 — Render sandbox (each sandbox runs at most ${RENDER_SANDBOX_TTL_SEC / 3600} hours; files return from checkpoints in the next sandbox, but background processes stop when a sandbox ends; publish durable work to git or Files)`,
-        runtimes: ["Node 24", "Python 3"],
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; files return from checkpoints when it starts again, but background processes do not; publish durable work to git or Files)`,
+        runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
         diskGb: 10,
         homeDir,
         workdir: base.workspaceDir,
         get tools() {
-          return visibleTools(["git", "curl", "jq", "tar", "python3", "aws", ...(opts.extraTools ?? [])]);
+          return visibleTools([
+            "git",
+            "curl",
+            "wget",
+            "jq",
+            "unzip",
+            "gnupg",
+            "python3",
+            "gh",
+            "aws (CLI v2)",
+            ...(opts.extraTools ?? []),
+          ]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gh", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
         },
       },
     },
@@ -457,6 +484,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
       const name = options?.scratch
         ? sandboxScopeName(`${prefix}-scratch`, options.scratch.key)
         : nameFor(writable?.scopeId ?? "default");
+      await goldens.ready(options?.onStatus);
       return withLifecycle(name, async () => {
         if (options?.scratch) {
           const temporary = await scratchStore.get(name);
@@ -521,10 +549,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         if (!stored) return;
         if (!options?.homeUnchanged && stored.homeDirty !== true)
           stored = (await store.merge(scope, { homeDirty: true })) ?? stored;
-        if (
-          (stored.homeDirty !== false && !recentlySaved(stored)) ||
-          (stored.homeDirty === true && stored.expiresAtMs <= Date.now() + expiryCheckpointWindowMs)
-        )
+        if (stored.homeDirty !== false && !recentlySaved(stored))
           await checkpoint(scope, stored).catch((error) => reportError("teardown_checkpoint_failed", error, scope));
         await store.merge(scope, { lastActivityMs: Date.now() });
       });
@@ -553,13 +578,10 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
           reaped++;
         }).catch((error) => reportError("scratch_cleanup_failed", error));
       }
-      const cutoff = idleMs > 0 ? Date.now() - idleMs : -Infinity;
+      const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
-        stored.expiresAtMs > Date.now() &&
-        (stored.lastActivityMs <= cutoff ||
-          stored.expiresAtMs <= Date.now() + expiryCheckpointWindowMs ||
-          stale(stored));
+        !stored.stopped && stored.expiresAtMs > Date.now() && (stored.lastActivityMs <= cutoff || stale(stored));
       for (const [scope] of await cleanupStore.entries())
         await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
           swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
@@ -572,26 +594,26 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
           if (stored) stored = await cleanupRetired(scope, stored);
           if (!stored || !due(stored)) return;
           const info = await client.get(stored.sandboxId);
-          if (info?.status !== "running") return;
-          const expiresSoon = info.expiresAtMs <= Date.now() + expiryCheckpointWindowMs;
-          const rotate = info.expiresAtMs <= Date.now() + rotationMarginMs;
-          const idle = stored.lastActivityMs <= cutoff;
-          if (!expiresSoon && !idle && !stale(stored)) return;
+          if (!info || info.status === "terminated" || info.status === "errored") {
+            await store.merge(scope, { stopped: true });
+            return;
+          }
+          if (info.status !== "running") return;
           const active = await hasLiveProcesses(info.id);
-          if (active && !expiresSoon && !stale(stored)) return;
-          const save = (!active && (idle || rotate || stale(stored))) || !recentlySaved(stored);
+          if (active && !stale(stored)) return;
           const current = stored;
           const stopped =
             !active &&
-            (idle || rotate) &&
+            stored.lastActivityMs <= cutoff &&
             (await tryUse(name, async () => {
               if (await hasLiveProcesses(info.id)) return false;
-              if (save) await checkpoint(scope, current, false);
+              await checkpoint(scope, current, false);
               await client.terminate(info.id);
+              await store.merge(scope, { stopped: true });
               return true;
             }));
           if (stopped) reaped++;
-          else if (save) await checkpoint(scope, stored, active || undefined);
+          else await checkpoint(scope, stored, active || undefined);
         }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
       }
       return { reaped };

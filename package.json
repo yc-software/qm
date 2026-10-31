@@ -80,7 +80,7 @@
     "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@renderinc/sdk": "1.5.0",
+    "@renderinc/sdk": "1.6.0",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
     "@slack/socket-mode": "^2.0.7",

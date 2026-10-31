@@ -7,7 +7,7 @@ import { createSdkRenderClient, RENDER_SCRIPT_DIR } from "../src/sandbox/render-
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
 const SPOOLED = new RegExp(`^timeout (\\d+) sh '${RENDER_SCRIPT_DIR.replaceAll(".", "\\.")}/[0-9a-f-]{36}\\.sh'$`);
-const prelude = (path: string): string =>
+const cleanup = (path: string): string =>
   `rm -f '${path}'; find '${RENDER_SCRIPT_DIR}' -type f -mmin +5 -delete 2>/dev/null\n`;
 
 function fakeStream(t: import("node:test").TestContext, stream: string) {
@@ -56,34 +56,68 @@ const snapshot = {
 
 test("Render SDK adapter maps sandbox and snapshot records and forwards the creation settings", async (t) => {
   const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+  let timeoutSeconds = 86400;
   t.mock.method(globalThis, "fetch", async (input: Request | string | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     assert.equal(request.headers.get("authorization"), "Bearer secret");
     const path = new URL(request.url).pathname;
-    requests.push({
-      method: request.method,
-      path,
-      ...(request.method === "POST" ? { body: await request.json() } : {}),
-    });
+    const body = request.method === "POST" ? ((await request.json()) as { timeoutSeconds?: number }) : undefined;
+    if (path === "/v1/sandboxes") timeoutSeconds = body?.timeoutSeconds ?? 86400;
+    requests.push({ method: request.method, path, ...(body ? { body } : {}) });
     if (request.method === "DELETE") return new Response(null, { status: 204 });
-    return Response.json(path.includes("/snapshots") ? snapshot : sandbox);
+    return Response.json(path.includes("/snapshots") ? snapshot : { ...sandbox, timeoutSeconds });
   });
   const client = createSdkRenderClient({
     apiKey: "secret",
     workspaceId: "tea-test",
   });
-  const info = await client.create("snp-base");
+  const heldAfter: number[] = [];
+  const info = await client.create({
+    snapshotId: "snp-base",
+    lifetimeSec: 2592000,
+    onCreated: async (id) => {
+      assert.equal(id, sandbox.id);
+      heldAfter.push(requests.length);
+    },
+  });
   assert.deepEqual(requests, [
     {
       method: "POST",
       path: "/v1/sandboxes",
-      body: { ownerId: "tea-test", plan: "2c-4g", timeoutSeconds: 86400, idleTimeoutSeconds: 0, snapshotId: "snp-base" },
+      body: {
+        ownerId: "tea-test",
+        plan: "2c-4g",
+        timeoutSeconds: 2592000,
+        idleTimeoutSeconds: 0,
+        snapshotId: "snp-base",
+      },
     },
     { method: "GET", path: "/v1/sandboxes/sbx-test" },
   ]);
+  assert.deepEqual(heldAfter, [1]);
   assert.equal(info.id, sandbox.id);
   assert.equal(info.status, "running");
-  assert.equal(info.expiresAtMs, Date.parse(sandbox.createdAt) + 86400_000);
+  assert.equal(info.expiresAtMs, Date.parse(sandbox.createdAt) + 2592000_000);
+  const disposable = await client.create({ lifetimeSec: 86400 });
+  assert.deepEqual(requests[2], {
+    method: "POST",
+    path: "/v1/sandboxes",
+    body: { ownerId: "tea-test", plan: "2c-4g", timeoutSeconds: 86400, idleTimeoutSeconds: 0 },
+  });
+  assert.equal(disposable.expiresAtMs, Date.parse(sandbox.createdAt) + 86400_000);
+  await client.create({ image: "sbb-0000000000000000000a", lifetimeSec: 3600 });
+  assert.deepEqual(requests[4], {
+    method: "POST",
+    path: "/v1/sandboxes",
+    body: {
+      ownerId: "tea-test",
+      plan: "2c-4g",
+      timeoutSeconds: 3600,
+      idleTimeoutSeconds: 0,
+      buildId: "sbb-0000000000000000000a",
+    },
+  });
+  requests.splice(0);
   const saved = await client.createSnapshot(info.id, "qm-test");
   assert.equal(saved.id, snapshot.id);
   assert.equal(saved.sandboxGroupId, snapshot.sandboxGroupId);
@@ -92,11 +126,53 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.equal(saved.expiresAtMs, Date.parse(snapshot.expiresAt));
   assert.deepEqual(await client.getSnapshot(saved), saved);
   await client.deleteSnapshot(saved);
-  assert.deepEqual(requests.slice(2), [
-    { method: "POST", path: "/v1/sandboxes/sbx-test/snapshots", body: { kind: "filesystem", name: "qm-test" } },
+  const { expiresAt, ...snapshotBody } = requests[0]!.body as unknown as { expiresAt: string };
+  assert.deepEqual(snapshotBody, { kind: "filesystem", name: "qm-test" });
+  assert.ok(Date.parse(expiresAt) - Date.now() > 9 * 365 * 86400_000);
+  assert.deepEqual(requests.slice(1), [
     { method: "GET", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
     { method: "DELETE", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
   ]);
+});
+
+test("Render SDK adapter imports an image into the default group and starts a sandbox from it", async (t) => {
+  const fake = createFakeRender();
+  t.after(() => fake.cleanup());
+  const source = "ghcr.io/acme/base:0123456789abcdef0123456789abcdef01234567";
+  fake.publishImage(source, `sha256:${"b".repeat(64)}`);
+  let refused = false;
+  serveFakeRenderApi(t, fake, (request) => {
+    if (refused || !request.url.endsWith("/builds")) return undefined;
+    refused = true;
+    return Response.json({ message: "unavailable" }, { status: 503 });
+  });
+  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
+  const ready = await client.importImage(source, "qm-sandbox-base-0123456");
+  assert.equal(ready.status, "succeeded");
+  assert.equal(ready.sourceDigest, `sha256:${"b".repeat(64)}`);
+  assert.deepEqual(fake.imports, [{ source, name: "qm-sandbox-base-0123456" }]);
+  const created = await client.create({ image: ready.id, lifetimeSec: 3600 });
+  assert.equal(
+    (await client.readFileBytes(created.id, "/root/.base-image"))?.toString().trim(),
+    `${source}@sha256:${"b".repeat(64)}`,
+  );
+  fake.failImport("manifest unknown");
+  const failed = await client.importImage(source, "qm-sandbox-base-other");
+  assert.deepEqual([failed.status, failed.failureReason], ["failed", "import failed"]);
+});
+
+test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
+  const fake = createFakeRender();
+  t.after(() => fake.cleanup());
+  serveFakeRenderApi(t, fake);
+  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
+  const { id } = await client.create({ lifetimeSec: 3600 });
+  const result = await client.runScript(
+    id,
+    'echo "$VIRTUAL_ENV $ANONYMIZED_TELEMETRY $BROWSER_USE_CLOUD_SYNC"; echo "$PATH" | cut -d: -f1',
+    30,
+  );
+  assert.equal(result.stdout, "/opt/agent-venv false false\n/opt/agent-venv/bin\n");
 });
 
 test("Render SDK adapter waits for a checkpoint and keeps the provider reason when it fails", async (t) => {
@@ -128,7 +204,7 @@ test("Render SDK adapter keeps waiting through a transient API error while a san
       : Response.json({ ...sandbox, status: "running" });
   });
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  assert.equal((await client.create()).status, "running");
+  assert.equal((await client.create({ lifetimeSec: 86400 })).status, "running");
   const pending = { id: "snp-test", sandboxGroupId: "sbg-test", status: "creating" as const, expiresAtMs: 0 };
   assert.equal((await client.waitSnapshot(pending)).status, "available");
   assert.deepEqual([sandboxReads, snapshotReads], [2, 2]);
@@ -156,7 +232,7 @@ for (const becomesReady of [true, false]) {
       });
     });
     const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-    const outcome = client.create().then(
+    const outcome = client.create({ lifetimeSec: 86400 }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
@@ -187,7 +263,7 @@ test("Render SDK adapter uploads binary files to new directories without a comma
   t.after(() => fake.cleanup());
   const http = serveFakeRenderApi(t, fake);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create();
+  const { id } = await client.create({ lifetimeSec: 86400 });
   const path = "/root/new/nested/data.bin";
   for (const bytes of [Buffer.from([0, 255, 128, 10]), Buffer.from("replacement")]) {
     await client.writeFileBytes(id, path, bytes);
@@ -221,7 +297,8 @@ test("Render SDK adapter keeps stdout, stderr, and nonzero exit status of an upl
   assert.equal(SPOOLED.exec(command)![1], "10");
   assert.deepEqual(JSON.parse(sent[3]!.body), { command });
   const path = command.slice(command.indexOf("'") + 1, -1);
-  assert.equal(sent[1]!.body, `${prelude(path)}example command`);
+  assert.ok(sent[1]!.body.startsWith(cleanup(path)));
+  assert.ok(sent[1]!.body.endsWith("\nexample command"));
 });
 
 function scriptedApi(t: import("node:test").TestContext, failures: Map<string, number[]>) {
@@ -293,13 +370,13 @@ test("Render SDK adapter retries sandbox and checkpoint creation only on 429", a
   ]);
   const attempts = scriptedApi(t, failures);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  assert.equal((await client.create()).id, "sbx-test");
+  assert.equal((await client.create({ lifetimeSec: 86400 })).id, "sbx-test");
   assert.equal((await client.createSnapshot("sbx-test", "qm-test")).id, "snp-test");
   assert.equal(attempts("POST /v1/sandboxes"), 2);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 2);
   failures.set("POST /v1/sandboxes", [503]);
   failures.set("POST /v1/sandboxes/sbx-test/snapshots", [503]);
-  await assert.rejects(client.create(), /injected 503/);
+  await assert.rejects(client.create({ lifetimeSec: 86400 }), /injected 503/);
   await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), /injected 503/);
   assert.equal(attempts("POST /v1/sandboxes"), 3);
   assert.equal(attempts("POST /v1/sandboxes/sbx-test/snapshots"), 3);
@@ -394,7 +471,7 @@ test(
       throw new Error(`Unexpected ${request.method} ${path}`);
     });
     const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-    await assert.rejects(client.create(), { name: "TimeoutError" });
+    await assert.rejects(client.create({ lifetimeSec: 86400 }), { name: "TimeoutError" });
     await cleaned.sandbox.promise;
     await assert.rejects(client.createSnapshot("sbx-test", "qm-test"), { name: "TimeoutError" });
     await cleaned.checkpoint.promise;
@@ -430,7 +507,7 @@ test("Render SDK adapter keeps scripts and secrets out of run token requests and
   t.after(() => fake.cleanup());
   const http = serveFakeRenderApi(t, fake);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create();
+  const { id } = await client.create({ lifetimeSec: 86400 });
   const secret = "turn-secret-value-4711";
   const payload = "x".repeat(200 * 1024);
   const result = await client.runScript(
@@ -458,7 +535,7 @@ test("Render SDK adapter removes scripts that an earlier run left behind", async
   t.after(() => fake.cleanup());
   serveFakeRenderApi(t, fake);
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create();
+  const { id } = await client.create({ lifetimeSec: 86400 });
   const spoolDir = join(fake.home(id), RENDER_SCRIPT_DIR);
   mkdirSync(spoolDir, { recursive: true });
   const stale = join(spoolDir, "00000000-0000-0000-0000-000000000000.sh");
@@ -505,7 +582,7 @@ test("Render SDK adapter removes an uploaded script when the run cannot start", 
     return Response.json({ message: "unavailable" }, { status: 503 });
   });
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const { id } = await client.create();
+  const { id } = await client.create({ lifetimeSec: 86400 });
   await assert.rejects(client.runScript(id, "export QM_TURN_TOKEN='never-run'; echo ran", 30), /unavailable/);
   assert.equal(http.uploads.length, 1);
   assert.deepEqual(http.proxyCommands, [`rm -f '${http.uploads[0]!.path}'`]);

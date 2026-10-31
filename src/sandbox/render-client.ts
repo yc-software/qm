@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { retryOperation, withAbort } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import { RENDER_SNAPSHOT_RETENTION_MS } from "./render-limits.ts";
 
 export const RENDER_SCRIPT_DIR = "/dev/.qm-run";
 const RENDER_SANDBOX_PLAN = "2c-4g";
@@ -22,6 +22,8 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const CHECKPOINT_SETTLE_MS = 180_000;
 const SANDBOX_START_MS = 180_000;
 const STALE_SCRIPT_MINUTES = 5;
+const IMAGE_ENV =
+  'export PATH="/opt/agent-venv/bin:$PATH" VIRTUAL_ENV=/opt/agent-venv ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false\n';
 
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
@@ -35,6 +37,13 @@ export interface RenderSandboxInfo {
   expiresAtMs: number;
 }
 
+interface RenderCreateOptions {
+  snapshotId?: string;
+  image?: string;
+  lifetimeSec: number;
+  onCreated?: (sandboxId: string) => Promise<void>;
+}
+
 export interface RenderSnapshot {
   id: string;
   sandboxGroupId: string;
@@ -44,8 +53,16 @@ export interface RenderSnapshot {
   error?: string;
 }
 
+export interface RenderImage {
+  id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  sourceDigest: string;
+  failureReason?: string;
+}
+
 export interface RenderClient {
-  create(snapshotId?: string): Promise<RenderSandboxInfo>;
+  create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
+  importImage(source: string, name: string): Promise<RenderImage>;
   get(sandboxId: string): Promise<RenderSandboxInfo | null>;
   terminate(sandboxId: string): Promise<void>;
   runScript(
@@ -167,7 +184,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   const runScript: RenderClient["runScript"] = async (sandboxId, script, timeoutSec) => {
     const path = `${RENDER_SCRIPT_DIR}/${randomUUID()}.sh`;
     const signal = AbortSignal.timeout(timeoutSec * 1000 + Math.min(CONTROL_TIMEOUT_MS, timeoutSec * 1000));
-    const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n`;
+    const prelude = `rm -f ${shq(path)}; find ${shq(RENDER_SCRIPT_DIR)} -type f -mmin +${STALE_SCRIPT_MINUTES} -delete 2>/dev/null\n${IMAGE_ENV}`;
     try {
       await retryOperation(
         (attempt) => api.upload(sandboxId, path, Buffer.from(prelude + script), undefined, { signal: attempt }),
@@ -184,14 +201,17 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   return {
-    async create(snapshotId) {
+    async create({ snapshotId, image, lifetimeSec, onCreated }) {
+      let source: { snapshotId: string } | { image: string } | Record<string, never> = {};
+      if (snapshotId) source = { snapshotId };
+      else if (image) source = { image };
       const created = await retryOperation(
         () =>
           api.create({
             plan: RENDER_SANDBOX_PLAN,
-            timeoutSeconds: RENDER_SANDBOX_TTL_SEC,
+            timeoutSeconds: lifetimeSec,
             idleTimeoutSeconds: 0,
-            ...(snapshotId ? { snapshotId } : {}),
+            ...source,
           }),
         "refused",
         {
@@ -202,6 +222,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         },
       );
       try {
+        await onCreated?.(created.id);
         return normalizeInfo(
           await retryOperation(
             (signal) => api.waitUntilRunning(created.id, { timeoutMs: SANDBOX_START_MS, signal }),
@@ -215,6 +236,24 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         );
         throw error;
       }
+    },
+    async importImage(source, name) {
+      const groups = await retryOperation(() => api.listGroups(), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: CONTROL_TIMEOUT_MS,
+      });
+      const sandboxGroupId = groups.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
+      if (!sandboxGroupId) throw new Error("Render workspace has no default sandbox group");
+      const image = await retryOperation(() => api.images.import({ sandboxGroupId, name, source }), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: SUBMIT_TIMEOUT_MS,
+      });
+      return {
+        id: image.id,
+        status: image.status,
+        sourceDigest: image.sourceDigest,
+        ...(image.failureReason ? { failureReason: image.failureReason } : {}),
+      };
     },
     get,
     terminate,
@@ -238,14 +277,24 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     },
     async createSnapshot(sandboxId, name) {
       return normalizeSnapshot(
-        await retryOperation(() => api.snapshots.create({ sandboxId, kind: "filesystem", name }), "refused", {
-          ...sdkErrors,
-          timeoutMs: SUBMIT_TIMEOUT_MS,
-          onLate: (late) =>
-            discardLateCheckpoint(normalizeSnapshot(late)).catch(
-              swallowAs(`render-client: delete late checkpoint ${late.id}`, undefined),
-            ),
-        }),
+        await retryOperation(
+          () =>
+            api.snapshots.create({
+              sandboxId,
+              kind: "filesystem",
+              name,
+              expiresAt: new Date(Date.now() + RENDER_SNAPSHOT_RETENTION_MS).toISOString(),
+            }),
+          "refused",
+          {
+            ...sdkErrors,
+            timeoutMs: SUBMIT_TIMEOUT_MS,
+            onLate: (late) =>
+              discardLateCheckpoint(normalizeSnapshot(late)).catch(
+                swallowAs(`render-client: delete late checkpoint ${late.id}`, undefined),
+              ),
+          },
+        ),
       );
     },
     getSnapshot,
