@@ -158,7 +158,11 @@ test("probe failures map from structured codes and error names, never provider t
 import "./support/auto-fake-sprites.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import type { ModelProvider } from "../src/model/model-credential-store.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -168,13 +172,26 @@ import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
+async function seededApp(
+  keys: Partial<Record<ModelProvider, string>>,
+  settings: TenantSettingValues = {},
+  overrides: Parameters<typeof buildApp>[1] = {},
+) {
+  const config = testConfig();
+  const built = buildApp(config, { tenantSettings: testTenantSettings(settings), ...overrides });
+  for (const [provider, key] of Object.entries(keys))
+    await built.modelCredentials.set(provider as ModelProvider, key, "admin");
+  await built.tenantSettings.get();
+  return { config, built };
+}
+
 test("live API verifies exact serving credentials, blocks denied models, rechecks edits, and invalidates rotated keys", async () => {
   const upstream = await verificationUpstream();
-  const config = testConfig({
-    openaiApiKey: "verification-test-key",
-    providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
-  });
-  const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
+  const { config, built } = await seededApp(
+    { openai: "verification-test-key" },
+    { OPENAI_BASE_URL: upstream.url + "/v1", ANTHROPIC_BASE_URL: upstream.url },
+    { modelCredentialFetch: async () => Response.json({ data: [] }) },
+  );
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -484,9 +501,9 @@ test("verification fingerprints use a memory-hard credential-bound MAC key", asy
   assert.notEqual((await differentDeployment(candidate)).fingerprint, expected);
 });
 
-test("environment and gateway credential changes invalidate cached fingerprints", async () => {
-  const fallback = { openai: "first-environment-test-key" };
-  const credentials = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key", fallback });
+test("admin and gateway credential changes invalidate cached fingerprints", async () => {
+  const credentials = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key" });
+  await credentials.set("openai", "first-admin-test-key", "admin");
   const candidate = parseModelOverlay(spec);
   const modelGateway = {
     url: "https://gateway.example.invalid/v1",

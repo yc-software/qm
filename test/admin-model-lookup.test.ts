@@ -1,16 +1,23 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp, serverDeps } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import type { Config } from "../src/config.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 
+const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
+  stopAtEnd(buildProductionApp(config, { tenantSettings: testTenantSettings({}, config.databaseUrl), ...overrides }));
+
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
-  const config = testConfig({ anthropicApiKey: "test-only" });
-  const built = stopAtEnd(buildApp(config));
+  const config = testConfig();
+  const built = buildApp(config);
+  await built.modelCredentials.set("anthropic", "test-only", "admin");
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
@@ -40,12 +47,12 @@ afterEach(() => {
   setProviderBaseUrls(TEST_TENANT, {});
   setModelOverlays([]);
 });
-const credentials = () =>
-  createModelCredentialStore({
-    backing: testMap(),
-    keyMaterial: "test-key",
-    fallback: { openai: "test-openai-key", anthropic: "test-anthropic-key" },
-  });
+async function credentials() {
+  const store = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key" });
+  await store.set("openai", "test-openai-key", "admin");
+  await store.set("anthropic", "test-anthropic-key", "admin");
+  return store;
+}
 
 test("exact catalog lookup returns documented values without network or other-model guesses", async () => {
   const result = await lookupModel({ provider: "anthropic", id: "claude-opus-4-6" }, await credentials(), async () => {
@@ -131,17 +138,15 @@ test("bad responses degrade to manual fields with no partial or mismatched metad
 
 test("live lookup is admin-only and builtin enable verifies without a duplicate or changed default", async () => {
   const upstream = await verificationUpstream();
-  const config = testConfig({
-    anthropicApiKey: "lookup-key",
-    providerBaseUrls: { anthropic: upstream.url },
+  const config = testConfig();
+  const built = buildApp(config, {
+    tenantSettings: testTenantSettings({ ANTHROPIC_BASE_URL: upstream.url }),
+    modelCredentialFetch: async () => {
+      throw Error("lookup must not fetch for builtin");
+    },
   });
-  const built = stopAtEnd(
-    buildApp(config, {
-      modelCredentialFetch: async () => {
-        throw Error("lookup must not fetch for builtin");
-      },
-    }),
-  );
+  await built.modelCredentials.set("anthropic", "lookup-key", "admin");
+  await built.tenantSettings.get();
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -184,8 +189,9 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
 
 test("enable rechecks serving credentials before mutating the picker", async () => {
   let onProbe: () => Promise<void> = async () => {};
-  const config = testConfig({ anthropicApiKey: "test-key" });
-  const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
+  const config = testConfig();
+  const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
+  await built.modelCredentials.set("anthropic", "test-key", "admin");
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;

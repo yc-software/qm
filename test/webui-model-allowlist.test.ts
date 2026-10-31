@@ -31,7 +31,6 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
-    providerKeys: { anthropic: false, openai: false, openrouter: true },
     admin: built.admin,
     auditLog: built.auditLog,
   });

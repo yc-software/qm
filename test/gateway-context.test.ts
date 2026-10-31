@@ -64,7 +64,7 @@ async function freshApp() {
 }
 
 test("gateway context flows into the system prompt the agent sees", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const res = await app.turn({
     surface: "slack",
     actor: { externalId: "U1" },

@@ -7,17 +7,17 @@ import { testConfig } from "./test-config.ts";
 
 const config = testConfig({
   databaseUrl: process.env.MODEL_OVERLAY_TEST_DATABASE_URL,
-  adminGrants: "admin-alice:org_admin",
-  modelId: "overlay-pg-model",
-  openaiApiKey: "local-test-key",
 });
 const built = buildApp(config, {
   modelCredentialFetch: async () => Response.json({ data: [] }),
-  tenantSettings: testTenantSettings({
-    OPENAI_BASE_URL: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1`,
-    PI_MODEL: "overlay-pg-model",
-    ADMIN_GRANTS: "admin-alice:org_admin",
-  }),
+  tenantSettings: testTenantSettings(
+    {
+      OPENAI_BASE_URL: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1`,
+      PI_MODEL: "overlay-pg-model",
+      ADMIN_GRANTS: "admin-alice:org_admin",
+    },
+    config.databaseUrl,
+  ),
 });
 if (!(await built.modelCredentials.resolve("openai")))
   await built.modelCredentials.set("openai", "local-test-key", "admin-alice");

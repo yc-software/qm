@@ -8,10 +8,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
-import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
+import type { ModelProvider } from "../src/model/pi-models.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testConfig } from "./support/test-config.ts";
-import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
@@ -49,7 +49,7 @@ async function buildWith(
     ...options.config,
   });
   const built = buildApp(config, {
-    tenantSettings: testTenantSettings(options.settings, config.harness),
+    tenantSettings: testTenantSettings(options.settings, config.databaseUrl),
     ...(modelCredentialFetch ? { modelCredentialFetch } : {}),
   });
   for (const [provider, key] of Object.entries(options.keys ?? {}))
@@ -70,14 +70,13 @@ async function start(
   close: () => Promise<void>;
 }> {
   const built = await buildWith(options, modelCredentialFetch);
-  const harness = options.config?.harness ?? "pi";
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
     modelCredentialFetch,
-    ...(companySubscriptionAuth(appConfig) ? { companySubscriptionAuth: companySubscriptionAuth(appConfig) } : {}),
-    providerKeys: providerKeysPresent(appConfig),
+    tenantSettings: built.tenantSettings,
+    companySubscriptionAuth: built.companySubscriptionAuth,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -439,7 +438,7 @@ test("admin scope keeps the selected runtime model visible when its provider is 
 });
 
 test("web turns refuse a model whose provider has no key", async () => {
-  const srv = start();
+  const srv = await start();
   try {
     const unkeyed = await srv.built.app.turn({
       surface: "web",
@@ -522,7 +521,7 @@ test("surface-config respects an admin-disabled provider", async () => {
 });
 
 test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
-  const srv = start({ codexAuthCredential: "company-chatgpt" });
+  const srv = await start({ settings: { CODEX_AUTH_CREDENTIAL: "company-chatgpt" } });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
@@ -533,7 +532,7 @@ test("surface-config reports company ChatGPT OAuth without making it a Pi API cr
 });
 
 test("a Claude subscription token is reported as company subscription auth", async () => {
-  const srv = start({ anthropicApiKey: "sk-ant-oat-test" });
+  const srv = await start({ keys: { anthropic: "sk-ant-oat-test" } });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);

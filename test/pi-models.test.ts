@@ -1,6 +1,6 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
