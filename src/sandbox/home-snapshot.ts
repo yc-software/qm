@@ -14,7 +14,7 @@ import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persisten
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { tenantKey } from "../tenants/storage.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 
 export const HOME_SNAPSHOT_AREAS = {
   sprites: "sprites-home",
@@ -120,7 +120,7 @@ export interface S3SnapshotStoreOptions {
 }
 
 export function homeSnapshotKey(prefix: string, scope: string, scopeKey: (scope: string) => string): string {
-  return tenantKey(prefix, `${scopeKey(scope)}.tar`);
+  return tenantObjectKey(prefix, `${scopeKey(scope)}.tar`);
 }
 
 export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapshotStore {

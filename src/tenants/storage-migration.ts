@@ -10,14 +10,15 @@ import {
   ListObjectsV2Command,
   UploadPartCopyCommand,
 } from "@aws-sdk/client-s3";
+import type { PoolClient } from "pg";
 import type { Config } from "../config.ts";
 import { isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { createPgPool, PG_MIGRATIONS_TABLE } from "../persistence/pg-pool.ts";
 import { swallowAs } from "../util/errors.ts";
 import { FILES_AREA } from "../files/durable-byte-store.ts";
 import { HOME_SNAPSHOT_AREAS } from "../sandbox/home-snapshot.ts";
-import { awsHomeArea } from "../sandbox/aws-sandbox.ts";
 import { deployDataArea } from "../deploy/aws-deploy-provider.ts";
+import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 
 const COPY_PART_BYTES = 1024 ** 3;
 const SINGLE_COPY_MAX = 5 * 1024 ** 3;
@@ -55,12 +56,7 @@ function storageAreas(config: Config, clientFor: (region?: string, endpoint?: st
   add(snapshots, config.e2bSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.e2b);
   add(snapshots, config.managedAgentsSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.managedAgents);
   add(snapshots, config.modalSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.modal);
-  add(clientFor(config.awsSandbox.region), config.awsSandbox.s3Bucket, awsHomeArea(config.awsSandbox.s3Prefix));
-  add(
-    clientFor(config.awsDeploy.region),
-    config.awsDeploy.dataBucket ?? config.awsSandbox.s3Bucket,
-    deployDataArea(config.awsDeploy.dataPrefix),
-  );
+  add(clientFor(config.awsDeploy.region), config.awsDeploy.dataBucket, deployDataArea(config.awsDeploy.dataPrefix));
   const dirs = ["transfer", FILES_AREA, "session-shares", "workspaces"].map((area) => join(config.dataDir, area));
   return { objects, dirs: [...dirs, config.deployGitDir] };
 }
@@ -150,14 +146,22 @@ async function copyObject(area: ObjectArea, source: Listed, Key: string): Promis
   }
 }
 
-async function exists(area: ObjectArea, Key: string): Promise<boolean> {
+async function stat(area: ObjectArea, Key: string): Promise<Listed | null> {
   try {
-    await area.client.send(new HeadObjectCommand({ Bucket: area.bucket, Key }));
-    return true;
+    const head = (await area.client.send(new HeadObjectCommand({ Bucket: area.bucket, Key }))) as {
+      ContentLength?: number;
+      LastModified?: Date;
+    };
+    return { Key, Size: head.ContentLength ?? 0, LastModified: head.LastModified ?? new Date(0) };
   } catch (error) {
-    if (isNoSuchKey(error)) return false;
+    if (isNoSuchKey(error)) return null;
     throw error;
   }
+}
+
+async function moveObject(area: ObjectArea, source: Listed, Key: string): Promise<void> {
+  if (!(await stat(area, Key))) await copyObject(area, source, Key);
+  await area.client.send(new DeleteObjectCommand({ Bucket: area.bucket, Key: source.Key }));
 }
 
 export async function migrateObjects(area: ObjectArea, tenants: ReadonlySet<string>): Promise<number> {
@@ -165,8 +169,7 @@ export async function migrateObjects(area: ObjectArea, tenants: ReadonlySet<stri
   for await (const source of legacyObjects(area, tenants)) {
     const rest = source.Key.slice(area.from.length);
     const Key = `${area.to}${soleTenant(tenants, `s3://${area.bucket}/${source.Key}`)}/${area.under ?? ""}${rest}`;
-    if (!(await exists(area, Key))) await copyObject(area, source, Key);
-    await area.client.send(new DeleteObjectCommand({ Bucket: area.bucket, Key: source.Key }));
+    await moveObject(area, source, Key);
     moved++;
   }
   return moved;
@@ -195,11 +198,42 @@ export async function migrateDir(root: string, tenants: ReadonlySet<string>): Pr
   return moved;
 }
 
+export function rootScopeRenames(oldOrg: string, tenant: string): Map<string, string> {
+  const [from, to] = [`org:${oldOrg}`, `org:${tenant}`];
+  return new Map([
+    [`${encodeURIComponent(from)}.tar`, `${encodeURIComponent(to)}.tar`],
+    [scopeStorageKey(from), scopeStorageKey(to)],
+  ]);
+}
+
+export async function renameScopes(
+  areas: { objects: ObjectArea[]; dirs: string[] },
+  tenant: string,
+  renames: ReadonlyMap<string, string>,
+): Promise<number> {
+  let moved = 0;
+  for (const [from, to] of renames) {
+    for (const dir of areas.dirs) {
+      const source = join(dir, tenant, from);
+      if (!(await lstat(source).catch(() => null))) continue;
+      await mergeInto(source, join(dir, tenant, to));
+      moved++;
+    }
+    for (const area of areas.objects) {
+      const base = `${area.to}${tenant}/${area.under ?? ""}`;
+      const source = await stat(area, `${base}${from}`);
+      if (!source) continue;
+      await moveObject(area, source, `${base}${to}`);
+      moved++;
+    }
+  }
+  return moved;
+}
+
 async function migrateTenantStorage(
   config: Config,
   tenants: ReadonlySet<string>,
-  clientFor: (region?: string, endpoint?: string) => S3Send = (region, endpoint) =>
-    s3Client(region, endpoint ? { endpoint } : {}),
+  clientFor: (region?: string, endpoint?: string) => S3Send = defaultClient,
 ): Promise<number> {
   const areas = storageAreas(config, clientFor);
   let moved = 0;
@@ -208,7 +242,40 @@ async function migrateTenantStorage(
   return moved;
 }
 
+const defaultClient = (region?: string, endpoint?: string): S3Send => s3Client(region, endpoint ? { endpoint } : {});
+
 const STORAGE_MIGRATION = "tenants/storage-layout";
+const ROOT_SCOPE_MIGRATION = "tenants/storage-root-scope";
+
+async function applied(client: PoolClient, id: string): Promise<boolean> {
+  return Boolean((await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id])).rowCount);
+}
+
+async function record(client: PoolClient, id: string): Promise<void> {
+  await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $1)`, [id]);
+}
+
+async function moveStorage(client: PoolClient, config: Config): Promise<void> {
+  if (await applied(client, STORAGE_MIGRATION)) return;
+  const tenants = new Set((await client.query("SELECT id::text AS id FROM tenants")).rows.map((r) => String(r.id)));
+  const moved = await migrateTenantStorage(config, tenants);
+  await record(client, STORAGE_MIGRATION);
+  console.log(`[qm:migrate] tenant storage layout applied (${moved} moved)`);
+}
+
+async function moveRootScope(client: PoolClient, config: Config): Promise<void> {
+  if (await applied(client, ROOT_SCOPE_MIGRATION)) return;
+  const { rows } = await client.query<{ id: string; recorded: boolean; org: string | null }>(
+    `SELECT id::text AS id, to_jsonb(t) ? 'composio_namespace' AS recorded, to_jsonb(t)->>'composio_namespace' AS org
+         FROM tenants t`,
+  );
+  if (!rows.every((row) => row.recorded)) return;
+  const areas = storageAreas(config, defaultClient);
+  let moved = 0;
+  for (const row of rows) if (row.org) moved += await renameScopes(areas, row.id, rootScopeRenames(row.org, row.id));
+  await record(client, ROOT_SCOPE_MIGRATION);
+  console.log(`[qm:migrate] tenant root scope storage applied (${moved} moved)`);
+}
 
 export async function migrateTenantStorageOnce(config: Config): Promise<void> {
   if (!config.databaseUrl) return;
@@ -217,12 +284,8 @@ export async function migrateTenantStorageOnce(config: Config): Promise<void> {
     const client = await (await db.pool()).connect();
     try {
       await client.query("SELECT pg_advisory_lock(hashtext($1))", [STORAGE_MIGRATION]);
-      const done = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [STORAGE_MIGRATION]);
-      if (done.rowCount) return;
-      const tenants = new Set((await client.query("SELECT id::text AS id FROM tenants")).rows.map((r) => String(r.id)));
-      const moved = await migrateTenantStorage(config, tenants);
-      await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $1)`, [STORAGE_MIGRATION]);
-      console.log(`[qm:migrate] tenant storage layout applied (${moved} moved)`);
+      await moveStorage(client, config);
+      await moveRootScope(client, config);
     } finally {
       await client
         .query("SELECT pg_advisory_unlock(hashtext($1))", [STORAGE_MIGRATION])

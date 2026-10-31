@@ -14,7 +14,7 @@ import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { tenantKey } from "../src/tenants/storage.ts";
+import { tenantObjectKey } from "../src/tenants/storage.ts";
 
 enterTenant(randomUUID());
 
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
   log("destroy + verify durable data SURVIVES (archive → restore must round-trip)...");
   await provider.destroy(d);
   const left = await s3.send(
-    new ListObjectsV2Command({ Bucket: awsDeploy.dataBucket!, Prefix: tenantKey("deploy-data", d.id) }),
+    new ListObjectsV2Command({ Bucket: awsDeploy.dataBucket!, Prefix: tenantObjectKey("deploy-data", d.id) }),
   );
   assert.ok((left.KeyCount ?? 0) > 0, "replica survives destroy");
   const keys = (left.Contents ?? []).map((o) => ({ Key: o.Key! }));

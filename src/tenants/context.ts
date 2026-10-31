@@ -4,8 +4,8 @@ const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 const bound = new AsyncLocalStorage<string>();
 
-export function isTenantId(value: string): boolean {
-  return TENANT_ID.test(value);
+export function isTenantId(id: unknown): id is string {
+  return typeof id === "string" && TENANT_ID.test(id);
 }
 
 function tenantId(id: string): string {

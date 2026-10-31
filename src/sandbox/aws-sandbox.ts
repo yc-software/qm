@@ -6,8 +6,6 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { hashId } from "../util/crypto.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -106,8 +104,6 @@ interface BodyRef {
   endpoint: string;
 }
 
-export const awsHomeArea = (prefix: string | undefined): string => (prefix ?? "sandbox-home").replace(/\/+$/, "");
-
 export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): Sandbox {
   const region = opts.region;
   const api =
@@ -128,7 +124,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
-  const s3Prefix = awsHomeArea(opts.s3Prefix);
+  const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
@@ -230,7 +226,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         suspendedDurationSeconds: opts.suspendedDurationSeconds ?? 3600,
       },
       maximumDurationInSeconds,
-      clientToken: hashId([currentTenant(), scope ?? "scratch", String(Date.now())], 32),
+      clientToken: `${scope ?? "scratch"}-${Date.now()}`,
     });
     try {
       if (scope)
@@ -310,8 +306,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     });
   }
 
-  async function ensureScratch(scratchKey: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
-    const key = `${currentTenant()}:${scratchKey}`;
+  async function ensureScratch(key: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
     return provisionQueue(`scratch:${key}`, async () => {
       const existing = scratchByKey.get(key);
       if (existing) {

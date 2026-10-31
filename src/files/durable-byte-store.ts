@@ -18,7 +18,7 @@ import { swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { currentTenant } from "../tenants/context.ts";
-import { tenantDir, tenantKey } from "../tenants/storage.ts";
+import { tenantDir, tenantObjectKey } from "../tenants/storage.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
 
@@ -56,7 +56,7 @@ const keyFor = (sha256: string): string => `files/${sha256}`;
 export const FILES_AREA = "docstore";
 
 export function durableObjectKey(prefix: string, area: string, blobKey: string): string {
-  return prefix + tenantKey(area, blobKey);
+  return prefix + tenantObjectKey(area, blobKey);
 }
 
 function collect(source: ByteSource, maxBytes?: number): Promise<{ data: Buffer; sha256: string }> {

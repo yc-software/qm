@@ -10,11 +10,6 @@ import { scopeId } from "../src/types.ts";
 import { scopeStorageKey } from "../cli/src/scope-storage-key.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { randomUUID } from "node:crypto";
-import { enterTenant } from "../src/tenants/context.ts";
-import { homeSnapshotKey } from "../src/sandbox/home-snapshot.ts";
-
-enterTenant(randomUUID());
 
 const region = process.env.AWS_SANDBOX_REGION ?? "us-west-2";
 const profile = process.env.AWS_SANDBOX_PROFILE ?? "dev";
@@ -91,7 +86,7 @@ async function main(): Promise<void> {
     if (bodyId) await api.terminate(bodyId).catch(() => {});
     const { S3Client, DeleteObjectCommand } = await import("@aws-sdk/client-s3");
     const s3 = new S3Client({ region, profile });
-    const key = homeSnapshotKey("sandbox-smoke", scope, scopeStorageKey);
+    const key = `sandbox-smoke/${scopeStorageKey(scope)}.tar`;
     await s3.send(new DeleteObjectCommand({ Bucket: s3Bucket, Key: key })).catch(() => {});
     log("done");
   }

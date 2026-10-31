@@ -6,7 +6,7 @@ import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { shq } from "../util/shell.ts";
 import { createRenderApi, type RenderApi } from "./render-api.ts";
-import { tenantKey } from "../tenants/storage.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 
 export interface StoredRenderAppStorage {
   deploymentId: string;
@@ -78,7 +78,7 @@ export function createRenderAppStorage(opts: {
     throw new Error("Render app storage requires a MinIO service and a valid endpoint");
   const key = deriveConnectorKey(opts.keyMaterial, "render-app-storage");
   const api = opts.api ?? createRenderApi(opts);
-  const prefixFor = (id: string) => `${opts.prefix ?? ""}${tenantKey("app-data", id)}/`;
+  const prefixFor = (id: string) => `${opts.prefix ?? ""}${tenantObjectKey("app-data", id)}/`;
   const path = `/services/${encodeURIComponent(opts.minioServiceId)}`;
   const poll = opts.pollIntervalMs ?? 2_000;
 

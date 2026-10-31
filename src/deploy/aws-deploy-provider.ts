@@ -2,7 +2,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import { currentTenant } from "../tenants/context.ts";
-import { tenantKey } from "../tenants/storage.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
@@ -156,8 +156,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  const dataKeyFor = (deploymentId: string): string => tenantKey(dataPrefix, `${deploymentId}.tar`);
-  const litestreamKeyPrefix = (deploymentId: string): string => tenantKey(dataPrefix, `${deploymentId}/litestream`);
+  const dataKeyFor = (deploymentId: string): string => tenantObjectKey(dataPrefix, `${deploymentId}.tar`);
+  const litestreamKeyPrefix = (deploymentId: string): string =>
+    tenantObjectKey(dataPrefix, `${deploymentId}/litestream`);
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
