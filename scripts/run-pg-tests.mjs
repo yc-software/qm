@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
+import { seedTestTenants } from "../test/support/tenant-seed.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -37,6 +38,23 @@ let ended = null;
 function endPool() {
   ended ??= admin.end();
   return ended;
+}
+
+function runnerAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+async function dropAbandonedRuns() {
+  const { rows } = await admin.query("SELECT datname FROM pg_database WHERE datname ~ '^qmt_[0-9]+_'");
+  for (const { datname } of rows) {
+    if (runnerAlive(Number(datname.split("_")[1]))) continue;
+    await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
+  }
 }
 
 function killGroup(child) {
@@ -100,6 +118,7 @@ async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
     await admin.query(`CREATE DATABASE ${name}`);
+    await seedTestTenants(databaseUrl(name));
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {
@@ -124,6 +143,7 @@ function migrateTemplate() {
 }
 
 const started = Date.now();
+await dropAbandonedRuns();
 await admin.query(`CREATE DATABASE ${templateName}`);
 await migrateTemplate().catch(async (error) => {
   try {

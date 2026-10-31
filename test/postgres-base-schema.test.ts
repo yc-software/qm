@@ -43,7 +43,7 @@ async function migrateBase(url: string): Promise<void> {
   try {
     await applyPgMigrations(
       pool,
-      registeredPgMigrations(url).filter((m) => !m.id.endsWith("-tenants")),
+      registeredPgMigrations(url).filter((m) => !/^0000-tenancy\/|-tenants$|^sessions\/store\/00(49|50)-/.test(m.id)),
     );
   } finally {
     await pool.end();

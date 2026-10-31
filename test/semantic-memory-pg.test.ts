@@ -6,6 +6,9 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
+import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);
@@ -146,7 +149,7 @@ test("put waits on in-flight edits and never writes stale or deleted fact vector
   const model = `race-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = new pg.Client({ connectionString: url! });
+  const client = new pg.Client({ connectionString: boundUrl(url!) });
   await client.connect();
   t.after(async () => {
     await client.end();
@@ -189,7 +192,7 @@ test("prune deletes stale model, hash, deleted, and dimension rows in bounded ba
   const model = `prune-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = new pg.Client({ connectionString: url! });
+  const client = new pg.Client({ connectionString: boundUrl(url!) });
   await client.connect();
   t.after(async () => {
     await client.end();
@@ -229,7 +232,7 @@ test(
     const scope = `personal:hash-${randomUUID()}`;
     const base = createPostgresMemoryService(url!);
     const index = createPostgresVectorStore(url!);
-    const client = new pg.Client({ connectionString: url! });
+    const client = new pg.Client({ connectionString: boundUrl(url!) });
     await client.connect();
     t.after(async () => {
       await client.end();

@@ -235,6 +235,8 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    const recorded = await client.query<{ id: string }>(`SELECT id FROM ${PG_MIGRATIONS_TABLE}`);
+    const recordedBeforeRun = recorded.rows.map((row) => row.id).join(",");
     for (const migration of migrations) {
       const applied = await client.query<{ checksum: string }>(
         `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
@@ -286,6 +288,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
       await client.query("BEGIN");
       try {
+        await client.query("SELECT set_config('qm.migrations_before_run', $1, true)", [recordedBeforeRun]);
         let adopted = false;
         if (migration.legacyId) {
           const legacyTable = await client.query<{ present: boolean }>(
