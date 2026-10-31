@@ -1,15 +1,15 @@
 import type { PgPool, Rows } from "../persistence/pg-pool.ts";
-import { withoutTenant, withTenant } from "./context.ts";
+import { boundTenant, withoutTenant, withTenant } from "./context.ts";
 import type { TenantList } from "./resolver.ts";
 
 type TenantRow<T = Rows[number]> = T & { tenant_id: string };
 
 export async function claimAcrossTenants<T = Rows[number]>(
-  db: Pick<PgPool, "ownerPool">,
+  db: Pick<PgPool, "ownerPool" | "pool">,
   text: string,
   params: unknown[] = [],
 ): Promise<Array<TenantRow<T>>> {
-  const { rows } = await (await db.ownerPool()).query(text, params);
+  const { rows } = await (boundTenant() ? await db.pool() : await db.ownerPool()).query(text, params);
   for (const row of rows as Rows) {
     if (typeof row.tenant_id !== "string") throw new Error("A cross-tenant claim must return each row's tenant_id");
   }

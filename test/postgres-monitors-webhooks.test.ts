@@ -6,20 +6,12 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createPostgresWebhookRows } from "../src/webhooks/webhook-table.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 const ALICE = "alice@example.com";
 const DAY = 24 * 60 * 60_000;
 const base = { owner: ALICE, createdBy: ALICE, ownerScopeId: scopeId("personal", ALICE) };
-
-function ownerUrl(appUrl: string): string {
-  const owner = new URL(appUrl);
-  const admin = new URL(PG_URL!);
-  owner.username = admin.username;
-  owner.password = admin.password;
-  return owner.toString();
-}
 
 const watch = (overrides: Record<string, unknown> = {}) => ({
   ...base,
@@ -40,40 +32,37 @@ const hook = (action = "triage the event") => ({
 test("monitors are watched per thread, claimed across tenants and swept only when defunct", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresMonitorRows(url),
-    async ({ store: rows, url, tenant, otherTenant }) => {
+    async ({ store: rows, tenant, otherTenant }) => {
       const monitors = createMonitorStore(rows);
-      const ownerRows = createPostgresMonitorRows(ownerUrl(url));
-      const claims = createMonitorStore(ownerRows);
-      try {
-        const a = await withTenant(tenant, () => monitors.create(watch({ pattern: "FAIL" })));
-        const b = await withTenant(otherTenant, () => monitors.create(watch()));
-        await withTenant(tenant, async () => {
-          assert.deepEqual(await monitors.get(a.id), a);
-          assert.deepEqual(
-            (await monitors.watching(["web:t1"])).map((m) => m.id),
-            [a.id],
-          );
-          await monitors.advance(a.id, { cursor: 42, tail: "line", firedAt: 5 });
-          await monitors.update(a.id, { cursor: 7 });
-          const moved = await monitors.get(a.id);
-          assert.equal(moved?.cursor, 7);
-          assert.equal(moved?.tail, undefined);
-          assert.equal(moved?.lastFiredAt, 5);
-          assert.equal(await monitors.get(b.id), null);
-        });
+      const a = await withTenant(tenant, () => monitors.create(watch({ pattern: "FAIL" })));
+      const b = await withTenant(otherTenant, () => monitors.create(watch()));
+      await withTenant(tenant, async () => {
+        assert.deepEqual(await monitors.get(a.id), a);
         assert.deepEqual(
-          new Set((await claims.enabled()).map((m) => `${m.tenantId}/${m.id}`)),
-          new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`]),
+          (await monitors.watching(["web:t1"])).map((m) => m.id),
+          [a.id],
         );
-        await assert.rejects(monitors.enabled(), /No tenant is bound/);
-        await withTenant(otherTenant, () => monitors.setEnabled(b.id, false));
-        assert.equal(await claims.deleteDefunct(Date.now()), 0);
-        assert.equal(await claims.deleteDefunct(Date.now() + 9 * DAY), 1);
-        assert.equal(await withTenant(otherTenant, () => monitors.get(b.id)), null);
-        assert.equal((await withTenant(tenant, () => monitors.get(a.id)))?.enabled, true);
-      } finally {
-        await ownerRows.close();
-      }
+        await monitors.advance(a.id, { cursor: 42, tail: "line", firedAt: 5 });
+        await monitors.update(a.id, { cursor: 7 });
+        const moved = await monitors.get(a.id);
+        assert.equal(moved?.cursor, 7);
+        assert.equal(moved?.tail, undefined);
+        assert.equal(moved?.lastFiredAt, 5);
+        assert.equal(await monitors.get(b.id), null);
+      });
+      assert.deepEqual(
+        new Set((await monitors.enabled()).map((m) => `${m.tenantId}/${m.id}`)),
+        new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`]),
+      );
+      assert.deepEqual(
+        (await withTenant(tenant, () => monitors.enabled())).map((m) => m.id),
+        [a.id],
+      );
+      await withTenant(otherTenant, () => monitors.setEnabled(b.id, false));
+      assert.equal(await monitors.deleteDefunct(Date.now()), 0);
+      assert.equal(await monitors.deleteDefunct(Date.now() + 9 * DAY), 1);
+      assert.equal(await withTenant(otherTenant, () => monitors.get(b.id)), null);
+      assert.equal((await withTenant(tenant, () => monitors.get(a.id)))?.enabled, true);
     },
   );
 });

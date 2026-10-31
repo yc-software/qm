@@ -14,8 +14,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { createWakeSweep } from "../src/wake/sweep.ts";
-import { claimAcrossTenants, eachTenant, inTenantOf, type EachTenant } from "../src/tenants/claim.ts";
-import { boundTenant, tenantKey, withTenant } from "../src/tenants/context.ts";
+import { claimAcrossTenants, eachTenant, inTenantOf } from "../src/tenants/claim.ts";
+import { boundTenant, tenantKey, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { pgTenants } from "../src/tenants/resolver.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -34,9 +34,6 @@ const request = (text: string): OrchestratorInput => ({
   origin: { kind: "direct" },
   text,
 });
-const twoTenants: EachTenant = async (fn) => {
-  for (const tenant of [TEST_TENANT, OTHER_TENANT]) await withTenant(tenant, fn);
-};
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   for (let i = 0; i < 300 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -176,9 +173,10 @@ test("NOTIFY payloads carry the emitter's tenant to subscribers", { skip }, asyn
   }
 });
 
-test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind their tenant", async () => {
+test("due crons are claimed across tenants and fire under their own tenant; cron-fire jobs rebind theirs", async () => {
   const crons = createCronStore();
   const dueUnder: Array<string | undefined> = [];
+  const ranUnder: Array<string | undefined> = [];
   const getUnder: Array<string | undefined> = [];
   const due = crons.due.bind(crons);
   const get = crons.get.bind(crons);
@@ -202,11 +200,21 @@ test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind 
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
-    run: async () => ({ status: "ok" as const, reply: "" }),
-    tenants: twoTenants,
+    run: async () => (ranUnder.push(boundTenant()), { status: "ok" as const, reply: "" }),
   };
-  await createScheduler(deps).tick(Date.now());
-  assert.deepEqual(dueUnder, [TEST_TENANT, OTHER_TENANT]);
+  for (const tenant of [TEST_TENANT, OTHER_TENANT])
+    await withTenant(tenant, () =>
+      crons.create({
+        schedule: { everyMs: 60_000, firstFireAt: 1 },
+        action: "due",
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+      }),
+    );
+  await withoutTenant(() => createScheduler(deps).tick(Date.now()));
+  assert.deepEqual(dueUnder, [undefined]);
+  assert.deepEqual(ranUnder.sort(), [TEST_TENANT, OTHER_TENANT].sort());
   const scheduler = createScheduler({ ...deps, jobQueue });
   scheduler.start(1000);
   await scheduler.ready();
