@@ -17,7 +17,7 @@ export interface ReasoningBlock {
 }
 
 export interface TurnStream {
-  begin(runId: string): void;
+  begin(runId: string, owner?: string): void;
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
@@ -36,7 +36,7 @@ export interface TurnStream {
   startOffset(runId: string): number;
   markReplyDone(runId: string): void;
   isReplyDone(runId: string): boolean;
-  end(runId: string): void;
+  end(runId: string, owner?: string): void;
   subscribe(runId: string, listener: TurnStreamListener): () => void;
 }
 
@@ -57,6 +57,7 @@ interface Entry {
   surfacePosted: boolean;
   replying: boolean;
   replyDone: boolean;
+  owner?: string | undefined;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -118,14 +119,15 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   };
 
   return {
-    begin(runId) {
+    begin(runId, owner) {
       const entry = runs.get(runId);
       if (entry) {
+        entry.owner = owner;
         entry.replying = true;
         entry.reasoning = [];
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = null;
-      } else runs.set(runId, makeEntry());
+      } else runs.set(runId, { ...makeEntry(), owner });
       opts.onChange?.(runId);
     },
 
@@ -242,9 +244,10 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       return runs.get(runId)?.replyDone ?? false;
     },
 
-    end(runId) {
+    end(runId, owner) {
       const entry = runs.get(runId);
       if (!entry) return;
+      if (owner !== undefined && entry.owner !== undefined && entry.owner !== owner) return;
       if (entry.timer) return;
       const timer = setTimeout(() => runs.delete(runId), graceMs);
       timer.unref?.();

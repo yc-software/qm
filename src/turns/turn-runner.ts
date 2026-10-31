@@ -103,6 +103,7 @@ export interface TurnRunner {
   start(): void;
   stopClaims(): Promise<void>;
   releaseInFlight(): Promise<void>;
+  drained(timeoutMs: number): Promise<void>;
   held(): readonly Run[];
 }
 
@@ -298,6 +299,7 @@ function parkForCapacity(deps: TurnRunnerDeps, inFlight: ReadonlyMap<string, Hel
 async function handBackAll(deps: TurnRunnerDeps, held: readonly HeldTurn[]): Promise<void> {
   await Promise.all(
     held.map(async (turn) => {
+      if (turn.yielding) return;
       turn.shutdown.abort();
       turn.cancel.abort();
       const stop: RunStop = { kind: "shutdown" };
@@ -468,6 +470,12 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     async releaseInFlight() {
       await stopClaims();
       await handBackAll(deps, [...inFlight.values()]);
+    },
+    async drained(timeoutMs) {
+      await Promise.race([
+        Promise.all([...inFlight.values()].map((turn) => turn.done)),
+        sleep(timeoutMs, { unref: true }),
+      ]);
     },
     held: () => [...inFlight.values()].map((turn) => turn.run),
   };

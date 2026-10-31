@@ -1528,16 +1528,7 @@ export function buildApp(
     ...runStore.runs,
     ...turnBinding,
     async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
+      const admit = async (known: Session | null) => {
         const participants = known ? await sessions.participantsOf(known.id) : [];
         const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
         const result = await turnBinding.enqueue(input);
@@ -1559,7 +1550,21 @@ export function buildApp(
           });
         return result;
       };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      const known = await sessions.getByThread(input.sessionId);
+      if (!known || (!known.parentSessionId && (await sessions.childrenOf(known.id)).length === 0)) return admit(known);
+      for (;;) {
+        const root = await sessionTreeRoot(sessions, known);
+        const admitted = await advisoryLock.withLock(`session-run-admission:${root.id}`, async () => {
+          if ((await sessionTreeRoot(sessions, known)).id !== root.id) return null;
+          if (
+            !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
+            (await sessionTreeRunCount(sessions, runStore.runs, root)) >= SUBAGENT_TREE_RUN_CAP
+          )
+            throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
+          return admit(known);
+        });
+        if (admitted) return admitted;
+      }
     },
   };
   const swarms =
@@ -2885,7 +2890,8 @@ export function buildApp(
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
+        turnRunner.drained(config.shutdownDrainMs),
+      ]).catch(swallowAs("wiring: turn drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
       stopStreamSync();
