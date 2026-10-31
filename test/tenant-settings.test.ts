@@ -5,7 +5,6 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import {
-  createTenantSettingsStore,
   openTenantSecret,
   requireTenantSetting,
   sealTenantSecret,
