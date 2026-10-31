@@ -148,7 +148,11 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
-    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    const identity = createIdentityService(testMap(), {
+      externalMembers: testMap(),
+      principals: testMap(),
+      principalLinks: links,
+    });
     await identity.refresh(true);
     assert.equal(identity.classify(OIDC).id, EMAIL);
     assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
@@ -162,7 +166,11 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
-    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    const identity = createIdentityService(testMap(), {
+      externalMembers: testMap(),
+      principals: testMap(),
+      principalLinks: links,
+    });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
       email: "guest@partner.test",
@@ -476,6 +484,7 @@ describe("link mutation serialization", () => {
         for (const row of reverse ? rows.reverse() : rows) await store.put(row.principalId, row);
         const identity = createIdentityService(store, {
           externalMembers: testMap(),
+          principals: testMap(),
           principalLinks: links,
           directorySyncProtected: ["B"],
         });

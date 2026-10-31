@@ -33,7 +33,7 @@ function deps(run: (req: TurnRequest) => Promise<TurnResult>, dir?: ReturnType<t
   return {
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     run,
     ...(dir ? { directory: dir } : {}),
   };

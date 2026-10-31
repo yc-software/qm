@@ -25,7 +25,7 @@ function captureDeps(): { deps: TriggerDeps; seen: TurnRequest[] } {
     deps: {
       deliveries: createDeliveryStore(),
       idempotency: createIdempotencyStore(testMap()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
       run,
     },
     seen,

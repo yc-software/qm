@@ -87,6 +87,7 @@ import {
   actorAssertionActive,
   createIdentityService,
   type DeactivationRecord,
+  type PrincipalRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
 import {
@@ -625,6 +626,7 @@ export function buildApp(
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
+    principals: artifactMap<PrincipalRecord>("principals"),
     principalLinks,
   });
   void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));

@@ -24,7 +24,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   );
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },

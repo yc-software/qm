@@ -572,6 +572,10 @@ function expired(rec: { expiresAt?: number }, now: number): boolean {
   return typeof rec.expiresAt === "number" && rec.expiresAt < now;
 }
 
+export function grantLive(grant: KeychainGrant, now: number): boolean {
+  return grant.status === "active" && !consumedGrant(grant) && !expired(grant, now);
+}
+
 function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: number): boolean {
   return rec.kind !== "file" && expired(rec, now);
 }
@@ -679,9 +683,7 @@ export function createKeychain(deps: {
 
   async function activeGrantsFor(scopeId: ScopeId): Promise<KeychainGrant[]> {
     const t = now();
-    return (await deps.grants.all()).filter(
-      (g) => g.audienceScopeId === scopeId && g.status === "active" && !consumedGrant(g) && !expired(g, t),
-    );
+    return (await deps.grants.all()).filter((g) => g.audienceScopeId === scopeId && grantLive(g, t));
   }
 
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {

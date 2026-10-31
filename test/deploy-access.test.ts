@@ -43,7 +43,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace(
     [owner, requester, "carol@example.com"].map((principalId) => ({

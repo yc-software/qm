@@ -35,7 +35,7 @@ export interface WebhookStore {
   get(id: string): Promise<Webhook | null>;
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
-  setEnabled(id: string, enabled: boolean): Promise<void>;
+  setEnabled(id: string, enabled: boolean): Promise<boolean>;
   update(id: string, patch: { action: string }): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }

@@ -474,15 +474,26 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   }
   const updated = Object.keys(patch).length > 0 ? await deps.store.update(loop.id, patch) : loop;
   if (!updated) return sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
-  if (patch.state !== undefined && loop.cronId && deps.crons) {
+  if (patch.state !== undefined) {
     try {
-      await deps.crons.setEnabled(loop.cronId, patch.state === "enabled");
+      await followLoopState(deps, loop, patch.state);
     } catch (e) {
-      await deps.store.update(loop.id, { restore: loop });
       return sendJson(ctx.res, 502, { error: "loop_schedule_failed", message: errMessage(e) });
     }
   }
   return sendJson(ctx.res, 200, { loop: updated ?? (await deps.store.get(loop.id)) });
+}
+
+export async function followLoopState(deps: LoopServiceDeps, loop: Loop, state: LoopState): Promise<void> {
+  if (!loop.cronId || !deps.crons) return;
+  try {
+    await deps.crons.setEnabled(loop.cronId, state === "enabled");
+  } catch (e) {
+    await deps.store
+      .update(loop.id, { restore: loop })
+      .catch((restoreError: unknown) => swallow("loop state restore", restoreError));
+    throw e;
+  }
 }
 
 async function deleteLoop(ctx: ApiCtx): Promise<void> {

@@ -468,7 +468,7 @@ export interface App {
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
-  setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
+  setWebhookEnabled(id: string, enabled: boolean): Promise<boolean>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {

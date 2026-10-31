@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { table, card, renderer } from "./shared.ts";
+import { table, card, renderer, badge } from "./shared.ts";
 
 type Services = Record<string, any>;
 export class UsersView {
@@ -8,6 +8,7 @@ export class UsersView {
   services: Services;
   paint: (template: unknown) => void;
   filter = "";
+  showOffboarded = false;
   inviteOpen = false;
   email = "";
   role = "member";
@@ -46,11 +47,28 @@ export class UsersView {
     if (previous && !previous.isConnected) return;
     const active = document.activeElement as HTMLElement | null;
     const focused = !!active && !!previous?.contains(active);
+    const offboarded = (this.data.users || []).filter((u: any) => u.offboarded).length;
     this.services.defaultShell({
       stats: [
         [(this.data.users || []).length, "Users"],
         [(this.data.grants || []).length, "Admins"],
       ],
+      actions: offboarded
+        ? [
+            this.services.twoWayToggle({
+              label: "Offboarded people",
+              options: [
+                { value: "hide", label: "Current" },
+                { value: "show", label: "Show offboarded (" + offboarded + ")" },
+              ],
+              value: this.showOffboarded ? "show" : "hide",
+              onChange: (value: string) => {
+                this.showOffboarded = value === "show";
+                this.draw();
+              },
+            }),
+          ]
+        : [],
       search: {
         value: this.filter,
         placeholder: "principal, role, or scope",
@@ -199,8 +217,10 @@ export class UsersView {
   draw() {
     const s = this.services;
     const matches = (parts: unknown[]) => parts.join(" ").toLowerCase().includes(this.filter.trim().toLowerCase());
-    const users = (this.data.users || []).filter((u: any) =>
-      matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
+    const users = (this.data.users || []).filter(
+      (u: any) =>
+        (this.showOffboarded || !u.offboarded || u.admin?.isAdmin) &&
+        matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
     );
     const externals = (this.data.externalUsers || []).filter((m: any) =>
       matches([m.email, m.role, m.invitedBy || "", m.status]),
@@ -270,7 +290,12 @@ export class UsersView {
     const roster = table(
       ["Principal", "Role", "Last seen", "Sessions", "Turns", "Credentials", "Grants", "", ""],
       users.map((u: any) => [
-        { text: u.principalId, cls: "mono" },
+        u.offboarded || u.deactivated
+          ? {
+              node: html`<span class="mono">${u.principalId}</span>
+                ${u.offboarded ? badge("Offboarded", "warn") : badge("Deactivated", "warn")}`,
+            }
+          : { text: u.principalId, cls: "mono" },
         { node: html`<span class="subline">${u.admin?.isAdmin ? s.labelRole(u.admin.role) : "member"}</span>` },
         u.lastSeenAt
           ? { node: html`<span title=${s.fmtTime(u.lastSeenAt)}>${s.relTime(u.lastSeenAt)}</span>`, cls: "num" }

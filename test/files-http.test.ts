@@ -18,7 +18,7 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as AppDeps);
 }
 

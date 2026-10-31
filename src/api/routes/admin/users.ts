@@ -10,6 +10,7 @@ import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../admin/i
 import { externalMemberActive, validEmail, type ExternalMember } from "../../../identity/external-members.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import { errMessage } from "../../../util/errors.ts";
+import { grantLive } from "../../../credentials/keychain.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
@@ -43,16 +44,25 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
+  const offboarded = ((await deps.identity?.listPrincipals()) ?? []).filter((r) => r.offboarded);
+  for (const principalId of [
+    ...externalUsers.filter((m) => m.kind === "teammate" && m.status === "active").map((m) => m.email),
+    ...offboarded.map((r) => r.principalId),
+  ]) {
+    if (!users.some((u) => samePerson(u.principalId, principalId)))
       users.push({
-        principalId: member.email,
+        principalId,
         sessionCount: 0,
         turnCount: 0,
         lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
+        admin: adminStatusFromGrants(grants, principalId),
       });
   }
+  const rows = users.map((u) => ({
+    ...u,
+    deactivated: deps.identity?.deactivated(u.principalId) === true,
+    offboarded: deps.identity?.offboarded(u.principalId) === true,
+  }));
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
@@ -61,7 +71,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   };
   return sendJson(res, 200, {
     scopeId: scope,
-    users,
+    users: rows,
     grants,
     externalUsers,
     inviteEmail,
@@ -314,10 +324,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
     return sendJson(res, 200, {
       users: new Set(credentials.map((credential) => credential.ownerId)).size,
-      standing: grants.filter(
-        (grant) =>
-          grant.mode === "standing" && grant.status === "active" && (!grant.expiresAt || grant.expiresAt > Date.now()),
-      ).length,
+      standing: grants.filter((grant) => grant.mode === "standing" && grantLive(grant, Date.now())).length,
     });
   }
 
@@ -350,19 +357,14 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
     principalId,
     displayName: namesByKey.get(personKey(principalId)) ?? null,
     credentialCount: credentials.filter((c) => samePerson(c.ownerId, principalId)).length,
-    activeGrantCount: grants.filter(
-      (g) =>
-        samePerson(g.ownerId, principalId) &&
-        g.status === "active" &&
-        (g.expiresAt === undefined || g.expiresAt > Date.now()),
-    ).length,
+    activeGrantCount: grants.filter((g) => samePerson(g.ownerId, principalId) && grantLive(g, Date.now())).length,
     pendingAskCount: asks.filter((a) => samePerson(a.ownerId, principalId) && a.status === "pending").length,
   }));
 
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
 }
 
-async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+export async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
   const member = await deps.directory?.get(requestedPrincipal);
   return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
 }
@@ -398,6 +400,8 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
+    deactivated: deps.identity?.deactivated(principalId) === true,
+    principal: (await deps.identity?.principal(principalId)) ?? null,
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

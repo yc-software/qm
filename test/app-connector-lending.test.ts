@@ -57,7 +57,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     acl,
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
     ownerScopeId: personalScope(PUBLISHER),

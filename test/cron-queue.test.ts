@@ -52,7 +52,7 @@ function instance(
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() }),
     run,
     jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
   });

@@ -1,5 +1,6 @@
-import { html, nothing } from "lit";
-import { card, table, badge, renderer } from "./shared.ts";
+import { html } from "lit";
+import { card, table, badge, renderer, stacked, muted } from "./shared.ts";
+import { offboardingCard } from "./offboarding.ts";
 
 export async function detail(root: HTMLElement, principal: string, s: Record<string, any>) {
   const paint = renderer(root);
@@ -33,12 +34,6 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
   let selectedGrant: any = null;
   let usage: any = null;
   let usageRequest = 0;
-  const stacked = (primary: any, secondary: any) =>
-    html`<div>
-      <div class="primaryline">${primary}</div>
-      ${secondary ? html`<div class="subline">${secondary}</div>` : nothing}
-    </div>`;
-  const muted = (text: string) => html`<span class="subline">${text}</span>`;
   const credName = (id: string) => {
     const c = credentials?.credentials?.find((c: any) => c.id === id);
     return c ? c.service + (c.accountLabel ? " - " + c.accountLabel : "") : id;
@@ -85,6 +80,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
       draw();
     }
   }
+  const offboarding = offboardingCard(principal, s, !!d.deactivated, d.principal, () => draw());
   async function showUsage(grant: any) {
     const request = ++usageRequest;
     selectedGrant = grant;
@@ -307,7 +303,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
             </button>
             <p class="hint">${resetHint}</p>
           </div>`,
-        )}
+        )}${offboarding.render()}
       </div>`,
     );
   }

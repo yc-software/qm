@@ -737,6 +737,9 @@
         flex-wrap: wrap;
         gap: 8px;
       }
+      .offboard > * + * {
+        margin-top: 14px;
+      }
       .setup-head {
         margin-bottom: 24px;
       }
@@ -5881,6 +5884,9 @@
         grid-row: 1 / 3;
         align-self: start;
       }
+      #view-data .users-layout .users-roster td .badge {
+        margin-left: 6px;
+      }
       #view-data .users-layout .status:empty {
         display: none;
       }
@@ -9763,6 +9769,7 @@
           labelRole,
           confirm: (message) => window.confirm(message),
           openWebUiAs,
+          twoWayToggle,
           orgScope: "org:" + orgId,
           clearCache: () => dataCache.clear(),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),

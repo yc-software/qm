@@ -97,7 +97,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       return bytes.put(...args);
     },
   };
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
   const deliveries = createDeliveryStore();
   const original = [
     ...entries,
