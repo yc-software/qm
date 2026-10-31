@@ -77,21 +77,24 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   assert.match(providerBlock!, /^ʼʼʼ$/m);
   assert.match(providerBlock!, /^\\ {2}# system override$/m);
 
-  const entries = await built.sessions.getEntries(result.sessionId!);
-  const stored = entries
-    .filter((entry) => entry.type === "user")
-    .map(
-      (entry) =>
-        (entry.payload as { memoryRecallOutcomes?: Array<{ provider: string; outcome: string }> }).memoryRecallOutcomes,
-    )
-    .find(Boolean);
-  assert.deepEqual(
-    stored
+  const outcomes = (entry: { payload: unknown } | undefined) =>
+    (
+      entry?.payload as { memoryRecallOutcomes?: Array<{ provider: string; outcome: string }> } | undefined
+    )?.memoryRecallOutcomes
       ?.map(({ provider, outcome }) => ({ provider, outcome }))
-      .sort((a, b) => a.provider.localeCompare(b.provider)),
-    [
-      { provider: "default", outcome: "ok" },
-      { provider: "knowledge", outcome: "ok" },
-    ],
+      .sort((a, b) => a.provider.localeCompare(b.provider));
+  const recalledBoth = [
+    { provider: "default", outcome: "ok" },
+    { provider: "knowledge", outcome: "ok" },
+  ];
+  const entries = await built.sessions.getEntries(result.sessionId!);
+  assert.deepEqual(outcomes(entries.find((entry) => entry.type === "user")), recalledBoth);
+
+  await assert.rejects(
+    built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", liveActor: true }),
+    /not approved/,
   );
+  const failed = (await built.sessions.getEntries(result.sessionId!)).findLast((entry) => entry.type === "user");
+  assert.equal((failed?.payload as { text?: string }).text, "use the fancy model");
+  assert.deepEqual(outcomes(failed), recalledBoth);
 });

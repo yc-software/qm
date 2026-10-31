@@ -3029,6 +3029,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
+                ...(recallOutcomes.length ? { memoryRecallOutcomes: recallOutcomes } : {}),
               }
             : undefined;
         const effectiveTurnWallClockMs =
