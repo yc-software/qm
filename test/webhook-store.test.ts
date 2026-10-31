@@ -135,12 +135,12 @@ test("history survives reconstruction without entering webhook listings", async 
   const event = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, event);
   const restored = createWebhookStore(backing, history);
-  assert.deepEqual(await restored.listEvents(wh.id), [event]);
+  assert.deepEqual(await restored.listEvents(wh.id), [{ ...event, pending: true }]);
   assert.equal(JSON.stringify(await restored.list()).includes("hello"), false);
   assert.deepEqual(await restored.listEvents("unknown"), []);
 });
 
-test("history atomically retains the latest 50 and bounds payloads", async () => {
+test("history keeps every unfired event and retains the latest 50 settled ones, with bounded payloads", async () => {
   const store = createWebhookStore(testMap(), testMap());
   const wh = await store.create(base);
   await Promise.all(
@@ -152,8 +152,11 @@ test("history atomically retains the latest 50 and bounds payloads", async () =>
       }),
     ),
   );
+  assert.equal((await store.listEvents(wh.id)).length, 70, "no queued delivery is evicted before it fires");
+  await Promise.all(Array.from({ length: 70 }, (_, i) => store.settleEvent(wh.id, `delivery-${i}`)));
   const events = await store.listEvents(wh.id);
   assert.equal(events.length, 50);
+  assert.ok(events.every((e) => e.pending === false));
   assert.equal(events[0]?.receivedAt, 69);
   assert.equal(events[1]?.payload.length, 16_100);
   assert.equal(events.at(-1)?.receivedAt, 20);
@@ -167,5 +170,5 @@ test("a repeated receipt preserves the original payload and timestamp", async ()
   const original = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, original);
   await store.recordEvent(wh.id, { ...original, receivedAt: 2, payload: "changed" });
-  assert.deepEqual(await store.listEvents(wh.id), [original]);
+  assert.deepEqual(await store.listEvents(wh.id), [{ ...original, pending: true }]);
 });

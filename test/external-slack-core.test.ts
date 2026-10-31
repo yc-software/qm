@@ -13,7 +13,8 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { claimTurn, testRunStore } from "./support/turns.ts";
+import { createTurnLedger } from "../src/turns/turn-ledger.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -160,10 +161,12 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   assert.equal(runs, 1);
 });
 
-test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
+test("external broker requires the current run lease and both external-safe and ordinary grants", async (t) => {
   const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const store = testRunStore();
+  t.after(() => store.close());
+  const { runs } = store;
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const req = request("test");
   const { run: queued } = await runs.enqueue({
@@ -175,7 +178,8 @@ test("external broker requires the current run lease and both external-safe and 
       origin: { kind: "human" },
     },
   });
-  const run = (await runs.claimById(queued.id, "test-worker", 60_000))!;
+  const claimed = (await claimTurn(store.ledger, queued.id))!;
+  const run = { ...claimed.run, leaseToken: claimed.token };
   const claims: CapabilityClaims = {
     actorId: "U1",
     scopeId: `channel:${namespace}:C1`,
@@ -305,7 +309,10 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
       origin: { kind: "human" },
     },
   });
-  const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
+  const ledger = createTurnLedger(config.databaseUrl!);
+  t.after(() => ledger.close());
+  const claimed = (await claimTurn(ledger, queued.id))!;
+  const run = { ...claimed.run, leaseToken: claimed.token };
   let forwarded = 0;
   const server = createServer(b.app, {
     ...serverDeps(config, b),

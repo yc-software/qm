@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testRunStore } from "./support/turns.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
@@ -161,11 +161,8 @@ for (const backend of ["memory", "postgres"] as const) {
   });
 
   test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {
-    const runtime =
-      backend === "memory"
-        ? createPostgresRunStore(testDatabaseUrl())
-        : createPostgresRunStore(process.env.DATABASE_URL!);
-    const { runs } = runtime;
+    const store = testRunStore();
+    const { runs } = store;
     const ids = [`batch:${randomUUID()}`, `batch:${randomUUID()}`];
     const actor = { id: "internal:batch", type: "internal" as const };
     try {
@@ -189,7 +186,7 @@ for (const backend of ["memory", "postgres"] as const) {
       }
       assert.deepEqual(await runs.latestForThreads([]), new Map());
     } finally {
-      await runs.close?.();
+      await store.close();
     }
   });
 }

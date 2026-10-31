@@ -64,13 +64,17 @@ function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof bu
   return built;
 }
 
-function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
+function freshApp(
+  overrides: Partial<Config> = {},
+  securityScreener?: SecurityScreener,
+  appOverrides: Parameters<typeof buildApp>[1] = {},
+) {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     ...overrides,
   });
   config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
-  return buildApp(config, securityScreener ? { securityScreener } : {});
+  return buildApp(config, { ...appOverrides, ...(securityScreener ? { securityScreener } : {}) });
 }
 
 function spyProvisioning(sandbox: Sandbox) {
@@ -367,41 +371,38 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   assert.doesNotMatch(footer, /deploy digest ready/);
 });
 
-test(
-  "an inline turn retries its failed predecessor before executing without a background worker",
-  { timeout: 10_000 },
-  async (t) => {
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-    const built = freshApp();
-    const { app, keychain } = built;
-    assert.ok(keychain);
+test("a turn whose setup fails is retried before the next turn in the conversation runs", async () => {
+  const built = freshApp({}, undefined, { turnRetryDelayMs: 300 });
+  const { app, keychain } = built;
+  assert.ok(keychain);
 
-    const realGrantsForScope = keychain.grantsForScope.bind(keychain);
-    const attempted: string[] = [];
-    const claimForSession = built.runs.claimForSession.bind(built.runs);
-    built.runs.claimForSession = async (...args) => {
-      const run = await claimForSession(...args);
-      if (run) attempted.push(run.request.text);
-      return run;
-    };
-    let injectFailure = true;
-    keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
-      if (injectFailure) {
-        injectFailure = false;
-        throw new Error("injected setup failure");
-      }
-      return realGrantsForScope(...args);
-    };
+  const realGrantsForScope = keychain.grantsForScope.bind(keychain);
+  let injectFailure = true;
+  keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
+    if (injectFailure) {
+      injectFailure = false;
+      throw new Error("injected setup failure");
+    }
+    return realGrantsForScope(...args);
+  };
 
-    await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
-    t.mock.timers.tick(18_000);
+  const first = await app.turn(dm("hi"));
+  assert.equal(first.status, "ok", first.reason);
 
-    const res = await app.turn(dm("hi again"));
-    assert.equal(res.status, "ok", res.reason);
-    assert.doesNotMatch(res.reason ?? "", /session busy/);
-    assert.deepEqual(attempted, ["hi", "hi", "hi again"]);
-  },
-);
+  const res = await app.turn(dm("hi again"));
+  assert.equal(res.status, "ok", res.reason);
+  assert.doesNotMatch(res.reason ?? "", /session busy/);
+
+  const runs = await built.runs.list({ limit: 100 });
+  const retried = runs.find((run) => run.request.text === "hi");
+  const next = runs.find((run) => run.request.text === "hi again");
+  assert.equal(retried?.request.text, "hi");
+  assert.equal(retried?.attempts, 2, "the failed turn was claimed again");
+  assert.equal(retried?.errorAttempts, 1);
+  assert.equal(next?.request.text, "hi again");
+  assert.equal(next?.attempts, 1);
+  assert.ok(next!.startedAt! >= retried!.finishedAt!, "the next turn ran only after the retried one finished");
+});
 
 test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
   const { app } = freshApp();

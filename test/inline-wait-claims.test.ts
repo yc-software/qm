@@ -8,40 +8,47 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { claimTurn, finishTurn } from "./support/turns.ts";
+import { createTurnLedger } from "../src/turns/turn-ledger.ts";
 import type { TurnRequest } from "../src/types.ts";
 
-test("a synchronous turn waiting on a run another worker holds does not poll claims", { timeout: 30_000 }, async () => {
-  const built = buildApp(
-    testConfig({
+test(
+  "a synchronous turn waiting on a run another worker holds does not run it again",
+  { timeout: 30_000 },
+  async () => {
+    const config = testConfig({
       runWaitMs: 5_000,
       dataDir: mkdtempSync(join(tmpdir(), "inline-wait-")),
-    }),
-  );
-  try {
-    const request: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `inline-wait-${randomUUID()}` },
-      text: "hello",
-      idempotencyKey: `held-${randomUUID()}`,
-    };
-    const queued = await built.app.turn({ ...request, async: true });
-    const held = await built.runs.claimById(queued.runId!, "other-worker", 60_000);
-    assert.ok(held?.leaseToken);
-    let claims = 0;
-    const claimForSession = built.runs.claimForSession.bind(built.runs);
-    built.runs.claimForSession = async (...args) => {
-      claims += 1;
-      return claimForSession(...args);
-    };
-    const waiting = built.app.turn(request);
-    await sleep(500);
-    assert.equal(claims, 0);
-    await built.runs.complete(held.id, held.leaseToken, { status: "ok", reply: "done elsewhere" });
-    const result = await waiting;
-    assert.equal(result.status, "ok");
-    assert.equal(result.reply, "done elsewhere");
-  } finally {
-    await built.runtime.stop();
-  }
-});
+    });
+    const built = buildApp(config);
+    const ledger = createTurnLedger(config.databaseUrl!);
+    try {
+      const request: TurnRequest = {
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `inline-wait-${randomUUID()}` },
+        text: "hello",
+        idempotencyKey: `held-${randomUUID()}`,
+      };
+      const queued = await built.app.turn({ ...request, async: true });
+      const held = await claimTurn(ledger, queued.runId!);
+      assert.ok(held);
+      const waiting = built.app.turn(request);
+      await sleep(500);
+      assert.equal(built.modelCalls.length, 0, "the held turn was not run by the waiting caller's runner");
+      assert.equal((await built.runs.get(held.run.id))?.leaseToken, held.token);
+      assert.equal(
+        await finishTurn(held, { status: "ok", sessionId: held.run.sessionId, reply: "done elsewhere" }),
+        true,
+      );
+      const result = await waiting;
+      assert.equal(result.status, "ok");
+      assert.equal(result.reply, "done elsewhere");
+      assert.equal(built.modelCalls.length, 0);
+      assert.equal((await built.runs.get(held.run.id))?.attempts, 1);
+    } finally {
+      await built.runtime.stop();
+      await ledger.close();
+    }
+  },
+);

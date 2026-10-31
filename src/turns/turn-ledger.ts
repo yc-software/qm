@@ -19,7 +19,7 @@ import {
   spawnTask,
   TaskCancelled,
 } from "./absurd.ts";
-import { ABSURD_MIGRATION, TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
+import { ABSURD_MIGRATION, ABSURD_RETENTION_DAYS, TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
 
 const TURN_TASK = "turn";
@@ -28,7 +28,7 @@ export const TURN_YIELD_CHANNEL = "qm_turn_yield";
 const TURN_CLAIM_TIMEOUT_SEC = 60;
 export const TURN_EXTEND_INTERVAL_MS = 20_000;
 const CANCEL_WRAP_UP_GRACE_SEC = 30;
-const TURN_RETENTION_SEC = 7 * 24 * 60 * 60;
+const TURN_RETENTION_SEC = ABSURD_RETENTION_DAYS * 24 * 60 * 60;
 const CLEANUP_BATCH = 1_000;
 const TURN_MAX_DURATION_SEC = 24 * 60 * 60;
 
