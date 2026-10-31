@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
+import type { InlineJobs } from "./support/inline-jobs.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -1171,7 +1172,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     );
   });
 
-  it("expiry: the scheduler sweep fires exactly one expired-resolution turn into the asking channel", async () => {
+  it("expiry: the ask-expiry job fires exactly one expired-resolution turn into the asking channel", async () => {
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1190,16 +1191,16 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
-    await built.scheduler.tick(Date.now());
+    await (built.jobs as InlineJobs).recurring.get("keychain:ask-expiry")!();
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
     assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
 
-    await built.scheduler.tick(Date.now());
+    await (built.jobs as InlineJobs).recurring.get("keychain:ask-expiry")!();
     assert.equal(
       (await resumeTurns(session!.id, /did not answer the access request/)).length,
       1,
-      "a second tick refires nothing — notifiedAt + fireKey both hold",
+      "a second sweep refires nothing — notifiedAt + fireKey both hold",
     );
   });
 });

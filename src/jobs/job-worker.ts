@@ -204,7 +204,8 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     maxAttempts: number | null,
     conn?: AbsurdConnection,
   ): Promise<void> {
-    const pool = conn ?? (await db.pool());
+    const ready = await db.pool();
+    const pool = conn ?? ready;
     const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts }).catch(
       noteError,
     );
