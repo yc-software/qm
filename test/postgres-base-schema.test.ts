@@ -17,6 +17,7 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
   const url = new URL(databaseUrl!);
   url.pathname = `/${name}`;
   const admin = new pg.Pool({ connectionString: url.toString() });
+  admin.on("error", () => undefined);
   try {
     await run(url.toString(), admin);
   } finally {
