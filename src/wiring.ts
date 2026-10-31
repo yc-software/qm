@@ -35,7 +35,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { perTenant } from "./tenants/context.ts";
+import { boundTenant, perTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
@@ -627,6 +627,7 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
+  if (boundTenant()) void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),

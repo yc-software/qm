@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { perTenant, withTenant } from "../src/tenants/context.ts";
+import { perTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
@@ -26,5 +26,5 @@ test("perTenant keeps one value per bound tenant", () => {
 
 test("perTenant fails closed when no tenant is bound", () => {
   const cache = perTenant(() => new Map<string, string>());
-  assert.throws(() => cache(), /No tenant is bound/);
+  assert.throws(() => withoutTenant(() => cache()), /No tenant is bound/);
 });

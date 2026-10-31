@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { currentTenant, withTenant } from "../src/tenants/context.ts";
+import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { neutralizeMentions, setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
 import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -32,7 +32,7 @@ test("each tenant arms and names mentions from its own index", () => {
     withTenant(B, () => toSlackMrkdwn("hi @alex")),
     /<@UBBB>/,
   );
-  assert.throws(() => toSlackMrkdwn("hi @alex"), /No tenant is bound/);
+  assert.throws(() => withoutTenant(() => toSlackMrkdwn("hi @alex")), /No tenant is bound/);
 });
 
 test("admin scope activity snapshots are kept per tenant for a shared store", async () => {
@@ -46,5 +46,5 @@ test("admin scope activity snapshots are kept per tenant for a shared store", as
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual([...withTenant(A, () => scopeActivity(store))!.byScope.keys()], [`channel:${A}`]);
   assert.deepEqual([...withTenant(B, () => scopeActivity(store))!.byScope.keys()], [`channel:${B}`]);
-  assert.throws(() => scopeActivity(store), /No tenant is bound/);
+  assert.throws(() => withoutTenant(() => scopeActivity(store)), /No tenant is bound/);
 });
