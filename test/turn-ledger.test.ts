@@ -70,6 +70,13 @@ async function claim(token = `test:${randomUUID()}`): Promise<{ run: Run; token:
   return { run: run!, token };
 }
 
+async function reclaimLapsed(): Promise<{ run: Run; token: string }> {
+  const sweep = await ledger.claim("turns_people", `test:${randomUUID()}`, "test");
+  assert.equal(sweep.run, null, "the lapsed attempt is failed over to a retry, not reclaimed at once");
+  assert.equal(await retryDue(URL!), 1);
+  return claim();
+}
+
 function note(text: string) {
   return { type: "user" as const, payload: { text }, scopeLabel: scopeId("personal", "alice@example.com") };
 }
@@ -196,7 +203,7 @@ test("an expired claim is taken over by a new attempt and the old holder is fenc
     "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
     [run.absurdRunId],
   );
-  const next = await claim();
+  const next = await reclaimLapsed();
   assert.equal(next.run.id, run.id);
   assert.notEqual(next.run.absurdRunId, run.absurdRunId);
   assert.equal((await absurdRun(next.run.absurdRunId!)).attempt, 2);
@@ -220,7 +227,7 @@ test("a new attempt starts with a clean reply status and the old holder cannot w
     false,
     "a holder whose claim lapsed cannot write delivery state",
   );
-  const next = await claim();
+  const next = await reclaimLapsed();
   assert.equal(next.run.id, run.id);
   assert.deepEqual(
     next.run.deliveryState,
@@ -646,6 +653,7 @@ test(
         "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
         [claimed!.absurdRunId],
       );
+      await eventually(() => retryDue(URL!), { until: (moved) => moved === 1, label: "the lapsed attempt's retry" });
       await eventually(() => started.length, { until: (n) => n === 2 });
       releases[0]!();
       await sleep(100);

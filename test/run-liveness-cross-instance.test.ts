@@ -10,6 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { claimTurn } from "./support/turns.ts";
 import { eventually } from "./support/settle.ts";
+import { retryDue } from "./support/absurd-clock.ts";
 import { createTurnLedger, queueOf } from "../src/turns/turn-ledger.ts";
 
 function setup(threadRef: string) {
@@ -59,10 +60,13 @@ test("a run whose claim lapsed and was taken over fences the old holder out", as
       `UPDATE absurd.r_${queueOf(lapsed.run)} SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1`,
       [lapsed.run.absurdRunId],
     );
-    const takeover = await eventually(() => claimTurn(otherInstance, run.id), {
-      until: (claimed) => claimed !== null,
-      label: "an expired claim is claimable again",
-    });
+    const takeover = await eventually(
+      async () => {
+        await retryDue(databaseUrl);
+        return claimTurn(otherInstance, run.id);
+      },
+      { until: (claimed) => claimed !== null, label: "an expired claim's retry is claimable once due" },
+    );
     assert.ok(takeover);
     assert.equal(takeover.run.attempts, 2);
 
