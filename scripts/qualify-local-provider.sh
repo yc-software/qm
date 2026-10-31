@@ -41,11 +41,14 @@ connector_secret_key="$(node -e 'console.log(require("node:crypto").randomBytes(
 docker network create "$network" >/dev/null
 docker run -d --name "$database" --network "$network" -e "POSTGRES_PASSWORD=$database_password" -e POSTGRES_DB=qm \
   pgvector/pgvector:0.8.1-pg16 >/dev/null
-for _ in $(seq 120); do
-  docker exec "$database" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
+until docker exec "$database" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$database")" != true ]]; then
+    docker logs "$database" >&2
+    echo "the qualification Postgres container stopped before accepting connections" >&2
+    exit 1
+  fi
   sleep 1
 done
-docker exec "$database" pg_isready -h 127.0.0.1 -U postgres
 socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
 docker run --rm --name "$container" --network "$network" --group-add "$socket_group" \
