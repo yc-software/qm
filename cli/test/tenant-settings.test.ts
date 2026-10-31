@@ -134,7 +134,7 @@ test("seeding creates the install tenant, then pushes its settings with the oper
     assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, "sk-ant");
     assert.equal(JSON.parse(body).tenant, "main");
     const expected = createHmac("sha256", signing)
-      .update(`v0:${headers["x-timestamp"]}:PUT\n/v1/tenant-settings\n${body}`)
+      .update(`v0:${headers["x-timestamp"]}:PUT\n/v1/tenant-settings\n\n${body}`)
       .digest("hex");
     assert.equal(headers["x-signature"], `v0=${expected}`);
   } finally {

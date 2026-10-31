@@ -94,6 +94,16 @@ export function createBackgroundOwnershipStore(
       if (!result) throw new Error("Background ownership disappeared");
       return normalized(result);
     },
+    async claimIfNeverSet(deploymentId: string): Promise<BackgroundOwnership> {
+      await ready();
+      const result = await rows.update(key, (stored) =>
+        normalized(stored).setAt === null
+          ? { ownerDeploymentId: deploymentId, setAt: new Date().toISOString(), setBy: deploymentId }
+          : stored,
+      );
+      if (!result) throw new Error("Background ownership disappeared");
+      return normalized(result);
+    },
   };
 }
 

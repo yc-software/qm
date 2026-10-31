@@ -2682,7 +2682,7 @@ test("AWS secret upload registers and records a task revision for a newly suppli
   );
   writeFileSync(
     join(dir, ".env"),
-    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "ANTHROPIC_API_KEY=optional-value"].join("\n"),
+    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "DATABASE_CA_CERT=optional-value"].join("\n"),
   );
   const fake = statefulAws(dir, secretsConfig);
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
@@ -2712,7 +2712,7 @@ test("AWS secret upload registers and records a task revision for a newly suppli
     const names = after.definitions[manifest.tasks.core].containerDefinitions[0].secrets.map(
       (secret: { name: string }) => secret.name,
     );
-    assert.ok(names.includes("ANTHROPIC_API_KEY"));
+    assert.ok(names.includes("DATABASE_CA_CERT"));
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
@@ -2727,7 +2727,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
   );
   writeFileSync(
     join(dir, ".env"),
-    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "ANTHROPIC_API_KEY=optional-value"].join("\n"),
+    [...required.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`), "DATABASE_CA_CERT=optional-value"].join("\n"),
   );
   const fake = statefulAws(dir, secretsConfig, {}, { failForcedDeploymentResponse: true });
   const state = JSON.parse(readFileSync(fake.state, "utf8"));

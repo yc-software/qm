@@ -917,20 +917,6 @@ test("local sandbox config is docker-only and rejects unused Fly settings", () =
   });
 });
 
-test("agent37 is a deployment backend on every target and rejects unused Fly settings", () => {
-  for (const target of ["docker", "fly"] as const) {
-    withConfig({ target, sandbox: { backend: "agent37" } }, ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: { SANDBOX_BACKEND: "agent37" },
-      });
-    });
-  }
-  withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.app"/);
-  });
-});
-
 test("e2b is a deployment backend on every target and rejects unused Fly settings", () => {
   for (const target of ["docker", "fly"] as const) {
     withConfig({ target, sandbox: { backend: "e2b" } }, ({ path }) => {
@@ -945,101 +931,16 @@ test("e2b is a deployment backend on every target and rejects unused Fly setting
   });
 });
 
-test("superserve backend requires the agent template in env.core", () => {
-  withConfig({ sandbox: { backend: "superserve" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-  });
-  withConfig({ env: { core: { SANDBOX_BACKEND: "superserve" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-  });
-  withConfig({ sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "  " } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-  });
-  withConfig(
-    { sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" } });
-    },
-  );
-  withConfig(
-    {
-      sandbox: { backend: "local" },
-      env: { core: { SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: "superserve" }) } },
-    },
-    ({ path }) => assert.doesNotThrow(() => loadConfigAt(path)),
-  );
-});
-
-test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
-  withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: "superserve" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-  });
-  withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: " superserve " } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);
-  });
-  withConfig({ sandbox: { backend: "superserve" }, env: { core: { SANDBOX_BACKEND: "   " } } }, ({ path }) => {
-    assert.throws(
-      () => loadConfigAt(path),
-      /"env.core.SANDBOX_BACKEND" is blank/,
-      "a blank override is refused rather than rendered over the sandbox block",
-    );
-  });
-  withConfig(
-    {
-      target: "fly",
-      sandbox: { backend: "sprites", app: "acme-sandboxes" },
-      env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(
-        sandboxCoreEnv(config),
-        { env: { SANDBOX_BACKEND: "superserve" } },
-        "the overridden backend's settings are not demanded or injected",
-      );
-    },
-  );
-  withConfig(
-    {
-      sandbox: { backend: "local" },
-      env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
-    },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.equal(config.sandbox?.backend, "local");
-    },
-  );
-  withConfig({ sandbox: { backend: "superserve" }, env: { core: { SANDBOX_BACKEND: "local" } } }, ({ path }) => {
-    const { config } = loadConfigAt(path);
-    assert.equal(localSandboxActive(config), true, "docker prepares the local sandbox the override actually runs");
-    assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
-  });
-  withConfig(
-    {
-      sandbox: { backend: "local" },
-      env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
-    },
-    ({ path }) => {
-      assert.equal(
-        localSandboxActive(loadConfigAt(path).config),
-        false,
-        "a remote override never mounts the host docker socket",
-      );
-    },
-  );
-});
-
-test("Superserve configuration preserves existing backend selection and validation", () => {
-  for (const override of ["agent37", "sprites", "", "   "]) {
+test("sandbox backend selection keeps sandbox.backend over env.core overrides and tolerates odd scope maps", () => {
+  for (const override of ["e2b", "sprites", "", "   "]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: override } } }, ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.equal(localSandboxActive(config), true);
       assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
     });
   }
-  withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } }, ({ path }) =>
-    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "agent37"),
+  withConfig({ sandbox: { backend: "e2b" }, env: { core: { SANDBOX_BACKEND: "sprites" } } }, ({ path }) =>
+    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "e2b"),
   );
   for (const scopes of ["invalid", "[]", "null", "42"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_SCOPE_BACKENDS: scopes } } }, ({ path }) =>
