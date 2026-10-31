@@ -4,7 +4,7 @@ import { scopeId, type ScopeId } from "../types.ts";
 export { boundTenant, isTenantId };
 
 type BindHook = (tenant: string) => Promise<unknown>;
-const bindHooks = new Map<BindHook, Map<string, Promise<void>>>();
+const bindHooks = new Map<BindHook, Map<string, Promise<void> | true>>();
 
 export function onFirstBind(hook: BindHook): () => void {
   bindHooks.set(hook, new Map());
@@ -12,17 +12,22 @@ export function onFirstBind(hook: BindHook): () => void {
 }
 
 function prepare(tenant: string): Promise<void> {
-  const runs = [...bindHooks].map(([hook, done]) => {
+  const pending: Array<Promise<void>> = [];
+  for (const [hook, done] of bindHooks) {
     const existing = done.get(tenant);
-    if (existing) return existing;
+    if (existing === true) continue;
+    if (existing) {
+      pending.push(existing);
+      continue;
+    }
     const run = Promise.resolve(tenant)
       .then(hook)
-      .then(() => undefined);
+      .then(() => void done.set(tenant, true));
     done.set(tenant, run);
     run.catch(() => done.get(tenant) === run && done.delete(tenant));
-    return run;
-  });
-  return Promise.all(runs).then(() => undefined);
+    pending.push(run);
+  }
+  return pending.length ? Promise.all(pending).then(() => undefined) : Promise.resolve();
 }
 
 function firstBind(tenant: string): string {
