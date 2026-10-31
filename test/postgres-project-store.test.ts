@@ -99,7 +99,6 @@ test("projects are isolated per tenant and the same id can exist in both", { ski
 test("the conversion backfills projects into the instance tenant and drops the old table", { skip }, async () => {
   const roadmap = {
     id: "p1",
-    orgId: orgId(),
     name: "Roadmap",
     ownerId: "alice",
     memberIds: ["alice", "bob"],
@@ -114,7 +113,6 @@ test("the conversion backfills projects into the instance tenant and drops the o
       assert.deepEqual(await withTenant(tenant, () => store.get("p1")), roadmap);
       assert.deepEqual(await withTenant(tenant, () => store.get("p2")), {
         id: "p2",
-        orgId: orgId(),
         name: "Plain",
         ownerId: "bob",
         memberIds: ["bob"],
@@ -138,11 +136,19 @@ test("the conversion backfills projects into the instance tenant and drops the o
     },
     (admin) =>
       seedKeyValueTable(admin, "projects", {
-        p1: roadmap,
-        p2: { id: "p2", orgId: orgId(), name: "Plain", ownerId: "bob", memberIds: ["bob"], createdAt: 3, updatedAt: 4 },
-        noMembers: { ...roadmap, id: "noMembers", memberIds: "alice" },
-        halfLink: { ...roadmap, id: "halfLink", slackChannel: { channelId: "C2" } },
-        ownerless: { ...roadmap, id: "ownerless", ownerId: undefined },
+        p1: { ...roadmap, orgId: "default-org" },
+        p2: {
+          id: "p2",
+          orgId: "default-org",
+          name: "Plain",
+          ownerId: "bob",
+          memberIds: ["bob"],
+          createdAt: 3,
+          updatedAt: 4,
+        },
+        noMembers: { ...roadmap, orgId: "default-org", id: "noMembers", memberIds: "alice" },
+        halfLink: { ...roadmap, orgId: "default-org", id: "halfLink", slackChannel: { channelId: "C2" } },
+        ownerless: { ...roadmap, orgId: "default-org", id: "ownerless", ownerId: undefined },
       }),
   );
 });
