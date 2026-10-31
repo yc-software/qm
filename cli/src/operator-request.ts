@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { signingHeaders } from "./deployment-layer.ts";
 import { CliError } from "./log.ts";
 import { deploymentSecretValue, isInvalidSecret } from "./util.ts";
 
@@ -36,16 +36,10 @@ export function operatorCredentials(
 }
 
 export function operatorInit(credentials: OperatorCredentials, method: "PUT", path: string, body: string): RequestInit {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signature = createHmac("sha256", credentials.signing)
-    .update(`v0:${timestamp}:${method}\n${path}\n${body}`)
-    .digest("hex");
   return {
     method,
     headers: {
-      "content-type": "application/json",
-      "x-timestamp": String(timestamp),
-      "x-signature": `v0=${signature}`,
+      ...signingHeaders(credentials.signing, method, path, body),
       authorization: `Bearer ${credentials.control}`,
     },
     body,

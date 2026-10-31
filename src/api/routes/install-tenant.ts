@@ -17,5 +17,5 @@ async function installTenant(ctx: ApiCtx): Promise<void> {
 }
 
 export const installTenantRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "PUT", path: "/v1/install/tenant", actor: "system", auth: "source", handle: installTenant },
+  { method: "PUT", path: "/v1/install/tenant", actor: "system", auth: "source", unbound: true, handle: installTenant },
 ];

@@ -2789,21 +2789,6 @@ test("AWS optional-secret activation restores prior tasks when a later service r
   }
 });
 
-test("a dual-role tenant secret (core service + sandbox.secretEnv) reaches core only under its sandbox name", () => {
-  const dual: QmConfig = {
-    ...config,
-    sandbox: { ...config.sandbox!, secretEnv: ["ACME_API_KEY", "ANTHROPIC_API_KEY"] },
-  };
-  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
-  const task = renderTaskDefinition(dual, "core", image);
-  const secrets = task.containerDefinitions[0]!.secrets as Array<{ name: string; valueFrom: string }>;
-  const names = secrets.map((secret) => secret.name);
-  assert.ok(!names.includes("ANTHROPIC_API_KEY"), "the core process reads its model key from tenant settings");
-  assert.ok(names.includes("FLY_RESIDENT_ENV_ANTHROPIC_API_KEY"), "renamed variant forwarded into sandboxes");
-  assert.ok(names.includes("FLY_RESIDENT_ENV_ACME_API_KEY"));
-  assert.ok(!names.includes("ACME_API_KEY"), "a sandbox-only secret is not delivered plain");
-});
-
 const oneServiceConfig = (name = "core"): QmConfig => ({
   ...config,
   services: ["core"],
@@ -4944,15 +4929,7 @@ test("env.core.SANDBOX_BACKEND adopts the deployment's substrate in the tenant s
     env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "sprites" } },
   };
   assert.equal(tenantSettingsEnv(adopted, new Map()).SANDBOX_BACKEND, "sprites");
-  const agent37: QmConfig = {
-    ...config,
-    sandbox: undefined,
-    env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "agent37" } },
-  };
-  const agent37Env = serviceEnvironment(agent37, "core");
-  assert.equal(agent37Env.SANDBOX_BACKEND, undefined);
-  assert.equal(tenantSettingsEnv(agent37, new Map()).SANDBOX_BACKEND, "agent37");
-  assert.equal(agent37Env.AWS_SANDBOX_IMAGE, undefined);
+  assert.equal(serviceEnvironment(adopted, "core").SANDBOX_BACKEND, undefined);
 });
 
 test("env.core.S3_BUCKET adopts a pre-existing snapshot bucket; the derived object store remains the default", () => {

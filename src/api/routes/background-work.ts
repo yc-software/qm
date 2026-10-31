@@ -22,14 +22,6 @@ function status(ctx: ApiCtx, state: BackgroundOwnership): void {
   });
 }
 
-export function requireDeploymentControl(ctx: ApiCtx): boolean {
-  if (!ctx.deps.backgroundOwnership) {
-    sendJson(ctx.res, 503, { error: "background_control_unavailable" });
-    return false;
-  }
-  return requireOperatorControl(ctx, "background_control_unavailable");
-}
-
 export function requireOperatorControl(ctx: ApiCtx, unavailable = "operator_control_unavailable"): boolean {
   const secret = ctx.deps.deploymentControlSecret;
   if (!ctx.secret || !ctx.auth || !isStrongSigningSecret(secret) || !isBearerSecret(secret) || secret === ctx.secret) {
@@ -44,6 +36,12 @@ export function requireOperatorControl(ctx: ApiCtx, unavailable = "operator_cont
     return false;
   }
   return true;
+}
+
+export function requireDeploymentControl(ctx: ApiCtx): boolean {
+  if (ctx.deps.backgroundOwnership) return requireOperatorControl(ctx, "background_control_unavailable");
+  sendJson(ctx.res, 503, { error: "background_control_unavailable" });
+  return false;
 }
 
 async function backgroundWork(ctx: ApiCtx): Promise<void> {

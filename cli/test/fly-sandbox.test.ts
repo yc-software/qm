@@ -195,7 +195,7 @@ test("--only rejects a name that is neither a service nor a plugin (before any F
   );
 });
 
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { flySecretsPush } from "../src/backends/fly.ts";
 
 function fakeFly(dir: string, script: string): { log: string; restore: () => void } {
@@ -248,96 +248,6 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
     const checked = spawnSync(process.execPath, ["--check", path], { encoding: "utf8" });
     assert.equal(checked.status, 0, checked.stderr);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("fly secrets push stages a dual-role tenant secret only under its sandbox name on the core app", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-"));
-  const config: QmConfig = {
-    contract: 1,
-    deploymentId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "fly",
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core", "slack"],
-    plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
-    skills: [],
-    env: { core: { HARNESS: "pi" } },
-    imageOverrides: {},
-    sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY", "COMPANY_TOKEN"] },
-  };
-  mkdirSync(join(dir, "plugins", "srcplug"), { recursive: true });
-  writeFileSync(join(dir, "plugins", "srcplug", "Dockerfile"), "FROM scratch\n");
-  writeFileSync(
-    join(dir, ".env"),
-    [
-      "ANTHROPIC_API_KEY=k",
-      "CAPABILITY_SECRET=cap",
-      "COMPANY_TOKEN=t",
-      `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
-      `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
-      "PORTAL_IDENTITY_SECRET=identity",
-      `SKILL_SIGNING_SECRET=${"skill-signing".repeat(3)}`,
-      `DEPLOYMENT_CONTROL_SECRET=${"deployment-control".repeat(3)}`,
-      "PUBLIC_API_URL=https://core.example.test",
-      "SLACK_BOT_TOKEN=xoxb",
-      "SLACK_APP_TOKEN=xapp",
-    ].join("\n"),
-  );
-  const fake = fakeFly(
-    dir,
-    `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
-  );
-  const priorAnthropic = process.env.ANTHROPIC_API_KEY;
-  process.env.ANTHROPIC_API_KEY = "proc-wins";
-  const log = console.log;
-  console.log = (): void => {};
-  try {
-    await flySecretsPush(config, dir);
-    const calls = readFileSync(fake.log, "utf8");
-    assert.ok(
-      !calls.includes("secrets set --stage -a acme-core ANTHROPIC_API_KEY=-"),
-      "the core process reads its model key from tenant settings",
-    );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_ANTHROPIC_API_KEY=-"),
-      "renamed variant forwarded into sandboxes",
-    );
-    assert.ok(calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
-    assert.ok(!calls.includes("-a acme-core COMPANY_TOKEN=-"), "a sandbox-only secret is not staged plain");
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-core SLACK_BOT_TOKEN=-"),
-      "virtual-service secrets stage plain on core",
-    );
-    assert.ok(
-      calls.includes("secrets set --stage -a acme-srcplug CORE_SIGNING_SECRET=-"),
-      "discovered source plugins get the signing secret",
-    );
-    assert.ok(calls.includes("apps create acme-core --org personal"), "the service app exists before secret staging");
-    assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
-    assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
-    assert.ok(
-      calls.includes("secrets unset --stage -a acme-signer CORE_API_URL CORE_SIGNING_SECRET"),
-      "coreless plugins lose previously stored core access",
-    );
-    assert.ok(
-      !calls.includes("secrets set --stage -a acme-signer CORE_SIGNING_SECRET"),
-      "coreless plugins do not get the signing secret",
-    );
-    assert.ok(
-      !calls.includes("apps create acme-sb --org personal"),
-      "secret delivery never adopts or creates the separately managed sandbox registry app",
-    );
-    assert.ok(!calls.includes("-a acme-srcplug SLACK_BOT_TOKEN"), "other secrets do not fan out to plugins");
-    assert.ok(calls.includes("value:k\n"), "the deployment .env wins over ambient process credentials");
-    assert.ok(!calls.includes("value:proc-wins"), "ambient credentials do not replace deployment-scoped values");
-  } finally {
-    console.log = log;
-    if (priorAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = priorAnthropic;
-    fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

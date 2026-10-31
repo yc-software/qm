@@ -245,18 +245,18 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "create an API key in the Superserve console (https://console.superserve.ai/api-keys)",
   },
   {
+    name: "DATABASE_URL",
+    service: "core",
+    required: { when: { kind: "target", target: "aws" } },
+    description: "Postgres URL of the qm_app login: not the table owner, no superuser, no BYPASSRLS.",
+    managedBy: { default: "terraform", render: "render" },
+  },
+  {
     name: "DATABASE_OWNER_URL",
     service: "core",
     required: { when: { kind: "target", target: "aws" } },
     description:
       "Postgres URL of the login that owns the tables; core uses it only for migrations and cross-tenant claims.",
-    managedBy: { default: "terraform", render: "render" },
-  },
-  {
-    name: "DATABASE_URL",
-    service: "core",
-    required: { when: { kind: "target", target: "aws" } },
-    description: "Postgres URL of the qm_app login: not the table owner, no superuser, no BYPASSRLS.",
     managedBy: { default: "terraform", render: "render" },
   },
   {

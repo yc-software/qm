@@ -89,6 +89,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "ANTHROPIC_API_KEY",
+      "FLY_RESIDENT_ENV_STALE_TOKEN",
       "SKILL_SIGNING_SECRET",
       "DEPLOYMENT_CONTROL_SECRET",
     ]
@@ -138,7 +139,10 @@ else console.log("ok");
     assert.match(calls, /DATABASE_OWNER_URL=-\n {2}value postgresql:\/\/u:p@direct\.pg-1\.flympg\.net\/db/);
     assert.match(calls, /DATABASE_URL=-\n {2}value postgresql:\/\/qm_app:rotated-qm_app@direct\.pg-1\.flympg\.net\/db/);
     assert.match(calls, /DATABASE_READER_URL=-\n {2}value postgresql:\/\/qm_reader:rotated-qm_reader@direct/);
-    assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN ANTHROPIC_API_KEY/);
+    assert.match(
+      calls,
+      /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN ANTHROPIC_API_KEY FLY_RESIDENT_ENV_STALE_TOKEN\n/,
+    );
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
     assert.equal(

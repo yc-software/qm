@@ -988,12 +988,15 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
   });
 }
 
-function unsetTenantSettingsFromCore(appPrefix: string): void {
+function unsetRetiredCoreSecrets(config: QmConfig, appPrefix: string): void {
   const app = `${appPrefix}-core`;
-  const stale = [...(secretNames(app) ?? [])].filter(isTenantSetting);
+  const expected = new Set(computedSecrets(config).flatMap((secret) => runtimeSecretNames("core", secret)));
+  const stale = [...(secretNames(app) ?? [])].filter(
+    (name) => isTenantSetting(name) || (name.startsWith("FLY_RESIDENT_ENV_") && !expected.has(name)),
+  );
   if (!stale.length) return;
   fly(["secrets", "unset", "--stage", "-a", app, ...stale]);
-  note(`removed tenant-owned settings from ${app} env: ${stale.join(", ")}`);
+  note(`removed tenant-owned and retired settings from ${app} env: ${stale.join(", ")}`);
 }
 
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
@@ -1167,7 +1170,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       die("\naborting `up`: set the missing secrets above first (use --stage, the deploy applies them)");
     }
     if (services.includes("core")) {
-      unsetTenantSettingsFromCore(ctx.appPrefix);
+      unsetRetiredCoreSecrets(config, ctx.appPrefix);
       unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
@@ -1702,7 +1705,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   for (const workload of runnableServices(config.services))
     ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
-  unsetTenantSettingsFromCore(prefix);
+  unsetRetiredCoreSecrets(config, prefix);
   unsetDisabledFlyPublisherToken(config, prefix);
   unsetCorelessPluginCoreSecrets(plugins, prefix);
   const stagedApps = new Set<string>();
