@@ -11,7 +11,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
@@ -585,7 +585,7 @@ export function createSwarmService(deps: {
       }),
     );
   }
-  const sweep = (): Promise<void> => {
+  const sweep = crossTenantLoop((): Promise<void> => {
     sweeping ??= (async () => {
       const pending = (selecting ??= store.pending(afterId).finally(() => {
         selecting = undefined;
@@ -598,7 +598,7 @@ export function createSwarmService(deps: {
       sweeping = undefined;
     });
     return sweeping;
-  };
+  });
   const sweeper = createSweeper(sweep, 2_000, { label: "swarm-outbox", immediate: true });
 
   return {

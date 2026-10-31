@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { configurePgPooling, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { withoutTenant } from "../../src/tenants/context.ts";
 import { createSlackTables, type SlackTables } from "../../src/slack/slack-tables.ts";
 import { seedTestTenants } from "./tenant-seed.ts";
 import { testDatabaseUrl } from "./test-database.ts";
@@ -47,7 +48,8 @@ export async function withSlackDb(
     await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO qm_app`);
     store = createSlackTables(appUrl.toString());
-    await fn({ store, owner, admin, tenant: first, otherTenant });
+    const made = store;
+    await withoutTenant(() => fn({ store: made, owner, admin, tenant: first, otherTenant }));
   } finally {
     await store?.pool.close();
     await owner.pool.close();

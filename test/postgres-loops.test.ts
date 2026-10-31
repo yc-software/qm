@@ -388,20 +388,16 @@ test("ingress sources and deliveries queue per tenant and background claims span
       new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
     );
     assert.equal(await store.deliveries.pruneCompleted(60), 2);
-    const inbox = await store.loopStore.inboxLoops();
-    assert.deepEqual(
-      new Set(inbox.map((l) => `${l.tenantId}/${l.name}`)),
-      new Set([`${tenant}/Inbox`, `${otherTenant}/Other inbox`]),
-    );
     const stale = await store.loopStore.staleGoverned(Date.now() + 10);
     assert.deepEqual(
       stale.map((l) => [l.tenantId, l.name]),
       [[tenant, "Inbox"]],
     );
     assert.deepEqual(
-      (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => l.tenantId),
-      [tenant],
+      (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => `${l.tenantId}/${l.name}`),
+      [`${tenant}/Inbox`],
     );
+    await assert.rejects(store.loopStore.inboxLoops(), /No tenant is bound/);
   });
 });
 

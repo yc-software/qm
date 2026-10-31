@@ -42,7 +42,15 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 export const ownerDatabaseUrl = (connectionString: string): string =>
   connectionString === poolingConfig.databaseUrl && poolingConfig.ownerUrl ? poolingConfig.ownerUrl : connectionString;
 
+const ownedDatabases = new Map<string, string>();
+
+export function registerOwnerLogin(connectionString: string, ownerUrl: string): void {
+  ownedDatabases.set(connectionString, ownerUrl);
+}
+
 function ownerLogin(connectionString: string): string {
+  const registered = ownedDatabases.get(connectionString);
+  if (registered) return registered;
   const { databaseUrl, ownerUrl } = poolingConfig;
   if (!ownerUrl || (connectionString !== databaseUrl && connectionString !== ownerUrl))
     throw new Error("Cross-tenant claims need DATABASE_OWNER_URL for this database");

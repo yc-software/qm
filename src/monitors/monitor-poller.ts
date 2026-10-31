@@ -15,7 +15,7 @@ import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 
 const TICK_LEASE_KEY = "monitor:poller:tick";
 const MAX_EVENT_CHARS = 16_000;
@@ -332,13 +332,13 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     }
   }
 
-  const tick = async (nowArg?: number): Promise<void> => {
+  const tick = crossTenantLoop(async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
     const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
     if (deps.admittedWork) await deps.admittedWork.run(work);
     else await work();
-  };
+  });
 
   const sweeper = createSweeper(() => tick().catch(reportFailureAs("monitor: tick", undefined)), 10_000, {
     label: "monitor",

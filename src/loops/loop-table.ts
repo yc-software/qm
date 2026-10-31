@@ -258,9 +258,7 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
       await q(`DELETE FROM loops WHERE ${MINE} AND id = $1`, [id]);
     },
     async inboxLoops() {
-      return (
-        await claimAcrossTenants(db, `${SELECT} WHERE ${INBOX} AND state <> 'archived' ORDER BY tenant_id, id`)
-      ).map(tenantRow);
+      return (await db.q(`${SELECT} WHERE ${INBOX} AND state <> 'archived' ORDER BY id`)).map(tenantRow);
     },
     async staleGoverned(now) {
       const rows = await claimAcrossTenants(

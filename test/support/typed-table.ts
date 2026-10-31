@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { configurePgPooling, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { withoutTenant } from "../../src/tenants/context.ts";
 
 export const PG_URL = process.env.DATABASE_URL;
 export const skipWithoutPg = PG_URL ? false : "set DATABASE_URL (a Postgres) to run typed-table tests";
@@ -45,7 +46,8 @@ export async function withTypedTableDb<S extends Closable>(
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
     configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
     store = make(appUrl.toString());
-    await fn({ store, admin, url: appUrl.toString(), tenant, otherTenant });
+    const made = store;
+    await withoutTenant(() => fn({ store: made, admin, url: appUrl.toString(), tenant, otherTenant }));
   } finally {
     await store?.close?.();
     configurePgPooling({});

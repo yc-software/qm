@@ -4,7 +4,7 @@ import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-gr
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
-import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { createPgPool, registerOwnerLogin, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { pgRows, type RowTable } from "../../src/persistence/keyed-rows.ts";
 import { createPostgresDeploymentRows } from "../../src/deploy/deploy-store.ts";
 import { createSandboxResourceStores } from "../../src/sandbox/sandbox-resource-store.ts";
@@ -45,7 +45,12 @@ function createDatabaseSync(request: { template?: string }): string {
 function databaseUrl(name: string): string {
   const url = baseDatabaseUrl();
   url.pathname = `/${name}`;
-  return url.toString();
+  return ownedTestDatabase(url.toString());
+}
+
+export function ownedTestDatabase(url: string): string {
+  registerOwnerLogin(url, url);
+  return url;
 }
 
 export function testDatabaseUrl(): string {

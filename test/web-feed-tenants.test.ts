@@ -15,7 +15,7 @@ import { canonicalPayload, TENANT_HEADER } from "../plugins/chassis/src/source-a
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { OTHER_TENANT, seedTestTenants, TEST_TENANT } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 const A = TEST_TENANT;
@@ -25,30 +25,28 @@ const TARGET = `web:${EMAIL}:t1`;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
-for (const backend of ["memory", "postgres"] as const) {
-  describe(`${backend} web feeds`, { skip: backend === "postgres" && !DATABASE_URL }, () => {
-    let built: BuiltApp;
-    let server: Server;
-    before(async () => {
-      if (backend === "postgres") await seedTestTenants(DATABASE_URL!);
-      built = buildApp(
-        testConfig({
-          dataDir: mkdtempSync(join(tmpdir(), "web-feed-tenants-")),
-          ...(backend === "postgres" ? { databaseUrl: appLogin(DATABASE_URL!), databaseOwnerUrl: DATABASE_URL! } : {}),
-        }),
-      );
-      server = withoutTenant(() => createServer(built.app, { signingSecret: SECRET }));
-      await new Promise<void>((resolve) => withoutTenant(() => server.listen(0, resolve)));
-      base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    });
-    after(async () => {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-      await built.runtime.stop();
-    });
-    feedTests(() => built);
+describe("web feeds", { skip: !DATABASE_URL }, () => {
+  let built: BuiltApp;
+  let server: Server;
+  before(async () => {
+    built = buildApp(
+      testConfig({
+        dataDir: mkdtempSync(join(tmpdir(), "web-feed-tenants-")),
+        databaseUrl: appLogin(DATABASE_URL!),
+        databaseOwnerUrl: DATABASE_URL!,
+      }),
+    );
+    server = withoutTenant(() => createServer(built.app, { signingSecret: SECRET, replayDedupe: built.replayDedupe }));
+    await new Promise<void>((resolve) => withoutTenant(() => server.listen(0, resolve)));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });
-}
+  after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await built.runtime.stop();
+  });
+  feedTests(() => built);
+});
 
 let base = "";
 

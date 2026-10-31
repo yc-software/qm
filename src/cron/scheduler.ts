@@ -20,7 +20,7 @@ import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { inTenantOf, type EachTenant } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf, type EachTenant } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
@@ -421,7 +421,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  const tick = async (nowArg?: number): Promise<void> => {
+  const tick = crossTenantLoop(async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
     await withWork(() =>
@@ -432,7 +432,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await sweepAsks(t);
       }),
     );
-  };
+  });
 
   const sweepAsks = (t: number): Promise<void> =>
     Promise.all([
@@ -509,7 +509,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (result === null) await enqueueNext(job.cronId);
   }
 
-  async function reconcile(): Promise<void> {
+  const reconcile = crossTenantLoop(async (): Promise<void> => {
     try {
       for (const cron of await deps.crons.scheduled()) {
         if (stopped) break;
@@ -519,7 +519,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
     }
-  }
+  });
 
   async function maintain(): Promise<void> {
     await sweepStranded(now());

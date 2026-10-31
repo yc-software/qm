@@ -14,7 +14,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "./sources/adapter.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
 
 export interface LoopIngress {
@@ -461,7 +461,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       await enqueue(source, deliveryId, { entries: [entry] });
       return { status: 202, body: "Accepted" };
     },
-    async maintain() {
+    maintain: crossTenantLoop(async () => {
       if (Date.now() >= nextCleanupAt) {
         await deps.deliveries.pruneCompleted(Date.now() - 30 * 86_400_000);
         nextCleanupAt = Date.now() + 86_400_000;
@@ -477,7 +477,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           }).catch((error) => swallow("Loop ingress maintenance", error)),
         ),
       );
-    },
+    }),
     process,
   };
 }
