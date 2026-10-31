@@ -7,18 +7,10 @@ import type { Target } from "./providers.ts";
  */
 export type TargetEnvDefaults = (config: QmConfig, service: string, name: string) => string | undefined;
 
-const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { SANDBOX_BACKEND: "aws" },
-};
-
 export const TARGET_ENV_DEFAULTS: Record<Target, TargetEnvDefaults> = {
   docker: () => undefined,
   fly: () => undefined,
   render: () => undefined,
-  aws: (config, service, name) => {
-    const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];
-    if (rendered === undefined) return undefined;
-    if (name === "SANDBOX_BACKEND") return config.sandbox?.backend ?? rendered;
-    return rendered;
-  },
+  aws: (config, service, name) =>
+    service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined,
 };

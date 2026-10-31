@@ -12,15 +12,15 @@ import { S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import {
   createRenderAppStorage,
   renderAppStoragePolicy,
-  type StoredRenderAppStorage,
+  RENDER_APP_STORAGE,
 } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
-import { testMap } from "./support/test-database.ts";
+import { testRows } from "./support/test-database.ts";
 
 type StorageOptions = Parameters<typeof createRenderAppStorage>[0];
 
 function fixture(handle: (call: FakeRenderApiCall) => unknown, extra: Partial<StorageOptions> = {}) {
-  const store = testMap<StoredRenderAppStorage>();
+  const store = testRows(RENDER_APP_STORAGE);
   const api = createFakeRenderApi((call) => {
     if (call.path === "/services/srv-minio" && call.method === "GET")
       return { ownerId: "tea-test", environmentId: "env-test", type: "web_service" };

@@ -1,78 +1,16 @@
 import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
-import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
-  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
-  awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
-  agent37Sandbox: Agent37SandboxEnv;
-  superserveSandbox: SuperserveSandboxEnv;
   e2bSandbox: E2bSandboxEnv;
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
   modalSandbox: ModalSandboxEnv;
-  porterSandbox: PorterSandboxEnv;
   renderSandbox: RenderSandboxEnv;
-}
-
-interface AwsSandboxEnv {
-  region: string;
-  profile?: string;
-  imageIdentifier: string;
-  imageVersion?: string;
-  executionRoleArn?: string;
-  ingressConnectorArns?: string[];
-  egressConnectorArns?: string[];
-  s3Bucket?: string;
-  s3Prefix?: string;
-  agentPort?: number;
-  maxIdleDurationSeconds?: number;
-  suspendedDurationSeconds?: number;
-  maximumDurationInSeconds?: number;
-  rotateAfterSeconds?: number;
-  snapshotIntervalMs?: number;
-  defaultTimeoutSec?: number;
-  cpus?: number;
-  memoryMb?: number;
-  diskGb?: number;
-}
-
-function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
-  const csv = (s: string | undefined): string[] | undefined =>
-    s
-      ? s
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean)
-      : undefined;
-  const ingress = csv(env.AWS_SANDBOX_INGRESS_CONNECTORS);
-  const egress = csv(env.AWS_SANDBOX_EGRESS_CONNECTORS);
-  return {
-    region: env.AWS_SANDBOX_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-west-2",
-    ...(env.AWS_SANDBOX_PROFILE ? { profile: env.AWS_SANDBOX_PROFILE } : {}),
-    imageIdentifier: env.AWS_SANDBOX_IMAGE ?? "qm-microvm-sandbox",
-    ...(env.AWS_SANDBOX_IMAGE_VERSION ? { imageVersion: env.AWS_SANDBOX_IMAGE_VERSION } : {}),
-    ...(env.AWS_SANDBOX_EXEC_ROLE_ARN ? { executionRoleArn: env.AWS_SANDBOX_EXEC_ROLE_ARN } : {}),
-    ...(ingress ? { ingressConnectorArns: ingress } : {}),
-    ...(egress ? { egressConnectorArns: egress } : {}),
-    ...(env.AWS_SANDBOX_S3_BUCKET ? { s3Bucket: env.AWS_SANDBOX_S3_BUCKET } : {}),
-    ...(env.AWS_SANDBOX_S3_PREFIX ? { s3Prefix: env.AWS_SANDBOX_S3_PREFIX } : {}),
-    ...optNum(env, "AWS_SANDBOX_AGENT_PORT", "agentPort"),
-    ...optNum(env, "AWS_SANDBOX_MAX_IDLE_SEC", "maxIdleDurationSeconds"),
-    ...optNum(env, "AWS_SANDBOX_SUSPENDED_SEC", "suspendedDurationSeconds"),
-    ...optNum(env, "AWS_SANDBOX_MAX_DURATION_SEC", "maximumDurationInSeconds"),
-    ...optNum(env, "AWS_SANDBOX_ROTATE_AFTER_SEC", "rotateAfterSeconds"),
-    ...optNum(env, "AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", "snapshotIntervalMs"),
-    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
-    ...optNum(env, "AWS_SANDBOX_CPUS", "cpus"),
-    ...optNum(env, "AWS_SANDBOX_MEMORY_MB", "memoryMb"),
-    ...optNum(env, "AWS_SANDBOX_DISK_GB", "diskGb"),
-  };
 }
 
 interface LocalSandboxEnv {
@@ -280,17 +218,6 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
   };
 }
 
-interface PorterSandboxEnv {
-  image?: string;
-  token?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  homeDir?: string;
-  ttlSec?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
-}
-
 export function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   const deployProjectId = numEnvStrict("PORTER_DEPLOY_PROJECT_ID", env.PORTER_DEPLOY_PROJECT_ID);
   const deployClusterId = numEnvStrict("PORTER_DEPLOY_CLUSTER_ID", env.PORTER_DEPLOY_CLUSTER_ID);
@@ -304,106 +231,14 @@ export function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
 export const porterLocatorPresent = (env: NodeJS.ProcessEnv): boolean =>
   Boolean(porterApiBaseUrl(env) || env.PORTER_CLUSTER_ID || env.KUBERNETES_SERVICE_HOST);
 
-function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
-  const token = env.PORTER_DEPLOY_API_TOKEN;
-  const baseUrl = porterApiBaseUrl(env);
-  const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
-  return {
-    ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
-    ...(token ? { token } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
-    ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
-    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
-  };
-}
-
-interface Agent37SandboxEnv {
-  apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  template?: string;
-  cpus?: number;
-  memoryGb?: number;
-  diskGb?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
-}
-
-function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
-  return {
-    ...(env.AGENT37_API_KEY ? { apiKey: env.AGENT37_API_KEY } : {}),
-    ...(env.AGENT37_API_BASE_URL ? { baseUrl: env.AGENT37_API_BASE_URL } : {}),
-    ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
-    ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
-    ...optNum(env, "AGENT37_CPUS", "cpus"),
-    ...optNum(env, "AGENT37_MEMORY_GB", "memoryGb"),
-    ...optNum(env, "AGENT37_DISK_GB", "diskGb"),
-    ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
-    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
-  };
-}
-
-interface SuperserveSandboxEnv {
-  apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  template?: string;
-  homeDir?: string;
-  idlePauseSec?: number;
-  retentionSec?: number;
-  egressAllow?: string[];
-  egressDeny?: string[];
-  defaultTimeoutSec?: number;
-  configGeneration?: number;
-}
-
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
-
-function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
-  const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
-  const egressDeny = csvList(env.SUPERSERVE_EGRESS_DENY);
-  const configGeneration = numEnvStrict("SUPERSERVE_CONFIG_GENERATION", env.SUPERSERVE_CONFIG_GENERATION);
-  if (configGeneration !== undefined && (!Number.isSafeInteger(configGeneration) || configGeneration < 0)) {
-    throw new Error(
-      `SUPERSERVE_CONFIG_GENERATION=${JSON.stringify(env.SUPERSERVE_CONFIG_GENERATION)} must be a nonnegative safe integer, or unset it.`,
-    );
-  }
-  return {
-    ...(env.SUPERSERVE_API_KEY ? { apiKey: env.SUPERSERVE_API_KEY } : {}),
-    ...(env.SUPERSERVE_BASE_URL?.trim() ? { baseUrl: env.SUPERSERVE_BASE_URL.trim() } : {}),
-    ...(env.SUPERSERVE_NAME_PREFIX ? { namePrefix: env.SUPERSERVE_NAME_PREFIX } : {}),
-    ...(env.SUPERSERVE_TEMPLATE?.trim() ? { template: env.SUPERSERVE_TEMPLATE.trim() } : {}),
-    ...(env.SUPERSERVE_HOME_DIR ? { homeDir: env.SUPERSERVE_HOME_DIR } : {}),
-    ...optNum(env, "SUPERSERVE_IDLE_PAUSE_SEC", "idlePauseSec"),
-    ...optNum(env, "SUPERSERVE_RETENTION_SEC", "retentionSec"),
-    ...(egressAllow ? { egressAllow } : {}),
-    ...(egressDeny ? { egressDeny } : {}),
-    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
-    ...(configGeneration !== undefined ? { configGeneration } : {}),
-  };
-}
-
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
-    agent37: Boolean(config.agent37Sandbox?.apiKey),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
-    aws: Boolean(config.awsSandbox?.s3Bucket),
-    porter: Boolean(config.porterSandbox?.token),
     render: Boolean(config.renderSandbox?.apiKey && config.renderSandbox?.workspaceId),
   };
   const enabled = new Set<SandboxBackendName>([config.sandboxBackend]);
@@ -413,25 +248,21 @@ export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendN
   return [...enabled];
 }
 
-function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): SandboxBackendName {
+function sandboxBackendEnvStrict(value: string | undefined): SandboxBackendName {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
   if (
-    backend === "aws" ||
     backend === "local" ||
     backend === "sprites" ||
     backend === "smolmachines" ||
     backend === "e2b" ||
     backend === "modal" ||
-    backend === "agent37" ||
-    backend === "superserve" ||
     backend === "do-managed-agents" ||
-    backend === "porter" ||
     backend === "render"
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
+    `SANDBOX_BACKEND=${JSON.stringify(value)} is not recognized — use local, sprites, smolmachines, e2b, modal, do-managed-agents, or render, or unset it.`,
   );
 }
 
@@ -486,23 +317,13 @@ function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
       "[config] SANDBOX_BACKEND=smolmachines without SMOLMACHINES_EGRESS_PROXY_URL — machines are created with open outbound networking and NO egress enforcement (fail-open); set SMOLMACHINES_EGRESS_PROXY_URL to allow-list only the egress proxy.",
     );
   }
-  if (env.SANDBOX_BACKEND === "porter" && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
-    );
-  }
 }
 
 export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   warnUnprotectedSandboxes(env);
-  if (env.SANDBOX_BACKEND === "porter" && !porterLocatorPresent(env)) {
-    throw new Error(
-      "SANDBOX_BACKEND=porter requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.",
-    );
-  }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, render, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, do-managed-agents, render, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
@@ -518,33 +339,11 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
         `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`,
       );
   }
-  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
-  if (env.SANDBOX_SCOPE_BACKENDS) {
-    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
-    if (!values || typeof values !== "object" || Array.isArray(values))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
-    for (const [kind, value] of Object.entries(values)) {
-      const parsed = parseScopeId(kind + ":scope").kind;
-      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
-        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
-    }
-  }
-  if (sandboxBackend === "superserve" && !env.SUPERSERVE_TEMPLATE?.trim()) {
-    throw new Error(
-      "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
-    );
-  }
   return {
     sandboxBackend,
-    legacySandboxScopeDefaults,
-    awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
-    agent37Sandbox: agent37SandboxEnv(env),
-    superserveSandbox: superserveSandboxEnv(env),
-    porterSandbox: porterSandboxEnv(env),
     renderSandbox: renderSandboxEnv(env),
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),

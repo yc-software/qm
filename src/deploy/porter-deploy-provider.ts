@@ -1,3 +1,5 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
@@ -27,8 +29,8 @@ import {
   waitPorterRunning,
   type PorterClientLike,
   type PorterSandboxLike,
-} from "../sandbox/porter-client.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+} from "./porter-client.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -59,6 +61,37 @@ export interface StoredPorterDeployBody {
   createdAtMs: number;
 }
 
+const PORTER_DEPLOY_BODIES_COLUMNS: RowColumns<StoredPorterDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  sandboxId: "text",
+  name: "text",
+  host: "text",
+  port: "bigint",
+  createdAtMs: "bigint",
+};
+
+export const PORTER_DEPLOY_BODIES: RowTable<StoredPorterDeployBody, "deploymentId"> = {
+  table: "porter_deploy_bodies",
+  key: "deploymentId",
+  recordKey: true,
+  columns: PORTER_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "porter_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "name TEXT NOT NULL",
+        "host TEXT NOT NULL",
+        "port BIGINT",
+        "created_at_ms BIGINT NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("porter_deploy_bodies", PORTER_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
+
 export interface PorterDeployProviderOptions {
   appsDomain?: string;
   token?: string;
@@ -71,7 +104,7 @@ export interface PorterDeployProviderOptions {
   readyWindowSec?: number;
   resolveCacheMs?: number;
   client?: PorterClientLike;
-  store: DurableMap<StoredPorterDeployBody>;
+  store: Pick<KeyedRows<StoredPorterDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }

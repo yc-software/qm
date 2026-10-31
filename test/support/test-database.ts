@@ -5,6 +5,9 @@ import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "..
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { pgRows, type RowTable } from "../../src/persistence/keyed-rows.ts";
+import { createPostgresDeploymentRows } from "../../src/deploy/deploy-store.ts";
+import { createSandboxResourceStores } from "../../src/sandbox/sandbox-resource-store.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -92,13 +95,20 @@ export function testAdminGrantStore(
   return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
 }
 
+export function testRows<T, K extends string>(spec: RowTable<T, K>) {
+  return pgRows(testDatabaseUrl(), spec);
+}
+
+export function testSandboxResourceStores() {
+  return createSandboxResourceStores(testDatabaseUrl());
+}
+
+export function testDeploymentRows() {
+  return createPostgresDeploymentRows(testDatabaseUrl());
+}
+
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
-  return {
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
-    pg: maps.pool,
-    ...backings,
-  };
+  return { deployments: testDeploymentRows(), ...backings };
 }

@@ -1,15 +1,44 @@
 import { ECSClient, DescribeTasksCommand, type DescribeTasksCommandOutput } from "@aws-sdk/client-ecs";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, RowTable } from "../persistence/keyed-rows.ts";
 
 export interface FlyPeerClaim {
   taskArn: string;
   stoppedConfirmedAt?: string;
 }
 
+export const FLY_PEER_CLAIMS: RowTable<FlyPeerClaim, "peerId"> = {
+  table: "fly_peer_claims",
+  key: "peerId",
+  global: true,
+  columns: { peerId: "text", taskArn: "text", stoppedConfirmedAt: "text" },
+  migrations: [
+    {
+      id: "tenancy/fly_peer_claims/0001-typed",
+      statements: [
+        `SET LOCAL lock_timeout = '5s'`,
+        `CREATE TABLE IF NOT EXISTS fly_peer_claims(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+        `ALTER TABLE fly_peer_claims RENAME TO fly_peer_claims_kv`,
+        `ALTER INDEX fly_peer_claims_pkey RENAME TO fly_peer_claims_kv_pkey`,
+        `CREATE TABLE fly_peer_claims(peer_id TEXT PRIMARY KEY, task_arn TEXT NOT NULL, stopped_confirmed_at TEXT)`,
+        `INSERT INTO fly_peer_claims(peer_id, task_arn, stopped_confirmed_at)
+           SELECT id, json->>'taskArn', json->>'stoppedConfirmedAt' FROM fly_peer_claims_kv`,
+        `DROP TABLE fly_peer_claims_kv`,
+        `DO $drop_version$ BEGIN
+           IF to_regclass('durable_map_versions') IS NOT NULL THEN
+             DELETE FROM durable_map_versions WHERE tbl = 'fly_peer_claims';
+           END IF;
+         END $drop_version$`,
+      ],
+    },
+  ],
+};
+
+export type FlyPeerClaims = Pick<KeyedRows<FlyPeerClaim>, "get" | "putIfAbsent" | "update">;
+
 export async function claimFlyPeer(opts: {
   peerIds: readonly string[];
   taskArn: string;
-  claims: DurableMap<FlyPeerClaim>;
+  claims: FlyPeerClaims;
   taskStopped: (taskArn: string) => Promise<boolean>;
 }): Promise<string> {
   if (!opts.taskArn || !opts.peerIds.length || new Set(opts.peerIds).size !== opts.peerIds.length)
@@ -49,7 +78,7 @@ export function createEcsTaskStopped(opts: {
 
 export async function recordStoppedFlyPeers(opts: {
   peerIds: readonly string[];
-  claims: DurableMap<FlyPeerClaim>;
+  claims: FlyPeerClaims;
   taskStopped: (taskArn: string) => Promise<boolean>;
 }): Promise<void> {
   for (const id of opts.peerIds) {
