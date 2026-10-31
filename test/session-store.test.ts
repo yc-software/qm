@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "../src/sessions/session-store.ts";
-import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
+import { parseSessionWakeRef } from "../src/edge/http/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";

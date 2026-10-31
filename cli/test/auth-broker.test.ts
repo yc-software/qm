@@ -10,7 +10,7 @@ import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
 import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
-import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
+import { isReservedContainerName, SERVICE_NAMES, serviceDef, serviceHost } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const brokerStack = join(repoRoot, "deploy", "stacks", "broker", "qm.config.jsonc");
@@ -35,77 +35,66 @@ function configText(over: { services?: string; env?: string } = {}): string {
   }`;
 }
 
-test("the auth service is a first-class, privately addressed service with its own ports", () => {
-  assert.ok(SERVICE_NAMES.includes("auth"));
-  assert.ok(isReservedContainerName("auth"), "a third-party plugin may not shadow the broker");
-  const def = serviceDef("auth");
-  assert.equal(def.docker.internalPort, 8080);
-  assert.equal(def.docker.hostPortOffset, undefined, "docker must not publish the broker on a host port");
+test("the web surfaces are names the edge hosts, reserved from plugins", () => {
+  for (const name of ["web-ui", "admin", "portal", "auth", "slack"]) {
+    assert.ok(!SERVICE_NAMES.includes(name as never), `${name} is not a separate workload`);
+    assert.equal(serviceHost(name), "edge");
+    assert.ok(isReservedContainerName(name), "a third-party plugin may not shadow an edge-hosted surface");
+  }
+  for (const name of ["core", "edge", "harness"]) assert.ok(isReservedContainerName(name), name);
   const offsets = SERVICE_NAMES.map((name) => serviceDef(name).docker.hostPortOffset);
   assert.equal(new Set(offsets).size, offsets.length, "host port offsets stay unique");
-  const slots = SERVICE_NAMES.map((name) => serviceDef(name).dev?.portSlotOffset);
-  assert.equal(new Set(slots).size, slots.length, "dev port slots stay unique");
-  assert.ok(def.order < serviceDef("portal").order, "the broker comes up before the portal that publishes it");
-  assert.deepEqual(
-    def.fly?.deployFlags,
-    ["--ha=false", "--flycast", "--no-public-ips"],
-    "the broker never gets a public IP",
-  );
-  assert.equal(def.fly?.flycast, true);
 });
 
-test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {
-  const portal = derivedTomlFor(brokerConfig(), "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
-  assert.match(portal, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
-  assert.match(portal, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
-  assert.match(portal, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
-  assert.match(portal, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
-  assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
-  assert.match(portal, /AUTH_BROKER_PREFIX = "\/idp"/);
-  assert.match(portal, /OIDC_PRINCIPAL_CLAIM = "email"/);
-  assert.match(portal, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
-  assert.doesNotMatch(portal, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
-
-  const core = derivedTomlFor(brokerConfig(), "core", repoRoot);
+test("fly derives the whole OIDC block from the embedded broker into the edge only", () => {
+  const core = derivedTomlFor(brokerConfig(), "edge", repoRoot);
+  assert.match(core, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
+  assert.match(core, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
+  assert.match(core, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
+  assert.match(core, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
+  assert.match(core, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
+  assert.match(core, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
+  assert.match(core, /AUTH_EMBEDDED = "1"/);
+  assert.match(core, /AUTH_BROKER_PREFIX = "\/idp"/);
+  assert.match(core, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
+  assert.match(core, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
+  assert.match(core, /OIDC_PRINCIPAL_CLAIM = "email"/);
+  assert.match(core, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
   assert.match(core, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "core refuses in-domain external invites");
-
-  const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
-  assert.equal(auth, readFileSync(join(repoRoot, "cli", "templates", "fly", "auth.toml"), "utf8"));
-  assert.match(auth, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
-  assert.match(auth, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
+  assert.doesNotMatch(core, /internal_port = 8080/, "the edge's API port never gets public ingress");
+  assert.match(core, /\[http_service\]\n {2}internal_port = 8000/);
+  assert.doesNotMatch(core, /WEB_UI_UPSTREAM|ADMIN_UPSTREAM|CORE_API_URL/, "the edge wires its hosted surfaces itself");
+  const harness = derivedTomlFor(brokerConfig(), "harness", repoRoot);
+  assert.doesNotMatch(harness, /OIDC_|AUTH_BROKER|AUTH_EMBEDDED|PUBLIC_PORT|PORTAL_PUBLIC_URL|http_service/);
+  assert.match(harness, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "harness refuses in-domain external invites too");
 });
 
 test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wiring", () => {
   const acme = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc")).config;
   assert.ok(!acme.services.includes("auth"));
-  const portal = derivedTomlFor(acme, "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/accounts\.google\.com"/);
-  assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
+  const core = derivedTomlFor(acme, "edge", repoRoot);
+  assert.match(core, /OIDC_ISSUER = "https:\/\/accounts\.google\.com"/);
+  assert.doesNotMatch(core, /AUTH_BROKER_UPSTREAM/);
 });
 
-test("a configured botName brands the docker service env for core and auth", () => {
+test("a configured botName brands both workloads, and the edge's hosted sign-in pages", () => {
   const config = configWith(
     configText().replace('"plugins": [],', '"botName": "straylight", "orgName": "Acme Corp", "plugins": [],'),
   );
-  const core = dockerServiceEnv(config, "core");
+  const core = dockerServiceEnv(config, "edge");
   assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
   assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
-  assert.equal(dockerServiceEnv(config, "auth").AUTH_BRAND_NAME, "straylight");
-  const bare = configWith(configText());
-  assert.equal(dockerServiceEnv(bare, "core").ORG_BRAND_SELF_LABEL, undefined);
-  assert.equal(dockerServiceEnv(bare, "auth").AUTH_BRAND_NAME, undefined);
+  assert.equal(core.AUTH_BRAND_NAME, "straylight");
+  const harness = dockerServiceEnv(config, "harness");
+  assert.equal(harness.ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(harness.AUTH_BRAND_NAME, undefined);
+  const bare = dockerServiceEnv(configWith(configText()), "edge");
+  assert.equal(bare.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(bare.AUTH_BRAND_NAME, undefined);
 });
 
-test("docker and AWS wire the broker with parity", () => {
-  const docker = configWith(configText());
-  const dockerPortal = dockerServiceEnv(docker, "portal");
-  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
-  assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
-  assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
-  assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
-
+test("docker and AWS wire the front door and the broker into the edge with parity", () => {
+  const dockerCore = dockerServiceEnv(configWith(configText()), "edge");
   const aws = configWith(`{
     "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
     "services": ["core", "web-ui", "admin", "portal", "auth"], "plugins": [], "skills": [],
@@ -116,38 +105,53 @@ test("docker and AWS wire the broker with parity", () => {
       "secretsPrefix": "acme/qm/", "imageLabel": "latest",
       "networking": { "cloudMapNamespace": "acme.internal" },
       "services": {
-        "core": { "ecrRepository": "acme-qm-core", "ecsService": "acme-qm-core", "cpu": 2048, "memory": 4096 },
-        "web-ui": { "ecrRepository": "acme-qm-web-ui", "ecsService": "acme-qm-web-ui", "cpu": 512, "memory": 1024 },
-        "admin": { "ecrRepository": "acme-qm-admin", "ecsService": "acme-qm-admin", "cpu": 512, "memory": 1024 },
-        "portal": { "ecrRepository": "acme-qm-portal", "ecsService": "acme-qm-portal", "cpu": 512, "memory": 1024 },
-        "auth": { "ecrRepository": "acme-qm-auth", "ecsService": "acme-qm-auth", "cpu": 256, "memory": 512 }
+        "core": { "ecrRepository": "acme-qm-core", "ecsService": "acme-qm-core", "cpu": 2048, "memory": 4096 }
       }
     }
   }`);
-  const awsPortal = serviceEnvironment(aws, "portal");
-  assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(awsPortal.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
-  assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
-  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+  const awsCore = serviceEnvironment(aws, "edge");
+  for (const env of [dockerCore, awsCore]) {
+    assert.equal(env.PUBLIC_PORT, "8000");
+    assert.equal(env.PORTAL_PUBLIC_URL, "https://agent.example.com");
+    assert.equal(env.REQUIRE_SIGNED_PORTAL_IDENTITY, "1");
+    assert.equal(env.ADMIN_ENABLED, "1");
+    assert.equal(env.AUTH_EMBEDDED, "1");
+    assert.equal(env.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+    assert.equal(env.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+    assert.equal(env.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+    assert.equal(env.OIDC_ISSUER, "https://agent.example.com/idp");
+    assert.equal(env.AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
+    assert.equal(env.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+    assert.equal(env.AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+    assert.equal(env.WEB_UI_UPSTREAM, undefined);
+    assert.equal(env.CORE_API_URL, undefined);
+  }
+  assert.equal(awsCore.PORT, "8080");
   assert.equal(
-    awsPortal.PORTAL_XFF_TRUSTED_HOPS,
+    awsCore.PORTAL_XFF_TRUSTED_HOPS,
     "1",
     "only the hop the load balancer appends is unforgeable; counting further left would select a client-prepended entry",
   );
-  assert.equal(serviceEnvironment(aws, "auth").AUTH_ISSUER, "https://agent.example.com/idp");
-  assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
+  assert.equal(dockerCore.PORTAL_XFF_TRUSTED_HOPS, undefined);
+  for (const harness of [dockerServiceEnv(configWith(configText()), "harness"), serviceEnvironment(aws, "harness")]) {
+    for (const name of ["PUBLIC_PORT", "PORTAL_PUBLIC_URL", "AUTH_EMBEDDED", "OIDC_ISSUER", "ADMIN_ENABLED"])
+      assert.equal(harness[name], undefined, `harness has no front door: ${name}`);
+    assert.equal(harness.AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+  }
 });
 
-test("docker local wires the host daemon coordinates only into core", () => {
+test("docker local wires the host daemon coordinates into edge and harness", () => {
   const local = configWith(
     configText().replace(
       '"plugins": [],',
       '"sandbox": { "backend": "local", "image": "qm-sandbox-local:latest" }, "plugins": [],',
     ),
   );
-  assert.equal(dockerServiceEnv(local, "core").DOCKER_HOST, "unix:///var/run/docker.sock");
-  assert.equal(dockerServiceEnv(local, "core").QM_CORE_CONTAINER, "qm-acme-core");
-  assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined);
+  for (const workload of ["edge", "harness"] as const) {
+    assert.equal(dockerServiceEnv(local, workload).DOCKER_HOST, "unix:///var/run/docker.sock");
+    assert.equal(dockerServiceEnv(local, workload).QM_CORE_CONTAINER, `qm-acme-${workload}`);
+  }
+  assert.equal(dockerServiceEnv(local, "egress-proxy").DOCKER_HOST, undefined);
 });
 
 test("the broker's generated secrets reach both sides under the right names", () => {
@@ -174,7 +178,11 @@ test("the broker's generated secrets reach both sides under the right names", ()
     const shared = secrets.find((secret) => secret.name === name)!;
     assert.equal(shared.required, false, "email delivery can be deferred while admins use the operator CLI");
     assert.deepEqual(runtimeSecretNames("auth", shared), [name]);
-    assert.deepEqual(runtimeSecretNames("core", shared), [name], `core emails external-user invitations with ${name}`);
+    assert.deepEqual(
+      runtimeSecretNames("harness", shared),
+      [name],
+      `core emails external-user invitations with ${name}`,
+    );
   }
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
 });
@@ -185,20 +193,21 @@ test("without a configured domain the allowlist becomes a required secret on bot
   assert.ok(allowed.required);
   assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("edge", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("harness", allowed), ["AUTH_ALLOWED_EMAILS"]);
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
   const resend = computedSecrets(config).find((secret) => secret.name === "RESEND_API_KEY")!;
   assert.equal(resend.required, false, "the unselected transport's key stays optional");
-  assert.deepEqual(runtimeSecretNames("auth", resend), []);
-  assert.deepEqual(runtimeSecretNames("core", resend), ["RESEND_API_KEY"], "core alone keeps it for invitations");
+  assert.deepEqual(runtimeSecretNames("harness", resend), ["RESEND_API_KEY"], "core keeps it for invitations");
 });
 
-test("the config refuses a broker without a portal, a bad transport, and hand-set derived env", () => {
+test("the config refuses a surface without a portal, a bad transport, and hand-set derived env", () => {
   const refuses = (body: string, pattern: RegExp): void => {
     assert.throws(() => configWith(body), pattern);
   };
-  refuses(configText({ services: '["core", "auth"]' }), /"auth" sign-in broker requires "portal"/);
+  refuses(configText({ services: '["core", "auth"]' }), /"auth" requires "portal"/);
+  refuses(configText({ services: '["core", "web-ui"]' }), /"web-ui" requires "portal"/);
   refuses(
     configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "sendmail" } }` }),
     /AUTH_EMAIL_TRANSPORT must be "resend" or "smtp"/,
@@ -244,7 +253,7 @@ test("a broker deployment with no allowlist at all is refused once secret values
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
 });
 
-test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
+test("fly up staging copies a changed .env email allowlist to the edge and harness apps", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
@@ -259,7 +268,7 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   const prior = process.env.FLY_BIN;
   process.env.FLY_BIN = fly;
   try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
+    stageFlyEmailAllowlist(config, dir, new Set(["edge", "harness"]));
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
@@ -267,6 +276,7 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   const calls = readFileSync(log, "utf8");
   const prefix = "acme";
   assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.match(calls, new RegExp(`-a ${prefix}-core OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.match(calls, new RegExp(`-a ${prefix}-harness AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.doesNotMatch(calls, /-a acme-(portal|auth|edge) /);
 });

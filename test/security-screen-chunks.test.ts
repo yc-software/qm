@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenChunks } from "../src/core/orchestrator/security-screen.ts";
+import { screenChunks } from "../src/security/security-classifier.ts";
 import type { SecurityScreenVerdict } from "../src/security/security-posture.ts";
 
 const clean: SecurityScreenVerdict = { decision: "auto" };

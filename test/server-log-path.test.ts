@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loggablePath } from "../src/api/server.ts";
+import { loggablePath } from "../src/edge/http/server.ts";
 
 test("server error logs keep the path but drop query strings that can carry tokens", () => {
   assert.equal(loggablePath("/v1/drops/abc?t=secret-drop-token"), "/v1/drops/abc?<query omitted>");

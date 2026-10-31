@@ -1,5 +1,5 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 
 export interface SessionMessage {
   id: string;

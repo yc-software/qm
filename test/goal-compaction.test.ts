@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createCompaction } from "../src/core/orchestrator/compaction.ts";
-import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
+import { createCompaction } from "../src/harness/orchestrator/compaction.ts";
+import type { OrchestratorDeps } from "../src/harness/orchestrator/types.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";

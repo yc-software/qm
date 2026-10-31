@@ -8,7 +8,7 @@ import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";

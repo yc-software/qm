@@ -7,7 +7,7 @@ import { createHmac } from "node:crypto";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";

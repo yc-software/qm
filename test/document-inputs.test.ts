@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
+import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
 import {
   isDocumentAttachment,
   documentFallbackText,

@@ -12,7 +12,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createAttachStaging } from "../src/harness/orchestrator/attach-tool.ts";
 import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/blob-transfer.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

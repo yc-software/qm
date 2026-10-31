@@ -8,7 +8,7 @@ import {
   type TurnFailureSessions,
 } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";

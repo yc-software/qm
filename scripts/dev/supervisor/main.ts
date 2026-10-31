@@ -271,8 +271,7 @@ function writeLegacyMeta(booting: boolean): void {
     worktree,
     branch,
     port: String(ports.core),
-    web_port: String(ports.web),
-    admin_port: String(ports.admin),
+    harness_port: String(ports.harness),
     portal_port: String(ports.portal),
     handle,
     supervisor_pid: String(process.pid),
@@ -396,7 +395,6 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
     databaseUrl,
     adminGrantsSeed,
-    coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
     portalSessionSecret,
     portalDevPrincipal,
     sandboxEnv: sandbox.env,
@@ -692,8 +690,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     });
     const dryEnvSha = computeEnvSha(assembled.env);
     const allHealthy =
-      children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
-      [...children.values()].every((c) => c.state === "healthy");
+      children.size === CHILD_ORDER.length && [...children.values()].every((c) => c.state === "healthy");
     return {
       ok: true,
       noop: dryEnvSha === currentEnvSha && allHealthy,
@@ -709,7 +706,7 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
   const newGitSha = gitHead(worktree);
   const noopEligible =
     newEnvSha === currentEnvSha &&
-    children.size === (spec.web === false ? 1 : CHILD_ORDER.length) &&
+    children.size === CHILD_ORDER.length &&
     [...children.values()].every((c) => c.state === "healthy");
   if (!force && noopEligible) {
     return {
@@ -766,7 +763,7 @@ async function statusReport(): Promise<StatusReport> {
   }
   const slackEnabled = slackOn(readBootSpec());
   const slackHealth = slackEnabled ? await fetchSlackHealth() : null;
-  if (slackHealth && childStatuses.core) childStatuses.core.slack = slackHealth;
+  if (slackHealth && childStatuses.edge) childStatuses.edge.slack = slackHealth;
   return {
     slot,
     state: bootState(),

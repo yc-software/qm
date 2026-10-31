@@ -2,7 +2,7 @@ import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
-import type { Scheduler } from "../cron/scheduler.ts";
+import type { CronChangeNotifier, CronRunRequests } from "../cron/fires.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
@@ -49,7 +49,7 @@ export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
   sessions: Pick<SessionStore, "latestEntrySeq" | "getEntries" | "get">;
   crons: CronStore;
-  scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
+  scheduler: CronChangeNotifier & CronRunRequests;
   enabled: boolean;
   context?: string;
   now?: () => number;

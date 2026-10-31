@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {

@@ -1,7 +1,7 @@
 import { boundLoopCron } from "../src/loops/authority.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { inboxRoutes } from "../src/api/routes/inbox.ts";
+import { inboxRoutes } from "../src/edge/http/routes/inbox.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
@@ -9,7 +9,7 @@ import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
 import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";

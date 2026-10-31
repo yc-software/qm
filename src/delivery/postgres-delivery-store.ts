@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -84,7 +85,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
   ]);
 
-  const enqueueListeners = new Set<() => void>();
+  const enqueued = createPostgresNotifyBus<number>(connectionString, "delivery_enqueued", "delivery-enqueued");
 
   async function expireOveraged(): Promise<void> {
     const rows = await q(
@@ -137,7 +138,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l();
+        if (input.shadow !== true) enqueued.emit(1);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -261,8 +262,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).reverse();
     },
     onEnqueue(listener) {
-      enqueueListeners.add(listener);
-      return () => enqueueListeners.delete(listener);
+      return enqueued.subscribe(() => listener(), { onResync: listener });
     },
   };
 }

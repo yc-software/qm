@@ -1,6 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../src/harness/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";

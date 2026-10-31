@@ -28,8 +28,8 @@ import {
   safeAttachmentName,
   turnFileId,
 } from "../src/core/attachments.ts";
-import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
-import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/harness/orchestrator/prompt-blocks.ts";
+import { createAttachStaging } from "../src/harness/orchestrator/attach-tool.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {

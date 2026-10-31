@@ -5,7 +5,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";

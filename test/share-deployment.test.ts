@@ -1,4 +1,4 @@
-import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { authBrokerRoutes } from "../src/edge/http/routes/auth-broker.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,8 +20,8 @@ import {
   getDeployment,
   getDeploymentShares,
   setDeploymentDisplayName,
-} from "../src/api/routes/deployments.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+} from "../src/edge/http/routes/deployments.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

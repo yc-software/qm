@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { getSlackInstallation, startSlackInstallation } from "../src/api/routes/admin/slack-installation.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { getSlackInstallation, startSlackInstallation } from "../src/edge/http/routes/admin/slack-installation.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { testMap } from "./support/test-database.ts";
