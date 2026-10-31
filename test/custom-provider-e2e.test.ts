@@ -1,5 +1,5 @@
 import { memoryModelTables } from "../src/model/model-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 // QA: end-to-end custom-provider lifecycle against a REAL fake upstream.
@@ -64,7 +64,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -204,7 +204,7 @@ test("QA: openai-responses custom provider serves a real turn through the genera
   const upstream = await verificationUpstream();
   const upstreamUrl = `${upstream.url}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -317,7 +317,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-ant-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
@@ -432,7 +432,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-own-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,

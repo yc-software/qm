@@ -8,9 +8,10 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -28,8 +29,9 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
   const ts = Math.floor(Date.now() / 1000);
   return {
     "content-type": "application/json",
+    ...TENANT_HEADERS,
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
+    "x-signature": signRequest(SECRET, ts, canonicalPayload(method, pathWithQuery, body, TEST_TENANT)),
   };
 }
 

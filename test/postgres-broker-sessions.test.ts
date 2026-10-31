@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresBrokerSessions } from "../src/auth/broker-sessions.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, OTHER_TENANT } from "./support/tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 bindTestTenant();
 
@@ -56,3 +57,19 @@ test(
     }
   },
 );
+
+test("broker sessions are keyed by tenant and email, never email alone", { skip: !url }, async () => {
+  const sessions = createPostgresBrokerSessions(url!);
+  const email = `${randomUUID()}@example.com`;
+  try {
+    const mine = await sessions.create(email, 30, 90);
+    const theirs = await withTenant(OTHER_TENANT, () => sessions.create(email, 30, 90));
+    assert.equal(await withTenant(OTHER_TENANT, () => sessions.use(mine.token)), null);
+    assert.equal((await sessions.use(mine.token))?.email, email);
+    await withTenant(OTHER_TENANT, () => sessions.revoke(email));
+    assert.equal((await sessions.use(mine.token))?.email, email);
+    assert.equal(await withTenant(OTHER_TENANT, () => sessions.use(theirs.token)), null);
+  } finally {
+    await sessions.revoke(email);
+  }
+});

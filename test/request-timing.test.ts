@@ -14,7 +14,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -48,7 +48,7 @@ async function settle(predicate: () => boolean): Promise<void> {
 
 test("core requests are named by route template and carry no URL, query or header values", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-")) }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

@@ -29,7 +29,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS } from "./support/tenant.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 bindTestTenant();
@@ -220,7 +220,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   const signed = (method: string, rawPath: string, body: string, owner?: string | null) => {
     const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
     const headers: Record<string, string> = {
-      ...signedRequestHeaders(SECRET, method, path, body),
+      ...signedRequestHeaders(SECRET, method, path, body, { ...TENANT_HEADERS }),
       ...(owner !== null ? { "x-drop-owner": owner ?? "U_A", "x-drop-owner-org": "acme" } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     };
@@ -700,7 +700,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
         const r = await fetch(`${base}${path}`, {
           method: "POST",
           headers: {
-            ...signedRequestHeaders(SECRET, "POST", path, body),
+            ...signedRequestHeaders(SECRET, "POST", path, body, { ...TENANT_HEADERS }),
             "x-drop-owner": "U_A",
             "x-drop-owner-org": "acme",
             "content-type": "application/json",

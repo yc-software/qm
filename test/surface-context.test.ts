@@ -12,7 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -44,12 +44,15 @@ describe("surface-context pulls", async () => {
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
   const signedGet = (path: string) =>
-    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "") });
+    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }) });
   const signedPost = (path: string, body: unknown) => {
     const raw = JSON.stringify(body);
     return fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...signedRequestHeaders(SECRET, "POST", path, raw) },
+      headers: {
+        "content-type": "application/json",
+        ...signedRequestHeaders(SECRET, "POST", path, raw, { ...TENANT_HEADERS }),
+      },
       body: raw,
     });
   };

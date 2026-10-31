@@ -10,7 +10,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push.ts";
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -66,6 +66,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(),
     lock: createMemoryAdvisoryLock(),
+    rowTenants: async () => [TEST_TENANT],
     fire: {
       fire: async (
         loopId: string,

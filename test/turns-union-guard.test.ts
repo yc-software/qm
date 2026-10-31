@@ -8,9 +8,10 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders } from "./support/signed-core.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 
 bindTestTenant();
 
@@ -269,7 +270,11 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...signedHeaders(SECRET, "POST", "/v1/turns", body),
+      "content-type": "application/json",
+      "x-portal-identity": await mintPortalIdentity({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, SECRET),
+    },
     body,
   });
   assert.equal(r.status, 400);

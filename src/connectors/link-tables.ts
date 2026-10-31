@@ -1,8 +1,8 @@
+import { currentTenant, perTenant } from "../tenants/context.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns, type ColumnCast, type TypedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill, upsertStatement } from "../persistence/typed-statements.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { SecretDropRecord } from "../credentials/secret-drop.ts";
 import type { McpServer } from "../mcp/mcp-server-store.ts";
@@ -127,7 +127,7 @@ export function memoryLinkTables(): LinkTables {
 }
 
 type Spec<T> = { readonly [K in keyof T & string]-?: ColumnCast };
-type OAuthFlowRow = Omit<OAuthState, "orgId" | "nonce"> & { id: string };
+type OAuthFlowRow = Omit<OAuthState, "tenant" | "nonce"> & { id: string };
 type ConsentLinkRow = Omit<ConsentLinkRecord, "orgId"> & { id: string };
 type SecretDropRow = Omit<SecretDropRecord, "orgId"> & { id: string };
 type ComposioReturnRow = ComposioReturn & { id: string };
@@ -398,7 +398,12 @@ export function createPostgresLinkTables(connectionString: string): LinkTables &
 
   return {
     close,
-    oauthFlows: oneTime("oauth_flows", OAUTH_FLOW, ({ id, ...state }) => ({ ...state, nonce: id }), withId),
+    oauthFlows: oneTime(
+      "oauth_flows",
+      OAUTH_FLOW,
+      ({ id, ...state }) => ({ ...state, nonce: id, tenant: currentTenant() }),
+      withId,
+    ),
     consentLinks: oneTime("consent_links", CONSENT_LINK, withoutId, withId),
     secretDrops: {
       ...drops,

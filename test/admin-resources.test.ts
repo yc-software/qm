@@ -11,13 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -47,7 +41,7 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
       ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
     }),
   );
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

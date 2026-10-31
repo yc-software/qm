@@ -24,7 +24,7 @@ import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -320,7 +320,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
-  const server = createInsecureTestServer(built.app, {});
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
@@ -1022,7 +1022,7 @@ test("linking a just-created channel refreshes the surface directory and retries
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
-  const server = createInsecureTestServer(built.app, {});
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 

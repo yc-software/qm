@@ -11,6 +11,9 @@ import {
   stagingApiHeaders,
 } from "../src/deployment/postdeploy-smoke.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("deployed database smoke rejects the parallel exception-handler failure class", () => {
   assert.match(PARALLEL_EXCEPTION_QUERY, /p\.proparallel = 's'/);
@@ -41,6 +44,7 @@ test("deployed API smoke proves the production portal-identity boundary", async 
     now,
   );
   assert.equal(headers["x-admin-actor"], "josh@example.com");
+  assert.equal(headers["x-qm-tenant"], TEST_TENANT);
   const actor = await verifyPortalIdentity(headers[PORTAL_IDENTITY_HEADER]!, "portal-secret", now);
   assert.equal(actor?.p, "josh@example.com");
 });

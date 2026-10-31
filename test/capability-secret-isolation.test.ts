@@ -10,12 +10,15 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import type { TenantResolver } from "../src/tenants/resolver.ts";
 
 bindTestTenant();
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
+const testTenants: TenantResolver = { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT };
 
 describe("capability tokens verify under the core-only capability secret, not the shared source-auth secret", () => {
   let server: Server;
@@ -48,6 +51,25 @@ describe("capability tokens verify under the core-only capability secret, not th
   it("rejects a capability forged with only the shared source-auth secret (what a surface holds)", async () => {
     assert.equal((await apis(await cap(SOURCE))).status, 401);
   });
+
+  it("rejects a capability carrying another tenant on a host that serves this tenant", async () => {
+    const hosted = createServer(built.app, {
+      signingSecret: SOURCE,
+      capabilitySecret: CAP,
+      scheduler: built.scheduler,
+      tenants: testTenants,
+    });
+    await new Promise<void>((resolve) => hosted.listen(0, resolve));
+    try {
+      const url = `http://localhost:${(hosted.address() as AddressInfo).port}/v1/apis`;
+      const foreign = await withTenant(OTHER_TENANT, () => cap(CAP));
+      const res = await fetch(url, { headers: { "x-agent-capability": foreign } });
+      assert.equal(res.status, 403);
+      assert.equal((await fetch(url, { headers: { "x-agent-capability": await cap(CAP) } })).status, 200);
+    } finally {
+      await new Promise<void>((resolve) => hosted.close(() => resolve()));
+    }
+  });
 });
 
 describe("createServer refuses to boot enforcement that a surface could bypass", () => {
@@ -60,7 +82,9 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     createServer(built.app, {
       signingSecret: SOURCE,
       scheduler: built.scheduler,
-      requireSignedPortalIdentity: true,
+      production: true,
+      tenants: testTenants,
+      rowTenants: async () => [TEST_TENANT],
       ...extra,
     });
 
@@ -99,23 +123,23 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     server.close();
   });
 
-  it("does not gate when enforcement is off, even with shared secrets", () => {
+  it("production refuses to boot without a tenant resolver and owner row lookup", () => {
+    const secrets = { capabilitySecret: CAP, portalIdentitySecret: "portal-only-identity-secret-for-tests-01" };
+    assert.throws(() => boot({ ...secrets, tenants: undefined }), /tenant resolver and an owner row lookup/);
+    assert.throws(() => boot({ ...secrets, rowTenants: undefined }), /tenant resolver and an owner row lookup/);
+  });
+
+  it("skips the split-secret check outside production, even with shared secrets", () => {
     const server = createServer(built.app, { signingSecret: SOURCE, scheduler: built.scheduler });
     assert.ok(server);
     server.close();
   });
 
-  it("production refuses an unauthenticated core unless explicitly isolated", () => {
+  it("production refuses an unauthenticated core", () => {
     assert.throws(
       () => createServer(built.app, { production: true, scheduler: built.scheduler }),
       /CORE_SIGNING_SECRET/,
     );
-    const server = createServer(built.app, {
-      production: true,
-      allowUnauthenticatedCore: true,
-      scheduler: built.scheduler,
-    });
-    server.close();
   });
 
   it("production enables signed-identity enforcement without a separate opt-in", () => {

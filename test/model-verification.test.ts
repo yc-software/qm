@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -163,7 +163,7 @@ import { serverDeps } from "../src/wiring.ts";
 import type { ModelProvider } from "../src/model/model-credential-store.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -190,7 +190,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     { OPENAI_BASE_URL: upstream.url + "/v1", ANTHROPIC_BASE_URL: upstream.url },
     { modelCredentialFetch: async () => Response.json({ data: [] }) },
   );
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };

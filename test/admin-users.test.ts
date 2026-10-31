@@ -11,7 +11,7 @@ import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -66,7 +66,7 @@ test("computeUsers includes a grant-holder who has never participated", () => {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     files: built.files,
@@ -253,7 +253,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")) }), {
     tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "new@example.com" }),
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     memory: built.memory,

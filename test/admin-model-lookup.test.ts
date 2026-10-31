@@ -2,19 +2,13 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
 import { serverDeps } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 import { memoryModelTables } from "../src/model/model-tables.ts";
-import { bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
+import { bindTestTenant, TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -23,7 +17,7 @@ test("admin lookup recognizes an existing model without asking for a clone templ
   const config = testConfig();
   const built = buildApp(config);
   await built.modelCredentials.set("anthropic", "test-only", "admin");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
     const result = await fetch(
@@ -151,7 +145,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     },
   });
   await built.modelCredentials.set("anthropic", "lookup-key", "admin");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: object, actor = "admin-alice") =>
@@ -195,7 +189,7 @@ test("enable rechecks serving credentials and harness policy before mutating the
   const config = testConfig({ harness: "pi" });
   const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
   await built.modelCredentials.set("anthropic", "test-key", "admin");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
   const enable = () =>

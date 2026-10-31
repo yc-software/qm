@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { boundTenant } from "../tenants/context.ts";
 
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 
@@ -44,7 +45,7 @@ function verifySessionToken(token: string, secret: string, now: number): PortalV
   } catch {
     return null;
   }
-  if (claims.k !== "session") return null;
+  if (claims.k !== "session" || claims.tenant !== boundTenant()) return null;
   if (typeof claims.sub !== "string" || !claims.sub) return null;
   if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
   if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;

@@ -7,7 +7,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -16,7 +16,7 @@ type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 async function setup() {
   const built = buildApp(testConfig());
   await built.config.setApprovedHarnesses(["pi", "claude"]);
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
     modelCredentials: built.modelCredentials,

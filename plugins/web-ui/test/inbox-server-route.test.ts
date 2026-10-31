@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 function corePath(url: string): string {
   return decodeURIComponent(new URL(url, "http://core").pathname);
@@ -46,7 +47,10 @@ const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 
 function headersFor(principal: string): Record<string, string> {
   return {
-    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: principal, exp: Date.now() + 60_000 }, "inbox-web-route-test"),
+    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+      { t: TEST_TENANT, p: principal, exp: Date.now() + 60_000 },
+      "inbox-web-route-test",
+    ),
     "content-type": "application/json",
   };
 }

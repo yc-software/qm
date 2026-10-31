@@ -86,6 +86,7 @@ test(
         decodeURIComponent(cookie.slice("portal_session=".length)),
         deriveKey(secret, "portal.session.v1"),
         Date.now(),
+        env.CORE_ORG_ID,
       );
       assert.equal(claims?.sub, configuredAdmin);
       assert.ok(res.headers.getSetCookie().some((value) => value.startsWith("portal_impersonate=;")));

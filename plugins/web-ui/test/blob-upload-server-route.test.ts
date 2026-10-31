@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 interface RecordedBlob {
   sha: string;
@@ -70,7 +71,7 @@ test.after(() => {
 
 const IDENTITY = {
   cookie: "webuiuser=alice",
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET),
 };
 
 test("POST /api/blobs streams the body to core with the declared sha and relays { blobId, sizeBytes }", async () => {

@@ -10,7 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
@@ -106,7 +106,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

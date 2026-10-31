@@ -13,13 +13,7 @@ import { defaultModelFor } from "../src/model/tenant-models.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -34,7 +28,7 @@ async function start(
   for (const [provider, key] of Object.entries(keys))
     await built.modelCredentials.set(provider as ModelProvider, key, "test");
   await built.tenantSettings.get();
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

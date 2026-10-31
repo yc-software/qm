@@ -15,7 +15,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -38,7 +38,7 @@ function httpGet(
 }
 
 async function fixture(
-  deps: Parameters<typeof createInsecureTestServer>[1],
+  deps: Parameters<typeof createInsecureTestServer>[2],
   upstreamContentType = "text/html; charset=utf-8",
   upstreamHeaders: Record<string, string> = {},
 ) {
@@ -75,7 +75,7 @@ async function fixture(
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, app, { rowTenants: async () => [TEST_TENANT], ...deps });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   const close = async () => {

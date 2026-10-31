@@ -1,9 +1,12 @@
 import { before } from "node:test";
 import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
+import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 
 export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
+export const TENANT_HEADERS = { [TENANT_HEADER]: TEST_TENANT };
 
 export async function seedTenant(url: string, id = TEST_TENANT): Promise<void> {
   const db = createPgPool(url, [TENANCY_BASE]);
@@ -31,8 +34,6 @@ export function boundUrl(url: string, id = TEST_TENANT): string {
 }
 
 export const TEST_ROOT_SCOPE = `org:${TEST_TENANT}`;
-
-export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 
 export async function provisionTestTenants(url: string): Promise<void> {
   await seedTenant(url, TEST_TENANT);

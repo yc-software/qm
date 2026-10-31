@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -26,13 +26,11 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-function signed(method: string, path: string, body = ""): Record<string, string> {
-  const ts = Math.floor(Date.now() / 1000);
-  return {
-    "content-type": "application/json",
-    "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${path}\n${body}`),
-  };
+function signed(method: string, path: string, body = ""): Promise<Record<string, string>> {
+  return signedCoreHeaders(SECRET, method, path, body, {
+    actor: "member",
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function claims(actorId: string): CapabilityClaims {
@@ -171,7 +169,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.equal((await control.disableWebhook(projectWebhook.id, claims("member"))).ok, false);
 
   const cronListPath = "/v1/crons?viewer=member";
-  const cronList = await fetch(`${base}${cronListPath}`, { headers: signed("GET", cronListPath) });
+  const cronList = await fetch(`${base}${cronListPath}`, { headers: await signed("GET", cronListPath) });
   const cronBody = (await cronList.json()) as { crons: Array<{ id: string }>; visible: Array<{ id: string }> };
   assert.ok(![...cronBody.crons, ...cronBody.visible].some((cron) => cron.id === projectCron.id));
   assert.ok(cronBody.crons.some((cron) => cron.id === slackCron.id));
@@ -180,7 +178,7 @@ test("Project trigger access follows current membership while Slack-group owner 
     `/v1/crons/${projectCron.id}?principalId=member`,
     `/v1/crons/${projectCron.id}/runs?principalId=member`,
   ]) {
-    assert.equal((await fetch(`${base}${suffix}`, { headers: signed("GET", suffix) })).status, 404);
+    assert.equal((await fetch(`${base}${suffix}`, { headers: await signed("GET", suffix) })).status, 404);
   }
   const projectPatchPath = `/v1/crons/${projectCron.id}?principalId=member`;
   const projectPatchBody = JSON.stringify({ title: "hijack" });
@@ -188,21 +186,21 @@ test("Project trigger access follows current membership while Slack-group owner 
     (
       await fetch(`${base}${projectPatchPath}`, {
         method: "PATCH",
-        headers: signed("PATCH", projectPatchPath, projectPatchBody),
+        headers: await signed("PATCH", projectPatchPath, projectPatchBody),
         body: projectPatchBody,
       })
     ).status,
     404,
   );
   const slackGetPath = `/v1/crons/${slackCron.id}?principalId=member`;
-  assert.equal((await fetch(`${base}${slackGetPath}`, { headers: signed("GET", slackGetPath) })).status, 200);
+  assert.equal((await fetch(`${base}${slackGetPath}`, { headers: await signed("GET", slackGetPath) })).status, 200);
   const publicGetPath = `/v1/crons/${publicCron.id}?principalId=member`;
-  assert.equal((await fetch(`${base}${publicGetPath}`, { headers: signed("GET", publicGetPath) })).status, 200);
+  assert.equal((await fetch(`${base}${publicGetPath}`, { headers: await signed("GET", publicGetPath) })).status, 200);
   const publicRunsPath = `/v1/crons/${publicCron.id}/runs?principalId=member`;
-  assert.equal((await fetch(`${base}${publicRunsPath}`, { headers: signed("GET", publicRunsPath) })).status, 404);
+  assert.equal((await fetch(`${base}${publicRunsPath}`, { headers: await signed("GET", publicRunsPath) })).status, 404);
 
   const webhookListPath = "/v1/webhooks?viewer=member";
-  const webhookList = await fetch(`${base}${webhookListPath}`, { headers: signed("GET", webhookListPath) });
+  const webhookList = await fetch(`${base}${webhookListPath}`, { headers: await signed("GET", webhookListPath) });
   const webhookBody = (await webhookList.json()) as { webhooks: Array<{ id: string }> };
   assert.ok(!webhookBody.webhooks.some((webhook) => webhook.id === projectWebhook.id));
   assert.ok(webhookBody.webhooks.some((webhook) => webhook.id === slackWebhook.id));
@@ -212,17 +210,17 @@ test("Project trigger access follows current membership while Slack-group owner 
     (
       await fetch(`${base}${projectDisablePath}`, {
         method: "POST",
-        headers: signed("POST", projectDisablePath),
+        headers: await signed("POST", projectDisablePath),
       })
     ).status,
-    404,
+    403,
   );
   const slackDisablePath = `/v1/webhooks/${slackWebhook.id}/disable?principalId=member`;
   assert.equal(
     (
       await fetch(`${base}${slackDisablePath}`, {
         method: "POST",
-        headers: signed("POST", slackDisablePath),
+        headers: await signed("POST", slackDisablePath),
       })
     ).status,
     200,

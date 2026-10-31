@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import {
   getRequiredModel,
@@ -20,13 +20,7 @@ import {
   defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
-import { bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
+import { bindTestTenant, TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -40,7 +34,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -208,7 +202,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelVerificationProbe: async () => {},
   });
   await built.modelCredentials.set("openai", "local-test-key", "admin-alice");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
@@ -464,7 +458,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       await registry.refresh();
     },
   };
-  const server = createInsecureTestServer(built.app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {

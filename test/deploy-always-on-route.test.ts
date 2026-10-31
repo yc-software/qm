@@ -6,6 +6,9 @@ import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "deploy-always-on-route-secret".repeat(2);
 

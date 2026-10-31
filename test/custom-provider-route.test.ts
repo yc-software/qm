@@ -12,9 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -31,7 +29,7 @@ function start(modelCredentialFetch: typeof fetch = async () => new Response(nul
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "custom-provider-route-")) }), {
     modelCredentialFetch,
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,

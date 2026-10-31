@@ -14,7 +14,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 bindTestTenant();
@@ -26,7 +26,7 @@ function start() {
     ...memoryKeychainRows(),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

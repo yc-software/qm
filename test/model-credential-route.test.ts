@@ -15,16 +15,8 @@ import { testConfig } from "./support/test-config.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
 
 bindTestTenant();
 
@@ -80,7 +72,7 @@ async function start(
 }> {
   const built = await buildWith(options, modelCredentialFetch);
   const harness = options.config?.harness ?? "pi";
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,

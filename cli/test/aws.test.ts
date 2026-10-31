@@ -583,7 +583,6 @@ test("AWS environment derives identity, public URLs and private wiring", () => {
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
-    REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");

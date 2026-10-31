@@ -1,5 +1,6 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
+import { isTenantId } from "../tenants/context.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
@@ -591,6 +592,7 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
+  tenant: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -607,6 +609,7 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
+    isTenantId(s.tenant) &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&

@@ -33,7 +33,8 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
+import { boundTenant } from "../../chassis/src/tenant.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -495,9 +496,9 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
+const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1_000, ttl: 5 * 60_000 });
 async function slackWorkspaceUrl(): Promise<string | null> {
-  const hit = slackUrlCache.get("url");
+  const hit = slackUrlCache.get(boundTenant() ?? "");
   if (hit) return hit.url;
   let urlValue: string | null = null;
   try {
@@ -506,7 +507,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   } catch {
     void 0;
   }
-  slackUrlCache.set("url", { url: urlValue });
+  slackUrlCache.set(boundTenant() ?? "", { url: urlValue });
   return urlValue;
 }
 
@@ -3564,8 +3565,9 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("x-frame-options", "DENY");
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
+  const route = () => portalTokenStore.run(token, () => routeRequest(req, res));
   try {
-    await portalTokenStore.run(token, () => routeRequest(req, res));
+    await withIdentityTenant(token, PORTAL_IDENTITY_SECRET, route);
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

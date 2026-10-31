@@ -12,7 +12,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import type { SpawnMeta } from "../src/types.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -35,7 +35,7 @@ test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag"
     actor: { id: "U1", type: "internal" },
   } as unknown as SpawnMeta);
   await built.sessions.addParticipant(child.id, "U1", "Research task");
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   try {
     const port = (server.address() as AddressInfo).port;

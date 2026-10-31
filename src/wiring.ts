@@ -123,7 +123,8 @@ import { memoryKeychainRows } from "./credentials/keychain-rows.ts";
 import { createPostgresUiStateStore, createUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
+import { memoryRowTenants, ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -453,6 +454,7 @@ export function stopWithBackstop(
 export interface BuiltApp {
   tenantSettings: TenantSettingsStore;
   baseModelDefault: () => string;
+  rowTenants: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -564,6 +566,7 @@ export function buildApp(
     tenantSettings?: TenantSettingsStore;
   } = {},
 ): BuiltApp {
+  const rowTenants = config.databaseUrl ? ownerRowTenants(createPgPool(config.databaseUrl)) : memoryRowTenants;
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
@@ -819,7 +822,6 @@ export function buildApp(
     leaderLease: tenantLease,
     createSweeper,
   });
-  // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
     createConfiguredMemoryService({
@@ -1108,8 +1110,6 @@ export function buildApp(
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
@@ -1136,9 +1136,6 @@ export function buildApp(
     ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const serviceCreds = credentialStore;
@@ -1235,8 +1232,6 @@ export function buildApp(
             try {
               return [p.id, await customProviders.resolveKey(p.id)] as const;
             } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
               console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
               return [p.id, null] as const;
             }
@@ -2435,6 +2430,7 @@ export function buildApp(
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
+    rowTenants,
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -2891,6 +2887,7 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    rowTenants,
     modelGatewayTransport: () => tenantModels.gateway(),
     budget,
     resolveBrowserCompanyKeys,
@@ -2993,14 +2990,12 @@ export function serverDeps(
           deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
         }
       : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.deploymentControlSecret ? { deploymentControlSecret: config.deploymentControlSecret } : {}),
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
@@ -3026,6 +3021,7 @@ export function serverDeps(
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
+    rowTenants: built.rowTenants,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),

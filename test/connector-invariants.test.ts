@@ -17,7 +17,8 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { OTHER_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 bindTestTenant();
 
@@ -57,7 +58,7 @@ test("C3 — a host-wide environment token never reaches an unconnected catalog 
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-tenant — the callback rejects sealed state minted for a different tenant BEFORE exchange", async () => {
+test("cross-tenant — the callback rejects sealed state that names no tenant BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
   const server = createServer(built.app, {
@@ -73,16 +74,15 @@ test("cross-tenant — the callback rejects sealed state minted for a different 
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const state = await withTenant(OTHER_TENANT, () =>
-      sealOAuthState(
-        { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
-        { secret: SECRET },
-      ),
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
+    const state = await mintSignedPayload(
+      { provider: "google", principalId: "U1", redirectUri, issuedAt: Date.now(), nonce: "n1", orgId: "other" },
+      SECRET,
     );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
-    assert.match(await res.text(), /different tenant/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-tenant state");
+    assert.match(await res.text(), /invalid OAuth state/);
+    assert.equal(exchanged, false, "exchange must NOT run for a state that names no tenant");
     assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
@@ -102,7 +102,12 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+        tenant: TEST_TENANT,
+      },
       { secret: SECRET },
     );
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
@@ -126,7 +131,7 @@ test("status/selector parity — a personal-only connection reports connected (m
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { connectorTokens: built.connectorTokens });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

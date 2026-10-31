@@ -13,7 +13,8 @@ import { buildApp } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { singleTenantResolver } from "../src/tenants/resolver.ts";
 
 bindTestTenant();
 
@@ -198,6 +199,8 @@ test("side-chat reads bind the query principal to the authenticated portal ident
     capabilitySecret: "side-chat-capability-secret-for-http-tests",
     portalIdentitySecret: identitySecret,
     production: true,
+    tenants: singleTenantResolver(async () => [TEST_TENANT]),
+    rowTenants: async () => [TEST_TENANT],
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -205,9 +208,14 @@ test("side-chat reads bind the query principal to the authenticated portal ident
     const path = `/v1/sessions/${result.sessionId}/side-chats?principalId=${principal}&nonce=${crypto.randomUUID()}`;
     return fetch(base + path, {
       headers: {
-        ...signedRequestHeaders(sourceSecret, "GET", path),
+        ...signedRequestHeaders(sourceSecret, "GET", path, "", { ...TENANT_HEADERS }),
         ...(actor
-          ? { "x-portal-identity": await mintSignedPayload({ p: actor, exp: Date.now() + 60_000 }, identitySecret) }
+          ? {
+              "x-portal-identity": await mintSignedPayload(
+                { t: TEST_TENANT, p: actor, exp: Date.now() + 60_000 },
+                identitySecret,
+              ),
+            }
           : {}),
       },
     });
@@ -232,8 +240,11 @@ test("side-chat reads bind the query principal to the authenticated portal ident
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...signedRequestHeaders(sourceSecret, "POST", forkPath, forkBody),
-        "x-portal-identity": await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret),
+        ...signedRequestHeaders(sourceSecret, "POST", forkPath, forkBody, { ...TENANT_HEADERS }),
+        "x-portal-identity": await mintSignedPayload(
+          { t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 },
+          identitySecret,
+        ),
       },
       body: forkBody,
     });

@@ -29,6 +29,8 @@ import {
   randomToken,
   safeEqual,
   sanitizeReturnTo,
+  requestTenant,
+  tenantKey,
   type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
@@ -55,7 +57,9 @@ import {
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { hostTenant, signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
+import { refreshSurfaceConfig, surfaceConfig } from "./surface-config.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -112,39 +116,6 @@ function playgroundIntEnv(name: string, fallback: number): number {
 }
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
-const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
-let modelProviderConfigured: boolean | undefined;
-let surfaceConfigNextAt = 0;
-let surfaceConfigInflight: Promise<void> | null = null;
-function refreshSurfaceConfig(): Promise<void> {
-  if (Date.now() >= surfaceConfigNextAt) {
-    surfaceConfigNextAt = Date.now() + 5_000;
-    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
-      surfaceConfigInflight = null;
-    });
-  }
-  return surfaceConfigInflight ?? Promise.resolve();
-}
-async function fetchSurfaceConfig(): Promise<void> {
-  try {
-    const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(2_000),
-    });
-    if (r.ok) {
-      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      modelProviderConfigured =
-        typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
-    }
-  } catch {
-    void 0;
-  }
-}
-
 const UPSTREAMS: Record<string, string> = {
   "web-ui": (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, ""),
   admin: (process.env.ADMIN_UPSTREAM ?? "http://localhost:8090").replace(/\/$/, ""),
@@ -261,7 +232,12 @@ const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_M
 
 function portalIdentityHeaders(sub: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
-    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
+    ? {
+        [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+          { t: requestTenant(), p: sub, exp: Date.now() + 60_000 },
+          PORTAL_IDENTITY_SECRET,
+        ),
+      }
     : {};
 }
 
@@ -290,7 +266,7 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
 }
 
 async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: boolean }> {
-  const hit = adminCache.get(sub);
+  const hit = adminCache.get(tenantKey(sub));
   if (hit !== undefined) return { isAdmin: hit, failed: false };
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -299,7 +275,7 @@ async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: bool
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(sub, isAdmin);
+    adminCache.set(tenantKey(sub), isAdmin);
     return { isAdmin, failed: false };
   }
   return { isAdmin: false, failed: true };
@@ -314,7 +290,7 @@ const CANONICAL_TIMEOUT_MS = 4_000;
 const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
 
 async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
+  const hit = canonicalCache.get(tenantKey(sub));
   if (hit !== undefined) return hit;
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
   try {
@@ -328,7 +304,7 @@ async function canonicalPrincipal(sub: string): Promise<string | null> {
     }
     const body = (await r.json()) as { canonicalId?: unknown };
     const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(sub, canonical);
+    canonicalCache.set(tenantKey(sub), canonical);
     return canonical;
   } catch (error) {
     console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
@@ -447,13 +423,20 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, tenant: requestTenant(), iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), SESSION_MAX_TTL_S) ??
-    localDevSession(req)
+  const cookie = readCookie(req.headers.cookie, "portal_session");
+  return openSession(cookie, sessionKey, Date.now(), boundTenant(), SESSION_MAX_TTL_S) ?? localDevSession(req);
+}
+
+function currentImpersonation(req: IncomingMessage): ImpersonationClaims | null {
+  return openImpersonation(
+    readCookie(req.headers.cookie, "portal_impersonate"),
+    impersonateKey,
+    Date.now(),
+    boundTenant(),
   );
 }
 
@@ -611,7 +594,7 @@ export function adminUnavailableHtml(): string {
 }
 
 const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${surfaceConfig().accent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -914,6 +897,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   const session: SessionClaims = {
     k: "session",
     sub: `playground-${randomToken(8)}`,
+    tenant: requestTenant(),
     name: "Guest",
     anon: true,
     auth: now,
@@ -929,6 +913,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
     readCookie(req.headers.cookie, "portal_session"),
     sessionKey,
     Date.now(),
+    boundTenant(),
     SESSION_MAX_TTL_S,
   );
   if (!session) return null;
@@ -985,7 +970,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
+  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
+  const tenant = await hostTenant(CORE, CORE_SIGNING_SECRET, requestHost);
+  if (!tenant) return json(res, 404, { error: "not_found", message: "no tenant serves this host" });
+  return withTenant(tenant, () => handleTenant(req, res, method, rawTarget, url));
+}
 
+async function handleTenant(req: IncomingMessage, res: ServerResponse, method: string, rawTarget: string, url: URL) {
+  const pathname = url.pathname;
   const crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
   if (crossOrigin && method === "OPTIONS") return answerPreflight(res);
 
@@ -1000,8 +992,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   void refreshSurfaceConfig();
-
-  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
@@ -1136,6 +1126,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       k: "impersonate",
       actor: session.sub,
       target,
+      tenant: session.tenant,
       iat: now,
       exp: now + IMPERSONATE_TTL_S,
     };
@@ -1151,7 +1142,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    const imp = currentImpersonation(req);
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
     if (wantsHtml(req)) {
@@ -1315,6 +1306,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     if (!id) return json(res, 404, { error: "not_found" });
     return proxyToDeployment(req, res, {
+      tenant: requestTenant(),
       coreBase: CORE,
       id,
       subPath,
@@ -1343,7 +1335,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (key === "web-ui" && method === "GET" && wantsHtml(req)) {
     await refreshSurfaceConfig();
-    if (modelProviderConfigured === false) {
+    if (surfaceConfig().modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
         res.writeHead(302, { location: "/admin/onboarding", "cache-control": "no-store" });
         return void res.end();
@@ -1355,7 +1347,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let principal = session.sub;
   let impersonator: string | undefined;
   if (key === "web-ui" && !crossOrigin) {
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    const imp = currentImpersonation(req);
     if (imp && imp.actor === session.sub && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
@@ -1364,6 +1356,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   const forwardPath = key === "web-ui" ? pathname : pathname.slice(`/${key}`.length) || "/";
   return proxyToSurface(req, res, {
+    tenant: requestTenant(),
     upstreamBase: UPSTREAMS[key]!,
     forwardPath,
     search: url.search,
@@ -1398,6 +1391,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       body.get("state") ?? "",
       SESSION_SECRET,
       ORIGIN,
+      requestTenant(),
       SESSION_MAX_TTL_S,
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
@@ -1584,7 +1578,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname === `${path}/login`) {
     const returnTo =
       url.searchParams.get("returnTo") ??
-      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
+      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now(), boundTenant())?.returnTo ??
       null;
     const existing = currentSession(req);
     const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
@@ -1595,7 +1589,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       });
       return void res.end();
     }
-    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
+    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), requestTenant());
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
     return void res.end();
@@ -1603,18 +1597,19 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
   setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
   try {
-    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
+    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url, requestTenant());
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
           core: CORE,
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
+          tenant: requestTenant(),
           issuer: trustedOidc!.issuer,
         },
         identity.subject,
       );
-      adminCache.delete(identity.sub);
+      adminCache.delete(tenantKey(identity.sub));
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
@@ -1636,6 +1631,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   const session: SessionClaims = {
     k: "session",
     sub,
+    tenant: requestTenant(),
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -1681,7 +1677,16 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const nonce = randomToken();
   const { verifier, challenge } = pkcePair();
   const now = Math.floor(Date.now() / 1000);
-  const tmp: TmpClaims = { k: "tmp", state, nonce, pkceVerifier: verifier, returnTo, iat: now, exp: now + TMP_TTL_S };
+  const tmp: TmpClaims = {
+    k: "tmp",
+    tenant: requestTenant(),
+    state,
+    nonce,
+    pkceVerifier: verifier,
+    returnTo,
+    iat: now,
+    exp: now + TMP_TTL_S,
+  };
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
@@ -1699,7 +1704,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
 
-  const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now());
+  const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now(), boundTenant());
   if (!tmp) return fail("login session expired, please try again");
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");

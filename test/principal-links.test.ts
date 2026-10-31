@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer, createInsecureTestServer } from "../src/api/server.ts";
+import { createServer } from "../src/api/server.ts";
 import {
   createPrincipalLinkService,
   createPrincipalLinkStore,
@@ -33,11 +33,11 @@ import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedCoreHeaders, signedFetcher } from "./support/signed-core.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 bindTestTenant();
@@ -252,19 +252,21 @@ describe("linked sign-ins across the HTTP surface", () => {
   let built: BuiltApp;
   let nonce = 0;
 
-  const signed = (method: string, rawPath: string, body = "", headers: Record<string, string> = {}) => {
+  const signed = async (
+    method: string,
+    rawPath: string,
+    body = "",
+    opts: { actor?: string; headers?: Record<string, string> } = {},
+  ) => {
     const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
+    const headers = { ...(body ? { "content-type": "application/json" } : {}), ...opts.headers };
     return fetch(`${base}${path}`, {
       method,
-      headers: {
-        ...signedRequestHeaders(SECRET, method, path, body),
-        ...(body ? { "content-type": "application/json" } : {}),
-        ...headers,
-      },
+      headers: await signedCoreHeaders(SECRET, method, path, body, { ...opts, headers }),
       ...(body ? { body } : {}),
     });
   };
-  const admin = { "x-admin-actor": "admin-alice" };
+  const admin = { actor: "admin-alice" };
   const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
 
@@ -295,10 +297,7 @@ describe("linked sign-ins across the HTTP surface", () => {
 
   it("only an org admin manages links, the agent never does, and a directory member stays canonical", async () => {
     const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
-    assert.equal(
-      (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER" })).status,
-      403,
-    );
+    assert.equal((await signed("POST", "/v1/admin/principal-links", body, { actor: "U0STRANGER" })).status, 403);
     const agent = await fetch(`${base}/v1/admin/principal-links`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": await capFor("admin-alice") },
@@ -352,7 +351,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(minted.status, 200);
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const t = new URL(formPath, "http://x").searchParams.get("t")!;
-    const owner = (id: string) => ({ "x-drop-owner": id, "x-drop-owner-org": "default-org" });
+    const owner = (id: string) => ({ headers: { "x-drop-owner": id, "x-drop-owner-org": "default-org" } });
     assert.equal(
       (
         await signed(
@@ -394,6 +393,8 @@ describe("linked sign-ins across the HTTP surface", () => {
 
 describe("the portal identity gate accepts a linked sign-in for the canonical viewer", () => {
   const PID = "portal-only-identity-secret-for-tests-02";
+  const SOURCE = "principal-links-gate-source-secret-0001";
+  const fetch = signedFetcher(SOURCE);
   let server: Server;
   let base: string;
   let built: BuiltApp;
@@ -402,9 +403,9 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
     await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
     await built.identity.refresh(true);
-    server = createInsecureTestServer(built.app, {
+    server = createServer(built.app, {
+      signingSecret: SOURCE,
       portalIdentitySecret: PID,
-      requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
       identity: built.identity,
       sessionShares: built.sessionShares,
@@ -419,7 +420,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
   const get = async (p: string, viewer: string) =>
     fetch(`${base}/v1/sessions/nope?viewer=${encodeURIComponent(viewer)}`, {
-      headers: { "x-portal-identity": await mintSignedPayload({ p, exp: Date.now() + 60_000 }, PID) },
+      headers: { "x-portal-identity": await mintSignedPayload({ t: TEST_TENANT, p, exp: Date.now() + 60_000 }, PID) },
     });
 
   it("passes for the canonical viewer, the sign-in itself, and rejects another person", async () => {
@@ -427,6 +428,14 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     assert.equal((await get(OIDC, OIDC)).status, 404);
     assert.equal((await get(EMAIL, OIDC)).status, 404);
     assert.equal((await get(OIDC, "casey@acme.test")).status, 403);
+  });
+
+  it("refuses a linked sign-in whose identity was minted for another tenant", async () => {
+    const foreign = await mintSignedPayload({ t: OTHER_TENANT, p: OIDC, exp: Date.now() + 60_000 }, PID);
+    const res = await fetch(`${base}/v1/sessions/nope?viewer=${encodeURIComponent(EMAIL)}`, {
+      headers: { "x-portal-identity": foreign },
+    });
+    assert.equal(res.status, 401);
   });
 });
 
@@ -500,19 +509,24 @@ describe("link mutation serialization", () => {
 });
 
 describe("canonical portal claims retain proof of the original sign-in", () => {
+  const SOURCE = "principal-links-proof-source-secret-0001";
+  const fetch = signedFetcher(SOURCE);
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
     await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
     await app.identity.refresh(true);
-    const server = createInsecureTestServer(app.app, {
+    const server = createServer(app.app, {
+      signingSecret: SOURCE,
       portalIdentitySecret: secret,
-      requireSignedPortalIdentity: true,
       identity: app.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const token = await mintSignedPayload({ p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 }, secret);
+    const token = await mintSignedPayload(
+      { t: TEST_TENANT, p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+      secret,
+    );
     const get = () =>
       fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
         headers: { "x-portal-identity": token },
@@ -520,7 +534,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     try {
       assert.equal((await get()).status, 404);
       const impersonation = await mintSignedPayload(
-        { p: "another-person", imp: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+        { t: TEST_TENANT, p: "another-person", imp: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
         secret,
       );
       const impersonate = () =>

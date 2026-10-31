@@ -12,7 +12,7 @@ import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -156,7 +156,7 @@ test("a shed event for an unknown thread still reaches subscribers, just without
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
   const built = freshApp();
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
+  const core = createInsecureTestServer(TEST_TENANT, built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {

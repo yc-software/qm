@@ -40,7 +40,12 @@ test("one-time links are redeemed once and only by their own tenant", { skip }, 
     const links = createConsentLinkStore(store.consentLinks, { now: () => AT });
     const drops = createSecretDropStore(store.secretDrops, { now: () => AT });
     const { flowId, linkId, dropId } = await withTenant(tenant, async () => ({
-      flowId: await flows.start({ provider: "github", principalId: "U1", redirectUri: "https://qm.example/cb" }),
+      flowId: await flows.start({
+        provider: "github",
+        principalId: "U1",
+        redirectUri: "https://qm.example/cb",
+        tenant,
+      }),
       linkId: (await links.mint({ principalId: "U1", provider: "github", accountType: "default", redirectUri: "r" }))
         .linkId,
       dropId: (await drops.mint(DROP)).dropId,

@@ -9,13 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
-
-bindTestTenant();
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -25,7 +19,7 @@ function start(overrides: Partial<ServerDeps> = {}) {
   const config = testConfig();
   const built = buildApp(config);
   const deps = { ...serverDeps(config, built), ...overrides };
-  const server = createInsecureTestServer(built.app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { built, deps, base, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };

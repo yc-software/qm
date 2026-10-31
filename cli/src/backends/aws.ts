@@ -433,9 +433,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       }),
     );
   }
-  if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
-    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
-  }
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
 }

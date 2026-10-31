@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { serverDeps } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { buildApp } from "./support/build-app.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -25,7 +25,7 @@ import {
   modelSupportedByHarness,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
 import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
@@ -155,7 +155,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   await built.modelCredentials.set("openai", "test-key", "admin");
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/${TEST_ROOT_SCOPE}/memory-embedding-model`;

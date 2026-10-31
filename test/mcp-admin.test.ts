@@ -14,10 +14,8 @@ import { createMcpServerStore } from "../src/mcp/mcp-server-store.ts";
 
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
-
-bindTestTenant();
 
 bindTestTenant();
 
@@ -27,7 +25,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(memoryLinkTables().mcpServers);
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,
@@ -172,7 +170,7 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadat
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(memoryLinkTables().mcpServers);
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,
@@ -251,7 +249,7 @@ test("MCP admin save stores the server's own description from the probe", async 
   const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,

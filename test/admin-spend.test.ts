@@ -14,7 +14,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -25,7 +25,7 @@ const ORG = TEST_ROOT_SCOPE;
 
 function start(sessions?: SessionStore) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spend-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: sessions ?? built.sessions,
     auditLog: built.auditLog,

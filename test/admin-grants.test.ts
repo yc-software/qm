@@ -15,7 +15,7 @@ bindTestTenant();
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -224,7 +224,7 @@ test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; 
   const dataDir = mkdtempSync(join(tmpdir(), "admin-grants-mem-"));
   const boot = () => {
     const built = buildApp(testConfig({ dataDir }));
-    const server = createInsecureTestServer(built.app, {
+    const server = createInsecureTestServer(TEST_TENANT, built.app, {
       admin: built.admin,
       sessions: built.sessions,
       auditLog: built.auditLog,

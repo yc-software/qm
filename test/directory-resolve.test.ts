@@ -6,19 +6,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders, canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
-
-enterTenant(TEST_TENANT);
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -64,7 +62,9 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       const path = `/v1/directory/channels/${channel}/members/${encodeURIComponent(principal)}`;
       assert.equal((await fetch(`${base}${path}`)).status, 401);
       assert.equal((await get(path)).status, 403);
-      const response = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+      const response = await fetch(`${base}${path}`, {
+        headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }),
+      });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { member });
     }
@@ -139,7 +139,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       return fetch(`${base}/v1/directory`, {
         method: "POST",
         headers: {
-          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw),
+          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw, { ...TENANT_HEADERS }),
           "content-type": "application/json",
         },
         body: raw,
@@ -228,8 +228,9 @@ describe("a deployment without the Slack surface (the directory store is never p
       method: "POST",
       headers: {
         "content-type": "application/json",
+        ...TENANT_HEADERS,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n/v1/directory\n${body}`),
+        "x-signature": signRequest(SECRET, ts, canonicalPayload("POST", "/v1/directory", body, TEST_TENANT)),
       },
       body,
     });
@@ -256,14 +257,15 @@ describe("qualification membership readiness with signed portal identity enforce
       signingSecret: SECRET,
       portalIdentitySecret: portalSecret,
       capabilitySecret: "readiness-capability-key-distinct-from-source",
-      requireSignedPortalIdentity: true,
       identity: app.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     try {
       const path = "/v1/directory/resolve?q=UQA";
-      const unsigned = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path) });
+      const unsigned = await fetch(`${base}${path}`, {
+        headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }),
+      });
       assert.equal(unsigned.status, 401);
       process.env.PORTAL_IDENTITY_SECRET = portalSecret;
       const core = new CoreClient(base, SECRET);
