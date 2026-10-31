@@ -34,7 +34,7 @@ test.after(() => {
 test("with no signing secret the surface advertises dev mode", async () => {
   const r = await fetch(`${base}/me`);
   assert.equal(r.status, 401);
-  assert.deepEqual(await r.json(), { error: "sign in", mode: "dev", reason: "unauthenticated" });
+  assert.deepEqual(await r.json(), { error: "sign in", mode: "dev" });
 });
 
 test("a bare principal id — not just an email — can sign in", async () => {
