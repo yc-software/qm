@@ -265,12 +265,15 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
   });
 });
 
-test("an unhydrated tenant fails closed on cached reads", { skip }, async () => {
+test("a tenant added after boot loads its configuration on first use", { skip }, async () => {
   await withConfigDb(async ({ tenant, otherTenant, store }) => {
     const config = await store(tenant);
+    const writer = await store(otherTenant);
+    await withTenant(otherTenant, () => writer.setEgress(channel, { allowedHosts: ["late.example"] }));
     await withTenant(otherTenant, async () => {
       assert.throws(() => config.getEgress(channel), /has not been loaded/);
-      assert.equal(await config.getSecurityPostureDurable(channel), "auto");
+      await config.refreshSecurity([org, channel]);
+      assert.deepEqual(config.getEgress(channel), { allowedHosts: ["late.example"] });
     });
   });
 });

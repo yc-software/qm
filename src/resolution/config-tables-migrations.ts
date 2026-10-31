@@ -3,7 +3,6 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { tenantPolicies } from "../tenants/migrations.ts";
 
 const TENANT_COLUMN = "tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants";
-const STAMP = "(SELECT id FROM tenants)";
 
 const texts = (json: string) =>
   `CASE WHEN jsonb_typeof(${json}) = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(${json})) END`;
@@ -71,13 +70,13 @@ const OTHER_SOURCES = ["soul_configs", "soul_history", "approved_harness_configs
 const scopeBackfill = ([table, columns]: [string, Record<string, string>]) => {
   const names = Object.keys(columns);
   return `INSERT INTO scope_settings(tenant_id, scope_id, ${names.join(", ")})
-    SELECT ${STAMP}, id, ${Object.values(columns).join(", ")} FROM ${table}
+    SELECT tenant_id, id, ${Object.values(columns).join(", ")} FROM ${table}
     ON CONFLICT (tenant_id, scope_id) DO UPDATE SET ${names.map((n) => `${n} = EXCLUDED.${n}`).join(", ")}`;
 };
 
 const soulRevisionsFrom = (source: string, scope: string, revision: string, where: string) =>
   `INSERT INTO soul_revisions(tenant_id, scope_id, version, content, updated_at, updated_by)
-    SELECT ${STAMP}, ${scope}, (${revision}->>'version')::integer, ${revision}->>'content',
+    SELECT s.tenant_id, ${scope}, (${revision}->>'version')::integer, ${revision}->>'content',
       ${at(`${revision}->>'updatedAt'`)}, ${revision}->>'updatedBy'
     ${source} WHERE ${where} ON CONFLICT DO NOTHING`;
 
@@ -157,7 +156,7 @@ const CREATE_TABLES = [
 const BACKFILL = [
   ...SCOPE_SOURCES.map(scopeBackfill),
   `INSERT INTO purpose_runtimes(tenant_id, purpose, harness_id, model_id, effort_level, fast_mode)
-    SELECT ${STAMP}, p.purpose, p.r->>'harnessId', p.r->>'modelId', p.r->>'effortLevel', ${flag("p.r->>'fastMode'")}
+    SELECT b.tenant_id, p.purpose, p.r->>'harnessId', p.r->>'modelId', p.r->>'effortLevel', ${flag("p.r->>'fastMode'")}
     FROM base_model_configs b
     CROSS JOIN LATERAL (VALUES ('cron', b.json->'cronRuntime'), ('subagent', b.json->'subagentRuntime'),
       ('fallback', b.json->'fallbackRuntime')) AS p(purpose, r)
@@ -171,7 +170,7 @@ const BACKFILL = [
     "(h.json->>'version')::integer < (s.json->>'version')::integer",
   ),
   soulRevisionsFrom(
-    "FROM soul_history h JOIN soul_configs s ON s.id = h.json->>'scopeId'",
+    "FROM soul_history h JOIN soul_configs s ON s.tenant_id = h.tenant_id AND s.id = h.json->>'scopeId'",
     "s.id",
     "h.json",
     "(h.json->>'version')::integer < (s.json->>'version')::integer",
@@ -192,7 +191,10 @@ export const CONFIG_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "tenancy/config-store/0001-typed",
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
-      ...SOURCES.map((table) => `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`),
+      ...SOURCES.flatMap((table) => [
+        `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+        `SELECT qm_tenant_column('${table}')`,
+      ]),
       ...CREATE_TABLES,
       ...BACKFILL,
       ...SOURCES.map((table) => `DROP TABLE ${table}`),

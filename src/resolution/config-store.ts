@@ -156,8 +156,9 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
   };
   const cached = (): TenantConfig => {
     const found = loaded();
-    if (!found) throw new Error(`Configuration for tenant ${currentTenant()} has not been loaded`);
-    return found;
+    if (found) return found;
+    void hydrate();
+    throw new Error(`Configuration for tenant ${currentTenant()} has not been loaded`);
   };
   const load = async (tenant: string) => {
     const [scopes, souls, purposes, settings] = await Promise.all([
@@ -173,24 +174,26 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
     if (souls?.length) target.souls.set(id, souls);
     else target.souls.delete(id);
   };
+  function hydrate(): Promise<void> {
+    const tenant = currentTenant();
+    let pending = loads.get(tenant);
+    if (!pending) {
+      pending = load(tenant);
+      pending.catch(() => loads.delete(tenant));
+      loads.set(tenant, pending);
+    }
+    return pending;
+  }
   return {
     loaded,
     cached,
     operator,
+    hydrate,
     markWritten: (id: ScopeId) => void written.set(writeKey(id), ++tick),
-    hydrate(): Promise<void> {
-      const tenant = currentTenant();
-      let pending = loads.get(tenant);
-      if (!pending) {
-        pending = load(tenant);
-        pending.catch(() => loads.delete(tenant));
-        loads.set(tenant, pending);
-      }
-      return pending;
-    },
     async refresh(ids: readonly ScopeId[], withOrg: boolean) {
       const target = loaded();
-      if (!target || !ids.length) return;
+      if (!target) return hydrate();
+      if (!ids.length) return;
       const since = tick;
       const [rows, heads] = await Promise.all([tables.scopeSettings(ids), tables.soulRevisions(1, ids)]);
       const head = new Map(heads.map((r) => [r.scopeId, r.version]));
