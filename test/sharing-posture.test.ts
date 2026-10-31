@@ -13,6 +13,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testConfigStore, testConfigTables, testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
   assert.equal(parseSharingPosture("open"), "open");
@@ -34,7 +35,7 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   const tables = testConfigTables();
   const writer = testConfigStore({ tables });
   const reader = testConfigStore({ tables });
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
 
@@ -60,7 +61,7 @@ test("Open membership re-checks durable organization, person, room, and membersh
   const tables = testConfigTables();
   const writer = testConfigStore({ tables });
   const reader = testConfigStore({ tables });
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
   let member = true;

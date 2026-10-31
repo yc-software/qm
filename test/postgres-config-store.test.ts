@@ -1,17 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { createPostgresConfigTables } from "../src/resolution/config-tables-pg.ts";
 import type { ConfigTables } from "../src/resolution/config-tables.ts";
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
-import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { tenantRootScope, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
-const ORG = "default-org";
-const org = scopeId("org", ORG);
+const LEGACY_TENANT = randomUUID();
+const legacyOrg = scopeId("org", LEGACY_TENANT);
+const org = () => tenantRootScope();
 const channel = scopeId("channel", "C1");
 const personal = scopeId("personal", "U1");
 
@@ -60,7 +62,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.equal(await a.setSoul(channel, "channel soul"), 1);
       await a.setCommandPolicy(channel, policy);
       await a.setSecurityPosture(channel, "strict");
-      await a.setSharingPosture(org, "open");
+      await a.setSharingPosture(org(), "open");
       await a.setSharingPosture(channel, "open");
       await a.setApprovalGrantModes(channel, { session: false, always: true });
       await a.setEgress(channel, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
@@ -69,15 +71,15 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       await a.setBrowseModel(channel, "claude-sonnet-4-6");
       await a.setWebuiModels(channel, ["claude-opus-4-8"]);
       await a.setAckEmoji(channel, ["eyes"]);
-      await a.setBranding(org, { accent: "#123456", orgName: "Acme" });
+      await a.setBranding(org(), { accent: "#123456", orgName: "Acme" });
       await a.setChannelHeaderPin(channel, true);
-      await a.setExternalSlackParticipants(org, true);
+      await a.setExternalSlackParticipants(org(), true);
       await a.setOrgAmbient(false);
       await a.setInteractiveFastMode(true);
       await a.setPersonalModelAuth("U1", true, "openai");
       await a.setPurposeRuntime("cron", { modelId: "gpt-5.5", fastMode: false });
       await a.setSlackEmojiCatalog(channel, { party: "https://emoji.example/party.png" });
-      await a.setConnectorClient(org, "google", { clientId: "cid", clientSecret: "shh", scopes: ["email"] });
+      await a.setConnectorClient(org(), "google", { clientId: "cid", clientSecret: "shh", scopes: ["email"] });
     });
 
     const b = await store(tenant);
@@ -98,7 +100,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.equal(b.getBrowseModel(channel), "claude-sonnet-4-6");
       assert.deepEqual(b.getWebuiModels(channel), ["claude-opus-4-8"]);
       assert.deepEqual(b.getAckEmoji(channel), ["eyes"]);
-      assert.deepEqual(b.getBranding(org), { accent: "#123456", orgName: "Acme" });
+      assert.deepEqual(b.getBranding(org()), { accent: "#123456", orgName: "Acme" });
       assert.equal(b.getChannelHeaderPin(channel), true);
       assert.equal(b.getExternalSlackParticipants(channel), true);
       assert.equal(b.getOrgAmbient(), false);
@@ -109,7 +111,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.deepEqual((await b.getSlackEmojiCatalogDurable(channel))?.emoji, {
         party: "https://emoji.example/party.png",
       });
-      assert.deepEqual(await b.getConnectorClientSecret(org, "google"), {
+      assert.deepEqual(await b.getConnectorClientSecret(org(), "google"), {
         clientId: "cid",
         clientSecret: "shh",
         scopes: ["email"],
@@ -118,7 +120,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       await b.setBrowseMaxSteps(channel, null);
       await b.setRuntimeSelection(channel, null);
       await b.clearPurposeRuntime("cron");
-      await b.deleteConnectorClient(org, "google");
+      await b.deleteConnectorClient(org(), "google");
     });
 
     const c = await store(tenant);
@@ -127,7 +129,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.equal(c.getRuntimeSelection(channel), null);
       assert.equal(c.getBrowseModel(channel), "claude-sonnet-4-6", "clearing one column keeps the others");
       assert.equal(c.getPurposeRuntime("cron"), undefined);
-      assert.deepEqual(await c.listConnectorClients(org), []);
+      assert.deepEqual(await c.listConnectorClients(org()), []);
     });
   });
 });
@@ -142,7 +144,7 @@ test("refreshScope carries a write from one core to another", { skip }, async ()
       await a.setAutoFlaggerConfig({ modelId: "m", rubric: "r" });
       assert.equal(b.getSoul(channel), null);
       await b.refreshScope(channel);
-      await b.refreshScope(org);
+      await b.refreshScope(org());
       assert.equal(b.getSoul(channel), "fresh");
       assert.deepEqual(b.getEgress(channel), { allowedHosts: ["x.example"] });
       assert.deepEqual(b.getAutoFlaggerConfig(), { modelId: "m", rubric: "r" });
@@ -165,8 +167,8 @@ test("SOUL compare-and-set admits one writer and setSoul ignores a stale cache",
       );
       assert.equal(await b.setSoul(channel, "after"), 2, "a stale cache still takes the next durable version");
       assert.equal(await a.setSoulIfVersion(channel, 1, "late"), null);
-      assert.equal(a.soulVersion(org), 1, "the org default soul counts as version 1");
-      assert.equal(await a.setSoul(org, "org soul"), 2);
+      assert.equal(a.soulVersion(org()), 1, "the org default soul counts as version 1");
+      assert.equal(await a.setSoul(org(), "org soul"), 2);
       for (let i = 0; i < 30; i++) await a.setSoul(channel, `v${i}`);
       const history = a.soulHistory(channel);
       assert.equal(history.length, 25);
@@ -182,11 +184,11 @@ test("concurrent runtime writes on two cores keep distinct revisions and both ch
     const b = await store(tenant);
     await withTenant(tenant, async () => {
       await Promise.all([
-        a.setRuntimeSelection(org, { modelId: "one" }),
-        b.setRuntimeSelection(org, { modelId: "two" }),
+        a.setRuntimeSelection(org(), { modelId: "one" }),
+        b.setRuntimeSelection(org(), { modelId: "two" }),
         b.setPurposeRuntime("cron", { modelId: "cron" }),
       ]);
-      assert.equal((await a.getRuntimeSelectionDurable(org))?.revision, 2);
+      assert.equal((await a.getRuntimeSelectionDurable(org()))?.revision, 2);
       assert.deepEqual(await a.getPurposeRuntimeDurable("cron"), { modelId: "cron" });
       await Promise.all([a.acknowledgeRuntimeSelection(channel), b.setRuntimeSelection(channel, { modelId: "new" })]);
       const chosen = await a.getRuntimeSelectionDurable(channel);
@@ -202,18 +204,18 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
     await withTenant(tenant, async () => {
       await mine.setSoul(channel, "tenant soul");
       await mine.setEgress(channel, { allowedHosts: ["mine.example"] });
-      await mine.setSharingPosture(org, "open");
+      await mine.setSharingPosture(org(), "open");
       await mine.setPurposeRuntime("cron", { modelId: "mine" });
-      await mine.setConnectorClient(org, "google", { clientId: "mine", clientSecret: "s" });
+      await mine.setConnectorClient(org(), "google", { clientId: "mine", clientSecret: "s" });
       await mine.setSlackEmojiCatalog(channel, { a: "b" });
     });
     const theirs = await store(otherTenant);
     await withTenant(otherTenant, async () => {
       assert.equal(theirs.getSoul(channel), null);
       assert.equal(theirs.getEgress(channel), null);
-      assert.equal(await theirs.getSharingPostureDurable(org), "isolated");
+      assert.equal(await theirs.getSharingPostureDurable(org()), "isolated");
       assert.equal(theirs.getPurposeRuntime("cron"), undefined);
-      assert.deepEqual(await theirs.listConnectorClients(org), []);
+      assert.deepEqual(await theirs.listConnectorClients(org()), []);
       assert.equal(await theirs.getSlackEmojiCatalogDurable(channel), null);
       assert.equal(await theirs.setSoul(channel, "their soul"), 1);
       await theirs.setEgress(channel, { allowedHosts: ["theirs.example"] });
@@ -228,7 +230,7 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
     try {
       const scopes = (bound: string) =>
         withTenant(bound, () => app.q(`SELECT scope_id FROM scope_settings ORDER BY scope_id`));
-      assert.deepEqual(await scopes(tenant), [{ scope_id: channel }, { scope_id: org }]);
+      assert.deepEqual(await scopes(tenant), [{ scope_id: channel }, { scope_id: scopeId("org", tenant) }]);
       assert.deepEqual(await scopes(otherTenant), [{ scope_id: channel }]);
       await assert.rejects(
         withoutTenant(() => app.q(`SELECT scope_id FROM scope_settings`)),
@@ -269,13 +271,15 @@ test("a tenant added after boot loads its configuration on first use", { skip },
     await withTenant(otherTenant, () => writer.setEgress(channel, { allowedHosts: ["late.example"] }));
     await withTenant(otherTenant, async () => {
       assert.throws(() => config.getEgress(channel), /has not been loaded/);
-      await config.refreshSecurity([org, channel]);
+      await config.refreshSecurity([org(), channel]);
       assert.deepEqual(config.getEgress(channel), { allowedHosts: ["late.example"] });
     });
   });
 });
 
 const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) => {
+  await admin.query(`CREATE TABLE qm_tenant(id UUID NOT NULL)`);
+  await admin.query(`INSERT INTO qm_tenant(id) VALUES ($1)`, [LEGACY_TENANT]);
   await seedKeyValueTable(admin, "soul_configs", {
     [channel]: {
       scopeId: channel,
@@ -299,15 +303,17 @@ const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) 
   await seedKeyValueTable(admin, "approval_grant_modes", {
     [channel]: { scopeId: channel, modes: { session: false, always: true } },
   });
-  await seedKeyValueTable(admin, "org_ambient_flag", { [org]: { scopeId: org, on: false } });
+  await seedKeyValueTable(admin, "org_ambient_flag", { [legacyOrg]: { scopeId: legacyOrg, on: false } });
   await seedKeyValueTable(admin, "individual_model_auth_flag", {
-    [org]: { scopeId: org, on: true },
+    [legacyOrg]: { scopeId: legacyOrg, on: true },
     [personal]: { scopeId: personal, on: true, provider: "anthropic" },
   });
-  await seedKeyValueTable(admin, "branding_configs", { [org]: { scopeId: org, branding: { accent: "#fff" } } });
+  await seedKeyValueTable(admin, "branding_configs", {
+    [legacyOrg]: { scopeId: legacyOrg, branding: { accent: "#fff" } },
+  });
   await seedKeyValueTable(admin, "base_model_configs", {
-    [org]: {
-      scopeId: org,
+    [legacyOrg]: {
+      scopeId: legacyOrg,
       modelId: "org-model",
       revision: 4,
       orgRevision: 4,
@@ -317,11 +323,11 @@ const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) 
     [channel]: { scopeId: channel, modelId: "chan-model", orgRevision: 3 },
   });
   await seedKeyValueTable(admin, "auto_flagger_configs", {
-    [org]: { scopeId: org, modelId: "flag-model", rubric: "be careful" },
+    [legacyOrg]: { scopeId: legacyOrg, modelId: "flag-model", rubric: "be careful" },
   });
   await seedKeyValueTable(admin, "connector_clients", {
-    [`${org}|google`]: {
-      scopeId: org,
+    [`${legacyOrg}|google`]: {
+      scopeId: legacyOrg,
       provider: "google",
       clientId: "legacy-client",
       secretEnc: "opaque",
@@ -340,6 +346,7 @@ test(
   { skip },
   async () => {
     await withConfigDb(async ({ tenant, otherTenant, store, admin, url }) => {
+      assert.equal(tenant, LEGACY_TENANT, "legacy rows land in the tenant that already owned them");
       const config = await store(tenant);
       await withTenant(tenant, async () => {
         assert.equal(config.getSoul(channel), "current");
@@ -361,8 +368,8 @@ test(
         assert.equal(config.getOrgAmbient(), false);
         assert.equal(await config.getModelAccountDurable("U1"), "anthropic");
         assert.equal(await config.getModelAccountDurable("U9"), "personal");
-        assert.deepEqual(config.getBranding(org), { accent: "#fff" });
-        assert.deepEqual(config.getRuntimeSelection(org), {
+        assert.deepEqual(config.getBranding(org()), { accent: "#fff" });
+        assert.deepEqual(config.getRuntimeSelection(org()), {
           modelId: "org-model",
           revision: 4,
           orgRevision: 4,
@@ -382,8 +389,8 @@ test(
       });
       const tables = createPostgresConfigTables(url);
       try {
-        assert.deepEqual(await withTenant(tenant, () => tables.connectorClient(org, "google")), {
-          scopeId: org,
+        assert.deepEqual(await withTenant(tenant, () => tables.connectorClient(legacyOrg, "google")), {
+          scopeId: legacyOrg,
           provider: "google",
           clientId: "legacy-client",
           secretEnc: "opaque",
@@ -391,7 +398,7 @@ test(
           enabled: false,
           updatedAt: 5000,
         });
-        assert.equal(await withTenant(otherTenant, () => tables.connectorClient(org, "google")), null);
+        assert.equal(await withTenant(otherTenant, () => tables.connectorClient(legacyOrg, "google")), null);
       } finally {
         await tables.close!();
       }
