@@ -29,6 +29,7 @@ for (const surface of ["web", "slack", "swarm"]) {
     });
     await built.config.setSecurityPosture(TEST_ROOT_SCOPE, "auto");
     await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
+    await built.identity.ready();
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const server = createInsecureTestServer(TEST_TENANT, built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

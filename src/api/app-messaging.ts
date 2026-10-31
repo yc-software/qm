@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { currentTenant, tenantRootScope } from "../tenants/context.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination } from "../types.ts";
@@ -29,7 +30,6 @@ import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { currentTenant, tenantRootScope } from "../tenants/context.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -125,7 +125,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
+  const contextRequestListeners = new Map<(request: SurfaceContextRequest) => void, string>();
   const contextRequestTokens = new Map<string, string>();
   const tokenKey = (id: string) => `${currentTenant()}\u0000${id}`;
   // Principals identity knows about that the Slack directory never sees: the email
@@ -318,7 +318,7 @@ export function createMessagingMethods(
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
-      if (self && (self.name || self.mentionId)) ambientSelf.set(`${currentTenant()}:${surface}`, self);
+      if (self && (self.name || self.mentionId)) ambientSelf().set(surface, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, events).catch(
@@ -376,11 +376,12 @@ export function createMessagingMethods(
         await contextRequests.settle(request.id, contextOutcome(outcome));
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      const tenant = currentTenant();
+      for (const [l, t] of contextRequestListeners) if (t === tenant) l(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
+      contextRequestListeners.set(listener, currentTenant());
       return () => contextRequestListeners.delete(listener);
     },
     getContextRequest(id) {

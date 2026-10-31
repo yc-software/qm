@@ -13,6 +13,7 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
+import { perTenant } from "../../tenants/context.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -316,17 +317,16 @@ export async function ownedAccount(
     : null;
 }
 
-const SCOPES_TTL_MS = 5 * 60_000;
-const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+const scopeCache = perTenant(() => new Map<string, { scopes: string[]; expiresAt: number }>());
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cached = scopeCache.get(authConfigId);
+  const cached = scopeCache().get(authConfigId);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    scopeCache().set(authConfigId, { scopes, expiresAt: Date.now() + 5 * 60_000 });
     return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);

@@ -42,6 +42,7 @@ async function start(withConfig = true) {
       apiBaseUrl: "http://core.example.test",
     }),
   );
+  await built.identity.ready();
   await built.directory.replaceChannels(
     [{ channelId: "C1", name: "agent-admin", isPrivate: false }],
     [

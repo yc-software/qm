@@ -14,6 +14,7 @@ export interface SessionStateEvent {
   state: SessionState;
   ui?: UiSignal;
   at: number;
+  tenant?: string;
 }
 
 export type SessionStateBus = EventBus<SessionStateEvent>;

@@ -6,6 +6,9 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;

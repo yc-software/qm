@@ -4,18 +4,18 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-function fresh() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
+async function fresh() {
+  return buildLoadedApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
 }
 
 test("resource search filters private data, includes owned drafts, and bounds snippets", async () => {
-  const { app, skills } = fresh();
+  const { app, skills } = await fresh();
   const owned = await skills.create({
     scopeId: "personal:U1",
     createdBy: "U1",
@@ -64,7 +64,7 @@ test("resource search filters private data, includes owned drafts, and bounds sn
 });
 
 test("revoked project membership removes both project and cron hits, even for the creator", async () => {
-  const { app } = fresh();
+  const { app } = await fresh();
   await app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -88,7 +88,7 @@ test("revoked project membership removes both project and cron hits, even for th
 });
 
 test("private matches within the candidate cap are filtered and authorized hits are bounded", async () => {
-  const { app } = fresh();
+  const { app } = await fresh();
   for (let i = 0; i < 65; i++)
     await app.createCron({
       owner: "U2",
@@ -118,7 +118,7 @@ test("private matches within the candidate cap are filtered and authorized hits 
 });
 
 test("private matches beyond the candidate cap reveal no search metadata", async () => {
-  const { app } = fresh();
+  const { app } = await fresh();
   const empty = await app.searchResources("U1", "zanzibar");
   for (let i = 0; i < 201; i++)
     await app.createCron({
@@ -133,7 +133,7 @@ test("private matches beyond the candidate cap reveal no search metadata", async
 });
 
 test("published skill search resolves shadowing without calling the full visible-skills API", async () => {
-  const { app, skills } = fresh();
+  const { app, skills } = await fresh();
   for (const home of [TEST_ROOT_SCOPE, "personal:U1"] as const) {
     const skill = await skills.create({
       scopeId: home,
@@ -158,7 +158,7 @@ test("published skill search resolves shadowing without calling the full visible
 });
 
 test("webhook search uses the existing owner and project controls without exposing verification secrets", async () => {
-  const { app } = fresh();
+  const { app } = await fresh();
   const own = await app.createWebhook({
     owner: "U1",
     createdBy: "U1",

@@ -91,3 +91,12 @@ export function buildApp(
   );
   return Object.assign(app, { modelCalls });
 }
+
+export async function buildLoadedApp(
+  config: Config,
+  overrides: Parameters<typeof buildProductionApp>[1] = {},
+): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
+  const app = buildApp(config, overrides);
+  await app.identity.ready();
+  return app;
+}

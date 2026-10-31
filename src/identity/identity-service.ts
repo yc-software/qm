@@ -3,6 +3,7 @@ import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { currentTenant, perTenant } from "../tenants/context.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember, type ExternalMemberStore } from "./external-members.ts";
 
@@ -81,6 +82,7 @@ export interface IdentityService extends IdentityProvider {
   putExternalMember(m: ExternalMember): Promise<void>;
   removeExternalMember(principalId: string): Promise<void>;
   refresh(force?: boolean): Promise<void>;
+  ready(): Promise<void>;
 }
 
 export function actorAssertionActive(
@@ -99,39 +101,53 @@ export function createIdentityService(
   },
 ): IdentityService {
   const externalStore = opts.externalMembers;
-  const deactivated = new Map<string, DeactivationRecord>();
-  const externals = new Map<string, ExternalMember>();
-  let directorySyncProtected: readonly string[] = [];
+  const queue = createKeyedQueue();
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(currentTenant(), fn);
+
+  const roster = perTenant(() => {
+    const state = {
+      deactivated: new Map<string, DeactivationRecord>(),
+      externals: new Map<string, ExternalMember>(),
+      kept: [] as readonly string[],
+      loaded: false,
+      firstLoad: null as Promise<void> | null,
+      refresh: createTtlRefresh(10_000, () =>
+        exclusive(async () => {
+          await opts.principalLinks?.refresh(true);
+          const [deactivations, members, kept] = await Promise.all([
+            store.list(),
+            externalStore.list(),
+            opts.directorySyncProtected?.() ?? [],
+          ]);
+          state.kept = kept;
+          state.deactivated.clear();
+          state.externals.clear();
+          for (const r of deactivations) {
+            const key = personKey(r.principalId);
+            if (state.deactivated.get(key)?.source !== "manual") state.deactivated.set(key, r);
+          }
+          for (const m of members) state.externals.set(personKey(m.email), m);
+          state.loaded = true;
+        }),
+      ),
+    };
+    return state;
+  });
+  const refresh = (force?: boolean): Promise<void> => roster().refresh(force);
+  const loadedRoster = () => {
+    const state = roster();
+    if (!state.loaded) throw new Error("The identity roster for this tenant has not loaded");
+    return state;
+  };
 
   const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
+    roster().kept.some((id) => personKey(id) === key) || roster().externals.has(key);
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
-
-  const queue = createKeyedQueue();
-  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue("identity", fn);
-
-  const refresh = createTtlRefresh(10_000, () =>
-    exclusive(async () => {
-      await opts.principalLinks?.refresh(true);
-      const [deactivations, members, kept] = await Promise.all([
-        store.list(),
-        externalStore.list(),
-        opts.directorySyncProtected?.() ?? [],
-      ]);
-      directorySyncProtected = kept;
-      deactivated.clear();
-      externals.clear();
-      for (const r of deactivations) {
-        const key = personKey(r.principalId);
-        if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
-      }
-      for (const m of members) externals.set(personKey(m.email), m);
-    }),
-  );
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
+    const { deactivated, externals } = loadedRoster();
     const record = deactivated.get(key);
     const external = externals.get(key);
     const inactive =
@@ -144,6 +160,7 @@ export function createIdentityService(
 
   async function deactivateNow(externalId: string, source: DeactivationSource): Promise<void> {
     const key = personKey(externalId);
+    const { deactivated } = roster();
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
@@ -152,7 +169,7 @@ export function createIdentityService(
   }
 
   async function reactivateNow(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
+    roster().deactivated.delete(personKey(externalId));
     await store.remove(storeKeys(externalId));
   }
 
@@ -160,11 +177,13 @@ export function createIdentityService(
     classify,
     deactivate: (externalId, source = "manual") => exclusive(() => deactivateNow(externalId, source)),
     deactivationSource(externalId: string): DeactivationSource | undefined {
-      return deactivated.get(personKey(externalId))?.source;
+      return loadedRoster().deactivated.get(personKey(externalId))?.source;
     },
     reactivate: (externalId) => exclusive(() => reactivateNow(externalId)),
-    recordDirectorySync: (removedIds, presentIds) =>
-      exclusive(async () => {
+    recordDirectorySync: async (removedIds, presentIds) => {
+      await refresh();
+      return exclusive(async () => {
+        const { deactivated } = roster();
         const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
         for (const id of removedIds) {
           if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
@@ -177,27 +196,36 @@ export function createIdentityService(
           outcome.reactivated.push(id);
         }
         return outcome;
-      }),
+      });
+    },
     async listExternalMembers(): Promise<ExternalMember[]> {
       await refresh();
-      return [...externals.values()];
+      return [...roster().externals.values()];
     },
     externalMember(principalId: string): ExternalMember | undefined {
-      return externals.get(personKey(principalId));
+      return loadedRoster().externals.get(personKey(principalId));
     },
     putExternalMember(m: ExternalMember): Promise<void> {
       return exclusive(async () => {
-        externals.set(personKey(m.email), m);
+        roster().externals.set(personKey(m.email), m);
         await externalStore.put(m);
       });
     },
     removeExternalMember(principalId: string): Promise<void> {
       return exclusive(async () => {
-        externals.delete(personKey(principalId));
+        roster().externals.delete(personKey(principalId));
         await externalStore.remove(storeKeys(principalId));
       });
     },
     refresh,
+    ready(): Promise<void> {
+      const state = roster();
+      if (state.loaded) return Promise.resolve();
+      state.firstLoad ??= state.refresh(true).finally(() => {
+        state.firstLoad = null;
+      });
+      return state.firstLoad;
+    },
     resolve(actor: ActorAssertion): Principal {
       const p = classify(actor.externalId, actor.isExternalGuest);
       return {

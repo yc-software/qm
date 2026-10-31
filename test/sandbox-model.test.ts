@@ -55,6 +55,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
+  await built.identity.ready();
   let overBudget = false;
   const server = createServer(built.app, {
     ...serverDeps(config, built),
@@ -170,6 +171,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 test("a sandbox-model token is refused on every other route", async (t) => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
+  await built.identity.ready();
   const server = createServer(built.app, serverDeps(config, built));
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -210,6 +212,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
         .join(","),
     }),
   });
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
@@ -241,6 +244,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
 test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);

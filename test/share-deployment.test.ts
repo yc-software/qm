@@ -61,7 +61,7 @@ function makeDeploy(
   return { deploy, acl };
 }
 
-function apiHarness(directory?: Dir) {
+async function apiHarness(directory?: Dir) {
   const { deploy, acl } = makeDeploy();
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
@@ -155,7 +155,7 @@ function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityCla
 }
 
 test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, source auth is trusted", async () => {
-  const { app, deploy } = apiHarness();
+  const { app, deploy } = await apiHarness();
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -182,7 +182,7 @@ test("manage endpoints (rename/display-name/archive): agent capability is owner-
 });
 
 test("deployment detail is viewer-gated and fixes the permission/gitUrl wire contract", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -205,7 +205,7 @@ test("deployment detail is viewer-gated and fixes the permission/gitUrl wire con
 });
 
 test("deployment projections omit runtime secrets and local paths", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -232,7 +232,7 @@ test("deployment projections omit runtime secrets and local paths", async () => 
 });
 
 test("restore endpoint is manage-gated and reactivates the archived current version", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -259,7 +259,7 @@ test("restore endpoint is manage-gated and reactivates the archived current vers
 });
 
 test('share endpoint: "everyone" grants org reach — a non-owner can reach it; access:none re-denies', async () => {
-  const { app, deploy } = apiHarness();
+  const { app, deploy } = await apiHarness();
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -284,7 +284,7 @@ test("share endpoint: recipient resolves a teammate via the directory → only t
   const directory: Dir = {
     resolve: async (q) => (q.toLowerCase() === "carol" ? one("U-carol", "Carol") : { kind: "none" }),
   };
-  const { app, deploy } = apiHarness(directory);
+  const { app, deploy } = await apiHarness(directory);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -303,7 +303,7 @@ test("share endpoint: recipient resolves a teammate via the directory → only t
 });
 
 test("share endpoint: only the owner can share (non-owner capability → 403)", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -318,7 +318,7 @@ test("share endpoint: only the owner can share (non-owner capability → 403)", 
 });
 
 test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/missing args → 400", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   const ghost = await callShare(app, cap("U1"), "ghost", { scope: "org" });
   assert.equal(ghost.status, 404);
   assert.equal(ghost.body.error, "not_found");
@@ -349,7 +349,7 @@ test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/
 
 test("share endpoint: access:manage grants write (reach + manage)", async () => {
   const directory: Dir = { resolve: async () => one("U-eng", "Eng") };
-  const { app, deploy } = apiHarness(directory);
+  const { app, deploy } = await apiHarness(directory);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -380,7 +380,7 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
       return { kind: "none" };
     },
   };
-  const { app } = apiHarness(directory);
+  const { app } = await apiHarness(directory);
   assert.deepEqual(await resolveShareTarget(app, { scope: "org" }), {
     kind: "ok",
     scope: TEST_ROOT_SCOPE,
@@ -551,7 +551,7 @@ test("transferDeploymentOwner to the current home is a no-op", async () => {
 });
 
 test("deployment public access is explicit, owner-only, and reversible", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -666,7 +666,7 @@ test("with external app sharing off, public links and outside emails are refused
 });
 
 test("deployment permissions are visible only to the owner, including for managers", async () => {
-  const { app } = apiHarness();
+  const { app } = await apiHarness();
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -686,7 +686,7 @@ test("deployment permissions are visible only to the owner, including for manage
 });
 
 test("app email grants normalize, dedupe, revoke, and reject external manage without changing the grant", async () => {
-  const { app, deploy } = apiHarness();
+  const { app, deploy } = await apiHarness();
   await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [], name: "email-app" });
   for (const email of ["  Invitee@Example.com  ", "invitee@example.com"]) {
     const r = await callShare(app, cap("U1"), "email-app", { email });

@@ -53,3 +53,12 @@ export function tenantKey(key: string): string {
   const tenant = boundTenant();
   return tenant ? `${tenant}:${key}` : key;
 }
+
+export function perTenant<V>(create: () => V): () => V {
+  const values = new Map<string, V>();
+  return () => {
+    const id = currentTenant();
+    if (!values.has(id)) values.set(id, create());
+    return values.get(id)!;
+  };
+}

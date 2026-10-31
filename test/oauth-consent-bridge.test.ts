@@ -28,6 +28,7 @@ async function start(
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): Promise<{ base: string; built: BuiltApp; close: () => Promise<void> }> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "consent-")), signingSecret: SECRET }));
+  await built.identity.ready();
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "consent", isPrivate: false },

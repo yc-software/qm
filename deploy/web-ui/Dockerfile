@@ -24,6 +24,7 @@ COPY plugins/admin/src /admin/src
 COPY plugins/admin/ui /admin/ui
 COPY plugins/admin/public /admin/public
 COPY plugins/chassis/src /chassis/src
+COPY src/tenants/context.ts /src/tenants/context.ts
 COPY plugins/web-ui/src /web-ui/src
 COPY --from=build /app/dist-web ./dist-web
 

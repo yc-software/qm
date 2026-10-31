@@ -5,6 +5,9 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { answerFeatures } from "./core-features.ts";
 const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 // The scenario Bugbot caught on this feature: a surface instance that saw only the QUEUE
 // submission holds the pending run in its local index and nothing else. Core's durable answer

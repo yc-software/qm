@@ -5,6 +5,9 @@ import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { answerFeatures } from "./core-features.ts";
 const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 let coreStatus = 200;
 const turns: Record<string, unknown>[] = [];

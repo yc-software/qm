@@ -83,3 +83,9 @@ export function testSkillPackStore(opts: { now?: () => number } = {}, url = test
 export function testSkillBundleStore(url = testDatabaseUrl()) {
   return createPostgresSkillBundleStore(url);
 }
+
+export async function testIdentity() {
+  const identity = testIdentityService();
+  await identity.ready();
+  return identity;
+}

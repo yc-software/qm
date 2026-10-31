@@ -11,6 +11,7 @@ bindTestTenant();
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   await built.skillsReady();
   for (const actor of ["U1", "U2"]) {
     const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");

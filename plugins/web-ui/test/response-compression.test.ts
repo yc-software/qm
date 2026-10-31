@@ -10,6 +10,9 @@ import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/po
 import { sendBuffered } from "../../chassis/src/http.ts";
 import { answerFeatures } from "./core-features.ts";
 const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "web-ui-compression-test";
 

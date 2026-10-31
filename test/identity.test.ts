@@ -6,6 +6,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
 const id = testIdentityService();
+await id.refresh();
 
 test("classifies a same-org member as internal", () => {
   const p = id.classify("U1");
@@ -38,6 +39,7 @@ test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-inte
 
 test("a deactivated principal classifies as non-internal (fail-closed source, §3)", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   assert.equal(svc.classify("U-leaver").type, "internal");
   await svc.deactivate("U-leaver");
   const after = svc.classify("U-leaver");
@@ -49,6 +51,7 @@ test("a deactivated principal classifies as non-internal (fail-closed source, §
 
 test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   await svc.deactivate("Alice@Corp.com");
   assert.equal(svc.classify("alice@corp.com").type, "guest");
   assert.equal(svc.classify("ALICE@CORP.COM").type, "guest");
@@ -58,6 +61,7 @@ test("deactivation folds email case: a leaver stays out under any casing of thei
 
 test("case fold does not merge distinct emails or touch non-email ids", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   await svc.deactivate("bob@corp.com");
   assert.equal(svc.classify("bobby@corp.com").type, "internal");
   await svc.deactivate("U-Case");
@@ -79,7 +83,7 @@ test("deactivation is durable: a fresh service over the same backing rehydrates 
   await first.deactivate("U-leaver");
 
   const second = testIdentityService({}, url);
-  assert.equal(second.classify("U-leaver").type, "internal");
+  assert.throws(() => second.classify("U-leaver"), /has not loaded/);
   await second.refresh();
   assert.equal(second.classify("U-leaver").type, "guest");
 });
@@ -127,6 +131,7 @@ test("external members written by one instance reach another over the same backi
 
 test("a manual deactivation issued alongside a directory sync is not undone by it", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   await svc.deactivate("alice", "directory-sync");
   await Promise.all([svc.deactivate("alice", "manual"), svc.recordDirectorySync([], ["alice"])]);
   assert.equal(svc.deactivationSource("alice"), "manual");
@@ -160,6 +165,7 @@ test("a deactivation written during a refresh survives that refresh", async () =
 
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
   assert.deepEqual(out, { deactivated: ["U-gone"], reactivated: [] });
   assert.equal(svc.classify("U-gone").type, "guest");
@@ -171,6 +177,7 @@ test("a directory sync deactivates dropped members and self-heals when they reap
 
 test("a manual deactivation survives roster churn — only reactivate() clears it", async () => {
   const svc = testIdentityService();
+  await svc.refresh();
   await svc.deactivate("U-fired");
   await svc.recordDirectorySync([], ["U-fired"]);
   assert.equal(svc.classify("U-fired").type, "guest");

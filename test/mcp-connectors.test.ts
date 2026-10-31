@@ -164,7 +164,7 @@ test("tool service exposes namespaced tools and calls through", async (t) => {
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
-  const defs = service.toolDefs();
+  const defs = await service.toolDefs();
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
   assert.ok(defs.every((d) => d.readOnly && d.serverAbout === "CRM records"));
   const out = await service.call("crm_query", { q: "hello" }, "internal:U1");
@@ -185,7 +185,7 @@ test("destructive annotations mark MCP tools for approval unless the server over
   const approvals = async (partial: Partial<McpServer>) => {
     await store.put(server({ url: mcp.url, ...partial }));
     await service.refresh();
-    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.needsApproval]));
+    return Object.fromEntries((await service.toolDefs()).map((d) => [d.remoteName, d.needsApproval]));
   };
   assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
   assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
@@ -211,7 +211,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
   assert.deepEqual(
-    service.toolDefs().map((d) => [d.name, d.catalog]),
+    (await service.toolDefs()).map((d) => [d.name, d.catalog]),
     [["records", true]],
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
@@ -279,10 +279,10 @@ test("disabled server's tools disappear and calls fail", async (t) => {
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: mcp.url }));
   await service.refresh();
-  assert.equal(service.toolDefs().length, 2);
+  assert.equal((await service.toolDefs()).length, 2);
   await store.put(server({ url: mcp.url, enabled: false }));
   await service.refresh();
-  assert.equal(service.toolDefs().length, 0);
+  assert.equal((await service.toolDefs()).length, 0);
   service.close();
 });
 
@@ -457,9 +457,9 @@ test("background MCP refresh contains registry failures on change and on its tim
   await assert.rejects(service.refresh(), /registry unavailable/);
   list.mock.restore();
   t.mock.timers.tick(100);
-  await settle(async () => service.toolDefs().length > 0);
+  await settle(async () => (await service.toolDefs()).length > 0);
   assert.deepEqual(
-    service.toolDefs().map((tool) => tool.name),
+    (await service.toolDefs()).map((tool) => tool.name),
     ["crm_query", "crm_update"],
   );
   assert.equal(await service.call("crm_query", {}), "ran query");
@@ -502,7 +502,7 @@ test("optional intent and locale parameters are left out of the schema the model
   t.after(() => service.close());
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
-  const schemas = Object.fromEntries(service.toolDefs().map((d) => [d.name, d.inputSchema]));
+  const schemas = Object.fromEntries((await service.toolDefs()).map((d) => [d.name, d.inputSchema]));
   assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
   assert.deepEqual(schemas.crm_search!.required, ["query"]);
   assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);

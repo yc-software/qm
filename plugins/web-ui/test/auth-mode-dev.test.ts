@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { answerFeatures } from "./core-features.ts";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 const core = createServer((req, res) => {
   if (answerFeatures(req, res, { alice: ["web_ui"] })) return;

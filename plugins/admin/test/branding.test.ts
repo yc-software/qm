@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 let coreBranding = { accent: "#f0652f", mark: "Y", selfLabel: "QM" };
 const core = createServer((req: IncomingMessage, res) => {

@@ -6,6 +6,7 @@ import {
   openOAuthState,
   PROVIDERS,
   oauthProvider,
+  publicOAuthClientsReady,
   withPublicOAuthClients,
   sealOAuthState,
   createSecretClientResolver,
@@ -206,6 +207,7 @@ async function completeOAuthCallback(
 }
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
+  await publicOAuthClientsReady();
   const p = oauthProvider(provider);
   if (!p || !deps.connectorTokens) return false;
   for (const host of p.hosts) {
@@ -230,6 +232,8 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { status: peeked.reason === "expired" ? "expired" : "invalid" });
   }
   const rec = peeked.rec;
+
+  await publicOAuthClientsReady();
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
@@ -299,6 +303,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     intendedPrincipalId?: unknown;
   };
   const provider = typeof b.provider === "string" ? b.provider : "";
+  await publicOAuthClientsReady();
   if (!oauthProvider(provider))
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
@@ -369,6 +374,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
+  await publicOAuthClientsReady();
   const provider = oauthProvider(oauthRoute.provider);
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
@@ -460,6 +466,7 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "principalId and provider or host required" });
   }
   if (providerName) {
+    await publicOAuthClientsReady();
     const provider = oauthProvider(providerName);
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });

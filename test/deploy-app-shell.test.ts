@@ -26,7 +26,7 @@ const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
 
-function appServingUpstream(upstreamPort: number) {
+async function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore(testDeployBackings());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
@@ -82,7 +82,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   upstream.listen(0);
   await new Promise((r) => upstream.once("listening", r));
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const { app, directory, acl } = appServingUpstream(upstreamPort);
+  const { app, directory, acl } = await appServingUpstream(upstreamPort);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

@@ -61,7 +61,7 @@ function registration(
   };
 }
 
-function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
+async function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
     acl,
     files,
@@ -82,11 +82,11 @@ test("a file delivered in a PUBLIC channel is auto-shared (read) with the org â€
     registration(files, acl, false, "channel"),
   );
 
-  const u1 = await makeApp(files, acl).listFilesForViewer(initiator);
+  const u1 = await (await makeApp(files, acl)).listFilesForViewer(initiator);
   assert.equal(u1.owned.length, 1);
   assert.equal(u1.owned[0]!.name, "flag.png");
 
-  const app = makeApp(files, acl);
+  const app = await makeApp(files, acl);
   const u2 = await app.listFilesForViewer("U2");
   assert.equal(u2.owned.length, 0, "U2 doesn't own it");
   assert.equal(u2.shared.length, 1, "the org read grant surfaces it to U2");
@@ -107,7 +107,7 @@ test("a file delivered in a DM stays owner-only â€” no auto-share", async () => 
     registration(files, acl, undefined, "dm"),
   );
 
-  assert.equal((await makeApp(files, acl).listFilesForViewer(initiator)).owned.length, 1, "owner sees it");
-  const u2 = await makeApp(files, acl).listFilesForViewer("U2");
+  assert.equal((await (await makeApp(files, acl)).listFilesForViewer(initiator)).owned.length, 1, "owner sees it");
+  const u2 = await (await makeApp(files, acl)).listFilesForViewer("U2");
   assert.equal(u2.owned.length + u2.shared.length, 0, "nobody else sees a DM file");
 });

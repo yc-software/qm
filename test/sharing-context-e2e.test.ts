@@ -19,6 +19,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}, settings: T
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }), {
     tenantSettings: testTenantSettings(settings),
   });
+  await built.identity.ready();
   await built.config.hydrate?.();
   await built.identity.refresh();
   await built.skillsReady();

@@ -1310,6 +1310,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
       apiBaseUrl: "http://core.test",
     }),
   );
+  await built.identity.ready();
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
   built.keychain.materializeOwn = async () => {
     throw new Error("eager owner materialization is forbidden");
