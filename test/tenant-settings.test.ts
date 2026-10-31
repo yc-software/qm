@@ -4,13 +4,7 @@ import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
-import {
-  openTenantSecret,
-  requireTenantSetting,
-  sealTenantSecret,
-  tenantSettingsKey,
-  TenantSettingMissingError,
-} from "../src/tenants/settings.ts";
+import { openTenantSecret, requireTenantSetting, sealTenantSecret, tenantSettingsKey, TenantSettingMissingError, createTenantSettingsStore } from "../src/tenants/settings.ts";
 
 test("each tenant reads only the settings written under its own binding", async () => {
   const store = await testSettingsStore();
@@ -75,6 +69,21 @@ test("a sealed secret opens only for the tenant and setting it was sealed for", 
 test("a tenant first bound after start has its settings loaded before its work runs", async () => {
   const tenant = THIRD_TENANT;
   const store = await testSettingsStore({ [tenant]: { PI_MODEL: "claude-opus-5-5" } });
+  store.start();
+  try {
+    const model = await withTenant(tenant, async () => {
+      await tenantReady();
+      return store.peek().piModel;
+    });
+    assert.equal(model, "claude-opus-5-5");
+  } finally {
+    await store.stop();
+  }
+});
+
+test("a tenant first bound after start has its settings loaded before its work runs", async () => {
+  const tenant = randomUUID();
+  const store = createTenantSettingsStore({ initial: { [tenant]: { PI_MODEL: "claude-opus-5-5" } } });
   store.start();
   try {
     const model = await withTenant(tenant, async () => {

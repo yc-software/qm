@@ -438,8 +438,6 @@ export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
          modal_token_secret BYTEA,
          do_agents_api_token BYTEA,
          smolmachines_token BYTEA,
-         agent37_api_key BYTEA,
-         superserve_api_key BYTEA,
          render_sandbox_api_key BYTEA,
          render_sandbox_workspace_id TEXT,
          security_screen TEXT,
@@ -465,6 +463,7 @@ export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
          oidc_allowed_emails TEXT,
          portal_expected_team_id TEXT,
          oidc_client_secret BYTEA,
+         admin_grants TEXT,
          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
        )`,
     ...tenantPolicies("tenant_settings"),

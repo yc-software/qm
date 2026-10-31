@@ -5,9 +5,9 @@ import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { TENANT_HEADER, signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
+import { createTenantSettingsStore, type TenantSettingsStore } from "../tenants/settings.ts";
 import { hostTenant } from "../../plugins/chassis/src/core-client.ts";
 import { loadConfig, type Config } from "../config.ts";
-import { createTenantSettingsStore, type TenantSettingsStore } from "../tenants/settings.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 

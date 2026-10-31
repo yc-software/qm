@@ -7,6 +7,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { parseSharingPosture } from "../resolution/sharing-posture.ts";
 import { parseSecurityPosture } from "../security/security-posture.ts";
 import { scopeId, type ScopeId } from "../types.ts";
+import { tenantRootScope } from "./context.ts";
 import { isTenantSettingKey, TENANT_SETTING_KEYS, type TenantSettingsStore } from "./settings.ts";
 
 const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
@@ -78,7 +79,6 @@ export interface TenantSettingsImportDeps {
     | "getConnectorClientSecret"
     | "setConnectorClient"
   >;
-  rootScope: ScopeId;
   actor: string;
 }
 
@@ -121,9 +121,9 @@ async function importOAuthClients(
   for (const [name, provider] of Object.entries(PROVIDERS)) {
     const clientId = values[provider.clientIdEnv]?.trim();
     const clientSecret = values[provider.clientSecretEnv]?.trim();
-    if (!clientId || !clientSecret || (await deps.config.getConnectorClientSecret(deps.rootScope, name))) continue;
+    if (!clientId || !clientSecret || (await deps.config.getConnectorClientSecret(tenantRootScope(), name))) continue;
     const hostedDomain = name === "google" ? values.GOOGLE_WORKSPACE_DOMAIN?.trim() : undefined;
-    await deps.config.setConnectorClient(deps.rootScope, name, {
+    await deps.config.setConnectorClient(tenantRootScope(), name, {
       clientId,
       clientSecret,
       ...(hostedDomain ? { hostedDomain } : {}),
@@ -149,7 +149,7 @@ async function importAccessFlags(
   for (const [key, feature] of Object.entries(ACCESS_FLAG_ENV) as [keyof typeof ACCESS_FLAG_ENV, FeatureName][]) {
     const raw = values[key];
     if (raw === undefined || (await deps.featureFlags.get(feature))) continue;
-    for (const scope of accessScopes(key, raw, deps.rootScope))
+    for (const scope of accessScopes(key, raw, tenantRootScope()))
       await deps.featureFlags.setEnabled(feature, scope, true, deps.actor);
   }
 }
@@ -164,7 +164,7 @@ export async function importTenantSettings(
   const { securityPosture, sharingPosture } = parsedPostures(values);
   await deps.settings.update(Object.fromEntries(present.filter(isTenantSettingKey).map((key) => [key, values[key]!])));
   await importModelKeys(values, deps);
-  const { rootScope } = deps;
+  const rootScope = tenantRootScope();
   if (securityPosture && !(await deps.config.getSecurityPostureOwnDurable(rootScope)))
     await deps.config.setSecurityPosture(rootScope, securityPosture);
   if (sharingPosture && !(await deps.config.getSharingPostureOwnDurable(rootScope)))

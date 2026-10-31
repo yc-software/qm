@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import pg from "pg";
 import { buildApp } from "./support/build-app.ts";
@@ -43,7 +44,7 @@ async function fixture(secret: string | undefined = controlSecret) {
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `PUT\n${path}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, canonicalPayload("PUT", path, raw)),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },
