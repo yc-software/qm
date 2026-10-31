@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { currentTenant } from "../tenants/context.ts";
@@ -22,7 +21,6 @@ interface ProjectSlackChannel {
 
 export interface Project {
   id: string;
-  orgId: string;
   name: string;
   ownerId: string;
   memberIds: string[];
@@ -73,8 +71,8 @@ interface ProjectRows {
   get(id: string): Promise<Project | null>;
   insert(project: Project): Promise<Project>;
   save(project: Project): Promise<void>;
-  forMember(orgId: string, principalId: string): Promise<Project[]>;
-  linked(orgId: string): Promise<Project[]>;
+  forMember(principalId: string): Promise<Project[]>;
+  linked(): Promise<Project[]>;
   close?(): Promise<void>;
 }
 
@@ -139,7 +137,7 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
     const id = projectIdFromGroupRef(groupRef);
     if (!id) return undefined;
     const project = await backing.get(id);
-    return project?.orgId === configOrgId() ? project : undefined;
+    return project ?? undefined;
   }
 
   function effectiveMemberIds(project: Project): string[] {
@@ -196,7 +194,6 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
       const at = now();
       const project: Project = {
         id: nextId(),
-        orgId: configOrgId(),
         name,
         ownerId: input.ownerId,
         memberIds: [input.ownerId],
@@ -214,9 +211,7 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
     },
     async listForMember(principalId) {
       if (!isActiveMember(principalId)) return [];
-      return (await backing.forMember(configOrgId(), principalId))
-        .filter((project) => isActiveMember(project.ownerId))
-        .map(visible);
+      return (await backing.forMember(principalId)).filter((project) => isActiveMember(project.ownerId)).map(visible);
     },
     addMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, true, effect),
     removeMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, false, effect),
@@ -313,7 +308,7 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
       });
     },
     async listLinked() {
-      return (await backing.linked(configOrgId())).filter((project) => isActiveMember(project.ownerId)).map(visible);
+      return (await backing.linked()).filter((project) => isActiveMember(project.ownerId)).map(visible);
     },
     async slackChannel(groupRef) {
       const project = await projectForGroup(groupRef);
@@ -345,7 +340,7 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
       if (!id) return undefined;
       return withLock(id, async () => {
         const project = await backing.get(id);
-        if (!project || project.orgId !== configOrgId() || String(project.updatedAt) !== version) return undefined;
+        if (!project || String(project.updatedAt) !== version) return undefined;
         return fn();
       });
     },
@@ -378,11 +373,9 @@ function memoryProjectRows(): ProjectRows {
       return project;
     },
     save: async (project) => void projects().set(project.id, project),
-    forMember: (orgId, principalId) =>
-      where(
-        (p) => p.orgId === orgId && (p.memberIds.includes(principalId) || !!p.channelMemberIds?.includes(principalId)),
-      ),
-    linked: (orgId) => where((p) => p.orgId === orgId && p.slackChannel !== undefined),
+    forMember: (principalId) =>
+      where((p) => p.memberIds.includes(principalId) || !!p.channelMemberIds?.includes(principalId)),
+    linked: () => where((p) => p.slackChannel !== undefined),
   };
 }
 
@@ -398,7 +391,6 @@ export const PROJECTS_MIGRATION = typedTableMigration({
   table: "projects",
   columns: [
     "id TEXT NOT NULL",
-    "org_id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "owner_id TEXT NOT NULL",
     "member_ids TEXT[] NOT NULL",
@@ -418,7 +410,6 @@ export const PROJECTS_MIGRATION = typedTableMigration({
   primaryKey: ["id"],
   backfill: {
     id: "id",
-    org_id: "json->>'orgId'",
     name: "json->>'name'",
     owner_id: "json->>'ownerId'",
     member_ids:
@@ -432,16 +423,17 @@ export const PROJECTS_MIGRATION = typedTableMigration({
     created_at: "round(COALESCE(json->>'createdAt', json->>'updatedAt', '0')::numeric)::bigint",
     updated_at: "round(COALESCE(json->>'updatedAt', json->>'createdAt', '0')::numeric)::bigint",
   },
-  where: "json->>'orgId' IS NOT NULL AND json->>'name' IS NOT NULL AND json->>'ownerId' IS NOT NULL",
+  where: `json->>'name' IS NOT NULL AND json->>'ownerId' IS NOT NULL
+    AND json->>'orgId' = (SELECT json->>'orgId' FROM projects_kv WHERE json->>'orgId' IS NOT NULL
+      GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1)`,
   indexes: [
-    "CREATE INDEX projects_by_org ON projects(tenant_id, org_id, updated_at DESC)",
-    "CREATE INDEX projects_linked ON projects(tenant_id, org_id) WHERE slack_channel_id IS NOT NULL",
+    "CREATE INDEX projects_by_updated ON projects(tenant_id, updated_at DESC)",
+    "CREATE INDEX projects_linked ON projects(tenant_id) WHERE slack_channel_id IS NOT NULL",
   ],
 });
 
 const PROJECT_COLUMNS = [
   "id",
-  "org_id",
   "name",
   "owner_id",
   "member_ids",
@@ -458,7 +450,6 @@ function projectRow(project: Project): unknown[] {
   const slack = project.slackChannel;
   return [
     pgTextSafe(project.id),
-    pgTextSafe(project.orgId),
     pgTextSafe(project.name),
     pgTextSafe(project.ownerId),
     project.memberIds.map(pgTextSafe),
@@ -475,7 +466,6 @@ function projectRow(project: Project): unknown[] {
 function projectFromRow(row: Record<string, unknown>): Project {
   return {
     id: String(row.id),
-    orgId: String(row.org_id),
     name: String(row.name),
     ownerId: String(row.owner_id),
     memberIds: row.member_ids as string[],
@@ -524,8 +514,8 @@ export function createPostgresProjectStore(connectionString: string, opts: Proje
           projectRow(project),
         );
       },
-      forMember: (orgId, principalId) => select(`org_id = $1 AND ${MEMBERS} @> ARRAY[$2::text]`, [orgId, principalId]),
-      linked: (orgId) => select("org_id = $1 AND slack_channel_id IS NOT NULL", [orgId]),
+      forMember: (principalId) => select(`${MEMBERS} @> ARRAY[$1::text]`, [principalId]),
+      linked: () => select("slack_channel_id IS NOT NULL", []),
       close,
     },
     opts,

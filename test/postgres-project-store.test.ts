@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { orgId } from "../src/config.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresProjectStore, projectGroupRef } from "../src/projects/project-store.ts";
@@ -35,7 +34,6 @@ test("projects persist rosters, Slack links and channel members through typed co
       try {
         const got = await restarted.get(project.id);
         assert.equal(got?.name, "Launch");
-        assert.equal(got?.orgId, orgId());
         assert.deepEqual(got?.memberIds, ["alice", "bob"]);
         assert.deepEqual(got?.channelMemberIds, ["dave", "erin"]);
         assert.equal(got?.slackChannel?.channelId, "C1");
@@ -98,56 +96,68 @@ test("projects are isolated per tenant and the same id can exist in both", { ski
   });
 });
 
-test("the conversion backfills projects into the instance tenant and drops the old table", { skip }, async () => {
-  const roadmap = {
-    id: "p1",
-    orgId: orgId(),
-    name: "Roadmap",
-    ownerId: "alice",
-    memberIds: ["alice", "bob"],
-    channelMemberIds: ["carol"],
-    slackChannel: { channelId: "C1", channelName: "roadmap", linkedBy: "alice", linkedAt: 5 },
-    createdAt: 1,
-    updatedAt: 2,
-  };
-  await withTypedTableDb(
-    make,
-    async ({ store, admin, tenant }) => {
-      assert.deepEqual(await withTenant(tenant, () => store.get("p1")), roadmap);
-      assert.deepEqual(await withTenant(tenant, () => store.get("p2")), {
-        id: "p2",
-        orgId: orgId(),
-        name: "Plain",
-        ownerId: "bob",
-        memberIds: ["bob"],
-        createdAt: 3,
-        updatedAt: 4,
-      });
-      const { rows } = await admin.query(
-        `SELECT tenant_id::text AS tenant, id, to_regclass('projects_kv') IS NULL AS dropped,
+test(
+  "the conversion backfills the most common org's projects into the instance tenant and drops the old table",
+  { skip },
+  async () => {
+    const roadmap = {
+      id: "p1",
+      name: "Roadmap",
+      ownerId: "alice",
+      memberIds: ["alice", "bob"],
+      channelMemberIds: ["carol"],
+      slackChannel: { channelId: "C1", channelName: "roadmap", linkedBy: "alice", linkedAt: 5 },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await withTypedTableDb(
+      make,
+      async ({ store, admin, tenant }) => {
+        assert.deepEqual(await withTenant(tenant, () => store.get("p1")), roadmap);
+        assert.deepEqual(await withTenant(tenant, () => store.get("p2")), {
+          id: "p2",
+          name: "Plain",
+          ownerId: "bob",
+          memberIds: ["bob"],
+          createdAt: 3,
+          updatedAt: 4,
+        });
+        const { rows } = await admin.query(
+          `SELECT tenant_id::text AS tenant, id, to_regclass('projects_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'projects') AS versions
            FROM projects ORDER BY id`,
-      );
-      assert.deepEqual(rows, [
-        { tenant, id: "halfLink", dropped: true, versions: 0 },
-        { tenant, id: "noMembers", dropped: true, versions: 0 },
-        { tenant, id: "p1", dropped: true, versions: 0 },
-        { tenant, id: "p2", dropped: true, versions: 0 },
-      ]);
-      const { slackChannel: _link, ...unlinked } = roadmap;
-      assert.deepEqual(await withTenant(tenant, () => store.get("halfLink")), { ...unlinked, id: "halfLink" });
-      assert.deepEqual((await withTenant(tenant, () => store.get("noMembers")))?.memberIds, ["alice"]);
-    },
-    (admin) =>
-      seedKeyValueTable(admin, "projects", {
-        p1: roadmap,
-        p2: { id: "p2", orgId: orgId(), name: "Plain", ownerId: "bob", memberIds: ["bob"], createdAt: 3, updatedAt: 4 },
-        noMembers: { ...roadmap, id: "noMembers", memberIds: "alice" },
-        halfLink: { ...roadmap, id: "halfLink", slackChannel: { channelId: "C2" } },
-        ownerless: { ...roadmap, id: "ownerless", ownerId: undefined },
-      }),
-  );
-});
+        );
+        assert.deepEqual(rows, [
+          { tenant, id: "halfLink", dropped: true, versions: 0 },
+          { tenant, id: "noMembers", dropped: true, versions: 0 },
+          { tenant, id: "p1", dropped: true, versions: 0 },
+          { tenant, id: "p2", dropped: true, versions: 0 },
+        ]);
+        const { slackChannel: _link, ...unlinked } = roadmap;
+        assert.deepEqual(await withTenant(tenant, () => store.get("halfLink")), { ...unlinked, id: "halfLink" });
+        assert.deepEqual((await withTenant(tenant, () => store.get("noMembers")))?.memberIds, ["alice"]);
+      },
+      (admin) =>
+        seedKeyValueTable(admin, "projects", {
+          p1: { ...roadmap, orgId: "acme" },
+          p2: {
+            id: "p2",
+            orgId: "acme",
+            name: "Plain",
+            ownerId: "bob",
+            memberIds: ["bob"],
+            createdAt: 3,
+            updatedAt: 4,
+          },
+          noMembers: { ...roadmap, orgId: "acme", id: "noMembers", memberIds: "alice" },
+          halfLink: { ...roadmap, orgId: "acme", id: "halfLink", slackChannel: { channelId: "C2" } },
+          ownerless: { ...roadmap, orgId: "acme", id: "ownerless", ownerId: undefined },
+          otherOrg: { ...roadmap, orgId: "beta", id: "otherOrg" },
+          orgless: { ...roadmap, id: "orgless" },
+        }),
+    );
+  },
+);
 
 test("project text with NUL bytes is stored without them", { skip }, async () => {
   await withTypedTableDb(make, async ({ store, tenant }) => {

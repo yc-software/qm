@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresFeatureFlagStore } from "../src/feature-flags.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { tenantRootScope, withTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -29,14 +29,14 @@ test("feature flags map each feature to enabled scopes and the org scope enables
         assert.deepEqual([...(await store.enabledFor("personal:U1"))].sort(), ["inbox_loops", "responsive_spine"]);
         await store.setEnabled("inbox_loops", "channel:C1", false, "admin");
         assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
-        await store.setEnabled("swarms", "org:default-org", true, "admin");
+        await store.setEnabled("swarms", tenantRootScope(), true, "admin");
         assert.equal(await store.enabled("swarms", "channel:C9"), true);
         assert.deepEqual(
           (await store.list()).map((row) => [row.featureName, row.enabledScopes]),
           [
             ["inbox_loops", ["personal:U1"]],
             ["responsive_spine", ["personal:U1"]],
-            ["swarms", ["org:default-org"]],
+            ["swarms", [tenantRootScope()]],
           ],
         );
         await assert.rejects(store.setEnabled("swarms", "personal:U1", true, " "), /must not be empty/);
@@ -48,13 +48,13 @@ test("feature flag rows are scoped to their tenant", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresFeatureFlagStore(url),
     async ({ store, tenant, otherTenant }) => {
-      await withTenant(tenant, () => store.setEnabled("swarms", "org:default-org", true, "admin"));
+      await withTenant(tenant, () => store.setEnabled("swarms", `org:${tenant}`, true, "admin"));
       assert.equal(await withTenant(otherTenant, () => store.enabled("swarms", "personal:U1")), false);
       assert.deepEqual(await withTenant(otherTenant, () => store.list()), []);
       await withTenant(otherTenant, () => store.setEnabled("swarms", "personal:U2", true, "other-admin"));
       assert.deepEqual(
         (await withTenant(tenant, () => store.list())).map((row) => row.enabledScopes),
-        [["org:default-org"]],
+        [[`org:${tenant}`]],
       );
       assert.deepEqual(
         (await withTenant(otherTenant, () => store.list())).map((row) => row.enabledScopes),

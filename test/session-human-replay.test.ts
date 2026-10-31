@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { orgId } from "../src/config.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
@@ -21,7 +22,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   );
   const project = await built.app.createProject("owner", "Replay receipt");
   assert.ok(project);
-  await built.config.setWebuiModels(`org:${project.orgId}`, ["gpt-5.5"]);
+  await built.config.setWebuiModels(`org:${orgId()}`, ["gpt-5.5"]);
   assert.equal((await built.app.addProjectMember(project.id, "owner", "sender")).status, "ok");
   const channelRef = projectGroupRef(project.id);
   const version = await built.projects.version(channelRef);

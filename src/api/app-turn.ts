@@ -132,11 +132,7 @@ export function createTurnMethods(
       if (projectGroup) {
         if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
         const project = await deps.projects?.get(projectId);
-        if (
-          !project ||
-          project.orgId !== orgIdOf() ||
-          !deps.identity.isInternal(deps.identity.classify(project.ownerId))
-        ) {
+        if (!project || !deps.identity.isInternal(deps.identity.classify(project.ownerId))) {
           return { status: "refused", reason: "you're not a member of that context" };
         }
         const roster = (await deps.projects?.members(conversationRef)) ?? [];

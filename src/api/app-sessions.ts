@@ -783,7 +783,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const directoryMember = await h.directoryMember(memberId);
       const principal = deps.identity.classify(memberId);
       if (!directoryMember || directoryMember.type !== "internal" || !deps.identity.isInternal(principal))
@@ -809,7 +809,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.removeMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -831,7 +831,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       let link: { channelId: string; channelName: string } | null = null;
       if (channel !== null) {
         const wanted = channel.trim().replace(/^#/, "");
@@ -890,7 +890,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.rename(id, principalId, name, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -1119,8 +1119,7 @@ export function createSessionMethods(
       if (!projectId) return fork();
       const projects = deps.projects;
       if (!projects) return null;
-      return projects.withRosterLock(projectId, async (project) => {
-        if (project.orgId !== orgIdOf()) return null;
+      return projects.withRosterLock(projectId, async () => {
         const members = await projects.members(parsed.ref);
         if (!members?.includes(principalId)) return null;
         return fork(members);
@@ -1158,7 +1157,6 @@ export function createSessionMethods(
         const projects = deps.projects;
         if (!projects) return null;
         return projects.withRosterLock(projectId, async (project) => {
-          if (project.orgId !== orgIdOf()) return null;
           const members = await projects.members(parsed.ref);
           if (!members?.includes(principalId)) return null;
           return create(members, project.name);

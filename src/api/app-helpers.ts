@@ -289,7 +289,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (kind !== "group" || projectIdFromGroupRef(ref) === null) return undefined;
     if (!deps.projects) return false;
     const project = await deps.projects.get(projectIdFromGroupRef(ref)!);
-    if (!project || project.orgId !== orgIdOf()) return false;
+    if (!project) return false;
     if (!deps.identity.isInternal(deps.identity.classify(project.ownerId))) return false;
     if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
     return (await deps.projects.membership(ref, principalId).catch(() => false)) === true;
