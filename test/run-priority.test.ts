@@ -6,6 +6,9 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

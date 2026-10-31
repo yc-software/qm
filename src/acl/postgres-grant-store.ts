@@ -1,6 +1,8 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
+import { TENANCY_BASE, TENANT, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -14,6 +16,7 @@ function rowToGrant(r: Record<string, unknown>): Grant {
 
 export function createPostgresGrantStore(connectionString: string): GrantPersistence {
   const db = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "acl/grants/0001",
       statements: [
@@ -80,20 +83,55 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       $migrate$`,
       ],
     },
+    tenantTables(
+      "acl/grants/0004-tenants",
+      [
+        { table: "acl_grants", primaryKey: "owner_scope_id, path, grantee_scope_id, permission" },
+        { table: "acl_grants_version", primaryKey: "only_row" },
+      ],
+      {
+        before: [`DELETE FROM acl_grants_version`],
+        after: [
+          `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN
+        IF TG_LEVEL = 'STATEMENT' THEN
+          UPDATE acl_grants_version SET v = v + 1;
+        ELSE
+          INSERT INTO acl_grants_version(tenant_id, only_row, v)
+          SELECT DISTINCT tenant, TRUE, 1
+            FROM (VALUES (CASE WHEN TG_OP <> 'INSERT' THEN OLD.tenant_id END),
+                         (CASE WHEN TG_OP <> 'DELETE' THEN NEW.tenant_id END)) changed(tenant)
+           WHERE tenant IS NOT NULL
+          ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+        END IF;
+        RETURN NULL;
+      END
+      $fn$`,
+          `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
+          `CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE ON acl_grants
+      FOR EACH ROW EXECUTE FUNCTION acl_grants_bump_version()`,
+          `DROP TRIGGER IF EXISTS acl_grants_truncate ON acl_grants`,
+          `CREATE TRIGGER acl_grants_truncate AFTER TRUNCATE ON acl_grants
+      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
+        ],
+      },
+    ),
   ]);
   const { q } = db;
-  let cache: { v: string; grants: readonly Grant[] } | null = null;
+  const cache = new Map<string, { v: string; grants: readonly Grant[] }>();
 
   return {
     async all() {
-      const versionRows = await q("SELECT v FROM acl_grants_version");
-      const version = versionRows.length ? String(versionRows[0]!.v) : null;
-      if (cache && version !== null && cache.v === version) return [...cache.grants];
+      const versionRows = await q(`SELECT v FROM acl_grants_version WHERE tenant_id = ${TENANT}`);
+      const version = versionRows.length ? String(versionRows[0]!.v) : "0";
+      const tenant = currentTenant();
+      const cached = cache.get(tenant);
+      if (cached?.v === version) return [...cached.grants];
       const rows = await q(
         "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants ORDER BY owner_scope_id, path, grantee_scope_id, permission",
       );
       const grants = rows.map(rowToGrant);
-      cache = version === null ? null : { v: version, grants };
+      cache.set(tenant, { v: version, grants });
       return [...grants];
     },
     async put(g) {
@@ -102,7 +140,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         await client.query(
           `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission)
+           ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)
            DO UPDATE SET granted_by = EXCLUDED.granted_by`,
           [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
         );

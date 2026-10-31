@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { startSignalPoll, waitForClientResult, type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const stores: RunSignalStore[] = [];
 const signalStore = (): RunSignalStore => {

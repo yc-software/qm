@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres memory tests";
@@ -24,6 +27,7 @@ beforeEach(async () => {
 });
 
 test("pg memory: notebook snapshots migrate into one row per fact, in order", { skip }, async () => {
+  await sql("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
   await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
     op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, records JSONB, UNIQUE (scope_id, seq))`);
   const records = {

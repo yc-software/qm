@@ -5,7 +5,9 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import pg from "pg";
 import { buildApp } from "./support/build-app.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
@@ -13,7 +15,11 @@ const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/tenant-settings";
 
 async function fixture(secret: string | undefined = controlSecret) {
-  const built = buildApp(testConfig({ signingSecret: sourceSecret }));
+  const config = testConfig({ signingSecret: sourceSecret });
+  const owner = new pg.Pool({ connectionString: config.databaseUrl });
+  await owner.query("DELETE FROM tenants WHERE id = $1", [OTHER_TENANT]);
+  await owner.end();
+  const built = buildApp(config);
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
@@ -55,13 +61,11 @@ test("tenant settings are written only with both the source signature and the op
     assert.equal((await srv.put({ env: { PI_MODEL: "x" } }, { "x-signature": "invalid" })).status, 401);
     const response = await srv.put({ env: { PI_MODEL: "claude-opus-5-5", ANTHROPIC_API_KEY: "key-a" } });
     assert.equal(response.status, 200);
-    const installTenant = await srv.built.tenantSettings.onlyTenant();
-    assert.ok(installTenant);
     assert.deepEqual(await response.json(), {
-      tenant: installTenant,
+      tenant: TEST_TENANT,
       updated: ["PI_MODEL", "ANTHROPIC_API_KEY"],
     });
-    await withTenant(installTenant, async () => {
+    await withTenant(TEST_TENANT, async () => {
       assert.equal((await srv.built.tenantSettings.get()).piModel, "claude-opus-5-5");
       assert.equal(await srv.built.modelCredentials.resolve("anthropic"), "key-a");
     });

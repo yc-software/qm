@@ -2,11 +2,13 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "../src/surface-cache/ack-emoji-pick-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ack-emoji-pick tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

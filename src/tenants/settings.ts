@@ -4,9 +4,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { currentTenant, onFirstBind, withTenant } from "./context.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
-import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
-import { SESSION_SCHEMA } from "../sessions/session-schema.ts";
-import { TENANT, TENANT_MIGRATIONS, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
+import { TENANCY_BASE, TENANT, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
 
 export type { TenantSettings } from "./settings-parse.ts";
 
@@ -158,8 +156,8 @@ interface TenantSettingsBacking {
 }
 
 function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
-  for (const migration of [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, ...TENANT_MIGRATIONS, TENANT_SETTINGS_MIGRATION])
-    db.registerMigration(migration);
+  db.registerMigration(TENANCY_BASE);
+  db.registerMigration(TENANT_SETTINGS_MIGRATION);
   const sealKey = tenantSettingsKey(keyMaterial);
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {

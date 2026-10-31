@@ -1,11 +1,13 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the replay-dedupe tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
