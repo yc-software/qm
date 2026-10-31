@@ -105,7 +105,10 @@ function oidcProblems(
   if ((rule.allowedEmailDomain || rule.allowedEmails?.length) && rule.claim !== "email") {
     problems.push("OIDC_ALLOWED_EMAIL_DOMAIN and OIDC_ALLOWED_EMAILS require OIDC_PRINCIPAL_CLAIM=email");
   }
-  if (!ctx.isProd) return problems;
+  if (!ctx.isProd) {
+    if (!oidc.clientId.trim()) problems.push("OIDC_CLIENT_ID is required");
+    return problems;
+  }
   if (isMissingOrPlaceholder(oidc.clientId))
     problems.push("OIDC_CLIENT_ID is required and may not be a placeholder in production");
   if (isMissingOrPlaceholder(oidc.clientSecret))

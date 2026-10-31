@@ -35,10 +35,9 @@ test("sign-in fails closed without the tenant's settings, then uses the ones cor
     refused.headers.getSetCookie().some((c) => c.startsWith("portal_oidc_tmp=")),
     false,
   );
-  assert.match(
-    await refused.text(),
-    /sign-in is not configured for this workspace: core refused the plugin settings read/,
-  );
+  const page = await refused.text();
+  assert.match(page, /sign-in is not configured for this workspace/);
+  assert.doesNotMatch(page, /core refused|HTTP 503/);
 
   settings = { OIDC_AUTH_ENDPOINT: "https://idp.example.test/authorize", OIDC_CLIENT_ID: "tenant-client" };
   const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
