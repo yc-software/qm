@@ -148,7 +148,9 @@ export async function detail(page: AdminPage) {
                 ["Mark dismissed", "dismissed"],
               ].map(
                 ([label, status]) =>
-                  html`<button type="button" ?disabled=${busy} @click=${() => setOnboarding(status)}>${label}</button>`,
+                  html`<button class="btn" type="button" ?disabled=${busy} @click=${() => setOnboarding(status)}>
+                    ${label}
+                  </button>`,
               )}
             </div>
             <p class="hint">${hint}</p>

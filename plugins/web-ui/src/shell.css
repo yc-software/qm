@@ -5709,7 +5709,7 @@ a.connector-widget:focus-visible {
   gap: 4px;
   border-bottom: 1px solid var(--border);
 }
-.resource-tabs button {
+.resource-tabs :is(button, a) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5720,13 +5720,14 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
   font: inherit;
   font-size: var(--font-13);
+  text-decoration: none;
   cursor: pointer;
 }
-.resource-tabs button.active {
+.resource-tabs :is(button, a).active {
   border-bottom-color: var(--foreground);
   color: var(--foreground);
 }
-.resource-tabs button span {
+.resource-tabs :is(button, a) span {
   padding: 1px 5px;
   border-radius: 999px;
   background: var(--secondary);

@@ -67,7 +67,7 @@ export async function mount(page: AdminPage) {
       {
         node: html`<button
           type="button"
-          class="rowbtn danger"
+          class="btn compact rowbtn danger"
           ?disabled=${pending.has(s.id)}
           @click=${(e: Event) => (e.stopPropagation(), remove(s))}
         >
@@ -117,7 +117,9 @@ function skillCard(k: Row, group: Row[], remove: (s: Row) => void) {
             g.status || "unknown",
             { text: g.version != null ? "v" + g.version : "None", cls: "num" },
             {
-              node: html`<button type="button" class="rowbtn danger" @click=${() => remove(g)}>Remove</button>`,
+              node: html`<button type="button" class="btn compact rowbtn danger" @click=${() => remove(g)}>
+                Remove
+              </button>`,
             },
           ]),
           "None",
@@ -230,12 +232,14 @@ function packCard(page: AdminPage, packs: Row[], reload: () => void, paint: () =
       { text: p.trustTier + (p.syncMode === "tracked" ? " · auto-sync" : ""), cls: "subline" },
       { node: html`<span class=${"status " + st.tone}>${st.text}</span>` },
       {
-        node: html`<button type="button" class="rowbtn" @click=${() => browse(page, p, reload, paint)}>
+        node: html`<button type="button" class="btn compact rowbtn" @click=${() => browse(page, p, reload, paint)}>
             Browse skills…</button
-          ><button type="button" class="rowbtn" @click=${() => act(p, "sync")}>Sync now</button
-          ><button type="button" class="rowbtn" @click=${() => act(p, "track")}>
+          ><button type="button" class="btn compact rowbtn" @click=${() => act(p, "sync")}>Sync now</button
+          ><button type="button" class="btn compact rowbtn" @click=${() => act(p, "track")}>
             ${p.syncMode === "tracked" ? "Turn off auto-sync" : "Turn on auto-sync"}</button
-          ><button type="button" class="rowbtn danger" @click=${() => act(p, "remove")}>Remove pack</button>`,
+          ><button type="button" class="btn compact rowbtn danger" @click=${() => act(p, "remove")}>
+            Remove pack
+          </button>`,
         cls: "num",
       },
     ];
@@ -246,7 +250,7 @@ function packCard(page: AdminPage, packs: Row[], reload: () => void, paint: () =
     html`<div class="pack-register">
         ${input("url", "Register a pack: paste a git repo URL of SKILL.md files, then Browse it into scopes")}<button
           type="button"
-          class="primary"
+          class="btn primary"
           ?disabled=${s.busy}
           @click=${register}
         >
@@ -352,9 +356,9 @@ async function browse(page: AdminPage, pack: Row, reload: () => void, paint: () 
           ]),
           "No skills found in this pack.",
         )}
-        <button type="button" class="primary" ?disabled=${busy} @click=${run}>Import selected</button
+        <button type="button" class="btn primary" ?disabled=${busy} @click=${run}>Import selected</button
         ><span class=${"status " + tone}>${message}</span>
-        <button type="button" @click=${() => ((s.browse = nothing), paint())}>Close</button>`,
+        <button class="btn" type="button" @click=${() => ((s.browse = nothing), paint())}>Close</button>`,
     );
     paint();
   };

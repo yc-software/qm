@@ -8,7 +8,7 @@ export const cardClass = (s: SettingState, kind: string, extra: Record<string, b
 
 export function saveButton(s: SettingState, label = "Apply", disabled = false) {
   return html`<button
-    class=${classMap({ primary: true, dirty: s.dirty })}
+    class=${classMap({ btn: true, primary: true, dirty: s.dirty })}
     data-save=${s.key}
     @click=${() => s.save()}
     ?disabled=${!s.dirty || s.saving || disabled}
@@ -149,10 +149,10 @@ export function reviewChange(r: Review): Promise<boolean> {
           <p class="review-dialog-warning admin-notice">${r.warning}</p>
         </div>
         <div class="review-dialog-foot">
-          <button type="button" id="governance-review-cancel" @click=${() => done(false)}>Cancel</button
+          <button class="btn" type="button" id="governance-review-cancel" @click=${() => done(false)}>Cancel</button
           ><button
             type="button"
-            class=${classMap({ "review-dialog-confirm": true, danger: !!r.danger })}
+            class=${classMap({ btn: true, "review-dialog-confirm": true, danger: !!r.danger })}
             id="governance-review-confirm"
             @click=${() => done(true)}
           >

@@ -131,7 +131,7 @@ test("a reply for a scope left behind is ignored", async () => {
   await page.settle();
   const strict = page.document.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
   assert.equal(strict.checked, true);
-  assert.equal(page.document.querySelector(".shell-title")!.textContent, "#C2");
+  assert.equal(page.document.querySelector(".pane-title")!.textContent, "#C2");
   page.close();
 });
 
@@ -148,7 +148,7 @@ test("a scope follows the organization's sharing after review and links its envi
     "/settings/governance?scope=channel%3AC1",
   );
   const doc = page.document;
-  assert.equal(doc.querySelector(".shell-title")!.textContent, "#ops");
+  assert.equal(doc.querySelector(".pane-title")!.textContent, "#ops");
   assert.match(doc.getElementById("environment-notice")!.textContent!, /Uses named environment Staging/);
   assert.equal(
     doc.querySelector<HTMLAnchorElement>("#environment-notice a")!.getAttribute("href"),

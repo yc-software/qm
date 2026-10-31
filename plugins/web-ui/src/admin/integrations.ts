@@ -69,10 +69,10 @@ function template() {
   return page.view === "connectors"
     ? html`<div id="view-connectors">${connectorsCard()}${builtIns()}</div>`
     : html`<div id="view-governance">
-          <div class="governance-content">
-            ${failure ? html`<p class="hint" role="status">${failure}</p>` : nothing}${installationCard()}${externalCard()}${pinCard()}${ackCard()}
-          </div>
-        </div>`;
+        <div class="governance-content">
+          ${failure ? html`<p class="hint" role="status">${failure}</p>` : nothing}${installationCard()}${externalCard()}${pinCard()}${ackCard()}
+        </div>
+      </div>`;
 }
 
 function externalCard() {
@@ -175,7 +175,13 @@ function ackCard() {
     <div class="body">
       <div id="ack-emoji-chips" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
         ${emojiChips(s)}<span style="position: relative; display: inline-block">
-          <button type="button" id="ack-emoji-open" @click=${() => toggleEmoji(s)} class="ghost" aria-haspopup="true">
+          <button
+            type="button"
+            id="ack-emoji-open"
+            @click=${() => toggleEmoji(s)}
+            class="btn ghost"
+            aria-haspopup="true"
+          >
             + Add emoji
           </button>
           <div class=${classMap({ "emoji-picker": true, hidden: !emoji.open })} id="ack-emoji-picker">
@@ -253,16 +259,16 @@ function connectorsCard() {
       ${toggleField("Enabled", 8, s.draft.enabled, (on) => s.change("enabled", on), { id: "conn-enabled" })}
     </div>
     <div class="foot">
-      <button type="button" id="add-oauth-app" class=${s.editor ? "hidden" : ""} @click=${() => openConnector()}>
+      <button type="button" id="add-oauth-app" class=${s.editor ? "btn hidden" : "btn"} @click=${() => openConnector()}>
         + Add OAuth app</button
       ><button
-        class=${classMap({ primary: true, hidden: !s.editor })}
+        class=${classMap({ btn: true, primary: true, hidden: !s.editor })}
         id="conn-save"
         ?disabled=${s.saving}
         @click=${() => s.save()}
       >
         ${s.editing ? "Save changes" : "Save connector"}</button
-      ><button class=${s.editor ? "" : "hidden"} id="conn-reset" @click=${() => s.reset()}>Cancel</button
+      ><button class=${s.editor ? "btn" : "btn hidden"} id="conn-reset" @click=${() => s.reset()}>Cancel</button
       >${settingStatus(s, "st-connectors")}
     </div>
   </section>`;
@@ -282,7 +288,7 @@ function installationCard() {
         </div>
         <div class="slack-connection-actions">
           <button
-            class=${d.installAvailable ? "" : "hidden"}
+            class=${d.installAvailable ? "btn" : "btn hidden"}
             id="slack-installation-start"
             ?disabled=${!!s.busy || (d.configured && d.source === "admin")}
             title=${d.configured && d.source === "admin" ? "Remove your current connection before switching to the hosted app." : ""}
@@ -292,7 +298,7 @@ function installationCard() {
             <span id="slack-installation-start-label">${d.configured ? "Re-add to Slack" : "Add to Slack"}</span>
           </button>
           <button
-            class=${classMap({ danger: true, hidden: !d.configured })}
+            class=${classMap({ btn: true, danger: true, hidden: !d.configured })}
             id="slack-installation-delete"
             ?disabled=${!d.configured || !!s.busy}
             @click=${() => s.remove()}
@@ -352,6 +358,7 @@ function installationCard() {
           >
         </p>
         <button
+          class="btn"
           type="button"
           id="slack-enter-tokens"
           @click=${() => {
@@ -371,7 +378,7 @@ function installationCard() {
             within a few seconds.
           </p>
           <button
-            class=${classMap({ primary: true, hidden: !s.editor })}
+            class=${classMap({ btn: true, primary: true, hidden: !s.editor })}
             id="slack-installation-save"
             ?disabled=${!!s.busy}
             @click=${() => s.save()}
@@ -423,7 +430,7 @@ function connectorRows() {
           </div>
         </div>
         <div class="credential-actions">
-          ${c.inherited ? html`<button type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="rowbtn danger" title="Delete connector" aria-label=${"Delete " + connectorName(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
+          ${c.inherited ? html`<button class="btn" type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button class="btn" type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="btn compact rowbtn danger" title="Delete connector" aria-label=${"Delete " + connectorName(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
         </div>
       </div>`,
   );
@@ -478,6 +485,7 @@ function emojiChips(s: SlackSetting) {
         ><span
           >${emoji.catalog[name] ? html`<img src=${emoji.catalog[name]} alt=${name} class="ack-emoji-img" style="margin-right:4px" />` : (emoji.standard.find((e) => e[0] === name)?.[1] || "") + " "}${":" + name + ":"}</span
         ><button
+          class="btn"
           type="button"
           aria-label=${"Remove " + name}
           style="border:0;background:none;cursor:pointer;padding:0;font-size:14px;line-height:1"
@@ -519,6 +527,7 @@ function emojiResults(s: SlackSetting) {
           ${entries.map(
             ([name, glyph]) =>
               html`<button
+                class="btn"
                 type="button"
                 title=${":" + name + ":"}
                 aria-label=${name}

@@ -59,7 +59,7 @@ export async function mount(page: AdminPage) {
       })),
       { label: "Custom", active: w.preset === null, href: page.href("spend", { from: w.from, to: w.to }) },
     ],
-    actions: html`<a class="button" href=${page.apiBase + "/spend?format=csv&breakdown=entity&" + query} download
+    actions: html`<a class="btn" href=${page.apiBase + "/spend?format=csv&breakdown=entity&" + query} download
       >Export CSV</a
     >`,
   });
@@ -89,7 +89,7 @@ export async function mount(page: AdminPage) {
             <input type="date" aria-label="First day" required max=${today} .value=${w.from} />
             <span>to</span>
             <input type="date" aria-label="Last day" required max=${today} .value=${isoDay(Date.parse(w.to) - DAY)} />
-            <button class="primary">Apply</button>
+            <button class="btn primary">Apply</button>
             <span class="hint">UTC, up to ${MAX_CUSTOM_DAYS} days</span>
           </form>`
         : null

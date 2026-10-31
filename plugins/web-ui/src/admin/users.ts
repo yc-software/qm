@@ -126,13 +126,13 @@ function users(page: AdminPage, initial: any) {
                     <option value="org_admin">Admin</option>
                   </select>
                 </div>
-                <button class="primary" ?disabled=${busy}>Send invite</button>
+                <button class="btn primary" ?disabled=${busy}>Send invite</button>
               </form>
               <p class="status" role="status">${message}</p>
               ${
                 inviteLink
                   ? html`<p class="flag-warn">${inviteWarning}</p>
-                      <button type="button" @click=${() => copyText(inviteLink)}>Copy invite link</button>`
+                      <button class="btn" type="button" @click=${() => copyText(inviteLink)}>Copy invite link</button>`
                   : ""
               }
               ${table(

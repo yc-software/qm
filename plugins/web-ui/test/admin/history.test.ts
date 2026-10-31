@@ -26,9 +26,9 @@ test("the org-wide landing lists newest sessions with scope tags, a scope filter
     ],
   );
   const doc = page.document;
-  assert.equal(doc.querySelector(".shell-title"), null);
+  assert.equal(doc.querySelector(".pane-title"), null);
   assert.deepEqual(
-    [...doc.querySelectorAll(".shell-tab")].map((a) => [tabText(a), a.getAttribute("href")]),
+    [...doc.querySelectorAll(".resource-tabs a")].map((a) => [tabText(a), a.getAttribute("href")]),
     [
       ["Conversations 12", "/settings/history"],
       ["Cron runs 3,400", "/settings/history?kind=cron"],
@@ -83,7 +83,7 @@ test("cron drill-downs and pages keep scope, kind, cron and cursor", async () =>
   assert.equal(list.get("cron"), "c1");
   assert.equal(list.get("cursor"), "17~s9");
   const doc = page.document;
-  assert.equal(doc.querySelector(".shell-title")!.textContent, "Digest");
+  assert.equal(doc.querySelector(".pane-title")!.textContent, "Digest");
   assert.equal(doc.querySelector(".dense-name")!.textContent, "Done");
   assert.equal(doc.querySelector(".dense-preview")!.textContent, "chatter");
   const [newest, older] = [...doc.querySelectorAll<HTMLButtonElement>(".pager .page")];
@@ -132,6 +132,6 @@ test("a session opens its transcript with paired tools, deliveries and session e
   assert.equal(doc.querySelectorAll(".tool-entry pre").length, 2);
   assert.match(doc.querySelector(".error-strip")!.textContent!, /1 error logged in this session[\s\S]*boom/);
   assert.equal(doc.querySelector(".load-earlier")!.getAttribute("href"), "/settings/history/s/sess-1?limit=2000");
-  assert.equal(doc.querySelector(".shell-context")!.textContent!.startsWith("#eng"), true);
+  assert.equal(doc.querySelector(".pane-subtitle")!.textContent!.startsWith("#eng"), true);
   page.close();
 });

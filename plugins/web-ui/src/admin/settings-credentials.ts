@@ -382,7 +382,13 @@ async function remove(c: Data) {
   status(message, "err");
 }
 export const addCredential = () =>
-  html`<button type="button" id="sc-add" ?disabled=${!!credentialState.listMessage} @click=${() => openEditor(null)}>
+  html`<button
+    class="btn"
+    type="button"
+    id="sc-add"
+    ?disabled=${!!credentialState.listMessage}
+    @click=${() => openEditor(null)}
+  >
     + Add credential
   </button>`;
 export const keychainCard = () => {
@@ -412,7 +418,7 @@ function credentialUsage(c: Data) {
 }
 function credentialRows() {
   if (credentialState.listMessage)
-    return html`${credentialState.listMessage}${credentialState.listRetry ? html`<button type="button" style="margin-inline-start: 8px" @click=${() => loadCredentials(page)}>Retry</button>` : null}`;
+    return html`${credentialState.listMessage}${credentialState.listRetry ? html`<button class="btn" type="button" style="margin-inline-start: 8px" @click=${() => loadCredentials(page)}>Retry</button>` : null}`;
   return credentialState.rows.length
     ? repeat(
         credentialState.rows,
@@ -443,10 +449,10 @@ function credentialRows() {
               deployment
                 ? html`<div class="credential-actions hint">Read-only</div>`
                 : html`<div class="credential-actions">
-                    <button type="button" @click=${() => openEditor(c)}>Edit</button
+                    <button class="btn" type="button" @click=${() => openEditor(c)}>Edit</button
                     ><button
                       type="button"
-                      class="rowbtn danger"
+                      class="btn compact rowbtn danger"
                       title="Delete credential"
                       aria-label=${"Delete " + (c.name || c.slug)}
                       @click=${() => remove(c)}
@@ -672,9 +678,9 @@ export function credentialsCard() {
         </div>
       </div>
       <div class="project-dialog-actions" id="sc-dialog-actions">
-        ${s.open ? statusLine() : null}<button id="sc-reset" @click=${dismiss}>Cancel</button
+        ${s.open ? statusLine() : null}<button class="btn" id="sc-reset" @click=${dismiss}>Cancel</button
         ><button
-          class=${classMap({ primary: true, dirty: s.dirty })}
+          class=${classMap({ btn: true, primary: true, dirty: s.dirty })}
           id="sc-save"
           ?disabled=${!s.dirty || s.saving}
           @click=${save}

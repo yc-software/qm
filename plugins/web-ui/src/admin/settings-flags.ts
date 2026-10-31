@@ -112,7 +112,11 @@ export function flagsCard() {
                 (r) =>
                   html`<div class="feature-flag-row">
                     <code>${r.featureName + ": " + r.scopeId}</code
-                    ><button class="danger" ?disabled=${state.saving} @click=${() => remove(r.scopeId, r.featureName)}>
+                    ><button
+                      class="btn danger"
+                      ?disabled=${state.saving}
+                      @click=${() => remove(r.scopeId, r.featureName)}
+                    >
                       Disable
                     </button>
                   </div>`,
@@ -153,7 +157,12 @@ export function flagsCard() {
       </div>
     </div>
     <div class="foot">
-      <button class="primary" id="feature-flag-enable" ?disabled=${state.saving || !state.selected.size} @click=${add}>
+      <button
+        class="btn primary"
+        id="feature-flag-enable"
+        ?disabled=${state.saving || !state.selected.size}
+        @click=${add}
+      >
         + Add flag</button
       ><span class="status" id="st-feature-flags">${state.message}</span>
     </div>
