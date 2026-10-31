@@ -17,9 +17,8 @@ import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
 import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
-import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
+import { prepareDevTenant, prepareDurability } from "./durability.ts";
 import { killTree } from "../lib/proc.ts";
-import { envFileGet } from "../lib/envctx.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
@@ -337,39 +336,13 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   for (const w of sandbox.warnings) phase("sandbox", "warn", w);
   phase("sandbox", "ok", sandbox.detail);
 
-  phase("durability", "start");
-  let databaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
-  let adminGrantsSeed = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
-  let localPg = false;
-  if (!databaseUrl) {
-    try {
-      const pg = await ensureLocalPostgres(worktree, log);
-      databaseUrl = pg.url;
-      localPg = true;
-    } catch (err) {
-      throw new Error(
-        `DATABASE_URL is required and local Docker Postgres could not be started (${errMessage(err)}). Export DATABASE_URL or add it to ${assembled.liveEnvFile} or .env.`,
-        { cause: err },
-      );
-    }
-  }
-  await checkPostgres(worktree, databaseUrl).catch((err) => {
-    throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
+  const { databaseUrl, adminGrantsSeed, durableAdminPrincipal } = await prepareDurability({
+    worktree,
+    env: assembled.env,
+    liveEnvFile: assembled.liveEnvFile,
+    log,
+    phase,
   });
-  const grants = await adminGrantCount(worktree, databaseUrl);
-  if (grants === 0 && !adminGrantsSeed) {
-    if (localPg) {
-      const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
-      adminGrantsSeed = `${principal}:org_admin`;
-      log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
-    } else {
-      throw new Error(
-        "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin for the first boot of this dev DB, or point DATABASE_URL at a DB that already has admin_grants.",
-      );
-    }
-  }
-  const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
-  phase("durability", "ok", `Postgres (${grants} durable grant(s))`);
   durability = { databaseUrl };
 
   completeDevSecuritySecrets(assembled.env, databaseUrl);
@@ -419,6 +392,7 @@ async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedC
       return { ok: false, failedChild: spec.name, detail: res.detail };
     }
     phase(spec.name, "ok");
+    if (spec.name === "core" && inputs.databaseUrl) await prepareDevTenant(inputs, phase);
   }
   return { ok: true };
 }

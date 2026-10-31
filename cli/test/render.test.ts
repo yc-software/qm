@@ -24,6 +24,7 @@ import { renderInternalUrl } from "../src/render-domains.ts";
 import { renderMinioCommand } from "../src/render-minio.ts";
 import { renderClient, streamRenderLogs } from "../src/render-api.ts";
 import { runChecks } from "../src/commands/check.ts";
+import { isTenantSetting } from "../src/tenant-setting-names.ts";
 
 function deployment(t: TestContext, portal = false) {
   const dir = mkdtempSync(join(tmpdir(), "qm-render-api-"));
@@ -340,7 +341,11 @@ function cloud(t: TestContext, d: Deployment) {
         return Response.json(domain);
       }
       if (path.startsWith(`/services/${id}/env-vars/`)) {
-        state.envs.get(id)![decodeURIComponent(path.split("/").at(-1)!)] = body.value;
+        const key = decodeURIComponent(path.split("/").at(-1)!);
+        if (method === "DELETE") {
+          if (!(key in state.envs.get(id)!)) return missing();
+          delete state.envs.get(id)![key];
+        } else state.envs.get(id)![key] = body.value;
         return empty();
       }
       if (path === `/services/${id}/rollback`) {
@@ -524,7 +529,10 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
   assert.equal(core.RENDER_PROJECT_ID, "prj-acme");
 
   assert.equal(core.RENDER_ENVIRONMENT_ID, "evm-acme");
-  assert.equal(core.DATABASE_URL, "postgresql://qm:private-password@pg/qm");
+  assert.equal(core.DATABASE_OWNER_URL, "postgresql://qm:private-password@pg/qm");
+  assert.match(core.DATABASE_URL!, /^postgresql:\/\/qm_app:[A-Za-z0-9_-]{43}@pg\/qm$/);
+  assert.match(core.DATABASE_READER_URL!, /^postgresql:\/\/qm_reader:[A-Za-z0-9_-]{43}@pg\/qm$/);
+  assert.equal(core.SANDBOX_BACKEND, undefined, "the sandbox backend is a tenant setting");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-web-ui-assigned.onrender.com");
   assert.equal(minio.MINIO_BROWSER, "off");
@@ -1268,6 +1276,43 @@ test("Render updates retain stored operator secrets for the core", async (t) => 
   assert.equal(c.envs.get("srv-acme-web-ui")!.RESEND_API_KEY, undefined);
 });
 
+test("Render upgrades keep deployed tenant settings until they are imported, then remove them", async (t) => {
+  const d = deployment(t, true);
+  const c = cloud(t, d);
+  await d.backend.up({ dryRun: false });
+  const tenantKeys = () => [...c.envs.values()].flatMap((env) => Object.keys(env).filter(isTenantSetting));
+  assert.deepEqual(tenantKeys(), []);
+  Object.assign(c.envs.get("srv-acme-core")!, { ANTHROPIC_API_KEY: "sk-deployed", PI_MODEL: "core-model" });
+  Object.assign(c.envs.get("srv-acme-portal")!, {
+    OIDC_CLIENT_ID: "client",
+    PI_MODEL: "portal-model",
+    OIDC_PROMPT: "",
+  });
+  c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS = "alice@example.com";
+  await d.backend.up({ dryRun: false });
+  assert.equal(c.envs.get("srv-acme-core")!.ANTHROPIC_API_KEY, "sk-deployed");
+  assert.equal(c.envs.get("srv-acme-portal")!.OIDC_CLIENT_ID, "client");
+  assert.equal(c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS, "alice@example.com");
+  const deployed = await hostingProvider("render").deployedTenantEnv!(d.ctx);
+  assert.deepEqual(deployed.values, {
+    ANTHROPIC_API_KEY: "sk-deployed",
+    PI_MODEL: "core-model",
+    OIDC_CLIENT_ID: "client",
+    WEB_UI_PRINCIPALS: "alice@example.com",
+  });
+  assert.deepEqual(await deployed.remove(), [
+    "ANTHROPIC_API_KEY",
+    "OIDC_CLIENT_ID",
+    "OIDC_PROMPT",
+    "PI_MODEL",
+    "WEB_UI_PRINCIPALS",
+  ]);
+  assert.deepEqual(tenantKeys(), []);
+  await d.backend.up({ dryRun: false });
+  assert.deepEqual(tenantKeys(), []);
+  assert.deepEqual((await hostingProvider("render").deployedTenantEnv!(d.ctx)).values, {});
+});
+
 test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async (t) => {
   const d = deployment(t);
   cloud(t, d);
@@ -1636,7 +1681,8 @@ test("Render connects a private web UI to the public portal and copies shared au
   assert.equal(portal.WEB_UI_UPSTREAM, "http://acme-web-ui-assigned:8080");
   assert.equal(portal.ADMIN_UPSTREAM, "http://acme-web-ui-assigned:8080/admin");
   assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
-  assert.equal(portal.AUTH_CLIENT_SECRET, portal.OIDC_CLIENT_SECRET);
+  assert.ok(portal.AUTH_CLIENT_SECRET);
+  assert.equal(portal.OIDC_CLIENT_SECRET, undefined, "the portal's OIDC client secret is a tenant setting");
   assert.equal(portal.CORE_SIGNING_SECRET, core.CORE_SIGNING_SECRET);
   assert.equal(c.envs.get("srv-acme-minio")!.MINIO_BROWSER, "off");
 });

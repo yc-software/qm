@@ -12,7 +12,9 @@ const productionEnv = {
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
-  DATABASE_URL: "postgres://qm@localhost/qm",
+  DATABASE_URL: "postgres://qm_app:app@localhost/qm",
+  DATABASE_OWNER_URL: "postgres://qm@localhost/qm",
+  DATABASE_READER_URL: "postgres://qm_reader:reader@localhost/qm",
 } as const;
 
 test("capability compression is explicitly enabled after verifier rollout", () => {
@@ -488,6 +490,7 @@ test("background ownership requires durable storage and an independent deploymen
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
+    DATABASE_OWNER_URL: "postgres://owner@localhost/test",
     CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
     DEPLOYMENT_CONTROL_SECRET: "deployment-control-secret-0123456789abcdef",
   };
@@ -497,6 +500,7 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(config.backgroundWorkEnabled, true);
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
   assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
+  assert.throws(() => loadConfig({ ...env, DATABASE_OWNER_URL: "" }), /DATABASE_OWNER_URL/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
   assert.throws(
     () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),

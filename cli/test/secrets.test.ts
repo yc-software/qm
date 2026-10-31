@@ -5,18 +5,18 @@ import {
   computedSecrets,
   missingRequiredSecrets,
   serviceSecretValue,
-  renderEnvExample,
   runtimeSecretNames,
   secretDestinations,
   secretsForService,
   type ComputedSecret,
 } from "../src/secrets.ts";
+import { renderEnvExample } from "../src/env-example.ts";
 import { isReservedContainerName, pluginNameError, SERVICE_NAMES } from "../src/services.ts";
 
 function makeConfig(overrides: Partial<QmConfig> = {}): QmConfig {
   return {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "http://localhost:8080",
     target: "docker",
     services: ["core"],
@@ -83,12 +83,12 @@ test("split security keys are required and routed only to their trust boundary",
   }
 });
 
-test("portal deployment coordinates can come from the target secret store", () => {
+test("portal sign-in coordinates can come from the target secret store as tenant settings", () => {
   const secretBacked = makeConfig({ services: ["core", "portal"], env: { portal: { OIDC_PRINCIPAL_CLAIM: "email" } } });
   for (const name of ["OIDC_CLIENT_ID", "PORTAL_EXPECTED_TEAM_ID"]) {
     const secret = secretByName(secretBacked, name);
     assert.equal(secret.required, true);
-    assert.deepEqual(runtimeSecretNames("portal", secret), [name]);
+    assert.deepEqual(runtimeSecretNames("portal", secret), [], `${name} is a tenant setting served by core`);
   }
 
   const configured = makeConfig({
@@ -106,7 +106,7 @@ test("portal deployments require a real initial administrator seed", () => {
   });
   const secret = secretByName(hosted, "ADMIN_GRANTS");
   assert.equal(secret.required, true);
-  assert.deepEqual(runtimeSecretNames("core", secret), ["ADMIN_GRANTS"]);
+  assert.deepEqual(runtimeSecretNames("core", secret), [], "the seed is a tenant setting, not core env");
   assert.ok(!computedSecrets(makeConfig()).some((item) => item.name === "ADMIN_GRANTS"));
 });
 
@@ -235,19 +235,19 @@ test("core requires and routes the sandbox-reachable PUBLIC_API_URL", () => {
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
   const config = makeConfig({
     services: ["core", "slack"],
-    secretEnv: { core: { OPENAI_API_KEY: "OPENAI_API_KEY" }, slack: { SLACK_AUX_BOT_TOKEN: "SLACK_AUX_BOT_TOKEN" } },
+    secretEnv: { core: { EXTRA_API_KEY: "EXTRA_API_KEY" }, slack: { SLACK_AUX_BOT_TOKEN: "SLACK_AUX_BOT_TOKEN" } },
   });
-  const openai = secretByName(config, "OPENAI_API_KEY");
-  assert.equal(openai.required, true);
-  assert.equal(openai.managedBy, "operator");
-  assert.deepEqual(runtimeSecretNames("core", openai), ["OPENAI_API_KEY"]);
+  const extra = secretByName(config, "EXTRA_API_KEY");
+  assert.equal(extra.required, true);
+  assert.equal(extra.managedBy, "operator");
+  assert.deepEqual(runtimeSecretNames("core", extra), ["EXTRA_API_KEY"]);
   const auxiliary = secretByName(config, "SLACK_AUX_BOT_TOKEN");
   assert.deepEqual(
     [...secretDestinations(auxiliary).keys()],
     ["core"],
     "a virtual service's extra folds onto the core",
   );
-  assert.match(renderEnvExample(config), /^OPENAI_API_KEY=$/m);
+  assert.match(renderEnvExample(config), /^EXTRA_API_KEY=$/m);
 });
 
 test("a secretEnv alias delivers the stored secret under its declared env name only", () => {
@@ -289,18 +289,6 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
     ["core", "portal", "web-ui"],
     "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
   );
-});
-
-test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin"] });
-  const allowlist = secretByName(config, "INBOX_USERS");
-  assert.equal(allowlist.required, false);
-  assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
-  assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
-  assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
-  assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
-  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
-  assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
 });
 
 test("the invitation-email pair reaches core as optional secrets on every topology", () => {
@@ -388,11 +376,8 @@ test("shared Fly publishing requires private peers only when selected", () => {
   }
 });
 
-test("deployment control credentials are conditional and cannot be delivered to plugins", () => {
-  assert.equal(
-    computedSecrets(makeConfig()).some((secret) => secret.name === "DEPLOYMENT_CONTROL_SECRET"),
-    false,
-  );
+test("deployment control credentials are required everywhere and cannot be delivered to plugins", () => {
+  assert.equal(secretByName(makeConfig(), "DEPLOYMENT_CONTROL_SECRET").required, true);
   const aws = { backgroundWorkControl: true } as NonNullable<QmConfig["aws"]>;
   const config = makeConfig({ target: "aws", aws });
   const control = secretByName(config, "DEPLOYMENT_CONTROL_SECRET");

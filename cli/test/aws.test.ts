@@ -1,4 +1,5 @@
 import test from "node:test";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import https from "node:https";
 import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
@@ -375,7 +376,7 @@ else if (a.includes("ecs describe-services")) {
     const service = s.services[name];
     if (!service) return [];
     if (name === staleName && service.previousTaskDefinition) {
-      return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: service.desiredCount, taskDefinition: service.previousTaskDefinition, deployments: [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.previousTaskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
+      return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: service.desiredCount, taskDefinition: service.previousTaskDefinition, deployments: [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.previousTaskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.deploymentId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
     }
     const deployments = draining
       ? [
@@ -389,7 +390,7 @@ else if (a.includes("ecs describe-services")) {
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.deploymentId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -537,7 +538,7 @@ else console.log("");`,
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
   services: ["core", "slack", "web-ui", "admin", "portal"],
@@ -580,15 +581,15 @@ test("AWS environment derives identity, public URLs and private wiring", () => {
     ADMIN_BASE_PATH: "/admin",
     ADMIN_ENABLED: "1",
     CORE_API_URL: "http://core.acme.internal:8080",
-    CORE_ORG_ID: "acme",
     PORT: "8080",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");
-  assert.equal(core.ORG_ID, "acme");
+  assert.equal(core.ORG_ID, undefined);
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
-  assert.equal(core.SANDBOX_BACKEND, "sprites");
+  assert.equal(core.SANDBOX_BACKEND, undefined);
+  assert.equal(tenantSettingsEnv(config, new Map()).SANDBOX_BACKEND, "sprites");
   assert.equal(core.SNAPSHOT_STORE, "s3");
   assert.equal(core.TRANSFER_STORE, "s3");
   assert.equal(core.S3_REGION, "us-west-2");
@@ -607,23 +608,23 @@ test("AWS hosting preserves an explicit publishing provider independently of san
       };
       const core = serviceEnvironment(selected, "core");
       assert.equal(core.DEPLOY_PROVIDER, provider);
-      assert.equal(core.SANDBOX_BACKEND, sandbox.backend);
+      assert.equal(tenantSettingsEnv(selected, new Map()).SANDBOX_BACKEND, sandbox.backend);
       assert.equal(core.SNAPSHOT_STORE, "s3");
       assert.equal(serviceEnvironment(selected, "portal").DEPLOY_PROVIDER, undefined);
     }
   }
 });
 
-test("a configured bot identity lands in the AWS core task env and only there", () => {
+test("a configured bot identity lands in the tenant settings and never in an AWS task env", () => {
   const branded = { ...config, botName: "straylight", orgName: "Straylight Industries" };
   const core = serviceEnvironment(branded, "core");
-  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
-  assert.equal(core.ORG_BRAND_ORG_NAME, "Straylight Industries");
+  assert.equal(core.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(tenantSettingsEnv(branded, new Map()).ORG_BRAND_ORG_NAME, "Straylight Industries");
   assert.equal(serviceEnvironment(branded, "web-ui").ORG_BRAND_SELF_LABEL, undefined);
   assert.equal(serviceEnvironment(config, "core").ORG_BRAND_SELF_LABEL, undefined);
 });
 
-test("AWS routes security screen proxy configuration and its token only to core", () => {
+test("AWS keeps security screen configuration and its token out of every task", () => {
   const screened: QmConfig = {
     ...config,
     securityScreen: {
@@ -638,11 +639,11 @@ test("AWS routes security screen proxy configuration and its token only to core"
     Object.fromEntries(
       Object.entries(serviceEnvironment(screened, "core")).filter(([name]) => name.startsWith("SECURITY_SCREEN_")),
     ),
-    {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
-      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-    },
+    {},
+  );
+  assert.equal(
+    tenantSettingsEnv(screened, new Map([["EXAMPLE_SCREEN_TOKEN", "token"]])).SECURITY_SCREEN_PROXY_TOKEN,
+    "token",
   );
   assert.deepEqual(
     Object.keys(serviceEnvironment(screened, "web-ui")).filter((name) => name.startsWith("SECURITY_SCREEN_")),
@@ -654,7 +655,7 @@ test("AWS routes security screen proxy configuration and its token only to core"
     (task.containerDefinitions[0]!.secrets as Array<{ name: string; valueFrom: string }>).filter(({ name }) =>
       name.startsWith("SECURITY_SCREEN_"),
     ),
-    [{ name: "SECURITY_SCREEN_PROXY_TOKEN", valueFrom: "arn:example-screen-token" }],
+    [],
   );
 });
 
@@ -690,7 +691,7 @@ test("AWS fixes every workload listen port to its ECS port mapping", () => {
   }
 });
 
-test("AWS core receives the configured model and virtual-service environment", () => {
+test("AWS core receives the virtual-service environment while the model goes to tenant settings", () => {
   const configured: QmConfig = {
     ...config,
     model: "anthropic/claude-sonnet-4-5",
@@ -701,7 +702,8 @@ test("AWS core receives the configured model and virtual-service environment", (
     },
   };
   const core = serviceEnvironment(configured, "core");
-  assert.equal(core.PI_MODEL, "anthropic/claude-sonnet-4-5");
+  assert.equal(core.PI_MODEL, undefined);
+  assert.equal(tenantSettingsEnv(configured, new Map()).PI_MODEL, "anthropic/claude-sonnet-4-5");
   assert.equal(core.SLACK_EVENTS_MODE, "http");
   assert.equal(core.SHARED_SETTING, "core");
 });
@@ -721,7 +723,6 @@ test("AWS required runtime settings cannot be overridden by config env", () => {
   const core = serviceEnvironment(overridden, "core");
   assert.equal(core.SNAPSHOT_STORE, "s3");
   assert.equal(core.TRANSFER_STORE, "s3");
-  assert.equal(core.SANDBOX_BACKEND, "sprites");
 });
 
 test("AWS deploy-role trust permits only the exact repository branch", () => {
@@ -1980,11 +1981,13 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "CAPABILITY_SECRET",
     "CONNECTOR_SECRET_KEY",
     "CORE_SIGNING_SECRET",
+    "DATABASE_OWNER_URL",
+    "DATABASE_READER_URL",
     "DATABASE_URL",
+    "DEPLOYMENT_CONTROL_SECRET",
     "PORTAL_IDENTITY_SECRET",
     "PUBLIC_API_URL",
     "SKILL_SIGNING_SECRET",
-    "SPRITES_TOKEN",
   ]);
   assert.throws(() => renderTaskDefinition(config, "core", "repo:latest"), /must be pinned by digest/);
 });
@@ -2362,7 +2365,6 @@ test("AWS renders third-party plugins as private ECS workloads with scoped secre
     ),
     {
       CORE_API_URL: "http://core.acme.internal:8080",
-      CORE_ORG_ID: "acme",
       LINEAR_REGION: "us",
       PORT: "8080",
     },
@@ -2400,7 +2402,7 @@ test("AWS coreless workloads receive no core endpoint or source-auth secret", ()
     (container.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [name, value]),
   );
   assert.equal(environment.CORE_API_URL, undefined);
-  assert.equal(environment.CORE_ORG_ID, "acme");
+  assert.equal(environment.CORE_ORG_ID, undefined);
   assert.deepEqual(container.secrets, []);
 });
 
@@ -2734,10 +2736,9 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     "web-ui": state.services["acme-web-ui"].taskDefinition,
   };
   const arns = Object.fromEntries(
-    [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
-      name,
-      "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
-    ]),
+    required
+      .map((secret) => secret.name)
+      .map((name) => [name, "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf"]),
   );
   for (const workload of ["core", "web-ui"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
@@ -4869,7 +4870,7 @@ test("AWS renders config secretEnv extras and aliases as Secrets Manager referen
   const extras: QmConfig = {
     ...config,
     secretEnv: {
-      core: { OPENAI_API_KEY: "OPENAI_API_KEY", DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET" },
+      core: { EXTRA_API_KEY: "EXTRA_API_KEY", DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET" },
       slack: { SLACK_AUX_BOT_TOKEN: "SLACK_AUX_BOT_TOKEN" },
     },
   };
@@ -4881,7 +4882,7 @@ test("AWS renders config secretEnv extras and aliases as Secrets Manager referen
       s.valueFrom,
     ]),
   );
-  assert.equal(secrets.OPENAI_API_KEY, "arn:aws:secretsmanager:us-west-2:123456789012:secret:acme/qm/OPENAI_API_KEY");
+  assert.equal(secrets.EXTRA_API_KEY, "arn:aws:secretsmanager:us-west-2:123456789012:secret:acme/qm/EXTRA_API_KEY");
   assert.equal(
     secrets.SLACK_AUX_BOT_TOKEN,
     "arn:aws:secretsmanager:us-west-2:123456789012:secret:acme/qm/SLACK_AUX_BOT_TOKEN",
@@ -4901,19 +4902,14 @@ test("AWS renders config secretEnv extras and aliases as Secrets Manager referen
   assert.ok(!portalSecrets.includes("DEPLOY_APPS_SESSION_SECRET"));
 });
 
-test("env.core.SANDBOX_BACKEND adopts the deployment's substrate; the default is sprites", () => {
-  assert.equal(serviceEnvironment(config, "core").SANDBOX_BACKEND, "sprites");
+test("env.core.SANDBOX_BACKEND adopts the deployment's substrate in the tenant settings; the default is sprites", () => {
+  assert.equal(tenantSettingsEnv(config, new Map()).SANDBOX_BACKEND, "sprites");
   const adopted: QmConfig = {
     ...config,
     env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "sprites" } },
   };
-  assert.equal(serviceEnvironment(adopted, "core").SANDBOX_BACKEND, "sprites");
-  const modal: QmConfig = {
-    ...config,
-    sandbox: undefined,
-    env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "modal" } },
-  };
-  assert.equal(serviceEnvironment(modal, "core").SANDBOX_BACKEND, "modal");
+  assert.equal(tenantSettingsEnv(adopted, new Map()).SANDBOX_BACKEND, "sprites");
+  assert.equal(serviceEnvironment(adopted, "core").SANDBOX_BACKEND, undefined);
 });
 
 test("env.core.S3_BUCKET adopts a pre-existing snapshot bucket; the derived object store remains the default", () => {
@@ -4957,7 +4953,7 @@ test("AWS doctor classifies an un-pushed secret store as pending, not drift", ()
   );
   const secrets = computedSecrets({
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],
@@ -5162,7 +5158,13 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
     };
     for (const method of ["GET", "PUT"] as const) {
       const body = method === "PUT" ? '{"contract":1}' : "";
-      const result = await awsDeploymentLayerTransport({ config: configured, configDir: dir, method, body });
+      const result = await awsDeploymentLayerTransport({
+        config: configured,
+        configDir: dir,
+
+        method,
+        body,
+      });
       assert.equal(result.status, 307);
     }
     assert.equal(calls.length, 2);
@@ -5238,7 +5240,15 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     for (const method of ["GET", "PUT"] as const) {
       const body = method === "PUT" ? '{"contract":1}' : "";
       assert.equal(
-        (await awsDeploymentLayerTransport({ config: configured, configDir: dir, method, body })).status,
+        (
+          await awsDeploymentLayerTransport({
+            config: configured,
+            configDir: dir,
+
+            method,
+            body,
+          })
+        ).status,
         200,
       );
     }
@@ -5313,7 +5323,14 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
     ]) {
       setDistribution(invalid);
       await assert.rejects(
-        () => awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "PUT", body: "{}" }),
+        () =>
+          awsDeploymentLayerTransport({
+            config: configured,
+            configDir: dir,
+
+            method: "PUT",
+            body: "{}",
+          }),
         /routing directly to the selected ALB/,
       );
     }
@@ -5402,7 +5419,13 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
     },
   );
   const send = (configured = config) =>
-    awsDeploymentLayerTransport({ config: configured, configDir: dir, method: "GET", body: "" });
+    awsDeploymentLayerTransport({
+      config: configured,
+      configDir: dir,
+
+      method: "GET",
+      body: "",
+    });
   try {
     process.env.AWS_FAKE_ALB_DNS = "invalid/target";
     await assert.rejects(send, /ALB hostname is invalid/);
@@ -5726,7 +5749,7 @@ for (const mode of ["success", "migration-failure", "update-failure", "write-fai
           assert.deepEqual(JSON.parse(readFileSync(progressFile, "utf8")), {
             phase: "monitoring",
             token: "attempt-unique-token",
-            orgId: single.orgId,
+            deploymentId: single.deploymentId,
             targets: Object.fromEntries(
               single.services.map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
             ),

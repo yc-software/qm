@@ -8,7 +8,7 @@ import { deploymentOutputs, renderSlackFiles } from "../src/commands/outputs.ts"
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://qm.acme.example/",
   target: "fly",
   region: "sjc",

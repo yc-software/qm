@@ -9,7 +9,7 @@ import { withDeploymentLock } from "./state.ts";
 type Collection = "projects" | "postgres" | "services";
 export interface State {
   version: 1;
-  orgId: string;
+  deploymentId: string;
   workspaceId: string;
   region: string;
   appPrefix: string;
@@ -94,23 +94,24 @@ export function readState(ctx: DeployContext, optional = false): State {
     if (!optional) throw new CliError("No Render resource record exists; run qm up");
     return {
       version: 1,
-      orgId: ctx.config.orgId,
+      deploymentId: ctx.config.deploymentId,
       workspaceId: render.workspaceId,
       region: render.region,
       appPrefix: appPrefixOf(ctx.config),
       services: {},
     };
   }
-  const state = JSON.parse(readFileSync(statePath(ctx), "utf8")) as State;
+  const { orgId, ...state } = JSON.parse(readFileSync(statePath(ctx), "utf8")) as State & { orgId?: string };
   if (state.version !== 1 || !state.services || Array.isArray(state.services))
     throw new CliError("The Render resource record has an unsupported format");
+  state.deploymentId ??= orgId!;
   if (
-    state.orgId !== ctx.config.orgId ||
+    state.deploymentId !== ctx.config.deploymentId ||
     state.workspaceId !== render.workspaceId ||
     state.region !== render.region ||
     state.appPrefix !== appPrefixOf(ctx.config)
   )
-    throw new CliError("render.resources.json belongs to another organization, workspace, region, or app prefix");
+    throw new CliError("render.resources.json belongs to another deployment, workspace, region, or app prefix");
   return state;
 }
 export function saveState(ctx: DeployContext, state: State): void {

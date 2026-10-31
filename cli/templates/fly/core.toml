@@ -4,7 +4,6 @@ primary_region = "sjc"
 [env]
   QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
   PORT = "8080"
-  ORG_ID = "acme"
   SNAPSHOT_STORE = "s3"
   TRANSFER_STORE = "s3"
   S3_BUCKET = "acme-data"
@@ -14,8 +13,6 @@ primary_region = "sjc"
   WEB_UI_PUBLIC_URL = "https://agent.example.com"
   FLY_ORG = "personal"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
-  SANDBOX_BACKEND = "sprites"
-  SECURITY_SCREEN = "off"
 [deploy]
   strategy = "bluegreen"
 

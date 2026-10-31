@@ -1,5 +1,6 @@
 import { serviceEnvironment } from "../src/backends/aws.ts";
 import { computedSecrets } from "../src/secrets.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -12,10 +13,18 @@ import {
   loadConfigInDir,
   sandboxCoreEnv,
   securityScreenEnv,
+  tenantOf,
   updateConfigImageOverrides,
+  localSandboxActive,
 } from "../src/config.ts";
 
-const BASE = { contract: 1, orgId: "acme", publicUrl: "http://localhost:8080", target: "docker", services: ["core"] };
+const BASE = {
+  contract: 1,
+  deploymentId: "acme",
+  publicUrl: "http://localhost:8080",
+  target: "docker",
+  services: ["core"],
+};
 
 function writeConfig(extra: Record<string, unknown>): { dir: string; path: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-cfg-"));
@@ -44,16 +53,20 @@ function withConfig(extra: Record<string, unknown>, fn: (r: { dir: string; path:
   }
 }
 
-test("required fields: orgId, target, services (must include core), valid service names", () => {
-  withConfig({ orgId: "" }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /"orgId" must be a lowercase DNS label/),
+test("required fields: deploymentId, target, services (must include core), valid service names", () => {
+  withConfig({ deploymentId: "" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /"deploymentId" must be a lowercase DNS label/),
   );
-  for (const orgId of ["../other", "ACME", "a/b", "-acme", "acme-"]) {
-    withConfig({ orgId }, ({ path }) =>
-      assert.throws(() => loadConfigAt(path), /"orgId" must be a lowercase DNS label/),
+  for (const deploymentId of ["../other", "ACME", "a/b", "-acme", "acme-"]) {
+    withConfig({ deploymentId }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"deploymentId" must be a lowercase DNS label/),
     );
   }
   withConfig({ target: "k8s" }, ({ path }) => assert.throws(() => loadConfigAt(path), /"target" must be/));
+  withConfig({}, ({ path }) => assert.equal(tenantOf(loadConfigAt(path).config), "main"));
+  withConfig({ tenant: "acme" }, ({ path }) => assert.equal(tenantOf(loadConfigAt(path).config), "acme"));
+  for (const tenant of ["", "Acme", "acme-", 7])
+    withConfig({ tenant }, ({ path }) => assert.throws(() => loadConfigAt(path), /"tenant" must be a tenant slug/));
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );
@@ -1084,7 +1097,7 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
 
 test("loadConfigInDir reads qm.config.jsonc from the deployment dir (no walk-up)", () => {
   withConfig({}, ({ dir }) => {
-    assert.equal(loadConfigInDir(dir).config.orgId, "acme");
+    assert.equal(loadConfigInDir(dir).config.deploymentId, "acme");
   });
   const empty = mkdtempSync(join(tmpdir(), "qm-empty-"));
   try {
@@ -1103,7 +1116,7 @@ test("config JSONC accepts comments and trailing commas like tsconfig.json", () 
       `{
       // JSONC comment
       "contract": 1,
-      "orgId": "acme",
+      "deploymentId": "acme",
       "publicUrl": "http://localhost:8080",
       "target": "docker",
       "services": ["core",],
@@ -1326,7 +1339,8 @@ test("blank model provider overrides preserve the declared provider in runtime a
     ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.equal(config.env.core?.MODEL_PROVIDER, undefined);
-      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, "openrouter");
+      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, undefined);
+      assert.equal(tenantSettingsEnv(config, new Map()).MODEL_PROVIDER, "openrouter");
       assert.equal(computedSecrets(config).find((secret) => secret.name === "OPENROUTER_API_KEY")?.required, true);
     },
   );

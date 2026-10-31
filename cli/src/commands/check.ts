@@ -168,7 +168,7 @@ export async function runCheckCommand(
   envFile?: string,
   report = true,
 ): Promise<ChecksResult> {
-  if (report) header(`qm check — ${config.orgId}`);
+  if (report) header(`qm check — ${config.deploymentId}`);
   assertNodeEngine(configDir);
   const result = runChecks(config, configDir, sandboxDir, { report });
   const secrets = readEnvFile(envFile ?? join(configDir, ".env"));

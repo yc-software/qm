@@ -57,7 +57,7 @@ test(
       ].join("\n"),
     );
     writeConfig(dep, {
-      orgId: org,
+      deploymentId: org,
       target: "docker",
       basePort,
       services: [...SERVICES],
@@ -213,7 +213,7 @@ test(
     const org = `qm-e2e-dl-empty-${process.pid}`;
     const dep = tmp("dl-empty");
     try {
-      writeConfig(dep, { orgId: org, target: "docker", services: ["core"] });
+      writeConfig(dep, { deploymentId: org, target: "docker", services: ["core"] });
       const r = runCli(["status"], { cwd: dep });
       assert.equal(r.code, 0, r.out);
       assert.match(r.out, /qm status/);
@@ -232,7 +232,7 @@ test(
     const org = `qm-e2e-dl-noop-${process.pid}`;
     const dep = tmp("dl-noop");
     try {
-      writeConfig(dep, { orgId: org, target: "docker", services: ["core"] });
+      writeConfig(dep, { deploymentId: org, target: "docker", services: ["core"] });
       const r = runCli(["down"], { cwd: dep });
       assert.equal(r.code, 0, r.out);
       assert.match(r.out, /down\./);

@@ -91,7 +91,7 @@ export async function devCiUp(): Promise<void> {
   const coreLog = join(dir, "core.log");
   const corePid = spawnBackground(process.execPath, [...serviceDef("core").dev!.entry], {
     cwd: root,
-    env: { ...baseEnv, ORG_ID: "acme", PORT: String(port) },
+    env: { ...baseEnv, PORT: String(port) },
     logFile: coreLog,
   });
   writePid(dir, "core", corePid);

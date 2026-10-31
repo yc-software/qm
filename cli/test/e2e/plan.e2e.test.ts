@@ -21,7 +21,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
   const org = `qm-e2e-plan-${process.pid}`;
   try {
     writeConfig(dir, {
-      orgId: org,
+      deploymentId: org,
       target: "docker",
       services: ["core", "web-ui"],
       plugins: [{ name: "ext", image: "ghcr.io/example/ext:1.2" }],
@@ -33,7 +33,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     assert.match(r.out, /DRY RUN/);
     assert.match(r.out, new RegExp(`network: qm-${org}`));
     assert.match(r.out, /core: image registry\.invalid\/qm\/qm-core@sha256:a{64}/);
-    assert.match(r.out, /env: .*\bORG_ID\b/);
+    assert.match(r.out, /env: .*\bDATA_DIR\b/);
     assert.match(r.out, /layer:/);
     assert.match(r.out, /plugin widget: build plugins\/widget\/Dockerfile/);
     assert.match(r.out, /plugin ext: pull ghcr\.io\/example\/ext:1\.2/);
@@ -51,7 +51,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
 test("plan is exactly `up --dry-run`", () => {
   const dir = tmp("plan-alias");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"] });
     const viaPlan = runCli(["plan"], { cwd: dir });
     const viaUp = runCli(["up", "--dry-run"], { cwd: dir });
     assert.equal(viaPlan.code, 0, viaPlan.out);
@@ -68,7 +68,7 @@ test("plan is exactly `up --dry-run`", () => {
 test("plan reports missing required operator secrets without starting anything", () => {
   const dir = tmp("plan-secrets");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core", "slack"] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core", "slack"] });
     const envFile = join(dir, "partial.env");
     writeFileSync(envFile, "CORE_SIGNING_SECRET=a\nSKILL_SIGNING_SECRET=b\n");
     const r = runCli(["plan", "--env-file", envFile], {
@@ -87,7 +87,7 @@ test("plan --build-from <path> shows local builds instead of registry pulls", ()
   const dir = tmp("plan-buildfrom");
   const checkout = standInCheckout(["core"]);
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", checkout], { cwd: dir });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /core: image build deploy\/core\/Dockerfile/);
@@ -101,7 +101,7 @@ test("plan --build-from <path> shows local builds instead of registry pulls", ()
 test("bare plan --build-from builds from the enclosing qm checkout", () => {
   const stack = tmp("plan-buildfrom-bare");
   try {
-    const cfg = writeConfig(stack, { orgId: "acme", target: "docker", services: ["core"] });
+    const cfg = writeConfig(stack, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", "--config", cfg], { cwd: repoRoot });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /core: image build deploy\/core\/Dockerfile/);
@@ -113,7 +113,7 @@ test("bare plan --build-from builds from the enclosing qm checkout", () => {
 test("bare plan --build-from rejects an unrelated enclosing Git repository", () => {
   const dir = tmpGitRepo("plan-buildfrom-wrong-repo");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from"], { cwd: dir });
     assert.equal(r.code, 1, r.out);
     assert.match(r.out, /not a QM checkout \(missing deploy\/core\/Dockerfile\)/);
@@ -125,7 +125,7 @@ test("bare plan --build-from rejects an unrelated enclosing Git repository", () 
 test("plan honors a host port base from the config", () => {
   const dir = tmp("plan-port");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: undefined } });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /core: image .*\(host :31080\)/);
@@ -137,7 +137,7 @@ test("plan honors a host port base from the config", () => {
 test("plan honors QM_BASE_PORT over the config", () => {
   const dir = tmp("plan-portenv");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: "32099" } });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /\(host :32099\)/);
@@ -150,7 +150,7 @@ test("plan --config points at a config kept elsewhere", () => {
   const home = tmp("plan-cfg-home");
   const stack = tmp("plan-cfg-stack");
   try {
-    const cfgPath = writeConfig(stack, { orgId: "acme", target: "docker", services: ["core"] });
+    const cfgPath = writeConfig(stack, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--config", cfgPath], { cwd: home });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /DRY RUN/);
@@ -163,7 +163,7 @@ test("plan --config points at a config kept elsewhere", () => {
 test("plan --env-file: a missing one errors, an existing one is accepted", () => {
   const dir = tmp("plan-envfile");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"] });
     const missing = runCli(["plan", "--env-file", join(dir, "nope.env")], { cwd: dir });
     assert.equal(missing.code, 1, missing.out);
     assert.match(missing.out, /--env-file not found/);
@@ -183,7 +183,7 @@ test("plan --sandbox-dir reports a sandbox layer kept outside the deployment dir
   const dep = tmp("plan-layer-dep");
   try {
     assert.equal(runCli(["init", layerSrc, "--org", "acme"]).code, 0);
-    writeConfig(dep, { orgId: "acme", target: "docker", services: ["core"] });
+    writeConfig(dep, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--sandbox-dir", join(layerSrc, "sandbox")], { cwd: dep });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /layer: .*sandbox.*\(skills, tools\)/);

@@ -189,7 +189,7 @@ the task replacement path when ownership control is not configured.
 Batch operators can set `QM_DEPLOY_PROGRESS_FILE` to a new absolute file path and
 `QM_DEPLOY_PROGRESS_TOKEN` to a unique attempt identifier for candidate `up --yes`.
 After all forward service updates have been submitted, the CLI atomically creates
-a private JSON receipt with `phase: "monitoring"`, `token`, `orgId`, and `targets`
+a private JSON receipt with `phase: "monitoring"`, `token`, `deploymentId`, and `targets`
 (the selected workload-to-task-definition mapping). It then continues health
 checks, manifest recording, and rollback under the deployment lease. This receipt
 only permits the batch runner to release a submission slot; the CLI exit status

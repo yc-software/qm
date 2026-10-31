@@ -16,11 +16,13 @@ import { retiredEnvPresent, tenantEnvPresent } from "./tenants/settings-import.t
 import { createSlackRuntime } from "./slack/runtime.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { migrateTenantStorageOnce } from "./tenants/storage-migration.ts";
+import { assertRuntimeLogin } from "./persistence/runtime-login.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await assertRuntimeLogin(config.databaseUrl!);
 await migrateTenantStorageOnce(config);
 await built.tenantSettings.refreshAll();
 const tenantEnv = tenantEnvPresent(process.env);

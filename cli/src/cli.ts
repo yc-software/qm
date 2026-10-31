@@ -8,7 +8,8 @@ import {
   isModelProvider,
   loadConfigAt,
   loadConfigInDir,
-  readConfigOrgId,
+  parseConfigJson,
+  validDeploymentId,
   EMAIL_TRANSPORTS,
   MODEL_PROVIDERS,
   type EmailTransport,
@@ -21,7 +22,12 @@ import { runSetup } from "./commands/setup.ts";
 import { runSandboxBuild } from "./commands/sandbox.ts";
 import { runChecks, runCheckCommand } from "./commands/check.ts";
 import { devCiDown, devCiUp } from "./backends/dev-ci.ts";
-import { hostingProvider, hostingProviderUpFlags, type DeployContext } from "./backends/registry.ts";
+import {
+  hostingProvider,
+  hostingProviderUpFlags,
+  type DeployContext,
+  type HostingProvider,
+} from "./backends/registry.ts";
 import { runConformance } from "./commands/conformance.ts";
 import { renderSlackFiles, runOutputs } from "./commands/outputs.ts";
 import { cliVersion } from "./manifest.ts";
@@ -29,6 +35,7 @@ import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
+import { seedTenantSettings } from "./tenant-settings.ts";
 
 interface Parsed {
   positionals: string[];
@@ -162,6 +169,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
   infra delete-task-definitions --yes      delete the stack's AWS ECS task definition revisions
   conformance [dir] [--static]             run static gates and compare the live resolved layer
   layer sync                               reconcile the configured deployment layer
+  settings push                            write tenant-owned settings into the install's tenant row
   secrets push [--from <env-file>]         upload the computed secret set to the target store
   secrets set <KEY> [<value>]              write one .env value in place (dedupes the key, keeps
      [--from-file <path>]                  order and file mode); reads stdin or prompts when no
@@ -192,6 +200,21 @@ ${dim("status/logs/down act on the configured target. Fly uses Fly Machines; AWS
 `;
 
 const deploymentBackend = (ctx: DeployContext) => hostingProvider(ctx.target).createBackend(ctx);
+
+function configDeploymentId(path: string): string | undefined {
+  try {
+    const raw: unknown = parseConfigJson(readFileSync(path, "utf8"));
+    const id = raw && typeof raw === "object" ? (raw as Record<string, unknown>).deploymentId : undefined;
+    return typeof id === "string" && validDeploymentId(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const operatorSecretOf = (provider: HostingProvider, ctx: DeployContext) =>
+  provider.operatorSecret && ((name: string) => provider.operatorSecret!(ctx.config, name));
+const deployedTenantEnvOf = (provider: HostingProvider, ctx: DeployContext) =>
+  provider.deployedTenantEnv && (() => provider.deployedTenantEnv!(ctx));
 
 function deployContext(flags: Flags, dir?: string): DeployContext {
   const explicit = strFlag(flags, "config");
@@ -332,11 +355,11 @@ async function dispatch(argv: string[]): Promise<void> {
         rejectExtraPositionals(positionals, 1);
       const root = gitTopLevel();
       const configPath = findConfigPath(root);
-      const orgId = strFlag(flags, "org") ?? (configPath && readConfigOrgId(configPath)) ?? "acme";
+      const deploymentId = strFlag(flags, "org") ?? (configPath && configDeploymentId(configPath)) ?? "acme";
       const result = spawnSync(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
         cwd: root,
         stdio: "inherit",
-        env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
+        env: { ...process.env, DEV_INSTANCE_ORG_ID: deploymentId },
       });
       if (result.error) throw result.error;
       process.exitCode = result.status ?? 1;
@@ -506,6 +529,22 @@ async function dispatch(argv: string[]): Promise<void> {
       return;
     }
 
+    case "settings": {
+      rejectUnknownFlags(flags, ["config", "env-file", "sandbox-dir", "target"]);
+      rejectExtraPositionals(positionals, 1);
+      if (positionals[0] !== "push") throw new CliError(`usage: ${CLI_NAME} settings push`);
+      const ctx = deployContext(flags);
+      const provider = hostingProvider(ctx.target);
+      await seedTenantSettings(
+        ctx,
+        () => provider.coreLink(ctx),
+        operatorSecretOf(provider, ctx),
+        "push",
+        deployedTenantEnvOf(provider, ctx),
+      );
+      return;
+    }
+
     case "up":
     case "plan": {
       const common = ["config", "env-file", "sandbox-dir", "target", "dry-run"];
@@ -518,6 +557,15 @@ async function dispatch(argv: string[]): Promise<void> {
       const upOptions = provider.upOptions(ctx, flags, dryRun);
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
       await provider.createBackend(ctx).up(upOptions);
+      const deploysCore = !upOptions.only || upOptions.only.includes("core");
+      if (!dryRun && !upOptions.buildOnly && !upOptions.candidate && !upOptions.inactive && deploysCore)
+        await seedTenantSettings(
+          ctx,
+          () => provider.coreLink(ctx),
+          operatorSecretOf(provider, ctx),
+          "up",
+          deployedTenantEnvOf(provider, ctx),
+        );
       return;
     }
 

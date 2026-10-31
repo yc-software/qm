@@ -25,7 +25,7 @@ after(() => rmDir(join(repoRoot, "deploy", "stacks", ".generated", APP_PREFIX)))
 function flyConfig(label: string): string {
   const dir = tmp(label);
   return writeConfig(dir, {
-    orgId: "acme",
+    deploymentId: "acme",
     target: "fly",
     appPrefix: APP_PREFIX,
     flyOrg: "e2e-org",
@@ -78,7 +78,7 @@ test("plan (fly) reports secrets: ok when every required secret is staged", () =
 test("--target fly overrides a docker config's target for one run", () => {
   const dir = tmp("fly-target-override");
   const cfg = writeConfig(dir, {
-    orgId: APP_PREFIX,
+    deploymentId: APP_PREFIX,
     target: "docker",
     appPrefix: APP_PREFIX,
     flyOrg: "e2e-org",
@@ -122,7 +122,7 @@ test("Fly rejects conflicting image-source flags instead of silently ignoring on
 test("explicit --build-from overrides a configured imageFrom default", () => {
   const dir = tmp("fly-build-over-config-image");
   const cfg = writeConfig(dir, {
-    orgId: "acme",
+    deploymentId: "acme",
     target: "fly",
     appPrefix: APP_PREFIX,
     flyOrg: "e2e-org",

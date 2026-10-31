@@ -21,12 +21,18 @@ const cmd = args.join(" ");
 if (process.env.FAKE_FLY_LOG) fs.appendFileSync(process.env.FAKE_FLY_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "apps" && args[1] === "create") {
   console.log("created");
-} else if (args[0] === "secrets" && args[1] === "set") {
+} else if (args[0] === "secrets" && (args[1] === "set" || args[1] === "unset")) {
   console.log("staged");
 } else if (args[0] === "secrets" && args[1] === "list") {
-  console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : "DATABASE_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");
+  console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nDEPLOYMENT_CONTROL_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : process.env.FAKE_FLY_PRESPLIT ? "DATABASE_URL\\n" : "DATABASE_OWNER_URL\\nDATABASE_URL\\nDATABASE_READER_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");
 } else if (args[0] === "mpg" && args[1] === "list") {
   console.log(process.env.FAKE_FLY_FRESH_PG ? "" : "pg-1 test-pg");
+} else if (args[0] === "mpg" && args[1] === "users" && args[2] === "list") {
+  console.log("[]");
+} else if (args[0] === "mpg" && args[1] === "users" && args[2] === "create") {
+  console.log("User created successfully!");
+} else if (args[0] === "mpg" && args[1] === "users" && args[2] === "rotate-password") {
+  console.log(JSON.stringify({ username: args[args.indexOf("--username") + 1], password: "rotated" }));
 } else if (args[0] === "mpg" && args[1] === "create") {
   console.log("ID: pg-1");
 } else if (args[0] === "mpg" && args[1] === "status") {
@@ -251,8 +257,15 @@ test("a fresh Fly deploy stages the direct Managed Postgres URL without attachin
     .split("\n")
     .map((line) => JSON.parse(line) as string[]);
   const directSecret = commands.findIndex(
-    (args) => args[0] === "secrets" && args[1] === "set" && args.includes("DATABASE_URL=-"),
+    (args) => args[0] === "secrets" && args[1] === "set" && args.includes("DATABASE_OWNER_URL=-"),
   );
+  for (const name of ["DATABASE_URL", "DATABASE_READER_URL"])
+    assert.ok(
+      commands.some((args) => args[0] === "secrets" && args.includes(`${name}=-`)),
+      `${name} is staged`,
+    );
+  assert.ok(commands.some((args) => args.join(" ") === "mpg users create pg-1 --username qm_app --role writer"));
+  assert.ok(commands.some((args) => args.join(" ") === "mpg users create pg-1 --username qm_reader --role reader"));
   const deploy = commands.findIndex((args) => args[0] === "deploy");
   assert.ok(directSecret >= 0, "the direct DATABASE_URL is staged");
   assert.ok(deploy > directSecret, "the direct DATABASE_URL is staged before the first deploy");
@@ -262,7 +275,7 @@ test("a fresh Fly deploy stages the direct Managed Postgres URL without attachin
   );
 });
 
-test("Fly preserves an existing DATABASE_URL even when a same-name Managed Postgres cluster exists", () => {
+test("Fly leaves already-split database logins alone even when a same-name Managed Postgres cluster exists", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-existing-db-"));
   const logPath = join(dir, "fly.log");
   execFileSync(
@@ -425,4 +438,47 @@ test("fly up build-only dry-run plans without pushing an image", () => {
 
   assert.match(stdout, /Plan only\. Re-run without --dry-run to build images\./);
   assert.equal(existsSync(logPath), false);
+});
+
+test("Fly stops before deploying when core still has a pre-split DATABASE_URL and no owner URL is given", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-presplit-db-"));
+  const logPath = join(dir, "fly.log");
+  const result = spawnSync(
+    process.execPath,
+    [
+      bin,
+      "up",
+      "--config",
+      join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"),
+      "--only",
+      "core",
+      "--image-from",
+      "source",
+    ],
+    {
+      encoding: "utf8",
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        FLY_BIN: fakeFlyBin(dir),
+        FLY_API_TOKEN: "",
+        FAKE_FLY_LOG: logPath,
+        FAKE_FLY_PRESPLIT: "1",
+      },
+    },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DATABASE_OWNER_URL/);
+  const commands = readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
+  assert.equal(
+    commands.some((args) => args[0] === "deploy" || args[0] === "mpg"),
+    false,
+  );
+  assert.equal(
+    commands.some((args) => args[0] === "secrets" && args[1] === "set" && args.some((a) => a.startsWith("DATABASE"))),
+    false,
+  );
 });

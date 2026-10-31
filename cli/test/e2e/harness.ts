@@ -70,7 +70,7 @@ export function rmDir(path: string): void {
 
 export function writeConfig(
   dir: string,
-  config: Partial<QmConfig> & { orgId: string; target: "docker" | "fly" | "aws" },
+  config: Partial<QmConfig> & { deploymentId: string; target: "docker" | "fly" | "aws" },
 ): string {
   const full = {
     contract: 1,
@@ -81,7 +81,7 @@ export function writeConfig(
     imageOverrides: {},
     services: ["core"],
     sandbox: {
-      app: `${config.orgId}-sandboxes`,
+      app: `${config.deploymentId}-sandboxes`,
     },
     ...config,
   };
@@ -123,9 +123,9 @@ export function dockerAvailable(): boolean {
   return dockerCache;
 }
 
-export function deploymentContainers(orgId: string): string[] {
+export function deploymentContainers(deploymentId: string): string[] {
   try {
-    return execFileSync("docker", ["ps", "-a", "--filter", `label=qm.org=${orgId}`, "--format", "{{.Names}}"], {
+    return execFileSync("docker", ["ps", "-a", "--filter", `label=qm.org=${deploymentId}`, "--format", "{{.Names}}"], {
       encoding: "utf8",
     })
       .split("\n")
@@ -148,9 +148,10 @@ const existingDockerNames = (kind: "volume" | "network", candidates: string[]): 
     return [];
   }
 };
-export const deploymentVolumes = (orgId: string): string[] =>
-  existingDockerNames("volume", [`qm-${orgId}-pgdata`, `qm-${orgId}-coredata`]);
-export const deploymentNetworks = (orgId: string): string[] => existingDockerNames("network", [`qm-${orgId}`]);
+export const deploymentVolumes = (deploymentId: string): string[] =>
+  existingDockerNames("volume", [`qm-${deploymentId}-pgdata`, `qm-${deploymentId}-coredata`]);
+export const deploymentNetworks = (deploymentId: string): string[] =>
+  existingDockerNames("network", [`qm-${deploymentId}`]);
 
 export function preexistingServiceImages(services: readonly string[]): string[] {
   try {
@@ -165,23 +166,23 @@ export function preexistingServiceImages(services: readonly string[]): string[] 
   }
 }
 
-export function dockerCleanup(orgId: string): void {
+export function dockerCleanup(deploymentId: string): void {
   try {
-    for (const name of deploymentContainers(orgId)) {
+    for (const name of deploymentContainers(deploymentId)) {
       try {
         execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" });
       } catch {
         void 0;
       }
     }
-    for (const v of deploymentVolumes(orgId)) {
+    for (const v of deploymentVolumes(deploymentId)) {
       try {
         execFileSync("docker", ["volume", "rm", "-f", v], { stdio: "ignore" });
       } catch {
         void 0;
       }
     }
-    for (const n of deploymentNetworks(orgId)) {
+    for (const n of deploymentNetworks(deploymentId)) {
       try {
         execFileSync("docker", ["network", "rm", n], { stdio: "ignore" });
       } catch {
@@ -191,11 +192,11 @@ export function dockerCleanup(orgId: string): void {
   } catch {
     void 0;
   }
-  rmDir(deploymentDir(orgId));
+  rmDir(deploymentDir(deploymentId));
 }
 
-export function removeStandInImages(services: readonly string[], orgId: string): void {
-  const tags = [...services.map((s) => `qm-${s}:local`), `qm-${orgId}-widget:local`];
+export function removeStandInImages(services: readonly string[], deploymentId: string): void {
+  const tags = [...services.map((s) => `qm-${s}:local`), `qm-${deploymentId}-widget:local`];
   for (const tag of tags) {
     try {
       execFileSync("docker", ["rmi", "-f", tag], { stdio: "ignore" });
