@@ -116,6 +116,7 @@ export function createRoutedMemoryService(opts: {
             const provider = providerFor(route);
             if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
               return { value: 0 };
+            if (provider.attestActor && !context?.actorId) return { value: 0 };
             return attempt(
               route,
               scopeId,

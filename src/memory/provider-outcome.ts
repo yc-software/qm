@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { orgId } from "../config.ts";
 import { McpCallError, type McpEnvelope } from "../mcp/mcp-client.ts";
 import { TimeoutError } from "../util/async.ts";
@@ -8,7 +8,13 @@ import { UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.t
 import type { ScopeId } from "../types.ts";
 import type { MemoryCaptureContext, MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
 
-export const DENIED_CODES: ReadonlySet<string> = new Set(["actor_not_attested", "actor_unlinked", "argument_mismatch"]);
+export const DENIED_CODES: ReadonlySet<string> = new Set([
+  "actor_not_attested",
+  "actor_unlinked",
+  "argument_mismatch",
+  "scope_denied",
+  "insufficient_scope",
+]);
 const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
 
 const envelopes = new AsyncLocalStorage<(envelope: McpEnvelope) => void>();
@@ -135,9 +141,9 @@ export async function writeFacts(
   context: MemoryCaptureContext,
   turn: string | undefined,
 ): Promise<MemoryWrite> {
-  const keyed = turn ? { ...context, idempotencyKey: writeKey(turn, scope, facts) } : context;
+  const idempotencyKey = writeKey(turn ?? randomUUID(), scope, facts);
   const { value, outcomes, problems } = await withProviders("write", (report) =>
-    memory.capture(scope, facts, Date.now(), author, { ...keyed, report }),
+    memory.capture(scope, facts, Date.now(), author, { ...context, idempotencyKey, report }),
   );
   return { added: value ?? Math.max(0, ...outcomes.map(({ added }) => added ?? 0)), outcomes, problems };
 }
