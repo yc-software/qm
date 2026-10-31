@@ -3,6 +3,9 @@ import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company-account" } }),

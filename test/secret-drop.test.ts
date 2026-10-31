@@ -16,7 +16,6 @@ import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/se
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -28,7 +27,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
@@ -95,16 +94,16 @@ describe("SecretDropStore", () => {
 });
 
 describe("fireDropResolution", () => {
-  const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
+  const depsWith = async (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
     run,
   });
 
   it("resumes the channel as the owner with the credential handle, exactly once", async () => {
     const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
+    const deps = await depsWith(async (req) => {
       seen.push(req);
       return { status: "ok" } as TurnResult;
     });
@@ -132,7 +131,7 @@ describe("fireDropResolution", () => {
 
   it("resumes a DM (own scope, no grant) and tells the agent the key is available here", async () => {
     const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
+    const deps = await depsWith(async (req) => {
       seen.push(req);
       return { status: "ok" } as TurnResult;
     });
@@ -153,7 +152,7 @@ describe("fireDropResolution", () => {
     const deps = {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: await testIdentity(),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
@@ -175,7 +174,7 @@ describe("fireDropResolution", () => {
 
   it("with sibling drops still pending: the wake fires (with its grant) but says what's outstanding instead of ordering a resume", async () => {
     const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
+    const deps = await depsWith(async (req) => {
       seen.push(req);
       return { status: "ok" } as TurnResult;
     });
@@ -654,6 +653,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     const built = buildApp(
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
     );
+    await built.identity.ready();
     await built.directory.replaceChannels(
       [{ channelId: "C1", name: "drops", isPrivate: false }],
       [{ channelId: "C1", principalId: "U_A" }],

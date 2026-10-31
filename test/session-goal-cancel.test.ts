@@ -47,6 +47,7 @@ async function sessionGoal(built: ReturnType<typeof freshApp>, sessionId: string
 for (const status of ["active", "paused"] as const) {
   test(`the owner cancels an idle ${status} goal; it closes for good and frees the session for a new goal`, async () => {
     const built = freshApp();
+    await built.identity.ready();
     const session = await sessionWithGoal(built, `web:U1:${status}`, status);
 
     assert.equal(await built.app.cancelSessionGoal(session.id, "U2"), null, "a non-participant cannot cancel");
@@ -93,6 +94,7 @@ for (const status of ["active", "paused"] as const) {
 for (const status of ["active", "paused"] as const) {
   test(`cancelling a ${status} goal while a turn runs lands after that turn's own final goal save`, async () => {
     const built = freshApp();
+    await built.identity.ready();
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
@@ -132,6 +134,7 @@ for (const status of ["active", "paused"] as const) {
 
 test("cancelling with no open goal touches nothing", async () => {
   const built = freshApp();
+  await built.identity.ready();
   const ref = "web:U1:none";
   const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
   await built.sessions.addParticipant(session.id, "U1");

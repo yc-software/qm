@@ -31,3 +31,12 @@ export function currentTenant(): string {
   if (!id) throw new Error("No tenant is bound to this operation");
   return id;
 }
+
+export function perTenant<V>(create: () => V): () => V {
+  const values = new Map<string, V>();
+  return () => {
+    const id = currentTenant();
+    if (!values.has(id)) values.set(id, create());
+    return values.get(id)!;
+  };
+}

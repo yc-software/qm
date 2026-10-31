@@ -50,6 +50,7 @@ const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const })
 
 async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
+  await b.identity.ready();
   await b.config.hydrate?.();
   await b.identity.refresh();
   await b.deploymentLayerReady;

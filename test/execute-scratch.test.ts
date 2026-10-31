@@ -143,6 +143,7 @@ async function freshApp(extra: Partial<Config> = {}) {
     ...extra,
   });
   const built = buildApp(config);
+  await built.identity.ready();
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "scoped");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   return built;

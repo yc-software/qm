@@ -377,6 +377,7 @@ test("mirror read interface: ingest is queryable by search + readMessages + acti
 test("dev debug footer: a surfaceTools reply carries an admin session deep-link (SURFACE_DEBUG_FOOTER)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-footer-"));
   const built = buildApp(testConfig({ dataDir, surfaceDebugFooter: true, publicWebUrl: "https://portal.test" }));
+  await built.identity.ready();
   built.runtime.start();
   try {
     const container = "C-footer";
@@ -398,6 +399,7 @@ test("dev debug footer: a surfaceTools reply carries an admin session deep-link 
 test("no debug footer when SURFACE_DEBUG_FOOTER is off (prod default)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-nofooter-"));
   const built = buildApp(testConfig({ dataDir, publicWebUrl: "https://portal.test" }));
+  await built.identity.ready();
   built.runtime.start();
   try {
     await built.app.setChannelPolicy("C-nf", "", "U-admin", undefined, undefined, true);
@@ -547,6 +549,7 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
 test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, detectModelId: "claude-opus-4-8", judgeModelId: "claude-sonnet-5" }));
+  await built.identity.ready();
   built.runtime.start();
   try {
     const container = "C-judgemodel";
@@ -564,6 +567,7 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
 test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, modelId: "gpt-5.6-sol", openaiApiKey: "sk-openai-test" }));
+  await built.identity.ready();
   built.runtime.start();
   try {
     const container = "C-openai-judge";
@@ -581,6 +585,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
+  await built.identity.ready();
   await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
   built.runtime.start();
   try {
