@@ -1586,7 +1586,6 @@ export function buildApp(
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
-    if (!sessionIds.length) return new Set();
     return new Set(
       (await approvals.forSessions(sessionIds))
         .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
@@ -2051,8 +2050,9 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = config.databaseUrl
-    ? createPostgresApprovalStore(config.databaseUrl, deliveries)
+  const { databaseUrl } = config;
+  const approvals = databaseUrl
+    ? createPostgresApprovalStore(databaseUrl, deliveries)
     : createApprovalStore(deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
@@ -2223,9 +2223,7 @@ export function buildApp(
     serviceCreds,
     deliveries,
     approvals,
-    approvalGrants: config.databaseUrl
-      ? createPostgresApprovalGrantStore(config.databaseUrl)
-      : createApprovalGrantStore(),
+    approvalGrants: databaseUrl ? createPostgresApprovalGrantStore(databaseUrl) : createApprovalGrantStore(),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2413,9 +2411,7 @@ export function buildApp(
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: config.databaseUrl
-      ? createPostgresContextRequestStore(config.databaseUrl)
-      : createContextRequestStore(),
+    contextRequests: databaseUrl ? createPostgresContextRequestStore(databaseUrl) : createContextRequestStore(),
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2424,9 +2420,7 @@ export function buildApp(
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
-    ambientCursors: config.databaseUrl
-      ? createPostgresAmbientCursorStore(config.databaseUrl)
-      : createAmbientCursorStore(),
+    ambientCursors: databaseUrl ? createPostgresAmbientCursorStore(databaseUrl) : createAmbientCursorStore(),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
