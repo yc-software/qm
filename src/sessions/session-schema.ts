@@ -1,4 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTableStatements } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -288,3 +289,19 @@ END $base_schema$`,
     `DROP FUNCTION IF EXISTS safe_json(text)`,
   ],
 };
+
+const SESSION_TENANCY: PgMigrationDefinition = {
+  id: "sessions/store/0048-tenant-rls",
+  statements: [
+    `INSERT INTO tenants(id, slug, name)
+     SELECT id, id::text, id::text FROM qm_tenant
+      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
+     ON CONFLICT (id) DO NOTHING`,
+    ...tenantTableStatements("blobs"),
+    ...tenantTableStatements("items"),
+    `DROP FUNCTION qm_tenant_id()`,
+    `DROP TABLE qm_tenant`,
+  ],
+};
+
+export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA, SESSION_TENANCY];

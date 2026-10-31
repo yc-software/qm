@@ -567,8 +567,11 @@ async function withPgSession(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  const { seedTestTenants } = await import("./support/tenant-seed.ts");
+  const { tenantBoundUrl } = await import("./support/test-tenants.ts");
+  await seedTestTenants(url.toString());
   const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(url.toString()) });
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
