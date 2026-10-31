@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool, ownerDatabaseUrl } from "../persistence/pg-pool.ts";
 
-export class InstallTenantConflict extends Error {}
-
 export async function ensureInstallTenant(databaseUrl: string): Promise<{ tenant: string; created: boolean }> {
   const db = createPgPool(ownerDatabaseUrl(databaseUrl));
   try {
@@ -11,8 +9,7 @@ export async function ensureInstallTenant(databaseUrl: string): Promise<{ tenant
        ON CONFLICT (slug) DO NOTHING RETURNING id::text AS id`,
       [randomUUID()],
     );
-    const rows = await db.q("SELECT id::text AS id FROM tenants");
-    if (rows.length !== 1) throw new InstallTenantConflict(`Expected one tenant in this install, found ${rows.length}`);
+    const rows = await db.q("SELECT id::text AS id FROM tenants ORDER BY (slug = 'main') DESC, created_at, id LIMIT 1");
     return { tenant: String(rows[0]!.id), created: inserted.length === 1 };
   } finally {
     await db.close();

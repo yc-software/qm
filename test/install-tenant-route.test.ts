@@ -5,7 +5,6 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { InstallTenantConflict } from "../src/tenants/install.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -67,21 +66,11 @@ test("the install tenant route needs both the source signature and the operator 
   }
 });
 
-test("the install tenant route is unavailable without a distinct operator credential and reports conflicts", async () => {
+test("the install tenant route is unavailable without a distinct operator credential", async () => {
   const unavailable = await fixture(undefined, async () => ({ tenant: "t", created: false }));
   try {
     assert.equal((await unavailable.request()).status, 503);
   } finally {
     await unavailable.close();
-  }
-  const conflicted = await fixture(controlSecret, async () => {
-    throw new InstallTenantConflict("Expected one tenant in this install, found 2");
-  });
-  try {
-    const response = await conflicted.request();
-    assert.equal(response.status, 409);
-    assert.equal(((await response.json()) as { error: string }).error, "install_tenant_conflict");
-  } finally {
-    await conflicted.close();
   }
 });
