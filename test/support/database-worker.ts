@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { parentPort, workerData, type MessagePort } from "node:worker_threads";
 import pg from "pg";
-import { seedTestTenants } from "./tenant.ts";
+import { seedTestTenants } from "./tenant-seed.ts";
 
 const { base, signal, port } = workerData as { base: string; signal: Int32Array; port: MessagePort };
 const baseUrl = new URL(base);
