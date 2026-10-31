@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { configurePgPooling, createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
@@ -32,13 +32,11 @@ async function withSettingsDb(
     const appUrl = new globalThis.URL(schemaUrl);
     appUrl.username = "qm_app";
     appUrl.password = "app";
-    configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: schemaUrl.toString() });
     const app = createPgPool(appUrl.toString());
     try {
       await fn({ app, admin, a, b });
     } finally {
       await app.close();
-      configurePgPooling({});
     }
   } finally {
     await owner.close();

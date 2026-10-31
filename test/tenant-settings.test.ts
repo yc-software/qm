@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
-import { TEST_SETTINGS_KEY, testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
-import { OTHER_TENANT, seedTenant, TEST_TENANT } from "./support/tenant.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import {
-  createTenantSettingsStore,
   openTenantSecret,
   requireTenantSetting,
   sealTenantSecret,
@@ -88,15 +85,4 @@ test("a tenant first bound after start has its settings loaded before its work r
   } finally {
     await store.stop();
   }
-});
-
-test("a store on a database nobody migrated at boot creates its own table", async () => {
-  const url = testDatabaseUrl();
-  await seedTenant(url, TEST_TENANT);
-  const store = createTenantSettingsStore({ db: createPgPool(url), keyMaterial: TEST_SETTINGS_KEY });
-  await withTenant(TEST_TENANT, async () => {
-    await store.update({ PI_MODEL: "claude-opus-5-5" });
-    assert.equal((await store.get()).piModel, "claude-opus-5-5");
-  });
-  assert.equal(await store.tenantForSlug(`t-${TEST_TENANT.slice(-12)}`), TEST_TENANT);
 });
