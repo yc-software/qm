@@ -9,12 +9,15 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_USERS = "alice";
+const core = createServer((req, res) => void answerFeatures(req, res, { alice: ["web_ui", "voice"], bob: ["web_ui"] }));
+await new Promise<void>((resolve) => core.listen(0, resolve));
+process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
 const { sweepDictationSpool } = await import("../server/voice-routes.ts");
@@ -52,6 +55,7 @@ function reply(status: number, body: unknown, headers: Record<string, string> = 
 test.after(() => {
   surface.close();
   openaiStub.close();
+  core.close();
   void rm(testTmp, { recursive: true, force: true });
 });
 

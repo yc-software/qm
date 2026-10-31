@@ -251,9 +251,7 @@ export function createTurnMethods(
           requestedModel = model;
         }
         if (!individualAuth) {
-          const configuredKeys = deps.providerKeys ??
-            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
-          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : undefined;
           let orgRuntime;
           let runtime;
           try {
@@ -279,12 +277,7 @@ export function createTurnMethods(
             swallow("turn: runtime resolution", error);
             return { status: "refused", reason: `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}` };
           }
-          let providers = deps.modelProviders;
-          if (deps.modelCredentials) {
-            providers = managedKeys;
-          } else if (deps.providerKeys) {
-            providers = configuredKeys;
-          }
+          const providers = managedKeys;
           if (providers && !modelServiceable(runtime.modelId, providers)) {
             return {
               status: "refused",

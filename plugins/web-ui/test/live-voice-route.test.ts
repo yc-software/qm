@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
-process.env.WEB_UI_VOICE_USERS = "alice";
+const core = createServer((req, res) => void answerFeatures(req, res, { alice: ["web_ui", "voice"], bob: ["web_ui"] }));
+await new Promise<void>((resolve) => core.listen(0, resolve));
+process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.OPENAI_API_KEY = "voice-test-key";
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -19,6 +22,7 @@ const headers = { ...identity(), "content-type": "application/json", origin: "ht
 const offer = JSON.stringify({ sdp: "v=0\r\no=offer" });
 test.after(() => {
   surface.close();
+  core.close();
 });
 
 test("voice route authenticates and gates accounts before spending", async () => {

@@ -6,7 +6,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("sandbox maintenance runs when both idle stopping settings are disabled", async () => {
-  const config = testConfig({ deepIdleMachineMs: 0, devIdleMachineMs: 0, sandboxBackend: "aws" });
+  const config = testConfig({ deepIdleMachineMs: 0, devIdleMachineMs: 0 });
   config.awsSandbox.s3Bucket = "maintenance-test";
   const built = buildApp(config);
   const called = Promise.withResolvers<number[]>();

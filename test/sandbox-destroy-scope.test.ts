@@ -66,7 +66,7 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
     const sandbox = createSpritesSandbox(workspace(), {
       initializationStore: testMap(),
       advisoryLock: testAdvisoryLock(),
-      token: "test",
+      token: async () => "test",
       baseUrl: fake.baseUrl,
     });
     await sandbox.provision([{ scopeId: "scope", mountPath: "", mode: "rw" }]);
@@ -98,7 +98,8 @@ for (const [name, create, resource] of [
     const sandbox = create(workspace(), {
       ...singleProcessDeps(),
       store: testMap(),
-      token: "test",
+      token: async () => "test",
+      apiKey: async () => "test",
       fetchImpl: async (input, init) => {
         const path = new URL(String(input)).pathname;
         calls.push(`${init?.method} ${path}`);
@@ -150,7 +151,8 @@ for (const [name, create, install] of [
   test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
     const fake = install();
     try {
-      const options = { ...singleProcessDeps(), token: "test-token", fetchImpl: fake.fetchImpl };
+      const credential = async () => "test-token";
+      const options = { ...singleProcessDeps(), token: credential, apiKey: credential, fetchImpl: fake.fetchImpl };
       const a = create(workspace(), { ...options, store: testMap() });
       const b = create(workspace(), { ...options, store: testMap() });
       const layers = [{ scopeId: "replaced", mountPath: "", mode: "rw" as const }];

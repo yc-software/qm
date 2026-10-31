@@ -890,6 +890,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     return new Response("ok");
   });
   const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
       for (const status of ["ok", "failed"] as const) {

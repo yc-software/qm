@@ -1,8 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
-import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
-import type { SecretSource } from "../credentials/secret-source.ts";
+import { PROVIDERS } from "./oauth.ts";
 
 export interface StoredConnectorClient {
   scopeId: string;
@@ -124,10 +123,8 @@ export interface ConnectorClientReader {
 export function createConnectorClientResolver(opts: {
   reader: ConnectorClientReader;
   orgScopeId: (orgId: string) => string;
-  secrets?: SecretSource;
 }): OAuthClientResolver {
-  const envResolver = createSecretClientResolver(opts.secrets);
-  return async (providerName, ctx): Promise<ResolvedClient> => {
+  return async (providerName): Promise<ResolvedClient> => {
     if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
     const orgId = configOrgId();
     const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
@@ -142,6 +139,6 @@ export function createConnectorClientResolver(opts: {
         ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
       };
     }
-    return envResolver(providerName, ctx);
+    throw new Error(`provider not configured — an admin must add the ${providerName} OAuth client`);
   };
 }

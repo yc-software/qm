@@ -168,6 +168,14 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
 
 const JUNK_FILE = /^(?:\.DS_Store|Thumbs\.db|\._.*)$/;
 
+export function layerBrokerEnv(
+  tools: readonly BrokeredLayerTool[],
+  env: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> {
+  const names = tools.flatMap((tool) => [tool.broker.roleArnEnv, tool.broker.regionEnv ?? ""]).filter(Boolean);
+  return Object.fromEntries(names.flatMap((name) => (env[name] ? [[name, env[name]]] : [])));
+}
+
 export function loadDeploymentLayer(dir: string): DeploymentLayerRuntime {
   if (!existsSync(dir)) {
     throw new Error(

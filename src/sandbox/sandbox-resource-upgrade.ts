@@ -24,18 +24,17 @@ export interface LegacyRoute {
 
 export function legacySandboxBackendForScope(
   scope: string,
-  fallback: SandboxBackendName,
+  fallback: () => SandboxBackendName,
   defaults?: LegacySandboxScopeDefaults,
 ): SandboxBackendName {
   const kind = parseScopeId(scope).kind;
-  return (kind && defaults?.[kind]) || fallback;
+  return (kind && defaults?.[kind]) || fallback();
 }
 
 export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): string =>
   `legacy-${createHash("sha256").update(`${backend}:${scopeId}`).digest("hex").slice(0, 24)}`;
 
 export async function upgradeLegacySandboxes(opts: {
-  availableBackends: readonly SandboxBackendName[];
   records: DurableMap<SandboxResource>;
   defaults: DurableMap<SandboxDefault>;
   marker: DurableMap<SandboxResourceUpgradeMarker>;
@@ -43,14 +42,18 @@ export async function upgradeLegacySandboxes(opts: {
   routes?: () => Promise<Array<[string, LegacyRoute]>>;
   legacyScopes?: () => Promise<string[]>;
   legacySandboxes?: () => Promise<LegacySandboxBinding[]>;
-  legacyBackend: (scopeId: string) => SandboxBackendName;
+  backends: () => Promise<{
+    available: readonly SandboxBackendName[];
+    legacyBackend: (scopeId: string) => SandboxBackendName;
+  }>;
   specFor?: (backend: SandboxBackendName) => AgentComputerSpec | undefined;
 }): Promise<void> {
   const done = async (): Promise<boolean> => (await opts.marker.get("explicit-defaults")) !== null;
   if (await done()) return;
   await opts.lock.withLock("sandbox-resources:activation", async () => {
     if (await done()) return;
-    const [existing, defaults, routes, knownScopes, bindings] = await Promise.all([
+    const [{ available, legacyBackend }, existing, defaults, routes, knownScopes, bindings] = await Promise.all([
+      opts.backends(),
       opts.records.all(),
       opts.defaults.entries(),
       opts.routes?.() ?? [],
@@ -60,7 +63,7 @@ export async function upgradeLegacySandboxes(opts: {
     const managed = new Set(existing.filter((record) => !record.legacy).map((record) => record.backingScopeId));
     const valid = (scope: string): boolean => !!parseScopeId(scope).kind && !managed.has(scope);
     const routed = new Map(routes);
-    const backendFor = (scope: string): SandboxBackendName => routed.get(scope)?.backend ?? opts.legacyBackend(scope);
+    const backendFor = (scope: string): SandboxBackendName => routed.get(scope)?.backend ?? legacyBackend(scope);
     const scopes = new Set(
       [
         ...knownScopes,
@@ -73,11 +76,7 @@ export async function upgradeLegacySandboxes(opts: {
     const retired = new Set(existing.filter((record) => record.state === "retired").map((record) => record.id));
     for (const scope of scopes) {
       const backend = backendFor(scope);
-      if (
-        !selected.has(scope) &&
-        !retired.has(legacySandboxId(scope, backend)) &&
-        !opts.availableBackends.includes(backend)
-      )
+      if (!selected.has(scope) && !retired.has(legacySandboxId(scope, backend)) && !available.includes(backend))
         throw new Error(
           `cannot import legacy computer for ${scope}: backend ${backend} is not configured; restore that provider before upgrading`,
         );

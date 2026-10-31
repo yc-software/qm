@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerFeatures } from "./core-features.ts";
 
 const activities = [
   { id: "app", title: "Build a home for my projects", prompt: "Build a private project tracker.", icon: "app" },
@@ -9,6 +10,7 @@ const activities = [
 let generatedRequest: unknown;
 let generation = false;
 const core = createServer(async (req, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if (req.method === "GET" && req.url?.startsWith("/v1/suggested-activities?")) {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ enabled: generation }));
@@ -25,7 +27,6 @@ const core = createServer(async (req, res) => {
 await new Promise<void>((resolve) => core.listen(0, resolve));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "suggestions-route-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.WEB_UI_SUGGESTED_ACTIVITIES = JSON.stringify(activities);
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

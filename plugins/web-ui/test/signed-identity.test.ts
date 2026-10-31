@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 let lastMemory: { url: string; portalHeader: string | undefined } | null = null;
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (u.startsWith("/v1/memory")) {
     lastMemory = { url: u, portalHeader: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined };
@@ -20,7 +22,6 @@ await new Promise<void>((r) => core.listen(0, r));
 const SECRET = "signed-identity-test-secret";
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");

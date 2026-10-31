@@ -116,13 +116,9 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
   const { cfg, signer, claims, mailer, signingKey } = deps;
   const sessions = deps.sessions ?? coreRememberedSessions(cfg.coreApiUrl, cfg.coreSigningSecret);
   const brandName = deps.brandName ?? ((): string => cfg.brandName);
-  const invited =
+  const emailAllowed =
     deps.emailAllowed ??
     ((email: string): Promise<boolean> => coreEmailAllowed(cfg.coreApiUrl, cfg.coreSigningSecret, email, "auth"));
-  const emailAllowed = async (email: string): Promise<boolean> =>
-    cfg.allowedEmails.includes(email) ||
-    (Boolean(cfg.allowedEmailDomain) && email.endsWith(`@${cfg.allowedEmailDomain}`)) ||
-    invited(email);
   const now = deps.now ?? Date.now;
   const notify = deps.onBackgroundTask ?? ((task: Promise<void>) => void task.catch(() => undefined));
   const formAction = `${cfg.publicPath}/authorize`;

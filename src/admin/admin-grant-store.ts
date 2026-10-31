@@ -29,18 +29,18 @@ export interface AdminGrantStore {
 }
 
 export interface AdminGrantStoreOptions {
-  seed?: AdminGrant[];
+  seed?: AdminGrant[] | (() => Promise<AdminGrant[]>);
 }
 
 export function createAdminGrantStore(
   persist: AdminGrantPersistence,
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
-  const seeds = opts.seed ?? [];
   let seededP: Promise<void> | null = null;
   function ensureSeeded(): Promise<void> {
     if (!seededP) {
       seededP = (async () => {
+        const seeds = typeof opts.seed === "function" ? await opts.seed() : (opts.seed ?? []);
         if (!seeds.length) return;
         if ((await persist.all()).length > 0) return;
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
