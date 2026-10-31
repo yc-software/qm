@@ -104,7 +104,6 @@ export interface AwsConfig {
   imageLabel: string;
   alb?: string;
   sharedAlb?: boolean;
-  backgroundWorkControl?: boolean;
   rdsInstance?: string;
   dbInstanceClass?: string;
   predeployDbSnapshot?: boolean;
@@ -802,13 +801,6 @@ function validate(raw: unknown, path: string): QmConfig {
   validatePortalTrust(out, path);
   if (target === "aws") {
     validateAwsFrontDoor(out, path);
-    if (
-      out.env.core?.BACKGROUND_DEPLOYMENT_ID !== undefined ||
-      out.secretEnv?.core?.BACKGROUND_DEPLOYMENT_ID !== undefined
-    )
-      throw new CliError(
-        `${path}: BACKGROUND_DEPLOYMENT_ID is allocated by aws.backgroundWorkControl and cannot be configured directly`,
-      );
     const externalImages = [
       ...plugins.filter((plugin) => plugin.image).map((plugin) => plugin.name),
       ...Object.keys(imageOverrides).filter((service) => services.includes(service as DeclaredServiceName)),
@@ -1163,9 +1155,8 @@ function validateAws(
       );
     }
   }
-  if (raw["backgroundWorkControl"] !== undefined && typeof raw["backgroundWorkControl"] !== "boolean") {
-    throw new CliError(`${path}: "aws.backgroundWorkControl" must be a boolean`);
-  }
+  if (raw["backgroundWorkControl"] !== undefined)
+    warn(`${path}: "aws.backgroundWorkControl" is obsolete and ignored; remove it`);
   if (raw["sharedAlb"] !== undefined && typeof raw["sharedAlb"] !== "boolean") {
     throw new CliError(`${path}: "aws.sharedAlb" must be a boolean`);
   }
@@ -1474,11 +1465,6 @@ function validateAws(
   if (deploymentState) out.deploymentState = deploymentState;
   if (alb) out.alb = alb;
   if (raw["sharedAlb"] !== undefined) out.sharedAlb = raw["sharedAlb"] as boolean;
-  if (raw["backgroundWorkControl"] !== undefined) out.backgroundWorkControl = raw["backgroundWorkControl"] as boolean;
-  if (out.backgroundWorkControl && (services.core?.ecsService.length ?? 0) > 219)
-    throw new CliError(
-      `${path}: controlled core service names must leave room for a unique deployment identity (maximum 219 characters)`,
-    );
   if (rdsInstance) out.rdsInstance = rdsInstance;
   if (dbInstanceClass) out.dbInstanceClass = dbInstanceClass;
   if (predeployDbSnapshot !== undefined) out.predeployDbSnapshot = predeployDbSnapshot;

@@ -250,7 +250,6 @@ export function isMissingOrPlaceholder(value: string | undefined): boolean {
 export function isInvalidSecret(name: string, value: string | undefined): boolean {
   if (isMissingOrPlaceholder(value)) return true;
   const candidate = value!.trim();
-  if (name === "DEPLOYMENT_CONTROL_SECRET" && candidate !== value) return true;
   if (name === "ADMIN_GRANTS") {
     const entries = candidate
       .split(",")
@@ -265,10 +264,7 @@ export function isInvalidSecret(name: string, value: string | undefined): boolea
     );
   }
   return (
-    (name === "CONNECTOR_SECRET_KEY" ||
-      name === "CORE_SIGNING_SECRET" ||
-      name === "SKILL_SIGNING_SECRET" ||
-      name === "DEPLOYMENT_CONTROL_SECRET") &&
+    (name === "CONNECTOR_SECRET_KEY" || name === "CORE_SIGNING_SECRET" || name === "SKILL_SIGNING_SECRET") &&
     candidate.length < 32
   );
 }

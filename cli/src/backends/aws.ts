@@ -1,6 +1,6 @@
 import { awsCoreHostnames, awsPortalAppsDomain, validAlbHostname } from "../aws-routing.ts";
 import https from "node:https";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lookup, resolveCname } from "node:dns/promises";
 import {
@@ -73,7 +73,6 @@ import {
   streamLabeled,
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
-import { checkControlledLiveSession } from "../live-session.ts";
 import {
   assertTerraformScaffoldSupportsConfig,
   awsObjectStoreBucket,
@@ -88,15 +87,6 @@ import {
   httpDeploymentLayerTransport,
   type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
-
-import {
-  awaitBackgroundWork,
-  readBackgroundWork,
-  readProductionOwner,
-  setBackgroundOwner,
-  type BackgroundWorkStatus,
-  type BackgroundWorkTransport,
-} from "../background-work.ts";
 
 async function fetchCore(
   url: URL,
@@ -451,20 +441,8 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-function workloadEnvironment(
-  config: QmConfig,
-  workload: string,
-  backgroundDeploymentId?: string,
-): Record<string, string> {
-  if (isServiceName(workload)) {
-    const env = serviceEnvironment(config, workload);
-    if (workload === "core" && requireAws(config).backgroundWorkControl) {
-      if (!backgroundDeploymentId)
-        throw new CliError("controlled background work requires a manifest-bound deployment identity");
-      env.BACKGROUND_DEPLOYMENT_ID = backgroundDeploymentId;
-    }
-    return env;
-  }
+function workloadEnvironment(config: QmConfig, workload: string): Record<string, string> {
+  if (isServiceName(workload)) return serviceEnvironment(config, workload);
   const plugin = config.plugins.find((entry) => entry.name === workload);
   return Object.fromEntries(
     Object.entries({
@@ -504,7 +482,6 @@ export function renderTaskDefinition(
   service: string,
   image: string,
   secretArns?: Record<string, string>,
-  backgroundDeploymentId?: string,
 ): EcsTaskDefinition {
   if (!isDigestPinned(image)) throw new CliError(`aws task image for ${service} must be pinned by digest`);
   const aws = requireAws(config);
@@ -556,9 +533,7 @@ export function renderTaskDefinition(
         name: service,
         image,
         essential: true,
-        environment: Object.entries(workloadEnvironment(config, service, backgroundDeploymentId)).map(
-          ([name, value]) => ({ name, value }),
-        ),
+        environment: Object.entries(workloadEnvironment(config, service)).map(([name, value]) => ({ name, value })),
         secrets,
         portMappings: [
           {
@@ -930,7 +905,6 @@ async function runAwsCandidateMigration(
 
 export function secretArns(config: QmConfig): Record<string, string> {
   const aws = requireAws(config);
-  const controlValues = new Map<string, string>();
   const pairs = computedSecrets(config).flatMap((secret) => {
     const id = `${aws.secretsPrefix}${secret.name}`;
     try {
@@ -954,19 +928,12 @@ export function secretArns(config: QmConfig): Record<string, string> {
       if (!value.ARN || isInvalidSecret(secret.name, value.SecretString)) {
         throw new CliError(`required AWS secret ${secret.name} has no usable, non-placeholder AWSCURRENT value`);
       }
-      if (secret.name === "CORE_SIGNING_SECRET" || secret.name === "DEPLOYMENT_CONTROL_SECRET")
-        controlValues.set(secret.name, value.SecretString!);
       return [[secret.name, value.ARN] as const];
     } catch (error) {
       if (!secret.required && /ResourceNotFoundException/.test(errMessage(error))) return [];
       throw error;
     }
   });
-  if (
-    aws.backgroundWorkControl &&
-    controlValues.get("CORE_SIGNING_SECRET") === controlValues.get("DEPLOYMENT_CONTROL_SECRET")
-  )
-    throw new CliError("DEPLOYMENT_CONTROL_SECRET must differ from CORE_SIGNING_SECRET");
   return Object.fromEntries(pairs);
 }
 
@@ -1118,6 +1085,31 @@ export function taskDefinitionChanges(
     out,
   );
   return out;
+}
+
+const RETIRED_CORE_ENV = new Set(["BACKGROUND_DEPLOYMENT_ID", "BACKGROUND_WORK_ENABLED"]);
+
+function withoutRetiredCoreSettings(
+  config: QmConfig,
+  service: string,
+  task: Record<string, unknown>,
+): Record<string, unknown> {
+  if (service !== "core") return task;
+  const configured = workloadEnvironment(config, service);
+  const containers = (task.containerDefinitions as Array<Record<string, unknown>> | undefined)?.map((container) => {
+    if (container.name !== service) return container;
+    const out = { ...container };
+    if (Array.isArray(container.environment))
+      out.environment = (container.environment as Array<{ name: string }>).filter(
+        (entry) => !RETIRED_CORE_ENV.has(entry.name) || entry.name in configured,
+      );
+    if (Array.isArray(container.secrets))
+      out.secrets = (container.secrets as Array<{ name: string }>).filter(
+        (entry) => entry.name !== "DEPLOYMENT_CONTROL_SECRET",
+      );
+    return out;
+  });
+  return containers ? { ...task, containerDefinitions: containers } : task;
 }
 
 export function taskDefinitionDiff(desired: EcsTaskDefinition, live: Record<string, unknown> | null): string[] {
@@ -1291,7 +1283,6 @@ interface AwsReleaseCandidate {
 
 interface DeploymentManifest {
   id: string;
-  backgroundDeploymentId?: string;
   previous?: string;
   createdAt: string;
   imageLabel?: string;
@@ -1301,101 +1292,6 @@ interface DeploymentManifest {
   counts?: Record<string, number>;
   imageProvenance?: Record<string, DeploymentImageProvenance>;
   layer?: { key: string; sha256: string };
-}
-
-interface BackgroundDeploymentPreparation {
-  id: string;
-  previousManifestId?: string;
-  backgroundDeploymentId: string;
-  before: { tasks: Record<string, string>; counts: Record<string, number> };
-}
-
-const BACKGROUND_PREPARATION_KEY = "deployment/background-preparation";
-
-function clearBackgroundPreparation(aws: AwsConfig): void {
-  awsText(aws, [
-    "dynamodb",
-    "transact-write-items",
-    "--transact-items",
-    JSON.stringify([
-      {
-        Delete: {
-          TableName: deployLocksTable(aws),
-          Key: { lockKey: { S: deploymentStateKey(aws, BACKGROUND_PREPARATION_KEY) } },
-        },
-      },
-    ]),
-  ]);
-}
-
-function assertBackgroundPreparationResolved(
-  aws: AwsConfig,
-  current: DeploymentManifest | undefined,
-  before: BackgroundDeploymentPreparation["before"],
-): boolean {
-  const response = awsJson<{ Item?: Record<string, { S?: string }> }>(aws, [
-    "dynamodb",
-    "get-item",
-    "--table-name",
-    deployLocksTable(aws),
-    "--key",
-    JSON.stringify({ lockKey: { S: deploymentStateKey(aws, BACKGROUND_PREPARATION_KEY) } }),
-    "--consistent-read",
-  ]);
-  if (!response.Item) return false;
-  let preparation: BackgroundDeploymentPreparation;
-  try {
-    preparation = JSON.parse(response.Item.preparation?.S ?? "");
-    if (
-      !preparation ||
-      typeof preparation.id !== "string" ||
-      typeof preparation.backgroundDeploymentId !== "string" ||
-      !preparation.before?.tasks ||
-      !preparation.before.counts
-    )
-      throw new Error("invalid preparation");
-  } catch {
-    throw new CliError("pending background deployment preparation is invalid; refusing a new cohort");
-  }
-  const committed =
-    current?.id === preparation.id &&
-    current.backgroundDeploymentId === preparation.backgroundDeploymentId &&
-    canonicalJson(before) === canonicalJson({ tasks: current.tasks, counts: current.counts });
-  const restored =
-    current?.id === preparation.previousManifestId && canonicalJson(before) === canonicalJson(preparation.before);
-  if (!committed && !restored)
-    throw new CliError(
-      `background deployment ${preparation.id} remains unresolved; reconcile its recorded tasks before retrying instead of allocating another cohort`,
-    );
-  return true;
-}
-
-function reconcileBackgroundPreparation(
-  aws: AwsConfig,
-  current: DeploymentManifest | undefined,
-  before: BackgroundDeploymentPreparation["before"],
-): void {
-  if (assertBackgroundPreparationResolved(aws, current, before)) clearBackgroundPreparation(aws);
-}
-
-function prepareBackgroundDeployment(aws: AwsConfig, preparation: BackgroundDeploymentPreparation): void {
-  awsText(aws, [
-    "dynamodb",
-    "transact-write-items",
-    "--transact-items",
-    JSON.stringify([
-      {
-        Put: {
-          TableName: deployLocksTable(aws),
-          Item: {
-            lockKey: { S: deploymentStateKey(aws, BACKGROUND_PREPARATION_KEY) },
-            preparation: { S: JSON.stringify(preparation) },
-          },
-          ConditionExpression: "attribute_not_exists(lockKey)",
-        },
-      },
-    ]),
-  ]);
 }
 
 const DEPLOYMENT_POINTER_KEY = "deployment/current";
@@ -1738,16 +1634,12 @@ function recordDeploymentManifest(
     layer?: DeploymentManifest["layer"];
     imageProvenance?: DeploymentManifest["imageProvenance"];
     counts?: DeploymentManifest["counts"];
-    backgroundDeploymentId?: string;
   },
 ): DeploymentManifest {
   const current = currentDeploymentManifest(aws);
   const counts = release.counts ?? current?.counts;
   const manifest: DeploymentManifest = {
     id: release.id ?? randomUUID(),
-    ...((release.backgroundDeploymentId ?? current?.backgroundDeploymentId)
-      ? { backgroundDeploymentId: release.backgroundDeploymentId ?? current?.backgroundDeploymentId }
-      : {}),
     ...(current ? { previous: current.id } : {}),
     createdAt: new Date().toISOString(),
     ...(release.imageLabel ? { imageLabel: release.imageLabel } : {}),
@@ -2092,11 +1984,10 @@ function reportTaskChanges(
   images: Record<string, string>,
   arns: Record<string, string>,
   restart: ReadonlySet<string> = new Set(),
-  backgroundDeploymentId?: string,
 ): Array<{ service: string; task: EcsTaskDefinition; changed: boolean }> {
   const desired = services.map((service) => ({
     service,
-    task: renderTaskDefinition(config, service, images[service]!, arns, backgroundDeploymentId),
+    task: renderTaskDefinition(config, service, images[service]!, arns),
     live: liveTask(config, service),
   }));
   return desired.map((item) => {
@@ -2401,11 +2292,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       }
       images[service] = plannedWorkloadImage(config, service, plugins.get(service));
     }
-    const backgroundDeploymentId = aws.backgroundWorkControl
-      ? (currentDeploymentManifest(aws)?.backgroundDeploymentId ??
-        `${aws.services.core!.ecsService}:00000000-0000-0000-0000-000000000000`)
-      : undefined;
-    reportTaskChanges(config, services, images, arns, restart, backgroundDeploymentId);
+    reportTaskChanges(config, services, images, arns, restart);
     for (const service of services) {
       step(`${service}: desired count ${before.counts[service] ?? 0} → ${workloadDesiredCount(config, service)}`);
     }
@@ -2447,14 +2334,6 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     assertAwsDeployImage(config);
     before = serviceSnapshot(config, allServices);
     current = currentDeploymentManifest(aws);
-    if (current?.backgroundDeploymentId && !aws.backgroundWorkControl)
-      throw new CliError("cannot disable background ownership control while a controlled deployment is recorded");
-    if (aws.backgroundWorkControl) {
-      if (!current?.backgroundDeploymentId && !services.includes("core"))
-        throw new CliError("enabling background ownership requires deploying core to allocate its identity");
-      reconcileBackgroundPreparation(aws, current, before);
-      if (services.includes("core")) await assertNotBackgroundOwner(config, current);
-    }
     const selected = new Set(services);
     if (allServices.some((service) => !selected.has(service))) {
       current = trustedDeploymentBaseline(
@@ -2525,21 +2404,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         images[service] = await publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
       }
     }
-    let backgroundDeploymentId = current?.backgroundDeploymentId;
-    if (aws.backgroundWorkControl && !backgroundDeploymentId)
-      backgroundDeploymentId = `${aws.services.core!.ecsService}:${releaseId}`;
-    const desired = reportTaskChanges(config, services, images, arns, restart, backgroundDeploymentId);
-    const changedCore = desired.find((item) => item.service === "core" && item.changed);
-    if (aws.backgroundWorkControl && changedCore) {
-      backgroundDeploymentId = `${aws.services.core!.ecsService}:${releaseId}`;
-      changedCore.task = renderTaskDefinition(config, "core", images.core!, arns, backgroundDeploymentId);
-      prepareBackgroundDeployment(aws, {
-        id: releaseId,
-        previousManifestId: current?.id,
-        backgroundDeploymentId,
-        before,
-      });
-    }
+    const desired = reportTaskChanges(config, services, images, arns, restart);
     const targets: Record<string, string> = {};
     for (const item of desired) {
       if (!item.changed) {
@@ -2623,7 +2488,6 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     ) {
       recorded = recordDeploymentManifest(aws, releaseTasks, {
         id: releaseId,
-        ...(backgroundDeploymentId ? { backgroundDeploymentId } : {}),
         counts: releaseCounts,
         imageLabel: label,
         ...(dbRestorePoint ? { dbRestorePoint } : {}),
@@ -2631,7 +2495,6 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         imageProvenance: releaseImageProvenance,
       });
     }
-    if (aws.backgroundWorkControl && changedCore) clearBackgroundPreparation(aws);
     if (recorded && dbRestorePoint) confirmDbRestorePointCovered(config, dbRestorePoint);
     for (const service of candidate ? [] : services) {
       try {
@@ -2805,11 +2668,6 @@ export async function awsRollback(
     } else {
       targetManifest = deploymentManifestForTarget(aws, to);
     }
-    if (currentManifest?.backgroundDeploymentId || targetManifest.backgroundDeploymentId) {
-      if (!aws.backgroundWorkControl || !targetManifest.backgroundDeploymentId)
-        throw new CliError("controlled rollback requires a protocol-capable target deployment");
-      await assertNotBackgroundOwner(config, currentManifest);
-    }
     const missing = services.filter((service) => !targetManifest.tasks[service]);
     if (missing.length)
       throw new CliError(`target AWS deployment manifest is missing workloads: ${missing.join(", ")}`);
@@ -2912,251 +2770,13 @@ export async function awsRollback(
   ok(`rolled back ${config.orgId}`);
 }
 
-export function taskDefinitionForBackgroundWork(
-  task: Record<string, unknown>,
-  enabled: boolean,
-): Record<string, unknown> {
-  const containers = structuredClone(task.containerDefinitions) as Array<Record<string, unknown>> | undefined;
-  const core = containers?.find((container) => container.name === "core");
-  if (!core) throw new CliError("core task definition has no core container");
-  const secrets = core.secrets as Array<{ name: string }> | undefined;
-  if (secrets?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED")) {
-    throw new CliError("BACKGROUND_WORK_ENABLED cannot be changed while supplied as a secret");
-  }
-  const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
-  core.environment = [
-    ...environment.filter((entry) => entry.name !== "BACKGROUND_WORK_ENABLED"),
-    { name: "BACKGROUND_WORK_ENABLED", value: enabled ? "1" : "0" },
-  ];
-  const fields = [
-    "family",
-    "taskRoleArn",
-    "executionRoleArn",
-    "networkMode",
-    "volumes",
-    "placementConstraints",
-    "requiresCompatibilities",
-    "cpu",
-    "memory",
-    "pidMode",
-    "ipcMode",
-    "proxyConfiguration",
-    "inferenceAccelerators",
-    "ephemeralStorage",
-    "runtimePlatform",
-    "enableFaultInjection",
-  ];
-  return {
-    ...Object.fromEntries(fields.flatMap((field) => (task[field] == null ? [] : [[field, task[field]]]))),
-    containerDefinitions: containers,
-  };
-}
-
-function awsBackgroundWorkTransport(
-  config: QmConfig,
-  path = "/v1/background-work",
-  timeoutMs = 30_000,
-  maxResponseBytes?: number,
-  productionRoute = false,
-): BackgroundWorkTransport {
-  const aws = requireAws(config);
-  const secret = (name: string): string =>
-    awsText(aws, [
-      "secretsmanager",
-      "get-secret-value",
-      "--secret-id",
-      `${aws.secretsPrefix}${name}`,
-      "--query",
-      "SecretString",
-    ]);
-  const signing = secret("CORE_SIGNING_SECRET");
-  const control = secret("DEPLOYMENT_CONTROL_SECRET");
-  if (isInvalidSecret("CORE_SIGNING_SECRET", signing) || control.trim().length < 32 || control === signing)
-    throw new CliError("deployment control requires a distinct secret of at least 32 characters");
-  const url = new URL(productionRoute ? (config.apiUrl ?? config.publicUrl) : config.publicUrl);
-  if (productionRoute && (url.protocol !== "https:" || url.username || url.password))
-    throw new CliError("the production background ownership route must be HTTPS without credentials");
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
-  url.search = "";
-  url.hash = "";
-  return (method, body = "") => {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
-      .digest("hex");
-    const init: RequestInit = {
-      method,
-      headers: {
-        "content-type": "application/json",
-        "x-timestamp": String(timestamp),
-        "x-signature": `v0=${signature}`,
-        authorization: `Bearer ${control}`,
-      },
-      ...(method === "POST" ? { body } : {}),
-      redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
-    };
-    return productionRoute
-      ? fetchCore(url, init, maxResponseBytes ?? 65_536)
-      : awsCoreRequest(config, url, init, maxResponseBytes);
-  };
-}
-
-interface AwsBackgroundCohort {
-  deploymentId: string;
-  taskArns: string[];
-  manifest: DeploymentManifest;
-}
-
-export function awsBackgroundWorkBootState(config: QmConfig): { enabled: boolean; deploymentId?: string } | undefined {
-  const aws = requireAws(config);
-  assertAwsCallerAccount(aws);
-  const manifest = currentDeploymentManifest(aws);
-  const taskDefinition = manifest?.tasks.core;
-  if (!taskDefinition) return undefined;
-  const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-    "ecs",
-    "describe-task-definition",
-    "--task-definition",
-    taskDefinition,
-  ]).taskDefinition;
-  const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
-  const core = containers?.filter((container) => container.name === "core");
-  if (core?.length !== 1) throw new CliError("recorded task definition must contain exactly one core container");
-  const secrets = (core[0]!.secrets ?? []) as Array<{ name: string }>;
-  if (secrets.some((secret) => secret.name === "BACKGROUND_WORK_ENABLED" || secret.name === "BACKGROUND_DEPLOYMENT_ID"))
-    throw new CliError("recorded background boot settings cannot be supplied as secrets");
-  const environment = (core[0]!.environment ?? []) as Array<{ name: string; value: string }>;
-  const identities = environment.filter((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID");
-  if (
-    manifest.backgroundDeploymentId
-      ? identities.length !== 1 || identities[0]!.value !== manifest.backgroundDeploymentId
-      : identities.length !== 0
-  )
-    throw new CliError("recorded core task does not match the manifest background deployment identity");
-  const flags = environment.filter((entry) => entry.name === "BACKGROUND_WORK_ENABLED");
-  if (flags.length !== 1 || !["0", "1"].includes(flags[0]!.value))
-    throw new CliError("recorded core task must contain one explicit BACKGROUND_WORK_ENABLED value of 0 or 1");
-  return {
-    enabled: flags[0]!.value === "1",
-    ...(manifest.backgroundDeploymentId ? { deploymentId: manifest.backgroundDeploymentId } : {}),
-  };
-}
-
-async function awsBackgroundCohort(
-  config: QmConfig,
-  configDir: string,
-  candidatePath?: string,
-  waitForReady = true,
-): Promise<AwsBackgroundCohort> {
-  const { aws, workloads } = awsTopology(config, configDir);
-  if (!aws.backgroundWorkControl)
-    throw new CliError("background ownership control is not enabled in the AWS configuration");
-  const manifest = currentDeploymentManifest(aws);
-  if (!manifest?.backgroundDeploymentId)
-    throw new CliError("background ownership requires a manifest-bound deployment identity");
-  const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
-  const states = describedServices(config, workloads);
-  assertOwnedServices(config, states, workloads);
-  const before = serviceSnapshotFromStates(states, workloads);
-  for (const workload of workloads) {
-    if (manifest.tasks[workload] !== before.tasks[workload] || manifest.counts?.[workload] !== before.counts[workload])
-      throw new CliError(`cannot control background work while ${workload} differs from the deployment manifest`);
-    const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-      "ecs",
-      "describe-task-definition",
-      "--task-definition",
-      before.tasks[workload]!,
-    ]).taskDefinition;
-    const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === workload,
-    );
-    if (typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image))
-      throw new CliError(`${workload} does not have a trusted digest-pinned image`);
-    if (
-      candidate &&
-      (container.image !== candidate.images[workload] ||
-        !candidate.imageProvenance[workload] ||
-        canonicalJson(candidate.imageProvenance[workload]) !== canonicalJson(manifest.imageProvenance?.[workload]))
-    )
-      throw new CliError(`${workload} does not match the expected release candidate`);
-    if (workload === "core") {
-      const environment = (container.environment ?? []) as Array<{ name: string; value: string }>;
-      if (
-        environment.find((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID")?.value !==
-        manifest.backgroundDeploymentId
-      )
-        throw new CliError("core task definition does not match the recorded background deployment identity");
-    }
-  }
-  const count = before.counts.core;
-  if (!count) throw new CliError("background ownership requires running core capacity");
-  if (waitForReady)
-    await awaitServiceTargets(config, {
-      core: { taskDefinition: before.tasks.core!, desiredCount: count },
-    });
-  const taskArns =
-    awsJson<{ taskArns?: string[] }>(aws, [
-      "ecs",
-      "list-tasks",
-      "--cluster",
-      aws.cluster,
-      "--service-name",
-      aws.services.core!.ecsService,
-      "--desired-status",
-      "RUNNING",
-    ]).taskArns ?? [];
-  const tasks = chunks(taskArns, 100).flatMap((batch) => {
-    const response = awsJson<{
-      tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; healthStatus?: string }>;
-      failures?: unknown[];
-    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
-    if (response.failures?.length) throw new CliError("cannot prove every running core task identity");
-    return response.tasks ?? [];
-  });
-  const current = tasks.filter(
-    (task) =>
-      task.taskDefinitionArn === before.tasks.core && task.lastStatus === "RUNNING" && task.healthStatus === "HEALTHY",
-  );
-  if (
-    current.length !== count ||
-    current.some((task) => !task.taskArn) ||
-    new Set(current.map((task) => task.taskArn)).size !== count
-  )
-    throw new CliError("core does not have the exact healthy task cohort recorded in its deployment manifest");
-  return { deploymentId: manifest.backgroundDeploymentId, taskArns: current.map((task) => task.taskArn!), manifest };
-}
-
-export async function awsBackgroundWorkStatus(
-  config: QmConfig,
-  configDir: string,
-  candidatePath?: string,
-): Promise<{
-  status: BackgroundWorkStatus;
-  deploymentId: string;
-  taskArns: string[];
-  manifestId: string;
-}> {
-  assertAwsCallerAccount(requireAws(config));
-  const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
-  const status = await readBackgroundWork(awsBackgroundWorkTransport(config), cohort.deploymentId);
-  return { status, deploymentId: cohort.deploymentId, taskArns: cohort.taskArns, manifestId: cohort.manifest.id };
-}
-
-export interface AwsBackgroundWorkCapacity {
-  manifestId: string;
-  deploymentId: string;
-  ownerDeploymentId: string;
-  workloads: Record<string, { taskDefinition: string; deploymentId: string; desiredCount: number; taskArns: string[] }>;
-}
-
 function stableWorkloadCapacity(
   config: QmConfig,
   workload: string,
   state: EcsServiceState,
   taskDefinition: string,
   desiredCount: number | undefined,
-): AwsBackgroundWorkCapacity["workloads"][string] {
+): { taskDefinition: string; deploymentId: string; desiredCount: number; taskArns: string[] } {
   const aws = requireAws(config);
   const primary = state.deployments?.filter((deployment) => deployment.status === "PRIMARY") ?? [];
   const deployment = primary[0];
@@ -3231,194 +2851,6 @@ function stableWorkloadCapacity(
   return { taskDefinition, deploymentId: deployment.id, desiredCount, taskArns: live.sort() };
 }
 
-export async function awsBackgroundWorkCapacity(
-  config: QmConfig,
-  configDir: string,
-  candidatePath?: string,
-): Promise<AwsBackgroundWorkCapacity> {
-  const { aws, workloads } = awsTopology(config, configDir);
-  assertAwsCallerAccount(aws);
-  const cohort = await awsBackgroundCohort(config, configDir, candidatePath, false);
-  const transport = awsBackgroundWorkTransport(config);
-  const ownership = await readBackgroundWork(transport, cohort.deploymentId);
-  if (!ownership.ownerDeploymentId || ownership.ownerDeploymentId === cohort.deploymentId)
-    throw new CliError("capacity requires background ownership held by another deployment");
-  const states = describedServices(config, workloads);
-  assertOwnedServices(config, states, workloads);
-  const snapshot = serviceSnapshotFromStates(states, workloads);
-  assertBackgroundPreparationResolved(aws, cohort.manifest, snapshot);
-  const proof: AwsBackgroundWorkCapacity = {
-    manifestId: cohort.manifest.id,
-    deploymentId: cohort.deploymentId,
-    ownerDeploymentId: ownership.ownerDeploymentId,
-    workloads: {},
-  };
-  for (const workload of [...workloads].sort()) {
-    proof.workloads[workload] = stableWorkloadCapacity(
-      config,
-      workload,
-      states.get(workload)!,
-      cohort.manifest.tasks[workload]!,
-      cohort.manifest.counts?.[workload],
-    );
-  }
-  if (canonicalJson(proof.workloads.core?.taskArns) !== canonicalJson([...cohort.taskArns].sort()))
-    throw new CliError("core task cohort changed while checking capacity");
-  const finalManifest = currentDeploymentManifest(aws);
-  if (canonicalJson(finalManifest) !== canonicalJson(cohort.manifest))
-    throw new CliError("deployment manifest changed while checking capacity");
-  assertBackgroundPreparationResolved(aws, finalManifest, snapshot);
-  const finalOwnership = await readBackgroundWork(transport, cohort.deploymentId);
-  if (finalOwnership.ownerDeploymentId !== proof.ownerDeploymentId)
-    throw new CliError("background ownership changed while checking capacity");
-  return proof;
-}
-
-export async function awsStoppedCoreOwner(
-  config: QmConfig,
-  deploymentId: string,
-): Promise<BackgroundWorkStatus | undefined> {
-  const state = describedServices(config, ["core"]).get("core");
-  if (!state || state.desiredCount !== 0) return undefined;
-  stableWorkloadCapacity(config, "core", state, state.taskDefinition ?? "", 0);
-  return readProductionOwner(awsBackgroundWorkTransport(config, undefined, undefined, undefined, true), deploymentId);
-}
-
-async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentManifest | undefined): Promise<void> {
-  if (!current?.backgroundDeploymentId) return;
-  if (await awsStoppedCoreOwner(config, current.backgroundDeploymentId)) return;
-  const status = await readBackgroundWork(awsBackgroundWorkTransport(config), current.backgroundDeploymentId);
-  if (status.ownerDeploymentId === current.backgroundDeploymentId)
-    throw new CliError("hand background ownership to another deployment before replacing the current core tasks");
-}
-
-export async function awsSetBackgroundWork(
-  config: QmConfig,
-  configDir: string,
-  enabled: boolean,
-  candidatePath?: string,
-  expectedOwnership?: Pick<BackgroundWorkStatus, "ownerDeploymentId">,
-): Promise<BackgroundWorkStatus | undefined> {
-  const { aws, workloads } = awsTopology(config, configDir);
-  if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
-  const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
-  assertAwsCallerAccount(aws);
-  const confirmed = await withAwsLease(aws, async () => {
-    const current = currentDeploymentManifest(aws);
-    if (!current) throw new CliError("background work requires a recorded deployment");
-    const states = describedServices(config, workloads);
-    assertOwnedServices(config, states, workloads);
-    const before = serviceSnapshotFromStates(states, workloads);
-    for (const workload of workloads) {
-      if (
-        current.tasks[workload] !== before.tasks[workload] ||
-        current.counts?.[workload] !== before.counts[workload]
-      ) {
-        throw new CliError(`cannot change background work while ${workload} differs from the deployment manifest`);
-      }
-    }
-    if (!before.counts.core) throw new CliError("cannot change background work while core is scaled down");
-    let coreTask: Record<string, unknown> | undefined;
-    for (const workload of candidate ? workloads : ["core"]) {
-      const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        before.tasks[workload]!,
-      ]).taskDefinition;
-      const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-        (item) => item.name === workload,
-      );
-      if (!task || typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image)) {
-        throw new CliError(`${workload} does not have a trusted digest-pinned image`);
-      }
-      if (
-        candidate &&
-        (container.image !== candidate.images[workload] ||
-          !candidate.imageProvenance[workload] ||
-          canonicalJson(candidate.imageProvenance[workload]) !== canonicalJson(current.imageProvenance?.[workload]))
-      ) {
-        throw new CliError(`${workload} does not match the expected release candidate`);
-      }
-      if (workload === "core") coreTask = task;
-    }
-    if (aws.backgroundWorkControl) {
-      const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
-      const transport = awsBackgroundWorkTransport(config);
-      const status = await readBackgroundWork(transport, cohort.deploymentId);
-      if (expectedOwnership && status.ownerDeploymentId !== expectedOwnership.ownerDeploymentId)
-        throw new CliError("background ownership changed since promotion; refusing automatic compensation");
-      if (!enabled && status.ownerDeploymentId !== null && status.ownerDeploymentId !== cohort.deploymentId)
-        throw new CliError("cannot disable background work on a different deployment's current owner");
-      const ownerDeploymentId = enabled ? cohort.deploymentId : null;
-      if (status.ownerDeploymentId !== ownerDeploymentId)
-        await setBackgroundOwner(transport, cohort.deploymentId, {
-          ownerDeploymentId,
-          expectedOwnerDeploymentId: status.ownerDeploymentId,
-        });
-      return awaitBackgroundWork(
-        transport,
-        cohort.deploymentId,
-        { ownerDeploymentId, active: enabled, instances: cohort.taskArns.length },
-        { timeoutMs: envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000), pollMs: 1000 },
-      );
-    }
-    if (expectedOwnership) throw new CliError("ownership preconditions require controlled background work");
-    if (current.backgroundDeploymentId)
-      throw new CliError("controlled background work cannot fall back to task replacement");
-    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
-    const core = (coreTask!.containerDefinitions as Array<Record<string, unknown>>).find(
-      (item) => item.name === "core",
-    )!;
-    const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
-    const currentFlag = environment.find((entry) => entry.name === "BACKGROUND_WORK_ENABLED")?.value;
-    const timeoutMs = envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
-    if (currentFlag === (enabled ? "1" : "0")) {
-      await awaitServiceTargets(
-        config,
-        {
-          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core },
-        },
-        timeoutMs,
-      );
-      return;
-    }
-    const dir = mkdtempSync(join(tmpdir(), "qm-background-work-"));
-    try {
-      const file = join(dir, "core.json");
-      writeFileSync(file, JSON.stringify(desired));
-      const target = registerTaskDefinition(config, file);
-      await applyServiceTargets(config, { core: target }, { core: before.counts.core }, { timeoutMs });
-      try {
-        recordDeploymentManifest(
-          aws,
-          { ...before.tasks, core: target },
-          {
-            counts: current.counts,
-            imageLabel: current.imageLabel,
-            dbRestorePoint: current.dbRestorePoint,
-            layer: current.layer,
-            imageProvenance: current.imageProvenance,
-          },
-        );
-      } catch (error) {
-        const failures: string[] = [];
-        try {
-          await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core }, { timeoutMs });
-          manifestTransaction(aws, current, current.id);
-        } catch (restoreError) {
-          failures.push(`restoring background work: ${errMessage(restoreError)}`);
-        }
-        throwAfterCompensation(error, failures);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-  ok(`background work ${enabled ? "enabled" : "disabled"}`);
-  return confirmed;
-}
-
 function envValues(configDir: string, path: string | undefined): Map<string, string> {
   const file = resolve(path ?? join(configDir, ".env"));
   if (!existsSync(file)) {
@@ -3454,8 +2886,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
     }
     await withAwsLease(aws, async () => {
       const baseline = currentDeploymentManifest(aws);
-      if (baseline?.backgroundDeploymentId && !aws.backgroundWorkControl)
-        throw new CliError("controlled secret activation cannot fall back to a legacy task definition");
       const states = describedServices(config, workloads);
       assertOwnedServices(config, states, workloads);
       const before = baseline ? serviceSnapshotFromStates(states, workloads) : undefined;
@@ -3484,7 +2914,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       );
       if (baseline && before) {
         for (const workload of affected) {
-          if (aws.backgroundWorkControl && workload === "core") continue;
           const live = awsJson<{ taskDefinition?: { runtimePlatform?: { cpuArchitecture?: string } } }>(aws, [
             "ecs",
             "describe-task-definition",
@@ -3496,24 +2925,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
           if (architecture !== expected)
             throw new CliError(
               `cannot rotate secrets while ${workload} uses ${architecture} but its configuration selects ${expected}; set aws.services.${workload}.architecture to match the deployed image or rebuild it with qm up --build-from`,
-            );
-        }
-      }
-      if (baseline?.backgroundDeploymentId) {
-        for (const secret of staged.filter((item) =>
-          ["DEPLOYMENT_CONTROL_SECRET", "CORE_SIGNING_SECRET"].includes(item.name),
-        )) {
-          const existing = awsText(aws, [
-            "secretsmanager",
-            "get-secret-value",
-            "--secret-id",
-            secret.id,
-            "--query",
-            "SecretString",
-          ]);
-          if (existing !== readFileSync(secret.file, "utf8"))
-            throw new CliError(
-              `${secret.name} cannot be rotated while controlled task cohorts are deployed; coordinated control credential rotation is required`,
             );
         }
       }
@@ -3540,12 +2951,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       if (!baseline || !before) {
         if (affected.length) step("secret activation deferred to the first complete AWS deployment");
         return;
-      }
-      if (aws.backgroundWorkControl && affected.includes("core")) {
-        note(
-          "core secret activation deferred: pause or hand over background ownership, then run qm up --restart core to allocate a new deployment identity",
-        );
-        affected.splice(affected.indexOf("core"), 1);
       }
       for (const [component, host, marker, expected] of [
         ["admin", "web-ui", "ADMIN_ENABLED", "1"],
@@ -3589,7 +2994,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         ) {
           throw new CliError(`cannot rotate secrets while ${workload} lacks a trusted digest-pinned image`);
         }
-        const desired = renderTaskDefinition(config, workload, container.image, arns, baseline.backgroundDeploymentId);
+        const desired = renderTaskDefinition(config, workload, container.image, arns);
         if (!taskDefinitionChanges(desired, live).length) continue;
         const dir = mkdtempSync(join(tmpdir(), "qm-task-"));
         try {
@@ -4761,17 +4166,18 @@ async function checkLive(
     }
     if (state.taskDefinition !== expectedTask)
       failures.push(`${service}: service task does not match deployment manifest ${manifest.id}`);
-    const live =
+    const recorded =
       awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
         "ecs",
         "describe-task-definition",
         "--task-definition",
         expectedTask,
       ]).taskDefinition ?? null;
-    if (!live) {
+    if (!recorded) {
       failures.push(`${service}: no live task definition`);
       continue;
     }
+    const live = withoutRetiredCoreSettings(config, service, recorded);
     const container = (live.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
       (item) => item.name === service,
     );
@@ -4781,7 +4187,7 @@ async function checkLive(
         item.value,
       ]),
     );
-    const expectedEnv = workloadEnvironment(config, service, manifest.backgroundDeploymentId);
+    const expectedEnv = workloadEnvironment(config, service);
     if (canonicalJson(liveEnv) !== canonicalJson(expectedEnv))
       failures.push(`${service}: environment drift (including live-only keys)`);
     const expectedSecrets = workloadSecrets(config, service, arns)
@@ -4799,10 +4205,9 @@ async function checkLive(
         failures.push(`${service}: image drift (live ${container.image}, desired ${desiredImage})`);
       }
       const comparisonImage = desiredImage ?? `${repository}@sha256:${"0".repeat(64)}`;
-      const fields = taskDefinitionDiff(
-        renderTaskDefinition(config, service, comparisonImage, arns, manifest.backgroundDeploymentId),
-        live,
-      ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`);
+      const fields = taskDefinitionDiff(renderTaskDefinition(config, service, comparisonImage, arns), live).filter(
+        (field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`,
+      );
       if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
     }
   }
@@ -4845,17 +4250,7 @@ async function checkLive(
   }
   if (!failures.length) {
     try {
-      const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
-      if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
-        const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
-        await checkControlledLiveSession({
-          before: cohort,
-          read: () => awsBackgroundWorkStatus(config, configDir),
-          request: (body) => transport("POST", body),
-        });
-      } else {
-        await awsLiveSession(config, states.get("core")!);
-      }
+      await awsLiveSession(config, states.get("core")!);
       if (opts.report ?? true) step("core: private live session smoke passed");
     } catch (error) {
       failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
