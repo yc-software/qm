@@ -1,3 +1,4 @@
+import { swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { inTenantOf } from "../tenants/claim.ts";
@@ -52,7 +53,8 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   function settle(run: Run): void {
     if (!isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
+    for (const listener of terminalListeners)
+      void inTenantOf(run.tenantId, () => listener(run)).catch(swallowAs("runs: terminal listener", undefined));
   }
 
   const store: RunStore = {
