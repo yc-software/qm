@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createPostgresCronRows } from "../src/cron/cron-table.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
@@ -145,7 +145,10 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
         (await claims.due(Date.now())).map((c) => c.id),
         [a.id],
       );
-      await assert.rejects(crons.due(Date.now()), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => crons.due(Date.now())),
+        /No tenant is bound/,
+      );
       await ownerRows.close();
     },
   );
@@ -173,8 +176,14 @@ test(
         const kept = await withTenant(tenant, () => crons.get(mine.id));
         assert.equal(kept?.enabled, true);
         assert.equal(kept?.title, undefined);
-        await assert.rejects(crons.get(mine.id), /No tenant is bound/);
-        await assert.rejects(crons.create(input({ action: "unbound" })), /No tenant is bound/);
+        await assert.rejects(
+          withoutTenant(() => crons.get(mine.id)),
+          /No tenant is bound/,
+        );
+        await assert.rejects(
+          withoutTenant(() => crons.create(input({ action: "unbound" }))),
+          /No tenant is bound/,
+        );
       },
     );
   },

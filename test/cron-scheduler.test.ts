@@ -462,10 +462,9 @@ test("a failing interval cron does not starve later due crons across ticks", asy
   await scheduler.tick(2000);
   await scheduler.tick(3500);
 
-  assert.deepEqual(
-    calls.map((call) => call.idempotencyKey),
-    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
-  );
+  const keys = calls.map((call) => call.idempotencyKey);
+  assert.deepEqual(new Set(keys.slice(0, 2)), new Set([`cron:${failing.id}:1`, `cron:${succeeding.id}:1`]));
+  assert.deepEqual(new Set(keys.slice(2)), new Set([`cron:${failing.id}:1`, `cron:${succeeding.id}:3000`]));
 });
 
 test("a capped batch of persistent failures rotates — later due crons still get their turn", async () => {

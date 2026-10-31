@@ -10,7 +10,7 @@ import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createPostgresShipGrantRows } from "../src/loops/ship-grant-table.ts";
 import { createPostgresIngressDeliveryRows, createPostgresIngressSourceRows } from "../src/loops/ingress-table.ts";
 import type { IngressDelivery, LoopIngress } from "../src/loops/ingress.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
@@ -175,9 +175,18 @@ test(
         assert.equal((await store.grantStore.byLoop(loop.id)).length, 1);
         assert.ok(await store.sources.get("s1"));
       });
-      await assert.rejects(store.loopStore.get(loop.id), /No tenant is bound/);
-      await assert.rejects(store.ledger.byLoop(loop.id), /No tenant is bound/);
-      await assert.rejects(store.loopStore.create(loopInput({ name: "Unbound" })), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => store.loopStore.get(loop.id)),
+        /No tenant is bound/,
+      );
+      await assert.rejects(
+        withoutTenant(() => store.ledger.byLoop(loop.id)),
+        /No tenant is bound/,
+      );
+      await assert.rejects(
+        withoutTenant(() => store.loopStore.create(loopInput({ name: "Unbound" }))),
+        /No tenant is bound/,
+      );
     });
   },
 );
@@ -405,8 +414,14 @@ test("ingress sources and deliveries queue per tenant and background claims span
         stale.map((l) => [l.tenantId, l.name]),
         [[tenant, "Inbox"]],
       );
-      await assert.rejects(store.sources.enabled(), /No tenant is bound/);
-      await assert.rejects(store.loopStore.inboxLoops(), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => store.sources.enabled()),
+        /No tenant is bound/,
+      );
+      await assert.rejects(
+        withoutTenant(() => store.loopStore.inboxLoops()),
+        /No tenant is bound/,
+      );
     } finally {
       await owner.close();
     }

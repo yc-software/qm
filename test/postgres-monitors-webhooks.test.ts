@@ -4,7 +4,7 @@ import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createPostgresMonitorRows } from "../src/monitors/monitor-table.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createPostgresWebhookRows } from "../src/webhooks/webhook-table.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
@@ -65,7 +65,10 @@ test("monitors are watched per thread, claimed across tenants and swept only whe
           new Set((await claims.enabled()).map((m) => `${m.tenantId}/${m.id}`)),
           new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`]),
         );
-        await assert.rejects(monitors.enabled(), /No tenant is bound/);
+        await assert.rejects(
+          withoutTenant(() => monitors.enabled()),
+          /No tenant is bound/,
+        );
         await withTenant(otherTenant, () => monitors.setEnabled(b.id, false));
         assert.equal(await claims.deleteDefunct(Date.now()), 0);
         assert.equal(await claims.deleteDefunct(Date.now() + 9 * DAY), 1);
@@ -160,7 +163,10 @@ test("webhooks dedupe per tenant and keep the newest events per webhook", { skip
         assert.notEqual(twin.id, mine.id);
       });
       assert.equal((await withTenant(tenant, () => webhooks.get(mine.id)))?.action, "triage the event");
-      await assert.rejects(webhooks.list(), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => webhooks.list()),
+        /No tenant is bound/,
+      );
     },
   );
 });

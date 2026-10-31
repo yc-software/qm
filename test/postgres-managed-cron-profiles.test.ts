@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresMemoryTidyProfiles } from "../src/memory/tidy-profiles.ts";
 import { createPostgresSuggestedActivityProfiles } from "../src/suggestions/activity-profiles.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -26,7 +26,10 @@ test("memory tidy claims are per tenant and update atomically", { skip }, async 
         assert.equal(await profiles.update("channel:C1", () => ({ cronId: "stolen" })), null);
       });
       assert.deepEqual(await withTenant(tenant, () => profiles.get("channel:C1")), { cronId: "c1" });
-      await assert.rejects(profiles.get("channel:C1"), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => profiles.get("channel:C1")),
+        /No tenant is bound/,
+      );
     },
   );
 });

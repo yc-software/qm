@@ -1,10 +1,31 @@
 import { test } from "node:test";
+import pg from "pg";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+
+const RUN_COLUMNS: Record<string, string> = {
+  status: "status",
+  attempts: "attempts",
+  leaseToken: "lease_token",
+  leaseExpiresAt: "lease_expires_at",
+};
+
+async function invalidateRow(url: string, runId: string, fields: Partial<Run>): Promise<void> {
+  const entries = Object.entries(fields);
+  const db = new pg.Pool({ connectionString: url });
+  try {
+    await db.query(
+      `UPDATE runs SET ${entries.map(([key], i) => `${RUN_COLUMNS[key]} = $${i + 2}`).join(", ")} WHERE id = $1`,
+      [runId, ...entries.map(([, value]) => value)],
+    );
+  } finally {
+    await db.end();
+  }
+}
 
 const invalidRuns: Record<string, Partial<Run>> = {
   completed: { status: "done" },
@@ -29,8 +50,9 @@ for (const [name, fields] of Object.entries(invalidRuns)) {
       };
       if (atCommit) {
         const update = f.store.update.bind(f.store);
-        f.store.update = (...args) => {
+        f.store.update = async (...args) => {
           invalidate();
+          await invalidateRow(f.url, f.caller.claims.runId!, fields);
           return update(...args);
         };
       } else invalidate();

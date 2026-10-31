@@ -135,6 +135,7 @@ export async function swarmFixture(
     };
   };
   return {
+    url,
     service,
     serviceOptions,
     store,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import type { Principal } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
@@ -60,8 +60,14 @@ test("mail is confined to its tenant and unbound access fails closed", { skip },
       (await withTenant(otherTenant, () => store.pending("inbox"))).map((row) => row.text),
       ["other"],
     );
-    await assert.rejects(store.pending("inbox"), /No tenant is bound/);
-    await assert.rejects(store.send(message("n", "inbox", 1)), /No tenant is bound/);
+    await assert.rejects(
+      withoutTenant(() => store.pending("inbox")),
+      /No tenant is bound/,
+    );
+    await assert.rejects(
+      withoutTenant(() => store.send(message("n", "inbox", 1))),
+      /No tenant is bound/,
+    );
   });
 });
 

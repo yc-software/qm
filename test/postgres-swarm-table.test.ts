@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresSwarmRows } from "../src/swarms/swarm-table.ts";
 import type { SwarmStorage } from "../src/swarms/swarm-store.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -87,14 +87,23 @@ test("writes round-trip every field and pending claims page across tenants", { s
       (await withTenant(tenant, () => store.pending(undefined, 10))).map((row) => [row.id, row.tenantId]),
       [["s1", tenant]],
     );
-    await assert.rejects(store.pending(undefined, 10), /No tenant is bound/);
+    await assert.rejects(
+      withoutTenant(() => store.pending(undefined, 10)),
+      /No tenant is bound/,
+    );
     await withTenant(tenant, () => store.write("s1", (current) => ({ ...current!, pending: false })));
     assert.deepEqual(
       (await asOwner(url, (owner) => owner.pending(undefined, 10))).map((row) => row.tenantId),
       [otherTenant, otherTenant],
     );
-    await assert.rejects(store.get("s1"), /No tenant is bound/);
-    await assert.rejects(store.write("s4", put(swarm("s4"))), /No tenant is bound/);
+    await assert.rejects(
+      withoutTenant(() => store.get("s1")),
+      /No tenant is bound/,
+    );
+    await assert.rejects(
+      withoutTenant(() => store.write("s4", put(swarm("s4")))),
+      /No tenant is bound/,
+    );
   });
 });
 
