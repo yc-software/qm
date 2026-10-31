@@ -17,4 +17,4 @@ The file is gbrain's bytes, unchanged, so `sha256sum qm-memory-provider-v1.json`
 3. Run `node --test test/gbrain-memory-provider.test.ts`. A failure names the request field or outcome that no longer matches; fix QM or the recipe, never the fixture.
 4. Repeat the recipe's [Verify](../../../docs/memory-providers.md#verify) steps against a brain running that release.
 
-A new contract version (`v2.json`) is a new fixture beside this one, not an edit to it.
+QM targets one gbrain contract at a time, so a new contract version replaces this fixture, its test expectations and the recipe's pinned version in one change.

@@ -122,6 +122,7 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
     if (!ARG.test(name)) throw new Error(`${at}.${key} is invalid`);
     out[key] = name;
   }
+  if (out.factsArg && out.contentArg) throw new Error(`${at} sets both factsArg and contentArg; keep one`);
   return out;
 }
 

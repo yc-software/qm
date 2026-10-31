@@ -56,7 +56,6 @@ export function createMcpMemoryProvider(opts: {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
       const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
-      if (opts.attestActor && actor === undefined) return 0;
       const provenance = context?.conversationScopeId ?? scopeId;
       const args: Record<string, unknown> = op.factsArg
         ? { [op.factsArg]: facts.map((fact) => ({ fact, provenance })) }

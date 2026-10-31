@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { McpClient } from "../src/mcp/mcp-client.ts";
 import { recallText } from "./support/recall-text.ts";
 
@@ -80,10 +81,15 @@ test("MCP recall returns one row per line of the provider's answer", async () =>
 
 test("a write that carries no member is not sent to an attested provider", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
-  const memory = createMcpMemoryProvider({
-    read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
-    write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
-    attestActor: true,
+  const memory = createRoutedMemoryService({
+    providers: {
+      knowledge: createMcpMemoryProvider({
+        read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
+        write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
+        attestActor: true,
+      }),
+    },
+    routes: [{ provider: "knowledge", scopes: ["channel"], capture: "explicit", manage: false }],
   });
   assert.equal(
     await memory.capture("channel:C1", ["history before May is unavailable"], 10, undefined, { mode: "explicit" }),

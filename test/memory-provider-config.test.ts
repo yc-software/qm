@@ -172,6 +172,21 @@ test("attestActor is an opt-in boolean on mcp providers only", () => {
   );
 });
 
+test("a write operation maps its facts with factsArg or contentArg, not both", () => {
+  const write = (fields: Record<string, unknown>) => {
+    const parsed = JSON.parse(value) as { providers: Array<{ write: Record<string, unknown> }> };
+    parsed.providers[0]!.write = { ...parsed.providers[0]!.write, ...fields };
+    const provider = parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.providers[0];
+    return provider?.type === "mcp" ? provider.write : undefined;
+  };
+  assert.equal(write({ factsArg: "facts" })?.factsArg, "facts");
+  assert.equal(write({ contentArg: "text" })?.contentArg, "text");
+  assert.throws(
+    () => write({ factsArg: "facts", contentArg: "text" }),
+    /memory provider knowledge\.write sets both factsArg and contentArg; keep one/,
+  );
+});
+
 test("an attested provider cannot manage a notebook, because notebook reads carry no member", () => {
   const route = (fields: Record<string, unknown>) => {
     const parsed = JSON.parse(withProvider({ attestActor: true })) as { routes: Array<Record<string, unknown>> };

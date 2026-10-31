@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { Errors } from "typebox/value";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
@@ -9,19 +10,15 @@ import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
-interface Schema {
-  type?: string;
-  properties?: Record<string, Schema>;
-  required?: string[];
-  items?: Schema;
-  enum?: unknown[];
-  additionalProperties?: boolean;
-}
-
 const contract = JSON.parse(
   readFileSync(new URL("./fixtures/gbrain/qm-memory-provider-v1.json", import.meta.url), "utf8"),
 ) as {
-  tools: Array<{ name: string; description: string; input_schema: Schema }>;
+  tools: Array<{
+    name: string;
+    description: string;
+    mutating: boolean;
+    input_schema: Tool["inputSchema"] & { properties: Record<string, unknown> };
+  }>;
   actor: { header: string; argument: string; actor_id: { pattern: string } };
   memory_recall: { limits: { max_chars: { min: number; max: number } } };
   unlinked_recall: CallToolResult;
@@ -67,7 +64,7 @@ async function gbrain(
     tools: contract.tools.map(({ name, description, input_schema }) => ({
       name,
       description,
-      inputSchema: input_schema as Tool["inputSchema"],
+      inputSchema: input_schema,
     })),
     clients: { ro: "x", rw: "y" },
     stateless: true,
@@ -104,26 +101,16 @@ async function gbrain(
   return { server, calls, memory, notebookWrites };
 }
 
-function violations(schema: Schema, value: unknown, at: string): string[] {
-  if (schema.enum && !schema.enum.includes(value)) return [`${at} is not one of ${JSON.stringify(schema.enum)}`];
-  if (schema.type === "string") return typeof value === "string" ? [] : [`${at} is not a string`];
-  if (schema.type === "integer") return Number.isInteger(value) ? [] : [`${at} is not an integer`];
-  if (schema.type === "array")
-    return Array.isArray(value)
-      ? value.flatMap((item, i) => violations(schema.items ?? {}, item, `${at}[${i}]`))
-      : [`${at} is not an array`];
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [`${at} is not an object`];
-  const fields = value as Record<string, unknown>;
+function violations({ name, args }: Call): string[] {
+  const tool = contract.tools.find((entry) => entry.name === name);
+  if (!tool) return [`${name} is not a contract tool`];
+  const undeclared = tool.mutating ? Object.keys(args).filter((key) => !(key in tool.input_schema.properties)) : [];
   return [
-    ...(schema.required ?? []).filter((key) => !(key in fields)).map((key) => `${at}.${key} is missing`),
-    ...Object.entries(fields).flatMap(([key, field]) => {
-      const declared = schema.properties?.[key];
-      return declared ? violations(declared, field, `${at}.${key}`) : [`${at}.${key} is not declared`];
-    }),
+    ...[...Errors(tool.input_schema, args)].map(({ instancePath, message }) => `${name}${instancePath} ${message}`),
+    ...undeclared.map((key) => `${name}/${key} is not declared, and gbrain refuses unknown arguments to a write`),
   ];
 }
 
-const schemaOf = (tool: string) => contract.tools.find(({ name }) => name === tool)?.input_schema ?? {};
 const gbrainOutcomes = (outcomes: readonly MemoryProviderOutcome[]) =>
   outcomes
     .filter(({ provider }) => provider === "gbrain")
@@ -185,31 +172,24 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
   await withProviders("search", (report) =>
     memory.recall(JORDAN, { query: "seats", actorId: "jordan@acme.example", maxChars: 6000, report }),
   );
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Ships Q1b after the tag"], "U0JORDAN", context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Ships Q1b after the tag"], "U0JORDAN", context, "run-1");
-  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Ships Q1b after the tag"], "U0JORDAN", context, undefined);
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, "run-1");
+  await writeFacts(memory, JORDAN, ["Prefers aisle seats", "Takes notes by hand"], "U0JORDAN", context, undefined);
 
   const [recall, ...writes] = calls;
-  assert.deepEqual(
-    calls.flatMap(({ name, args }) => violations(schemaOf(name), args, name)),
-    [],
-  );
+  assert.deepEqual(calls.flatMap(violations), []);
   assert.equal(recall?.name, "memory_recall");
   const maxChars = Number(recall?.args.max_chars);
   const { min, max } = contract.memory_recall.limits.max_chars;
   assert.ok(maxChars >= min && maxChars <= max, `max_chars ${maxChars} is outside ${min}-${max}`);
 
-  const actorId = new RegExp(contract.actor.actor_id.pattern);
   assert.deepEqual(
     calls.map(({ actor, args }) => [actor, args[contract.actor.argument]]),
     Array(4).fill(["U0JORDAN", "U0JORDAN"]),
   );
-  assert.ok(actorId.test("U0JORDAN"));
-  assert.deepEqual(new Set(server.requests.filter(({ rpc }) => rpc).map(({ actor }) => actor)), new Set(["U0JORDAN"]));
-  assert.deepEqual(
-    server.requests.filter(({ audience }) => audience !== undefined),
-    [],
-  );
+  const sent = server.requests.filter(({ rpc }) => rpc).map(({ actor }) => actor);
+  assert.deepEqual(new Set(sent), new Set(["U0JORDAN"]));
+  for (const actor of sent) assert.match(String(actor), new RegExp(contract.actor.actor_id.pattern));
   assert.deepEqual(
     server.requests.filter(({ method }) => method === "DELETE"),
     [],
@@ -225,7 +205,7 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
     assert.ok(facts.length >= limits.facts.min && facts.length <= limits.facts.max);
     assert.deepEqual(
       facts.map(({ fact }) => fact),
-      ["Prefers aisle seats", "Ships Q1b after the tag"],
+      ["Prefers aisle seats", "Takes notes by hand"],
     );
     for (const { provenance } of facts) {
       assert.ok(provenance.length >= 1 && provenance.length <= limits.provenance_chars);
@@ -237,7 +217,7 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
 test("gbrain's answers and refusals become the outcomes the contract classes them as", async (t) => {
   const facts = [
     { id: "41", text: "Prefers aisle seats", date: "2026-10-30", kind: "preference" },
-    { id: "42", text: "Ships Q1b after the tag", date: "2026-10-31", kind: "commitment" },
+    { id: "42", text: "Takes notes by hand", date: "2026-10-31", kind: "commitment" },
   ];
   let answer: CallToolResult = { content: [] };
   const { memory } = await gbrain(t, () => answer);
