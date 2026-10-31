@@ -1208,7 +1208,6 @@ class PaneTab implements ITabRenderer {
     if (entry) {
       const title = entry.kind.title(entry.id);
       const count = entry.kind.badge(entry.id);
-      this.element.title = dockApi?.panels.length === 1 ? title : "";
       render(
         html`
           <span class="pane-kind-glyph">${icon(entry.kind.glyph, 12)}</span>
