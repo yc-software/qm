@@ -19,7 +19,7 @@ import {
   spawnTask,
   TaskCancelled,
 } from "./absurd.ts";
-import { TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
+import { ABSURD_MIGRATION, TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
 
 const TURN_TASK = "turn";
@@ -581,7 +581,7 @@ function upkeep(
 }
 
 export function createTurnLedger(connectionString: string, opts: { onTerminal?: (run: Run) => void } = {}): TurnLedger {
-  const db: PgPool = createPgPool(connectionString, [TURN_LEDGER_MIGRATION]);
+  const db: PgPool = createPgPool(connectionString, [ABSURD_MIGRATION, TURN_LEDGER_MIGRATION]);
   const ctx: LedgerContext = {
     db,
     tx: async (fn) => withPgTransaction(await db.pool(), fn),
