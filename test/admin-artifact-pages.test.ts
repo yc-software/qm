@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-artifacts-")) }));
@@ -23,7 +24,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE_ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE_ADMIN = { "x-admin-actor": "admin-alice" };
 const json = async (r: Response): Promise<any> => r.json();
 
 test("per-kind artifact reads are scope-filtered, authz-gated, and audited", async () => {
@@ -84,7 +85,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
       assert.equal(
         (
           await fetch(`${s.base}/v1/admin/${kind}?scope=personal:U1`, {
-            headers: { "x-admin-actor": "nobody@default-org" },
+            headers: { "x-admin-actor": "nobody" },
           })
         ).status,
         403,
@@ -244,17 +245,18 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
     );
     assert.equal(mismatched.ownerScopeId, "personal:U1", "the response reports the skill's own scope");
     const orgGot = await json(
-      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
     );
     assert.equal(orgGot.id, made.id, "an org scope reads any skill");
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/skills/does-not-exist?scope=org:default-org`, { headers: ALICE_ADMIN })).status,
+      (await fetch(`${s.base}/v1/admin/skills/does-not-exist?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }))
+        .status,
       404,
     );
     assert.equal(
       (
         await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=personal:U1`, {
-          headers: { "x-admin-actor": "nobody@default-org" },
+          headers: { "x-admin-actor": "nobody" },
         })
       ).status,
       403,
@@ -296,20 +298,26 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
     });
     s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" });
 
-    const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const crons = await json(
+      await fetch(`${s.base}/v1/admin/crons?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
+    );
     assert.deepEqual(
       crons.crons.map((c: any) => c.ownerScopeId).sort(),
       ["channel:C9", "personal:U1"],
       "org scope lists every scope's crons, labelled with their owner scope",
     );
 
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const skills = await json(
+      await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
+    );
     assert.ok(
       skills.skills.some((k: any) => k.ownerScopeId === "personal:U1"),
       "org scope includes other scopes' skills (alongside the seeded org ones)",
     );
 
-    const errors = await json(await fetch(`${s.base}/v1/admin/errors?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const errors = await json(
+      await fetch(`${s.base}/v1/admin/errors?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
+    );
     assert.deepEqual(
       errors.errors.map((e: any) => e.scopeLabel).sort(),
       ["channel:C9", "personal:U1"],
@@ -322,7 +330,7 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       "a non-org scope still filters",
     );
     const bySession = await json(
-      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-1`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/errors?scope=${TEST_ROOT_SCOPE}&sessionId=sess-1`, { headers: ALICE_ADMIN }),
     );
     assert.deepEqual(
       bySession.errors.map((e: any) => e.code),
@@ -330,13 +338,15 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       "sessionId narrows to that session's errors (the transcript error strip)",
     );
     const noSession = await json(
-      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-none`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/errors?scope=${TEST_ROOT_SCOPE}&sessionId=sess-none`, { headers: ALICE_ADMIN }),
     );
     assert.deepEqual(noSession.errors, [], "an unknown sessionId matches nothing");
 
-    const audit = await json(await fetch(`${s.base}/v1/admin/audit?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const audit = await json(
+      await fetch(`${s.base}/v1/admin/audit?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
+    );
     assert.ok(
-      audit.events.some((e: any) => e.scopeLabel !== "org:default-org"),
+      audit.events.some((e: any) => e.scopeLabel !== TEST_ROOT_SCOPE),
       "org scope sees admin activity on every scope, not just org-labelled events",
     );
   } finally {
@@ -353,23 +363,25 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
       ref: "main",
       syncMode: "pinned",
       trustTier: "third-party",
-      targetScopeId: "org:default-org",
+      targetScopeId: TEST_ROOT_SCOPE,
       subset: "all",
       createdBy: "admin-alice",
     });
     const imported = await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "from-pack", description: "imported", requiredCapabilities: [], body: "..." },
       createdBy: `pack:${pack.id}`,
       pack: { packId: pack.id, commit: "abc123", upstreamName: "from-pack" },
     });
     await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "homegrown", description: "local", requiredCapabilities: [], body: "..." },
       createdBy: "system:plugin-skills",
     });
 
-    const list = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const list = await json(
+      await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
+    );
     const listImported = list.skills.find((k: any) => k.name === "from-pack");
     assert.deepEqual(
       listImported.pack,
@@ -384,7 +396,7 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
     );
 
     const detail = await json(
-      await fetch(`${s.base}/v1/admin/skills/${imported.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${imported.id}?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN }),
     );
     assert.deepEqual(
       detail.pack,
@@ -415,7 +427,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
         headers: { ...actor, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-    assert.equal((await put({ runtime }, "personal:U1", { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put({ runtime }, "personal:U1", { "x-admin-actor": "nobody" })).status, 403);
     assert.equal((await put({ runtime }, "channel:C9")).status, 403);
     assert.equal((await put({ runtime: { ...runtime, modelId: "unavailable" } })).status, 400);
     assert.equal((await put({ runtime, action: "replace the task" })).status, 400);

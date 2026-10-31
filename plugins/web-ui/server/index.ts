@@ -40,7 +40,6 @@ import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
 import {
   CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
@@ -837,15 +836,18 @@ async function postTurnAndMint(
   relay(res, r);
 }
 
-async function userPermissions(): Promise<string[]> {
-  if (!CORE_SIGNING_SECRET) return [];
+async function coreWhoami(): Promise<{ permissions: string[]; tenant: string | null }> {
+  if (!CORE_SIGNING_SECRET) return { permissions: [], tenant: null };
   try {
     const r = await coreFetchCap("GET", "/v1/admin/whoami");
-    if (r.status !== 200) return [];
-    const j = JSON.parse(r.text) as { permissions?: unknown };
-    return Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [];
+    if (r.status !== 200) return { permissions: [], tenant: null };
+    const j = JSON.parse(r.text) as { permissions?: unknown; tenant?: unknown };
+    return {
+      permissions: Array.isArray(j.permissions) ? j.permissions.filter((p): p is string => typeof p === "string") : [],
+      tenant: typeof j.tenant === "string" ? j.tenant : null,
+    };
   } catch {
-    return [];
+    return { permissions: [], tenant: null };
   }
 }
 
@@ -1428,8 +1430,8 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       res.setHeader("set-cookie", sessionCookie(user));
-      const [allPermissions, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
-        userPermissions(),
+      const [who, workspaceUrl, authStatus, activityConfig, companyBranding] = await Promise.all([
+        coreWhoami(),
         slackWorkspaceUrl(),
         coreFetch("GET", `/v1/user-model-auth/status?principalId=${encodeURIComponent(user)}`, "", 5_000).catch(
           () => null,
@@ -1450,14 +1452,14 @@ const apiRoutes: readonly WebRoute[] = [
         account?: string;
         connections?: { provider: string }[];
       };
-      const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
+      const permissions = who.permissions.filter((permission) => permission !== "loops" && permission !== "inbox");
       if (await hasInboxLoopPreview(user)) {
         if (isLoopsUser(user)) permissions.push("loops");
         if (isInboxUser(user)) permissions.push("inbox");
       }
       return json(res, 200, {
         user,
-        org: ORG,
+        org: who.tenant,
         companyName: companyBranding.orgName?.trim() || null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
@@ -3477,10 +3479,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
-      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
-        org: ORG,
-        publicUrl: PUBLIC_URL,
-      });
+      return handleVoiceRoute(req, res, path, resolveIdentity(req)!, { publicUrl: PUBLIC_URL });
     }
 
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
@@ -3585,9 +3584,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     .then((v) => {
       vite = v;
       server.listen(PORT, () => {
-        console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
-        );
+        console.log(`[web-ui] surface on http://localhost:${PORT} → core ${CORE}${WEB_UI_DEV ? " [vite hmr]" : ""}`);
         if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)

@@ -28,7 +28,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): OrchestratorInput => ({
   surface: "test",
@@ -88,7 +87,7 @@ function gatedAgent() {
 }
 
 function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mca-")));
@@ -103,7 +102,7 @@ function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

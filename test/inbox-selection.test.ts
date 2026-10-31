@@ -23,7 +23,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
     outputs: createLoopOutputStore(testMap()),
     grants: createShipGrantStore(testMap()),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-    config: testConfigStore("org"),
+    config: testConfigStore(),
   };
   const uiState = testMap<PersistedUiState>();
   const call = async (method = "GET", body: unknown = null, query = "", actor = "alice") => {

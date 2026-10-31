@@ -29,7 +29,6 @@ export function open(token: string | null | undefined, key: Buffer): Record<stri
 export interface SessionClaims {
   k: "session";
   sub: string;
-  org: string;
   name?: string;
   auth?: number;
   anon?: boolean;
@@ -42,7 +41,6 @@ export interface ImpersonationClaims {
   k: "impersonate";
   actor: string;
   target: string;
-  org: string;
   iat: number;
   exp: number;
 }
@@ -61,22 +59,12 @@ export function openSession(
   token: string | null,
   key: Buffer,
   now: number,
-  expectedOrg?: string,
   maxAgeSeconds?: number,
 ): SessionClaims | null {
   const p = open(token, key);
   if (!p || p.k !== "session") return null;
-  if (
-    typeof p.sub !== "string" ||
-    !p.sub ||
-    typeof p.org !== "string" ||
-    !p.org ||
-    typeof p.iat !== "number" ||
-    typeof p.exp !== "number"
-  )
-    return null;
+  if (typeof p.sub !== "string" || !p.sub || typeof p.iat !== "number" || typeof p.exp !== "number") return null;
   if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
-  if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
   if (maxAgeSeconds !== undefined && now >= (authenticatedAt + maxAgeSeconds) * 1000) return null;
@@ -88,7 +76,7 @@ export function openImpersonation(token: string | null, key: Buffer, now: number
   if (!p || p.k !== "impersonate") return null;
   if (typeof p.actor !== "string" || !p.actor) return null;
   if (typeof p.target !== "string" || !p.target) return null;
-  if (typeof p.org !== "string" || typeof p.exp !== "number") return null;
+  if (typeof p.exp !== "number") return null;
   if (now >= p.exp * 1000) return null;
   return p as unknown as ImpersonationClaims;
 }

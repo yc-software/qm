@@ -29,6 +29,7 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -61,7 +62,7 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
       parentSeq: null,
       type: "user",
       payload: { text: "sign up" },
-      scopeLabel: "org:default-org",
+      scopeLabel: TEST_ROOT_SCOPE,
       createdAt: 1,
     },
     {
@@ -70,7 +71,7 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
       parentSeq: null,
       type: "tool_call",
       payload: { tool: "execute", command: "browse", callId: "c1" },
-      scopeLabel: "org:default-org",
+      scopeLabel: TEST_ROOT_SCOPE,
       createdAt: 2,
     },
     {
@@ -79,7 +80,7 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
       parentSeq: null,
       type: "tool_result",
       payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
-      scopeLabel: "org:default-org",
+      scopeLabel: TEST_ROOT_SCOPE,
       createdAt: 3,
     },
     {
@@ -88,7 +89,7 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
       parentSeq: null,
       type: "assistant",
       payload: { text: "done" },
-      scopeLabel: "org:default-org",
+      scopeLabel: TEST_ROOT_SCOPE,
       createdAt: 4,
     },
   ];

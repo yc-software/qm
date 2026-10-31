@@ -43,7 +43,6 @@ Object.assign(process.env, {
   PORTAL_PUBLIC_URL: origin,
   PORTAL_SESSION_SECRET: sessionSecret,
   CORE_SIGNING_SECRET: coreSecret,
-  CORE_ORG_ID: "invite-test",
   CORE_API_URL: upstreamUrl,
   WEB_UI_UPSTREAM: upstreamUrl,
   ADMIN_UPSTREAM: upstreamUrl,
@@ -120,7 +119,7 @@ test("redemption signs the core request and issues a session for the verified te
   const cookies = response.headers.getSetCookie();
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("portal_session="))!;
   const token = sessionCookie.split(";")[0]!.slice("portal_session=".length);
-  const session = openSession(token, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), "invite-test");
+  const session = openSession(token, deriveKey(sessionSecret, "portal.session.v1"), Date.now());
   assert.equal(session?.sub, "teammate@example.test");
   assert.ok(session?.auth);
   assert.match(sessionCookie, /HttpOnly/);

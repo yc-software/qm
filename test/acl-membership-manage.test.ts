@@ -5,6 +5,7 @@ import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const CHAN = scopeId("channel", "C1");
 const GROUP = scopeId("group", "G1");
@@ -67,7 +68,7 @@ test("without a membership predicate, channel/group grants pass unguarded (narro
 
 test("org/team home scopes are not membership-managed: grants pass unguarded as before", async () => {
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), { manages });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const team = scopeId("team", "eng");
   await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
   await acl.grant(grant({ ownerScopeId: team, grantedBy: "someone" }));

@@ -13,6 +13,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from ".
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 
@@ -67,7 +68,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   const get = (path: string, headers: Record<string, string> = {}) => fetch(`${base}${path}`, { headers });
 
   const U1 = scopeId("personal", "U1");
-  const ORG = scopeId("org", "default-org");
+  const ORG = TEST_ROOT_SCOPE;
 
   it("reads and searches another authorized notebook but never writes it", async () => {
     await built.memory.capture(ORG, ["other scope fact"], Date.parse("2026-10-01T12:00:00Z"));

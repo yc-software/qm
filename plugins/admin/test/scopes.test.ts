@@ -39,7 +39,7 @@ test("GET /api/scopes (the scope directory) forwards to /v1/admin/scopes signed 
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/scopes");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -57,7 +57,7 @@ test("GET /api/scopes/<id>/export forwards to the config-export endpoint, query 
   assert.equal(r.status, 200);
   const c = calls.at(-1)!;
   assert.equal(c.url, "/v1/admin/scopes/org%3Aacme/export?secrets=include");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -67,7 +67,7 @@ test("GET /api/resources forwards to the governable-resource manifest, signed + 
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/resources");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -77,7 +77,7 @@ test("GET /api/connector-catalog forwards the live connector catalog signed + at
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/connectors/catalog");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 

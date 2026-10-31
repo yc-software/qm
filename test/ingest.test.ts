@@ -5,6 +5,7 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import { createSkillPackStore } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const md = (front: string, body = "# Body\ntext") => `---\n${front}\n---\n${body}`;
 
@@ -57,7 +58,7 @@ test("planIngest classifies eligibility with reasons and excludes by config", ()
 
 test("importPack publishes eligible skills with provenance + assets; native publish untouched", async () => {
   const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const native = await store.create({
     scopeId: org,
     manifest: { name: "publish", description: "native", requiredCapabilities: [], body: "# native" },
@@ -102,7 +103,7 @@ test("re-import is idempotent (all skipped on the second run)", async () => {
     syncMode: "pinned",
     trustTier: "third-party",
     config: { exclude: ["trusted/*"] },
-    targetScopeId: scopeId("org", "acme"),
+    targetScopeId: TEST_ROOT_SCOPE,
     subset: "all",
     createdBy: "u1",
   });

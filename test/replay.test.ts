@@ -10,6 +10,7 @@ import {
   selectOverheardToImport,
 } from "../src/agent/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
   return {
@@ -18,7 +19,7 @@ function entry(type: SessionEntry["type"], text: string): SessionEntry {
     parentSeq: null,
     type,
     payload: { text },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: 0,
   };
 }
@@ -30,13 +31,13 @@ function overheardEntry(ts: string, name: string, text: string, files?: string[]
     parentSeq: null,
     type: "user",
     payload: { overheard: true, ts, name, text, ...(files ? { files } : {}) },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: Number(ts) || 0,
   };
 }
 
 function ent(type: SessionEntry["type"], payload: unknown, seq = 0): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt: seq };
 }
 
 function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>): void {
@@ -322,7 +323,7 @@ function triggerEntry(ts: string, text: string): SessionEntry {
     parentSeq: null,
     type: "user",
     payload: { text, ts },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: Number(ts) || 0,
   };
 }

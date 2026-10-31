@@ -231,7 +231,7 @@ garbage-collects an abandoned visitor's scope yet.
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
+`WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.

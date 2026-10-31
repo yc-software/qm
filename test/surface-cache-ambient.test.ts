@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -581,7 +582,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setBaseModel(TEST_ROOT_SCOPE, "gpt-5.6-sol");
   built.runtime.start();
   try {
     const container = "C-admin-base";

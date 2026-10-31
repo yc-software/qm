@@ -22,7 +22,6 @@ export function mintDesktopLogin(
       k: "desktop-login",
       aud: origin,
       sub: session.sub,
-      org: session.org,
       name: session.name,
       auth: session.auth ?? session.iat,
       sessionExp: session.exp,
@@ -42,7 +41,6 @@ export function openDesktopLogin(
   state: string,
   secret: string,
   origin: string,
-  org: string,
   maxAge: number,
   nowMs = Date.now(),
 ) {
@@ -54,7 +52,6 @@ export function openDesktopLogin(
     p.k !== "desktop-login" ||
     p.appOnly !== undefined ||
     p.aud !== origin ||
-    p.org !== org ||
     typeof p.sub !== "string" ||
     !p.sub ||
     typeof p.auth !== "number" ||
@@ -84,7 +81,6 @@ export function openDesktopLogin(
   const session: SessionClaims = {
     k: "session",
     sub: p.sub,
-    org,
     auth: p.auth,
     iat: now,
     exp: p.sessionExp,

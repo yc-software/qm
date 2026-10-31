@@ -2,14 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { composioUserId } from "../src/api/routes/composio.ts";
+import { composioNamespaceReader, composioUserId } from "../src/tenants/tenant-record.ts";
 import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-media.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { orgId } from "../src/config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -34,7 +34,7 @@ const cap: CapabilityClaims = {
 };
 const xAccount = {
   id: "ca_alice",
-  user_id: composioUserId(orgId(), "alice"),
+  user_id: composioUserId(TEST_TENANT, "alice"),
   status: "ACTIVE",
   toolkit: { slug: "twitter" },
 };
@@ -54,6 +54,7 @@ async function fixture() {
   const audits: string[] = [];
   const deps: Partial<ServerDeps> = {
     keychain,
+    composioNamespace: composioNamespaceReader(null),
     serviceCreds: keychain,
     auditLog: { record: (e: { action: string }) => audits.push(e.action) } as unknown as ServerDeps["auditLog"],
     runs: {
@@ -157,7 +158,7 @@ test("images larger than one proxy request are appended in ordered segments", as
 
 test("other owners, inactive or disabled accounts and non-X connections are refused before uploading", async () => {
   for (const account of [
-    { ...xAccount, user_id: composioUserId(orgId(), "bob") },
+    { ...xAccount, user_id: composioUserId(TEST_TENANT, "bob") },
     { ...xAccount, id: "ca_bob" },
     { ...xAccount, status: "EXPIRED" },
     { ...xAccount, is_disabled: true },

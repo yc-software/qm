@@ -56,7 +56,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       outputs: createLoopOutputStore(testMap()),
       grants: createShipGrantStore(testMap()),
       crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-      config: testConfigStore("org"),
+      config: testConfigStore(),
     },
     crons: new Map(),
     sent: [],

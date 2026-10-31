@@ -25,3 +25,5 @@ export function boundUrl(url: string, id = TEST_TENANT): string {
   bound.searchParams.set("options", `${options ? `${options} ` : ""}-c qm.tenant_id=${id}`);
   return bound.toString();
 }
+
+export const TEST_ROOT_SCOPE = `org:${TEST_TENANT}`;

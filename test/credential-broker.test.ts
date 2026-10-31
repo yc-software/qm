@@ -5,6 +5,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "super-secret-bearer";
 
@@ -49,7 +50,7 @@ function captureFetch(): {
 const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) => ({
   claims: claims(["x-firehose"]),
   body: { credential: "x-firehose", method: "GET", url: "https://api.x.com/2/tweets/search/recent?query=ai" },
-  orgScopeId: "org:default-org",
+  orgScopeId: TEST_ROOT_SCOPE,
   reader: reader({ slug: "x-firehose", allowedMethods: ["GET"], allowedPathPrefixes: ["/2/tweets/search/"] }),
   fetchImpl: captureFetch().fetch,
   ...over,
@@ -388,7 +389,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
     const result = await brokerCredentialCall({
       claims: claims(["relay"]),
       body: { credential: "relay", url: "https://child.example.test/read" },
-      orgScopeId: "org:default-org",
+      orgScopeId: TEST_ROOT_SCOPE,
       reader: reader({ slug: "relay", host: "example.test", injection: { actor } }),
       fetchImpl: cap.fetch,
     });
@@ -399,7 +400,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
   const result = await brokerCredentialCall({
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test/read" },
-    orgScopeId: "org:default-org",
+    orgScopeId: TEST_ROOT_SCOPE,
     reader: reader({ slug: "relay", host: "example.test", injection: { actor: true } }),
     fetchImpl: cap.fetch,
   });
@@ -412,7 +413,7 @@ test("actor attestation rejects alternate ports before sending credentials", asy
   const result = await brokerCredentialCall({
     claims: claims(["relay"]),
     body: { credential: "relay", url: "https://example.test:8443/read" },
-    orgScopeId: "org:default-org",
+    orgScopeId: TEST_ROOT_SCOPE,
     reader: reader({ slug: "relay", host: "example.test", injection: { actor: true } }),
     fetchImpl: cap.fetch,
   });

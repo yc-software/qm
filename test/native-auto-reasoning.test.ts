@@ -6,6 +6,7 @@ import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 
@@ -184,7 +185,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
   const { resolveRuntimeChoice } = await import("../src/agent/runtime-choice.ts");
   const { createRuntimeService } = await import("../src/agent/runtime-control.ts");
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);
   const service = createRuntimeService({ config }, { authorizesCapabilityScope: async () => true });
@@ -192,7 +193,7 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   for (const effort of ["adaptive", "default"]) {
     const result = await service(claims, active, { action: "set", effort, lifetime: "scope" });
     assert.equal(result.ok, true);
-    assert.equal((await resolveRuntimeChoice(config, "org:default-org", "personal:test", active)).effortLevel, effort);
+    assert.equal((await resolveRuntimeChoice(config, TEST_ROOT_SCOPE, "personal:test", active)).effortLevel, effort);
   }
   assert.deepEqual(
     await service(claims, active, { action: "set", effort: "adaptive", model: "gpt-6-astra", lifetime: "scope" }),
@@ -201,12 +202,12 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   assert.equal(config.getRuntimeSelection("personal:test")?.effortLevel, "default");
   await assert.rejects(
     async () =>
-      await resolveRuntimeChoice(config, "org:default-org", "personal:test", active, {
+      await resolveRuntimeChoice(config, TEST_ROOT_SCOPE, "personal:test", active, {
         modelId: "gpt-6-astra",
         effortLevel: "adaptive",
       }),
     /not supported/,
   );
   await config.setRuntimeSelection("personal:test", active);
-  assert.equal((await resolveRuntimeChoice(config, "org:default-org", "personal:test", active)).effortLevel, "auto");
+  assert.equal((await resolveRuntimeChoice(config, TEST_ROOT_SCOPE, "personal:test", active)).effortLevel, "auto");
 });

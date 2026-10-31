@@ -70,7 +70,7 @@ test("GET /api/files/download streams the core attachment with actor + signature
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/files/download?id=art-abc123");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -104,7 +104,7 @@ test("POST /api/files/upload stages the body, then registers it with the admin a
   const reg = calls.at(-1)!;
   assert.equal(reg.method, "POST");
   assert.equal(reg.url, "/v1/admin/files/upload?scope=personal%3AU1");
-  assert.equal(reg.actor, "U-admin@acme");
+  assert.equal(reg.actor, "U-admin");
   assert.equal(reg.signed, true);
 });
 

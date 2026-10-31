@@ -107,7 +107,6 @@ test("sliding renewal preserves the anon flag", async () => {
   const aged: SessionClaims = {
     k: "session",
     sub: "playground-deadbeef",
-    org: process.env.CORE_ORG_ID ?? "acme",
     name: "Guest",
     anon: true,
     auth: now - SESSION_TTL_S / 2 - 600,

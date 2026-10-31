@@ -21,6 +21,7 @@ import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createPostgresDirectoryStore(testDatabaseUrl());
@@ -285,7 +286,7 @@ test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope lab
     current: tc,
     emit: (e) => void emitted.push(e as never),
     scopeLabel: scopeId("personal", "U1"),
-    orgScopeId: scopeId("org", "default-org"),
+    orgScopeId: TEST_ROOT_SCOPE,
   };
   const [execute] = createAgentTools(ref, { reachExec: true });
   const r = await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });

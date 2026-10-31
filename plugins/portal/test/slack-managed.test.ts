@@ -21,7 +21,6 @@ process.env.PORTAL_PUBLIC_URL = "http://portal.test";
 process.env.PORTAL_SESSION_SECRET = "managed-test-session-secret";
 process.env.PORTAL_IDENTITY_SECRET = "managed-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "managed-test-core-secret";
-process.env.CORE_ORG_ID = "test";
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 process.env.WEB_UI_UPSTREAM = process.env.CORE_API_URL;
 process.env.ADMIN_UPSTREAM = process.env.CORE_API_URL;

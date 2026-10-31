@@ -10,8 +10,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+const ADMIN = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
 const md = (front: string) => `---\n${front}\n---\n# Body\ntext`;
 
@@ -128,7 +129,7 @@ test("register → browse → import → list → remove a git skill pack (org s
     );
     const id = reg.pack.id as string;
     assert.ok(id);
-    assert.equal(reg.pack.targetScopeId, "org:default-org");
+    assert.equal(reg.pack.targetScopeId, TEST_ROOT_SCOPE);
     assert.equal(reg.pack.syncMode, "pinned");
     assert.equal(
       reg.pack.available,
@@ -157,7 +158,7 @@ test("register → browse → import → list → remove a git skill pack (org s
     const cat2 = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
     assert.deepEqual(
       cat2.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.importedScopes,
-      ["org:default-org"],
+      [TEST_ROOT_SCOPE],
       "an imported skill reports the scope it landed in on re-browse",
     );
 
@@ -168,11 +169,11 @@ test("register → browse → import → list → remove a git skill pack (org s
       "shared files bundled; per-skill scripts + trusted/* excluded",
     );
 
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     const alpha = skills.skills.find((k: any) => k.name === "reg-alpha");
     assert.ok(alpha, "imported skill is listed");
     assert.equal(alpha.status, "published");
-    assert.equal(alpha.ownerScopeId, "org:default-org");
+    assert.equal(alpha.ownerScopeId, TEST_ROOT_SCOPE);
 
     const list = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
     assert.equal(list.packs.length, 1);
@@ -203,11 +204,11 @@ test("pack removal and re-import identify pack skills by their pack record, not 
     );
     const id = reg.pack.id as string;
     const lookalike = await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
       createdBy: `pack:${id}`,
     });
-    await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
+    await s.built.skills.review(lookalike.id, "admin-alice", []);
     await s.built.skills.publish(lookalike.id);
 
     const imp = await json(
@@ -261,7 +262,7 @@ test("a legacy published skill with an unsafe name does not block unrelated pack
   const s = start();
   try {
     const legacy = await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "legacy-safe", description: "legacy", requiredCapabilities: [], body: "legacy" },
       createdBy: "legacy-import",
     });
@@ -332,7 +333,7 @@ test("supporting files are namespaced per pack, so same paths never clobber", as
       (await s.built.skillBundles.get(idB))?.files.find((f) => f.path === "lib/shared.mjs")?.content,
       'export const who = "col-beta";',
     );
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     assert.ok(skills.skills.some((k: any) => k.name === "col-beta"));
   } finally {
     rmSync(a.dir, { recursive: true, force: true });
@@ -442,7 +443,7 @@ test("pack removal waits for an in-flight reconciliation and leaves no orphan re
     assert.equal((await importing).status, 200);
     assert.equal((await removing).status, 200);
     assert.equal(await s.built.skillBundles.get(id), null);
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     assert.ok(!skills.skills.some((skill: any) => skill.createdBy === `pack:${id}`));
     const packs = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
     assert.ok(!packs.packs.some((pack: any) => pack.id === id));
@@ -592,7 +593,7 @@ test("re-import archives removed/renamed/now-ineligible skills and keeps unchang
       "deleted + renamed-from + now-personal are archived",
     );
 
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     const published = skills.skills
       .filter((k: any) => k.status === "published")
       .map((k: any) => k.name)
@@ -674,7 +675,7 @@ test("sync refreshes IMPORTED skills (update + archive) but does NOT add un-impo
     assert.equal(afterSync.packs[0].lastImport.counts.archived, 1, "the removed imported skill counts as archived");
 
     const published = (
-      await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
+      await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }))
     ).skills
       .filter((k: any) => k.status === "published")
       .map((k: any) => k.name);
@@ -703,17 +704,17 @@ test("a single imported skill can be un-indexed (archived) via DELETE /admin/ski
       headers: ADMIN,
       body: JSON.stringify({ selected: "all" }),
     });
-    let skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    let skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     const alpha = skills.skills.find((k: any) => k.name === "reg-alpha");
     assert.equal(alpha.status, "published");
 
-    const del = await fetch(`${s.base}/v1/admin/skills/${alpha.id}?scope=org:default-org`, {
+    const del = await fetch(`${s.base}/v1/admin/skills/${alpha.id}?scope=${TEST_ROOT_SCOPE}`, {
       method: "DELETE",
       headers: ADMIN,
     });
     assert.equal(del.status, 200);
 
-    skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     const after = skills.skills.find((k: any) => k.name === "reg-alpha");
     assert.ok(!after || after.status === "archived", "the un-indexed skill is no longer published");
     assert.equal(
@@ -732,7 +733,7 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
   const s = start();
   try {
     const seeded = await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "reg-alpha", description: "bundled default", requiredCapabilities: [], body: "bundled" },
       createdBy: "system:skills-seed",
     });
@@ -758,9 +759,9 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
     });
     assert.equal(blockedImport.status, 200);
     assert.deepEqual((await json(blockedImport)).imported, []);
-    assert.equal((await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill?.id, seeded.id);
+    assert.equal((await s.built.skills.resolve("reg-alpha", [TEST_ROOT_SCOPE])).skill?.id, seeded.id);
 
-    const archived = await fetch(`${s.base}/v1/admin/skills/${seeded.id}?scope=org:default-org`, {
+    const archived = await fetch(`${s.base}/v1/admin/skills/${seeded.id}?scope=${TEST_ROOT_SCOPE}`, {
       method: "DELETE",
       headers: ADMIN,
     });
@@ -781,11 +782,11 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
     assert.equal(imported.status, 200);
     assert.deepEqual((await json(imported)).imported, ["reg-alpha"]);
     assert.equal((await s.built.skills.get(seeded.id))?.status, "archived");
-    const replacement = (await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill;
+    const replacement = (await s.built.skills.resolve("reg-alpha", [TEST_ROOT_SCOPE])).skill;
     assert.ok(replacement);
     assert.notEqual(replacement.id, seeded.id);
     assert.equal(replacement.createdBy, `pack:${id}`);
-    assert.equal(replacement.scopeId, "org:default-org");
+    assert.equal(replacement.scopeId, TEST_ROOT_SCOPE);
     assert.equal(replacement.manifest.description, "a");
   } finally {
     rmSync(repo.dir, { recursive: true, force: true });
@@ -836,7 +837,7 @@ test("remove then re-register the same repo re-imports cleanly (no stuck-archive
       ["reg-alpha", "reg-beta"],
       "re-add re-imports (delete-on-remove cleared the tombstones)",
     );
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
+    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }));
     assert.equal(
       skills.skills.filter((k: any) => k.name === "reg-alpha" && k.status === "published").length,
       1,
@@ -852,7 +853,7 @@ test("skill-pack routes are admin-only and audited", async () => {
   const s = start();
   try {
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/skill-packs`, { headers: { "x-admin-actor": "nobody@default-org" } })).status,
+      (await fetch(`${s.base}/v1/admin/skill-packs`, { headers: { "x-admin-actor": "nobody" } })).status,
       403,
     );
     await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN });
@@ -885,17 +886,17 @@ test("imports a pack into MULTIPLE scopes at once; catalog reports per-scope; im
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+        body: JSON.stringify({ selected: "all", scopeIds: [TEST_ROOT_SCOPE, "personal:admin-alice"] }),
       }),
     );
     assert.equal(imp.imported.length, 4, "2 eligible skills × 2 scopes = 4 installs");
 
-    assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["reg-alpha", "reg-beta"]);
+    assert.deepEqual(await packSkillsIn(s.base, TEST_ROOT_SCOPE, id), ["reg-alpha", "reg-beta"]);
     assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["reg-alpha", "reg-beta"]);
 
     const cat = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
     assert.deepEqual(cat.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.importedScopes.sort(), [
-      "org:default-org",
+      TEST_ROOT_SCOPE,
       "personal:admin-alice",
     ]);
 
@@ -943,7 +944,7 @@ test("re-importing into ONE scope archives only that scope's deselected skills, 
     await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
       method: "POST",
       headers: ADMIN,
-      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+      body: JSON.stringify({ selected: "all", scopeIds: [TEST_ROOT_SCOPE, "personal:admin-alice"] }),
     });
 
     const imp2 = await json(
@@ -956,7 +957,7 @@ test("re-importing into ONE scope archives only that scope's deselected skills, 
     assert.deepEqual(imp2.archived, ["scoped-b"], "alice's deselected skill is archived");
 
     assert.deepEqual(
-      await packSkillsIn(s.base, "org:default-org", id),
+      await packSkillsIn(s.base, TEST_ROOT_SCOPE, id),
       ["scoped-a", "scoped-b"],
       "the OTHER scope's skills are untouched",
     );
@@ -1006,7 +1007,7 @@ test("sync refreshes EVERY scope the pack was imported into", async () => {
     await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
       method: "POST",
       headers: ADMIN,
-      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+      body: JSON.stringify({ selected: "all", scopeIds: [TEST_ROOT_SCOPE, "personal:admin-alice"] }),
     });
 
     writeSkill("ms-a", "CHANGED");
@@ -1025,7 +1026,7 @@ test("sync refreshes EVERY scope the pack was imported into", async () => {
     );
     assert.equal(synced.imported.length, 0, "sync adds nothing new");
 
-    assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["ms-a"]);
+    assert.deepEqual(await packSkillsIn(s.base, TEST_ROOT_SCOPE, id), ["ms-a"]);
     assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["ms-a"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1081,7 +1082,7 @@ test("a pack skill whose name collides with a native skill in ANOTHER scope stil
   const s = start();
   try {
     const nat = await s.built.skills.create({
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       manifest: { name: "shared-name", description: "native", requiredCapabilities: [], body: "x" },
       createdBy: "system:native",
     });
@@ -1104,8 +1105,8 @@ test("a pack skill whose name collides with a native skill in ANOTHER scope stil
     assert.deepEqual((await json(imp)).imported, ["shared-name"], "the pack skill imports into its own scope");
     assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", reg.pack.id), ["shared-name"]);
     const orgNative = (
-      await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
-    ).skills.find((k: any) => k.name === "shared-name" && k.ownerScopeId === "org:default-org");
+      await json(await fetch(`${s.base}/v1/admin/skills?scope=${TEST_ROOT_SCOPE}`, { headers: ADMIN }))
+    ).skills.find((k: any) => k.name === "shared-name" && k.ownerScopeId === TEST_ROOT_SCOPE);
     assert.equal(orgNative?.status, "published", "the org native skill is untouched");
   } finally {
     rmSync(dir, { recursive: true, force: true });

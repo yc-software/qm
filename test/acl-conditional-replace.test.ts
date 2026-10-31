@@ -4,8 +4,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Grant } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const owner = "org:default-org";
+const owner = TEST_ROOT_SCOPE;
 const ref = "service-cred:k";
 
 test("conditional grant compensation preserves a newer full-tuple write", async () => {

@@ -22,7 +22,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE = { "x-admin-actor": "admin-alice" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await fetch(base + path, { headers })).json();
 
@@ -286,7 +286,7 @@ test("the mirror is org-admin only and requires a container or query", async () 
   try {
     await seed(s.built);
     for (const path of ["/v1/admin/slack-mirror", "/v1/admin/slack-mirror/messages?container=C1"]) {
-      const r = await fetch(s.base + path, { headers: { "x-admin-actor": "stranger@default-org" } });
+      const r = await fetch(s.base + path, { headers: { "x-admin-actor": "stranger" } });
       assert.equal(r.status, 403, path);
     }
     const bad = await fetch(s.base + "/v1/admin/slack-mirror/messages", { headers: ALICE });

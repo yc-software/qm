@@ -52,7 +52,7 @@ import type {
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
-import { orgId } from "../config.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -698,7 +698,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenantRootScope()) : false));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -1153,7 +1153,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
+      await deps.skillsReady?.();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1596,7 +1596,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
+        const browseSteps = deps.config?.getBrowseMaxSteps(tenantRootScope());
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }

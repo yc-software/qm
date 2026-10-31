@@ -11,8 +11,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "policy-route-")) }));
@@ -27,7 +28,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
 }
 
 const putPolicy = (base: string, b: unknown) =>
-  fetch(`${base}/v1/admin/scopes/org:default-org/command-policy`, {
+  fetch(`${base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/command-policy`, {
     method: "PUT",
     headers: ADMIN,
     body: JSON.stringify(b),

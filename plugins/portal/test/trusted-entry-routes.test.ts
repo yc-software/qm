@@ -55,7 +55,6 @@ const upstream = createServer((req, res) => {
       assert.equal(grant.purpose, "trusted-entry-admin");
       assert.equal(grant.subject, "person-7");
       assert.equal(grant.issuer, issuer);
-      assert.equal(grant.org, "org:test-company");
       res.statusCode = adminAvailable ? 200 : 503;
       return res.end(JSON.stringify({ ok: adminAvailable }));
     }
@@ -84,7 +83,6 @@ Object.assign(process.env, {
   NODE_ENV: "test",
   PORTAL_PUBLIC_URL: "http://127.0.0.1:19998",
   PORTAL_SESSION_SECRET: sessionSecret,
-  CORE_ORG_ID: "test-company",
   CORE_API_URL: issuer,
   CORE_SIGNING_SECRET: "test-core-secret",
   PORTAL_IDENTITY_SECRET: identitySecret,
@@ -147,7 +145,7 @@ test("trusted route issues an ordinary scoped session, clears transient cookies,
     .find((cookie) => cookie.startsWith("portal_session="))!
     .split(";")[0]!
     .slice("portal_session=".length);
-  const session = openSession(sessionCookie, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), "test-company");
+  const session = openSession(sessionCookie, deriveKey(sessionSecret, "portal.session.v1"), Date.now());
   assert.ok(session);
   assert.match(session.sub, /^oidc:/);
   assert.notEqual(session.sub, "admin@example.test");

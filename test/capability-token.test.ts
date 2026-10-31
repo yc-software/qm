@@ -30,7 +30,7 @@ test("large room capabilities fit an 8 KiB header without losing authorization c
     teamIds: ["engineering", `team-${i % 4}`],
   }));
   const c = claims({ members, keychainMembers: members.filter((p) => p.type === "internal"), grants: ["read"] });
-  const value = { orgId: "default-org", ...c };
+  const value = { ...c };
   const legacy = await mintSignedPayload(value, SECRET);
   assert.ok(Buffer.byteLength(legacy) > 16 * 1024);
   assert.equal(await mintCapabilityToken(c, SECRET), legacy);
@@ -75,15 +75,12 @@ test("compressed capability envelopes reject malformed and oversized claims", as
 test("mint → verify round-trips the claims", async () => {
   const c = claims();
   const got = await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET);
-  assert.deepEqual(got, { orgId: "default-org", ...c });
+  assert.deepEqual(got, c);
 });
 
 test("grants round-trip and reject malformed claims", async () => {
   const granted = claims({ grants: ["admin.sessions.read"] });
-  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(granted, SECRET), SECRET), {
-    orgId: "default-org",
-    ...granted,
-  });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(granted, SECRET), SECRET), granted);
   for (const grants of ["admin.sessions.read", ["admin.sessions.read", 1]]) {
     assert.equal(
       await verifyCapabilityToken(
@@ -97,10 +94,7 @@ test("grants round-trip and reject malformed claims", async () => {
 
 test("timezone claims must be valid IANA timezone strings", async () => {
   const c = claims({ timezone: "America/Los_Angeles" });
-  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET), {
-    orgId: "default-org",
-    ...c,
-  });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET), c);
 
   for (const timezone of ["", " America/Los_Angeles ", "not-a-zone", "x".repeat(65), 12]) {
     assert.equal(
@@ -177,10 +171,7 @@ test("blob-transfer verification enforces its audience-specific grant", async ()
 
 test("a deployment claim round-trips and must be a non-empty string", async () => {
   const c = claims({ deployment: "dpl-1" });
-  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET), {
-    orgId: "default-org",
-    ...c,
-  });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(c, SECRET), SECRET), c);
   for (const deployment of [7, "", null] as unknown[]) {
     const token = await mintCapabilityToken(claims({ deployment } as Partial<CapabilityClaims>), SECRET);
     assert.equal(await verifyCapabilityToken(token, SECRET), null, `deployment=${JSON.stringify(deployment)}`);
@@ -189,10 +180,7 @@ test("a deployment claim round-trips and must be a non-empty string", async () =
 
 test("session and run-attempt claims round-trip and reject malformed values", async () => {
   const bound = claims({ sessionId: "session", runAttempt: 2, runLeaseToken: "lease" });
-  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(bound, SECRET), SECRET), {
-    orgId: "default-org",
-    ...bound,
-  });
+  assert.deepEqual(await verifyCapabilityToken(await mintCapabilityToken(bound, SECRET), SECRET), bound);
   for (const invalid of [
     { sessionId: "" },
     { sessionId: 1 },

@@ -8,8 +8,9 @@ import { createSkillStore, type Skill, type SkillManifest, type SkillStore } fro
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 const JOSH = scopeId("personal", "josh");
 const ERIC = scopeId("personal", "eric");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });

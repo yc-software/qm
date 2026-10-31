@@ -121,7 +121,6 @@ test("mint → intended teammate redeems → callback connects them; the link is
     assert.equal(consent.searchParams.get("client_id"), "gid");
     const state = await openOAuthState(consent.searchParams.get("state") ?? "", { secret: SECRET });
     assert.equal(state.principalId, "U1");
-    assert.equal(state.orgId, "default-org");
 
     const second = await redeem(srv.base, coreRedeemPath(connectPath), "U1");
     assert.equal(

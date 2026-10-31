@@ -17,6 +17,7 @@ import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/b
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
@@ -132,7 +133,7 @@ test("a person-grant resolves in a shared room of {owner, grantee} — but never
   const { files, acl } = fixture();
   const alice = scopeId("personal", "U1");
   const carol = scopeId("personal", "U2");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
   const image = await put(files, alice, "orange.jpg", JPEG);
   await acl.grant({
@@ -165,7 +166,7 @@ test("a person-grant resolves in a shared room of {owner, grantee} — but never
 test("an org grant surfaces for the whole audience; a team grant only when every member is in the team", async () => {
   const { files, acl } = fixture();
   const alice = scopeId("personal", "U1");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
   const poster = await put(files, alice, "poster.png", JPEG);
   const playbook = await put(files, alice, "playbook.md", Buffer.from("plan"));

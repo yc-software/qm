@@ -5,12 +5,13 @@ import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ORG = "org:default-org" as const;
+const ORG = TEST_ROOT_SCOPE;
 const PERSONAL = "personal:alice" as const;
 
 test("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "claude-sonnet-5" });
 
@@ -29,7 +30,7 @@ test("runtime selection is sparse, revisioned, and acknowledges a changed org de
 });
 
 test("runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-5.5" });
   const fallback = { modelId: "claude-opus-4-8" };
@@ -45,7 +46,7 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
 });
 
 test("runtime resolution carries reasoning and fast-mode defaults into turns", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection(ORG, {
     modelId: "claude-opus-5",
     effortLevel: "high",
@@ -88,8 +89,8 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", a
 
 test("runtime resolution reads selections from shared durable state on every turn", async () => {
   const baseModels = testMap<PersistedBaseModel>();
-  const writer = testConfigStore("default-org", { baseModels });
-  const reader = testConfigStore("default-org", { baseModels });
+  const writer = testConfigStore({ baseModels });
+  const reader = testConfigStore({ baseModels });
   const fallback = { modelId: "claude-opus-4-8" };
 
   await writer.setRuntimeSelection(ORG, fallback);
@@ -102,7 +103,7 @@ test("runtime resolution reads selections from shared durable state on every tur
 });
 
 test("every write that changes a scope's served model notifies listeners", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   const seen: string[] = [];
   config.onRuntimeSelectionChanged((id) => seen.push(id));
 
@@ -115,7 +116,7 @@ test("every write that changes a scope's served model notifies listeners", async
 });
 
 test("a listener that throws cannot break the write that notified it", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   config.onRuntimeSelectionChanged(() => {
     throw new Error("surface unreachable");
   });
@@ -124,7 +125,7 @@ test("a listener that throws cannot break the write that notified it", async () 
 });
 
 test("durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection(PERSONAL, { modelId: "testvendor/cold-router-model" });
   const fallback = { modelId: "claude-opus-4-8" };
 
@@ -159,7 +160,7 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
 });
 
 test("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection(ORG, { modelId: "claude-sonnet-5" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-6-astra" });
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);

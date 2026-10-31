@@ -30,11 +30,11 @@ mock.module("../src/resolution/config-store.ts", {
   namedExports: {
     ...configModule,
     createConfigStore: (...args: Parameters<typeof configModule.createConfigStore>) =>
-      configModule.createConfigStore(args[0], {
-        ...args[1],
-        deploymentIdentity: {
-          ...args[1].deploymentIdentity,
-          putIfAbsent: async () => {
+      configModule.createConfigStore({
+        ...args[0],
+        souls: {
+          ...args[0].souls,
+          all: async () => {
             reads.config++;
             throw configFailure;
           },

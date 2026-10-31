@@ -9,8 +9,9 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("the org allowed-models list restricts the runtime-config picker and clearing restores the catalog", async () => {
   const modelCredentialFetch: typeof fetch = async () =>
@@ -47,7 +48,7 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
     assert.ok(unrestricted.includes("anthropic/claude-sonnet-4.5"));
     assert.ok(unrestricted.includes("deepseek/deepseek-chat-v3.1"));
 
-    const saved = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/webui-models`, {
+    const saved = await fetch(`${base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/webui-models`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ ids: ["deepseek/deepseek-chat-v3.1", "openrouter/auto"] }),
@@ -56,7 +57,7 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
 
     assert.deepEqual(await runtimeModels(), ["deepseek/deepseek-chat-v3.1", "openrouter/auto"]);
 
-    const cleared = await fetch(`${base}/v1/admin/scopes/org%3Adefault-org/webui-models`, {
+    const cleared = await fetch(`${base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/webui-models`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ ids: [] }),

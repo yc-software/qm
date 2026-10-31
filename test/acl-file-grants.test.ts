@@ -8,10 +8,11 @@ import type { Grant, Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const owner = "personal:alice";
 const recipient = "personal:bob";
-const org = "org:default-org";
+const org = TEST_ROOT_SCOPE;
 const bob: Principal = { id: "bob", type: "internal", teamIds: [] };
 const grant: Grant = {
   ownerScopeId: owner,

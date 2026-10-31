@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGitFetcher, resolvePackAuth } from "../src/skills/pack-fetcher.ts";
 import type { SkillPack } from "../src/skills/skill-pack-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function makeSourceRepo(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-src-fixture-"));
@@ -40,7 +41,7 @@ const src = (over: Partial<SkillPack>): SkillPack => ({
   ref: "",
   syncMode: "pinned",
   trustTier: "internal",
-  targetScopeId: "org:acme",
+  targetScopeId: TEST_ROOT_SCOPE,
   subset: "all",
   createdBy: "u",
   createdAt: 0,

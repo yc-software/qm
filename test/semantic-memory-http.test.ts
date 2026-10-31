@@ -14,7 +14,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -134,11 +134,11 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   );
   await built.config.setEmbeddingModel(embeddingId);
   const orgFact = "Browser regression tests should also cover Firefox.";
-  await built.memory.capture("org:default-org", [orgFact], Date.now());
+  await built.memory.capture(TEST_ROOT_SCOPE, [orgFact], Date.now());
   const otherFact = "Another user's confidential browser preference";
   await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
   await built.memory.capture("personal:U2", [otherFact], Date.now());
-  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, [TEST_ROOT_SCOPE, "personal:U1"]);
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,

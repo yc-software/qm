@@ -45,7 +45,7 @@ test("POST /api/grants forwards to the core with the actor + a source-auth signa
   const c = calls.at(-1)!;
   assert.equal(c.method, "POST");
   assert.equal(c.url, "/v1/admin/grants");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.deepEqual(JSON.parse(c.body), { principalId: "U1", role: "org_admin", scopeId: "org:acme" });
 });
@@ -60,7 +60,7 @@ test("DELETE /api/grants/:id forwards the path + query to the core", async () =>
   assert.equal(c.method, "DELETE");
   assert.ok(c.url.startsWith("/v1/admin/grants/U1"), `forwarded path: ${c.url}`);
   assert.ok(c.url.includes("role=org_admin"), `forwarded query: ${c.url}`);
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
 });
 
 test("POST /api/external-users forwards the invite to the core with the actor + a signature", async () => {
@@ -74,7 +74,7 @@ test("POST /api/external-users forwards the invite to the core with the actor + 
   const c = calls.at(-1)!;
   assert.equal(c.method, "POST");
   assert.equal(c.url, "/v1/admin/external-users");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.deepEqual(JSON.parse(c.body), invite);
 });
@@ -88,7 +88,7 @@ test("DELETE /api/external-users/:email forwards the encoded address to the core
   const c = calls.at(-1)!;
   assert.equal(c.method, "DELETE");
   assert.equal(c.url, "/v1/admin/external-users/dana%40partner.example");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
   assert.equal(c.body, "");
 });
@@ -99,7 +99,7 @@ test("GET /api/users forwards to /v1/admin/users", async () => {
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/users");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
 });
 
 test("GET /api/keychain forwards to /v1/admin/keychain", async () => {
@@ -108,7 +108,7 @@ test("GET /api/keychain forwards to /v1/admin/keychain", async () => {
   const c = calls.at(-1)!;
   assert.equal(c.method, "GET");
   assert.equal(c.url, "/v1/admin/keychain");
-  assert.equal(c.actor, "U-admin@acme");
+  assert.equal(c.actor, "U-admin");
   assert.equal(c.signed, true);
 });
 
@@ -141,6 +141,6 @@ test("GET credential usage forwards the scoped path with signed admin identity",
   assert.equal(response.status, 200);
   const call = calls.at(-1)!;
   assert.equal(call.url, "/v1/admin/scopes/org%3Aacme/credential-usage");
-  assert.equal(call.actor, "U-admin@acme");
+  assert.equal(call.actor, "U-admin");
   assert.equal(call.signed, true);
 });

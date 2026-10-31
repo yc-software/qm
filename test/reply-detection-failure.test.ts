@@ -41,7 +41,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
       throw new Error("401 invalid x-api-key");
     },
   };
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -49,7 +49,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService("default-org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

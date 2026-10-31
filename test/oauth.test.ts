@@ -18,6 +18,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -347,12 +348,12 @@ test("Linear refreshes via the standard refresh_token grant", async () => {
 });
 
 test("scopesFor: BYO client scopes override the provider default", async () => {
-  const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
+  const byo: ResolvedClient = { id: "x", secret: "y", clientRef: `${TEST_ROOT_SCOPE}:google`, scopes: ["only.this"] };
   assert.deepEqual(scopesFor(PROVIDERS.google!, byo), ["only.this"]);
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });
 
-test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
+test("OAuth state is sealed, scoped (tenant/accountType/clientRef), and expires", async () => {
   const state = await sealOAuthState(
     {
       provider: "google",
@@ -375,6 +376,7 @@ test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", a
     clientRef: "env:google",
     issuedAt: 1_000,
     nonce: "n1",
+    tenant: TEST_TENANT,
   });
   await assert.rejects(() => openOAuthState(`${state}x`, { secret: "state-secret" }), /invalid OAuth state/);
   await assert.rejects(

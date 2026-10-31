@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
@@ -17,7 +18,7 @@ test("feature flags map each feature to enabled scopes", async () => {
 
 test("the org scope enables a feature everywhere", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  await store.setEnabled("inbox_loops", "org:default-org", true, "admin");
+  await store.setEnabled("inbox_loops", TEST_ROOT_SCOPE, true, "admin");
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
 });
 

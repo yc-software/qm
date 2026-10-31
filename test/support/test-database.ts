@@ -6,8 +6,7 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
-import { orgId } from "../../src/config.ts";
-import { scopeId } from "../../src/types.ts";
+import { tenantRootScope } from "../../src/tenants/context.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -76,8 +75,8 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
-export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
-  return createConfigStore(orgId, { ...configStoreMaps(() => testMap<never>()), ...opts });
+export function testConfigStore(opts: Partial<Parameters<typeof createConfigStore>[0]> = {}) {
+  return createConfigStore({ ...configStoreMaps(() => testMap<never>()), ...opts });
 }
 
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
@@ -85,11 +84,11 @@ export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
 export function testAdminGrantStore(
   seed: AdminGrant[] = ["admin-alice", "admin-bob"].map((principalId) => ({
     principalId,
-    scopeId: scopeId("org", orgId()),
+    scopeId: tenantRootScope(),
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: () => seed });
 }
 
 export function testDeployBackings(

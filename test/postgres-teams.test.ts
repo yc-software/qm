@@ -8,7 +8,6 @@ bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
-const org = scopeId("org", "default-org");
 const room = scopeId("channel", "C1");
 
 beforeEach(async () => {
@@ -19,7 +18,7 @@ beforeEach(async () => {
   await p.end();
 });
 
-const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, org);
+const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on });
 
 test("pg teams: members are rows, edited one at a time, looked up by person", { skip }, async () => {
   const teams = store();

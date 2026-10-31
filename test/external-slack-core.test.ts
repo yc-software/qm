@@ -14,6 +14,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -58,14 +59,14 @@ test("external Slack strips private and org preloads before the prompt, but keep
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
-  await b.config.setSharingPosture("org:default-org", "open");
-  await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
+  await b.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
+  await b.config.setSoul(TEST_ROOT_SCOPE, "ORG_SOUL_SENTINEL");
   await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
-  await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
-  await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
+  await b.memory.capture(TEST_ROOT_SCOPE, ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
+  await b.workspace.write(TEST_ROOT_SCOPE, "secret.txt", "ORG_FILE_SENTINEL");
   await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
   for (const slug of ["safe", "confidential"]) {
-    await b.serviceCreds.setServiceCredential("org:default-org", {
+    await b.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
       slug,
       name: slug,
       delivery: "env",
@@ -74,9 +75,9 @@ test("external Slack strips private and org preloads before the prompt, but keep
       host: "",
     });
     await b.acl.grant({
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       ref: encodeRef(serviceCredRef(slug)),
-      granteeScopeId: "org:default-org",
+      granteeScopeId: TEST_ROOT_SCOPE,
       permission: "read",
       grantedBy: "U1",
     });
@@ -191,9 +192,9 @@ test("external broker requires the current run lease and both external-safe and 
   assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
   for (const slug of ["safe", "confidential"])
     await acl.grant({
-      ownerScopeId: "org:default-org",
+      ownerScopeId: TEST_ROOT_SCOPE,
       ref: encodeRef(serviceCredRef(slug)),
-      granteeScopeId: "org:default-org",
+      granteeScopeId: TEST_ROOT_SCOPE,
       permission: "read",
       grantedBy: "U1",
     });
@@ -218,7 +219,7 @@ test("external broker requires the current run lease and both external-safe and 
       await externalSlackCapabilityAllowed({ ...claims, ...patch }, { runs, acl, externalSlackPolicies }),
       false,
     );
-  await acl.revoke("org:default-org", encodeRef(serviceCredRef("safe")), "org:default-org", "U1");
+  await acl.revoke(TEST_ROOT_SCOPE, encodeRef(serviceCredRef("safe")), TEST_ROOT_SCOPE, "U1");
   assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
 });
 
@@ -281,7 +282,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
-  await b.serviceCreds.setServiceCredential("org:default-org", {
+  await b.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
     slug: "safe",
     name: "safe",
     host: "public.example",
@@ -289,9 +290,9 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
     secret: "SYNTHETIC_BROKER_SECRET",
   });
   await b.acl.grant({
-    ownerScopeId: "org:default-org",
+    ownerScopeId: TEST_ROOT_SCOPE,
     ref: encodeRef(serviceCredRef("safe")),
-    granteeScopeId: "org:default-org",
+    granteeScopeId: TEST_ROOT_SCOPE,
     permission: "read",
     grantedBy: "U1",
   });

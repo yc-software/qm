@@ -22,14 +22,8 @@ export function writableMemoryScope(layers: WorkspaceLayer[], fallback: ScopeId)
   return layers.find((l) => l.mode === "rw")?.scopeId ?? fallback;
 }
 
-export function recallMemoryScopes(
-  policy: MemoryPolicy,
-  layers: WorkspaceLayer[],
-  writableScopeId: ScopeId,
-): ScopeId[] {
+export function recallMemoryScopes(policy: MemoryPolicy, visible: ScopeId[], writableScopeId: ScopeId): ScopeId[] {
   if (policy.recall === "off") return [];
   if (policy.recall === "writable") return [writableScopeId];
-
-  const scopes = [writableScopeId, ...layers.map((l) => l.scopeId)];
-  return [...new Set(scopes)];
+  return [...new Set([writableScopeId, ...visible])];
 }

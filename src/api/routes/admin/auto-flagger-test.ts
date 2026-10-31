@@ -1,10 +1,11 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { securityScreenSystemPrompt, type SecurityScreenVerdict } from "../../../security/security-posture.ts";
 import { defaultAutoFlaggerConfig, parseAutoFlaggerDraft, type AutoFlaggerDraft } from "../admin-resources.ts";
 import type { ScreenSample } from "../../../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../../../security/security-screener.ts";
+import { tenantRootScope } from "../../../tenants/context.ts";
 
 const DEFAULT_WINDOW = 100;
 const MAX_WINDOW = 500;
@@ -81,7 +82,7 @@ async function replay(
  * real screenings and report how often it flags. Org-wide, admin-only, aggregates only.
  */
 export async function testAutoFlagger(ctx: ApiCtx): Promise<void> {
-  const scope = orgScope();
+  const scope = tenantRootScope();
   const requestedScope = decodeURIComponent(ctx.params.scope ?? scope);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;

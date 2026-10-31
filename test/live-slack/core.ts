@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { TEST_ROOT_SCOPE } from "../support/tenant.ts";
 
 const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 
@@ -18,7 +19,7 @@ export class CoreClient {
   readonly orgScope: string;
   private readonly requestSignal?: AbortSignal;
 
-  constructor(baseUrl: string, signingSecret: string, orgScope = "org:acme", requestSignal?: AbortSignal) {
+  constructor(baseUrl: string, signingSecret: string, orgScope = TEST_ROOT_SCOPE, requestSignal?: AbortSignal) {
     this.baseUrl = baseUrl;
     this.signingSecret = signingSecret;
     this.orgScope = orgScope;

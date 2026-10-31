@@ -1,8 +1,8 @@
-import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
 import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 export interface StoredConnectorClient {
   scopeId: string;
@@ -123,20 +123,19 @@ export interface ConnectorClientReader {
 
 export function createConnectorClientResolver(opts: {
   reader: ConnectorClientReader;
-  orgScopeId: (orgId: string) => string;
   secrets?: SecretSource;
 }): OAuthClientResolver {
   const envResolver = createSecretClientResolver(opts.secrets);
   return async (providerName, ctx): Promise<ResolvedClient> => {
     if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
-    const orgId = configOrgId();
-    const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
+    const orgScopeId = tenantRootScope();
+    const rec = await opts.reader.getConnectorClientSecret(orgScopeId, providerName);
     if (rec) {
       if (!rec.enabled) throw new Error(`connector '${providerName}' is disabled for this org`);
       return {
         id: rec.clientId,
         secret: rec.clientSecret,
-        clientRef: `org:${orgId}:${providerName}`,
+        clientRef: `${orgScopeId}:${providerName}`,
         ...(rec.scopes ? { scopes: rec.scopes } : {}),
         ...(rec.redirectAllowlist ? { redirectAllowlist: rec.redirectAllowlist } : {}),
         ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),

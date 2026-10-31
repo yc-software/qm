@@ -14,6 +14,7 @@ import {
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("security posture parses only the three named modes", () => {
   assert.equal(parseSecurityPosture("dangerous"), "dangerous");
@@ -158,16 +159,16 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
 
 test("scoped postures persist and resolve against the org floor", async () => {
   const backing = testMap<PersistedSecurityPosture>();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
-  const first = testConfigStore("default-org", {
+  const first = testConfigStore({
     securityPostures: backing,
     defaultSecurityPosture: "dangerous",
   });
   await first.setSecurityPosture(org, "auto");
   await first.setSecurityPosture(channel, "strict");
 
-  const restarted = testConfigStore("default-org", {
+  const restarted = testConfigStore({
     securityPostures: backing,
     defaultSecurityPosture: "dangerous",
   });
@@ -182,9 +183,9 @@ test("scoped postures persist and resolve against the org floor", async () => {
 
 test("approval grant modes default to all-on and compose tighten-only", async () => {
   const backing = testMap<PersistedApprovalGrantModes>();
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
-  const store = testConfigStore("acme", { approvalGrantModes: backing });
+  const store = testConfigStore({ approvalGrantModes: backing });
 
   assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
   assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
@@ -208,7 +209,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
     "the scope's tightening never leaks back to the org",
   );
 
-  const restarted = testConfigStore("acme", { approvalGrantModes: backing });
+  const restarted = testConfigStore({ approvalGrantModes: backing });
   await restarted.hydrate?.();
   assert.deepEqual(
     await restarted.getApprovalGrantModesDurable(channel),
