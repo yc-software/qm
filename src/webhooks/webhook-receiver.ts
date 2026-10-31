@@ -95,7 +95,9 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     try {
       if (wh.enabled) await fireEvent(wh, deliveryId);
     } finally {
-      await deps.webhooks.settleEvent(wh.id, deliveryId);
+      await deps.webhooks
+        .settleEvent(wh.id, deliveryId)
+        .catch(reportFailureAs("webhook: settle event", undefined, `webhook=${wh.id}`));
     }
   }
 

@@ -156,12 +156,14 @@ export function createJobWorker(databaseUrl: string): JobWorker {
 
   async function poll(): Promise<void> {
     let idleMs = POLL_MIN_MS;
+    let probe = false;
     while (started) {
       woken = false;
       let claimed = 0;
       let bounced = 0;
       try {
-        for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, claimBatch())) {
+        const batch = probe ? 1 : claimBatch();
+        for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, batch)) {
           claimed++;
           const handler = handlers.get(task.taskName);
           if (!handler || handler.running >= handler.concurrency) bounced++;
@@ -176,6 +178,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
         reportFailure("jobs: claim", e);
       }
       if (claimed > 0) idleMs = POLL_MIN_MS;
+      probe = bounced > 0;
       const saturated = claimed > 0 && bounced === claimed;
       if ((claimed === 0 || saturated) && !woken) {
         await Promise.race([sleep(saturated ? POLL_MAX_MS : idleMs, { unref: true }), wake.promise]);
