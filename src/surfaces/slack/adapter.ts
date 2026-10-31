@@ -8,18 +8,17 @@ import type { SlackNative, Surface } from "../contract.ts";
 export const SLACK_MENTION_SYNTAX =
   "To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping.";
 
-const LABEL = "Slack";
-
 export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface {
   const slack: SlackNative = {
     userFrom(user, account) {
       const classified = classifyUser(user, account.ownTeamId, account.identityMode);
+      const id = String(user?.id ?? "");
       const timezone = slackUserTimezone(user);
       return {
         surface: "slack",
         account: account.id,
-        id: String(user?.id ?? ""),
-        ...(classified.externalId.includes("@") ? { email: classified.externalId } : {}),
+        id,
+        ...(classified.externalId === id ? {} : { email: classified.externalId }),
         ...(classified.displayName ? { displayName: classified.displayName } : {}),
         ...(classified.isBot ? { bot: true } : {}),
         ...(classified.isExternalGuest ? { guest: true } : {}),
@@ -29,7 +28,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
   };
   return {
     kind: "slack",
-    label: LABEL,
+    label: "Slack",
     capabilities: {
       threads: true,
       edits: true,
@@ -56,22 +55,15 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
       });
     },
     principalFor(user) {
-      return classifyUser(
-        {
-          id: user.id,
-          ...(user.guest ? { is_restricted: true } : {}),
-          ...(user.bot ? { is_bot: true } : {}),
-          profile: {
-            ...(user.displayName ? { display_name: user.displayName } : {}),
-            ...(user.email ? { email: user.email } : {}),
-          },
-        },
-        "",
-        user.email ? "email" : "slack-id",
-      );
+      const displayName = user.displayName || user.id;
+      return {
+        externalId: user.email ?? user.id,
+        isExternalGuest: Boolean(user.guest),
+        ...(user.bot ? { isBot: true } : {}),
+        ...(displayName ? { displayName } : {}),
+      };
     },
     mention: (user) => `<@${user.id}>`,
-    promptHints: () => ({ surfaceLabel: LABEL, mentionSyntax: SLACK_MENTION_SYNTAX }),
     native: (kind) => (kind === "slack" ? slack : null),
   };
 }
