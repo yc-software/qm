@@ -9,19 +9,19 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
+import { createMcpServerStore } from "../src/mcp/mcp-server-store.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { errMessage } from "../src/util/errors.ts";
-import { testMap } from "./support/test-database.ts";
+import { testLinkTables } from "./support/typed-stores.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(testMap<McpServer>());
+  const store = createMcpServerStore(testLinkTables().mcpServers);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -168,7 +168,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
 test("MCP admin accepts per-user OAuth servers, discovers endpoints only from public addresses, and never shadows built-in connectors", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(testMap<McpServer>());
+  const store = createMcpServerStore(testLinkTables().mcpServers);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -250,7 +250,7 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints only from pu
 test("MCP admin save stores the server's own description from the probe", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-about-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(testMap<McpServer>());
+  const store = createMcpServerStore(testLinkTables().mcpServers);
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
   const server = createInsecureTestServer(built.app, {

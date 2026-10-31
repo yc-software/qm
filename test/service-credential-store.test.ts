@@ -1,21 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
-import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "../src/credentials/keychain.ts";
-import { type DurableMap } from "../src/persistence/durable-map.ts";
+import { createKeychain, isValidCredentialSlug } from "../src/credentials/keychain.ts";
+import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
-function store(opts: { creds?: DurableMap<KeychainCredential> } = {}) {
+function store(opts: { creds?: KeychainCredentialRows } = {}) {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: opts.creds ?? testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
+    ...(opts.creds ? { creds: opts.creds } : {}),
     key: KEY,
   });
 }
@@ -84,7 +84,7 @@ test("an explicit new secret REPLACES the stored one", async () => {
 });
 
 test("conditional credential updates and deletes are atomic across store instances", async () => {
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows().creds;
   const left = store({ creds });
   const right = store({ creds });
   await left.setServiceCredential(ORG, { slug: "k", name: "K", secret: "old", host: "h.example" });

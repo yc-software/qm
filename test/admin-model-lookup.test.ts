@@ -54,7 +54,7 @@ afterEach(() => {
   setModelOverlays([]);
 });
 async function credentials() {
-  const store = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key" });
+  const store = createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: "test-key" });
   await store.set("openai", "test-openai-key", "admin");
   await store.set("anthropic", "test-anthropic-key", "admin");
   return store;
@@ -227,8 +227,8 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
-import { testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

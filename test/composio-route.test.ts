@@ -15,13 +15,12 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
+import { testKeychainRows, testLinkTables } from "./support/typed-stores.ts";
 
 function fixture() {
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: deriveConnectorKey("composio-test"),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -35,7 +34,7 @@ function fixture() {
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
-    composioReturns: testMap(),
+    composioReturns: testLinkTables().composioReturns,
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -689,7 +688,7 @@ test("callback completion is browser-only and preserves the durable return URL",
     session_uri: "opaque",
     user_id: composioUserId(TEST_TENANT, "alice"),
   });
-  assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+  assert.equal(await f.deps.composioReturns!.take(`${composioUserId(TEST_TENANT, "alice")}:ca_test`), null);
   assert.deepEqual(
     f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
     [["composio.connected", "gmail"]],
@@ -810,7 +809,7 @@ test("expired callback returns are discarded after successful browser verificati
   });
   f.replies.push({ connected_account_id: "ca_test" });
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
-  assert.equal(await f.deps.composioReturns!.get(key), null);
+  assert.equal(await f.deps.composioReturns!.take(key), null);
 });
 
 test("linked aliases can execute their existing accounts until the identity link is removed", async () => {
@@ -950,13 +949,12 @@ test("consent and browser verification use the canonical identity when signed in
     );
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, aliasId)).status, 200);
     assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
-    assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
     const result = await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, aliasId);
     assert.equal(result.status, 200);
     assert.deepEqual(result.data, { returnTo: callbackUrl });
     assert.deepEqual(JSON.parse(String(f.calls.at(-1)!.init?.body)), { session_uri: "opaque", user_id: userId });
-    assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+    assert.equal(await f.deps.composioReturns!.take(`${userId}:ca_linked`), null);
   } finally {
     installPrincipalLinks(null);
   }

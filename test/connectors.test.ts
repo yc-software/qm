@@ -1,17 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { envKey } from "../src/credentials/connector-token.ts";
-import {
-  createKeychain,
-  type KeychainCredential,
-  type OAuthRefresh,
-  type OAuthToken,
-} from "../src/credentials/keychain.ts";
+import { createKeychain, type OAuthRefresh, type OAuthToken } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
+import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -20,14 +16,14 @@ function makeKeychain(
     now?: () => number;
     skewMs?: number;
     refresh?: OAuthRefresh;
-    creds?: DurableMap<KeychainCredential>;
+    creds?: KeychainCredentialRows;
   } = {},
 ) {
+  const rows = testKeychainRows();
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: opts.creds ?? testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    ...rows,
+    ...(opts.creds ? { creds: opts.creds } : {}),
     key: KEY,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.skewMs !== undefined ? { oauthSkewMs: opts.skewMs } : {}),
@@ -177,7 +173,7 @@ test("connector token refresh failures are logged and never poison the stored to
     errors.push(args.map(String).join(" "));
   });
 
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
@@ -247,7 +243,7 @@ test("connector tokens: expired non-refreshable connector tokens need reconnect"
 });
 
 test("connector token keys are Postgres-safe (no NUL byte) — round-trip through Postgres", async () => {
-  const keychain = makeKeychain({ creds: testMap<KeychainCredential>() });
+  const keychain = makeKeychain({ creds: testKeychainRows().creds });
 
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" }, "personal");
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), "tok");
@@ -304,7 +300,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
   await keychain.save({ ownerId: "U1", service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });

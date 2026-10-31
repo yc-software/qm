@@ -5,7 +5,9 @@ import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { test } from "node:test";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPostgresModelTables } from "../src/model/model-tables.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
@@ -58,7 +60,7 @@ test(
     const url = new URL(databaseUrl);
     url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
     const isolatedDatabaseUrl = url.toString();
-    const factory = createPostgresMapFactory(isolatedDatabaseUrl);
+    const tables = createPostgresModelTables(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];
     try {
       const first = await start(isolatedDatabaseUrl, upstream.url);
@@ -124,8 +126,10 @@ test(
       const coldConfig = await read(cold.base);
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
       assert.equal(coldConfig.modelCatalog["overlay-pg-model"]?.contextWindow, 600_000);
-      const reloaded = createModelOverlayStore(factory.map("model_registry"));
-      const reloadedSpec = (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")!.spec;
+      const reloaded = createModelOverlayStore(tables.registry);
+      const reloadedSpec = (await withTenant(TEST_TENANT, () => reloaded.statuses())).find(
+        (m) => m.spec.id === "overlay-pg-model",
+      )!.spec;
       assert.ok("contextWindow" in reloadedSpec);
       assert.equal(reloadedSpec.contextWindow, 600_000);
       assert.equal((await fetch(path, { method: "DELETE", headers })).status, 200);
@@ -137,7 +141,7 @@ test(
       }
     } finally {
       await Promise.all(processes.map(stop));
-      await factory.pool.close();
+      await tables.close();
     }
   },
 );

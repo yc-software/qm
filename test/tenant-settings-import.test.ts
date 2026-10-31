@@ -7,6 +7,7 @@ import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 const KEY = "import-test-connector-key-0123456789";
 const root = scopeId("org", "acme");
@@ -14,7 +15,7 @@ const root = scopeId("org", "acme");
 async function deps() {
   return {
     settings: await testSettingsStore(),
-    modelCredentials: createModelCredentialStore({ backing: testMap(), keyMaterial: KEY }),
+    modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: KEY }),
     featureFlags: createFeatureFlagStore(testMap<FeatureFlagRecord>()),
     config: testConfigStore({ connectorSecretKey: KEY }),
     rootScope: root,

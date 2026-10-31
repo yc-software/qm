@@ -8,6 +8,7 @@ import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -112,7 +113,7 @@ test("runtime recovery uses only durable decisions belonging to the same run and
 test("individual-account availability does not depend on organization provider keys", async () => {
   const { config } = await setup();
   const service = createRuntimeService(
-    { config, modelCredentials: createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key" }) },
+    { config, modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: "test-key" }) },
     { authorizesCapabilityScope: async () => true },
   );
   const ownRuntime = { ...active, modelId: "gpt-6-astra" };

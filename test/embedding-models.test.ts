@@ -27,6 +27,7 @@ import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 const definition = {
   kind: "embedding",
@@ -42,7 +43,7 @@ afterEach(() => {
 
 test("verified embedding definitions survive registry reload but never become chat models", async () => {
   const credentials = createModelCredentialStore({
-    backing: testMap(),
+    backing: testModelTables().credentials,
     keyMaterial: "test-key",
   });
   await credentials.set("openai", "test-key", "admin");
@@ -55,7 +56,7 @@ test("verified embedding definitions survive registry reload but never become ch
       return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
     },
   });
-  const backing = testMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
+  const backing = testModelTables().registry;
   const writer = createModelOverlayStore(backing, undefined, verifier);
   await writer.upsert(definition, "admin");
   await assert.rejects(
