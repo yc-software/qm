@@ -104,41 +104,21 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
       ],
     },
+    {
+      id: "processes/registry/0002",
+      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
+    },
+    {
+      id: "processes/registry/0003",
+      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
+    },
+    {
+      id: "processes/registry/0004",
+      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
+    },
+    tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
   ]);
-
-  const migration = {
-    id: "processes/registry/0002",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
-  };
-  pg.registerMigration(migration);
-  const purposeMigration = {
-    id: "processes/registry/0003",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
-  };
-  pg.registerMigration(purposeMigration);
-  const credentialFilesMigration = {
-    id: "processes/registry/0004",
-    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
-  };
-  pg.registerMigration(credentialFilesMigration);
-  const tenantMigration = tenantTables("processes/registry/0005-tenants", [
-    { table: "process_sessions", primaryKey: "process_id" },
-  ]);
-  pg.registerMigration(tenantMigration);
-  let ready: Promise<void> | undefined;
-  const q: typeof pg.q = async (...args) => {
-    ready ??= pg
-      .migrate(migration)
-      .then(() => pg.migrate(purposeMigration))
-      .then(() => pg.migrate(credentialFilesMigration))
-      .then(() => pg.migrate(tenantMigration))
-      .catch((error) => {
-        ready = undefined;
-        throw error;
-      });
-    await ready;
-    return pg.q(...args);
-  };
+  const { q } = pg;
   return {
     async register(rec) {
       const row = newRecord(rec, Date.now());
