@@ -10,7 +10,7 @@ import { buildModelRuntime } from "../src/model/model-runtime.ts";
 import { lastGatewayBudgetRejection } from "../src/model/model-route.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import { testConfigStore } from "./support/test-database.ts";
 import { orgScope } from "../src/config.ts";
 
 const GATEWAY = {
@@ -243,7 +243,7 @@ test("helper calls run on the org's utility model, not the deployment default", 
 
 test("the runtime listing says which account each model bills and when the gateway last ran out of budget", async () => {
   const deps = {
-    config: createMemoryConfigStore("default-org"),
+    config: testConfigStore("default-org"),
     baseModelDefault: "claude-sonnet-5",
     modelCredentials: {
       availability: async () => ({ anthropic: true, modelIds: new Set(["gpt-6-astra"]) }),
