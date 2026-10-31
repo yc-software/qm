@@ -157,7 +157,11 @@ export interface DetectResult {
   reason?: string;
 }
 
-export interface CompactInput {
+export type SessionRoute = Partial<
+  Pick<AgentTurnInput, "scopeLabel" | "runtime" | "runtimePurpose" | "runtimePinned" | "providerKeys">
+>;
+
+export interface CompactInput extends SessionRoute {
   session: Session;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
@@ -166,7 +170,7 @@ export interface CompactInput {
 export interface ModelUtilities {
   shouldRespond?(input: DetectInput): Promise<DetectResult>;
   compactHistory?(input: CompactInput): Promise<string>;
-  contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
+  contextTokenBudget?(model?: string): number | undefined;
   oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
   screenSecurity?(input: ScreenSecurityInput): Promise<SecurityScreenVerdict | undefined>;

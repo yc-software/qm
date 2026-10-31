@@ -448,10 +448,16 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
 });
 
 test("a refusal fallback prices each step on its actual model and tier", async () => {
-  const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
-    index === 0
-      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
-      : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+  const { rows, payloads } = await runTurn(
+    "refusal-fallback-pricing",
+    "claude-sonnet-5",
+    true,
+    (_payload, index) =>
+      index === 0
+        ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
+        : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
+    false,
+    { resolveFallbackRuntime: () => ({ modelId: "claude-opus-5" }) },
   );
   assert.equal(payloads.length, 2);
   assert.equal(payloads[0]?.model, "claude-sonnet-5");
