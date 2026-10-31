@@ -1291,14 +1291,21 @@ test("Render upgrades keep deployed tenant settings until they are imported, the
   await d.backend.up({ dryRun: false });
   assert.equal(c.envs.get("srv-acme-core")!.ANTHROPIC_API_KEY, "sk-deployed");
   assert.equal(c.envs.get("srv-acme-portal")!.OIDC_CLIENT_ID, "client");
+  c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS = "alice@example.com";
   const deployed = await hostingProvider("render").deployedTenantEnv!(d.ctx);
   assert.deepEqual(deployed.values, {
     ANTHROPIC_API_KEY: "sk-deployed",
     PI_MODEL: "core-model",
     OIDC_CLIENT_ID: "client",
+    WEB_UI_PRINCIPALS: "alice@example.com",
   });
   assert.deepEqual(await deployed.remove(), ["ANTHROPIC_API_KEY", "OIDC_CLIENT_ID", "OIDC_PROMPT", "PI_MODEL"]);
   assert.deepEqual(tenantKeys(), []);
+  assert.equal(
+    c.envs.get("srv-acme-web-ui")!.WEB_UI_PRINCIPALS,
+    "alice@example.com",
+    "web UI access is read, not removed",
+  );
   await d.backend.up({ dryRun: false });
   assert.deepEqual(tenantKeys(), []);
   assert.deepEqual((await hostingProvider("render").deployedTenantEnv!(d.ctx)).values, {});

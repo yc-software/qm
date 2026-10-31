@@ -8,7 +8,7 @@ import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { isTenantSetting } from "./tenant-setting-names.ts";
+import { isTenantImport, isTenantSetting, WEB_UI_ACCESS_KEYS } from "./tenant-setting-names.ts";
 
 function sandboxBackendSetting(config: QmConfig): Record<string, string> {
   const backend =
@@ -44,6 +44,11 @@ function portalSignInSettings(config: QmConfig): Record<string, string> {
   return config.target === "render" ? SLACK_SIGN_IN : {};
 }
 
+function webUiAccess(config: QmConfig): Record<string, string> {
+  if (!config.services.includes("web-ui")) return {};
+  return Object.fromEntries(WEB_UI_ACCESS_KEYS.map((key) => [key, config.env["web-ui"]?.[key] ?? ""]));
+}
+
 export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, string>): Record<string, string> {
   const secret = (name: string): string | undefined => deploymentSecretValue(name, values.get(name));
   const fromSecrets: Record<string, string> = {};
@@ -76,7 +81,10 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
     ...renderSandbox,
     ...fromSecrets,
   };
-  return Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name)));
+  return {
+    ...Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name))),
+    ...webUiAccess(config),
+  };
 }
 
 export interface DeployedTenantEnv {
@@ -114,7 +122,7 @@ export async function seedTenantSettings(
   const settings = tenantSettingsEnv(opts.config, values);
   const carried = deployed ? await deployed() : undefined;
   for (const [name, value] of Object.entries(carried?.values ?? {}))
-    if (isTenantSetting(name) && !settings[name]?.trim()) settings[name] = value;
+    if (isTenantImport(name) && !settings[name]?.trim()) settings[name] = value;
   let core: CoreLink;
   try {
     core = await link();

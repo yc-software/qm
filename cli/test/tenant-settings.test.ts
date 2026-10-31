@@ -77,6 +77,15 @@ test("Render seeds its sandbox backend with the deployment's workspace and key",
   assert.equal(settings.RENDER_API_KEY, undefined);
 });
 
+test("a deployment running the web UI sends its access lists, empty when unset", () => {
+  const web = config({ services: ["core", "web-ui"], env: { "web-ui": { WEB_UI_VOICE_USERS: "all" } } });
+  const settings = tenantSettingsEnv(web, new Map());
+  assert.equal(settings.WEB_UI_PRINCIPALS, "");
+  assert.equal(settings.LOOPS_USERS, "");
+  assert.equal(settings.WEB_UI_VOICE_USERS, "all");
+  assert.equal(tenantSettingsEnv(config(), new Map()).WEB_UI_PRINCIPALS, undefined);
+});
+
 function quietly<T>(fn: (lines: string[]) => Promise<T>): Promise<T> {
   const log = console.log;
   const warn = console.warn;

@@ -245,6 +245,29 @@ test("Helm pushes sign-in and admin settings to the install tenant instead of an
   assert.match(push.env.find((entry) => entry.name === "QM_CORE_URL")!.value, /^http:\/\/test-qm-core\./);
 });
 
+test("Helm imports the web UI's access lists, empty when unset, only when the web UI runs", options, () => {
+  const access = (env: Record<string, string>) => [env.WEB_UI_PRINCIPALS, env.LOOPS_USERS, env.WEB_UI_VOICE_USERS];
+  assert.deepEqual(access(tenantSettings(render())), ["", "", ""]);
+  const listed = tenantSettings(
+    render({
+      env: { LOOPS_USERS: "a@example.com" },
+      services: { "web-ui": { env: { WEB_UI_PRINCIPALS: "a@example.com,b@example.com", WEB_UI_VOICE_USERS: "all" } } },
+    }),
+  );
+  assert.deepEqual(access(listed), ["a@example.com,b@example.com", "a@example.com", "all"]);
+  const without = tenantSettings(
+    render({
+      services: {
+        "web-ui": { enabled: false },
+        portal: { enabled: false },
+        admin: { enabled: false },
+        auth: { enabled: false },
+      },
+    }),
+  );
+  assert.deepEqual(access(without), [undefined, undefined, undefined]);
+});
+
 test("Helm refuses tenant settings placed in service env", options, () => {
   for (const values of [
     { env: { AUTH_ALLOWED_EMAILS: "member@example.com" } },
