@@ -792,8 +792,7 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
 });
 
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", async () => {
-  const { built, control } = await setup();
-  await built.config.hydrate();
+  const { control } = await setup();
   const before = control.readSoul(claims("U1"));
   assert.equal(before.soul, null);
 
