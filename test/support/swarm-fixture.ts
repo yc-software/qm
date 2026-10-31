@@ -14,6 +14,8 @@ import { testAdvisoryLock, testDatabaseUrl, testMap, testSandboxResourceStores }
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { TEST_TENANT } from "./tenant-seed.ts";
 
+bindTestTenant();
+
 export async function swarmFixture(
   options: {
     store?: SwarmStore;
