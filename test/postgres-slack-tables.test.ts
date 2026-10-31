@@ -7,7 +7,7 @@ import {
   tenantsWithUnsettledAcks,
 } from "../src/slack/slack-tables.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { skipWithoutPg, withSlackDb } from "./support/slack-db.ts";
 
 const skip = skipWithoutPg;
@@ -65,8 +65,10 @@ test("every Slack table keeps each tenant's rows to itself and refuses unbound a
       assert.equal(await store.installation.consumeState("nonce", 4_000, 3_000), true, "expired nonces are forgotten");
       assert.equal((await store.sessionStatus.entries()).length, 1);
     });
-    await assert.rejects(installs.get(), /No tenant is bound/);
-    await assert.rejects(store.accounts.get("alice"), /No tenant is bound/);
+    await withoutTenant(async () => {
+      await assert.rejects(installs.get(), /No tenant is bound/);
+      await assert.rejects(store.accounts.get("alice"), /No tenant is bound/);
+    });
   });
 });
 
