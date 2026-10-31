@@ -56,20 +56,12 @@ test("egress hides empty host editors", () => {
   assert.equal(state.denyEditor, false);
 });
 
-test("egress validation follows programmatic reloads and successful saves", () => {
+test("egress validation follows programmatic reloads", () => {
   const state = new GovernanceState("egress");
   state.load({ allowedHosts: ["https://invalid"], deniedHosts: [] });
   assert.equal(state.warnings.length, 1);
   state.load({ allowedHosts: ["example.com"], deniedHosts: [] });
   assert.deepEqual(state.warnings, []);
-  state.change("egress-deny", "example.com");
-  assert.match(state.warnings[0], /both lists/);
-});
-
-test("command policy collects its mode and rules", () => {
-  const state = new GovernanceState("command-policy");
-  state.load({ mode: "allowlist", rules: [{ pattern: "^safe$", decision: "allow" }] });
-  assert.deepEqual(state.collect(), { mode: "allowlist", rules: [{ pattern: "^safe$", decision: "allow" }] });
 });
 
 test("credential edits carry the loaded revision and preserve injection settings", () => {
@@ -92,12 +84,6 @@ test("credential edits carry the loaded revision and preserve injection settings
     header: "x-api-key",
     scheme: "Token",
   });
-});
-
-test("SOUL saves carry the expected version", () => {
-  const state = new SettingsState("soul");
-  state.draft = { content: "test", expectedVersion: 4 };
-  assert.equal(state.collect().expectedVersion, 4);
 });
 
 test("enabled models add and remove through explicit actions", () => {

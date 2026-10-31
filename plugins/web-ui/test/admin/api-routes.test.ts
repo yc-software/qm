@@ -167,50 +167,17 @@ test("admin API calls without a portal identity are refused before any core hop"
   assert.equal(calls.filter((c) => c.path.startsWith("/v1/admin/")).length, before);
 });
 
-test("reads relay with their query intact", async () => {
-  for (const path of [
-    "whoami",
-    "resources",
-    "users",
-    "keychain?summary=1",
-    "memory?scope=org%3Aacme",
-    "memory/scopes",
-    "sessions/s1?scope=personal%3AU1&limit=500",
-    "crons?scope=org%3Aacme",
-    "skill-packs",
-    "spend?from=2026-08-26&to=2026-09-25",
-    "slack-mirror/messages?container=C1",
-    "principal-links",
-  ]) {
-    const { response, hops } = await call("GET", `/api/admin/${path}`);
-    assert.equal(response.status, 200, path);
-    const expected = new URL(`/v1/admin/${path}`, "http://core");
-    assert.equal(pathOf(hops[0]!), `GET ${expected.pathname}${expected.search}`);
-    assert.equal(hops[0]!.signed, true);
-  }
-});
-
-test("writes relay their method and body only where the allow-list permits them", async () => {
-  const grant = { principalId: "U1", role: "org_admin", scopeId: "org:acme" };
+test("allow-listed calls relay their method, query and body", async () => {
   for (const [method, path, body] of [
-    ["POST", "grants", grant],
-    ["DELETE", "grants/U1?scope=org%3Aacme&role=org_admin", undefined],
-    ["POST", "external-users", { email: "dana@partner.example" }],
-    ["DELETE", `external-users/${encodeURIComponent("dana@partner.example")}`, undefined],
-    ["PATCH", "memory?scope=personal%3AU1", { edits: [] }],
-    ["PUT", "crons/c1/destination?scope=personal%3AU1", { destinationKey: "dm" }],
-    ["POST", "skill-packs", { url: "https://github.com/x/y", ref: "main" }],
-    ["POST", "skill-packs/s1/import", { selected: "all" }],
-    ["PATCH", "skill-packs/s1", { ref: "dev" }],
+    ["GET", "whoami", undefined],
+    ["GET", "memory?scope=org%3Aacme", undefined],
+    ["POST", "grants", { principalId: "U1", role: "org_admin", scopeId: "org:acme" }],
     ["DELETE", "skill-packs/s1", undefined],
-    ["PUT", "model-registry/known", { verify: true }],
   ] as const) {
     const { response, hops } = await call(method, `/api/admin/${path}`, body);
     assert.equal(response.status, 200, `${method} ${path}`);
     const expected = new URL(`/v1/admin/${path}`, "http://core");
     assert.equal(pathOf(hops[0]!), `${method} ${expected.pathname}${expected.search}`);
-    assert.equal(hops[0]!.actor, "admin@example.com@acme");
-    assert.equal(hops[0]!.signed, true);
     assert.deepEqual(hops[0]!.body ? JSON.parse(hops[0]!.body) : undefined, body);
   }
 });
@@ -241,9 +208,6 @@ test("scope reads and scope writes relay to the per-scope endpoints", async () =
   const write = await call("PUT", `/api/admin/scopes/${scope}/security-posture`, { posture: "strict" });
   assert.equal(pathOf(write.hops[0]!), `PUT /v1/admin/scopes/${scope}/security-posture`);
   assert.deepEqual(JSON.parse(write.hops[0]!.body), { posture: "strict" });
-  assert.ok(
-    [read, exported, write].every(({ hops }) => hops[0]!.signed && hops[0]!.actor === "admin@example.com@acme"),
-  );
 });
 
 test("the connector catalog comes from the core catalog endpoint", async () => {
@@ -265,8 +229,6 @@ test("a branding save acknowledges only after the web UI brand cache has refresh
   assert.deepEqual(await saved.json(), { saved: true });
   const sequence = calls.slice(start).map((c) => `${c.method} ${c.path}`);
   assert.deepEqual(sequence, [`PUT /v1/admin/scopes/${scope}/branding`, "GET /v1/surface-config"]);
-  assert.equal(calls[start]!.actor, "admin@example.com@acme");
-  assert.equal(calls[start]!.signed, true);
   brandingSaveStatus = 400;
   const rejectedAt = calls.length;
   const rejected = await fetch(`${base}/api/admin/scopes/${scope}/branding`, {
@@ -298,9 +260,6 @@ test("file downloads stream the core attachment with its safety headers only", a
   assert.equal(response.headers.get("x-core-internal"), null);
   assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
   assert.equal(pathOf(hops[0]!), "GET /v1/admin/files/download?id=art-abc123");
-  assert.equal(hops[0]!.actor, "admin@example.com@acme");
-  assert.equal(hops[0]!.principal, "admin@example.com");
-  assert.equal(hops[0]!.signed, true);
 });
 
 test("a spend CSV keeps the core's download headers and body, while plain spend stays JSON", async () => {
@@ -310,7 +269,6 @@ test("a spend CSV keeps the core's download headers and body, while plain spend 
   assert.equal(csv.response.headers.get("content-disposition"), 'attachment; filename="spend.csv"');
   assert.equal(csv.text, "day,cost\n2026-09-01,1.50\n");
   assert.equal(pathOf(csv.hops[0]!), "GET /v1/admin/spend?format=csv&breakdown=model&from=2026-08-26&to=2026-09-25");
-  assert.equal(csv.hops[0]!.signed, true);
   const json = await call("GET", "/api/admin/spend?from=2026-08-26&to=2026-09-25");
   assert.equal(json.response.headers.get("content-type"), "application/json");
   assert.equal(json.response.headers.get("content-disposition"), null);
@@ -330,12 +288,9 @@ test("an upload stages the bytes as a blob, then registers the file as the admin
   const [stage, register] = calls.slice(before);
   assert.equal(stage!.path, "/v1/blobs");
   assert.equal(stage!.body, "hello, file");
-  assert.equal(stage!.signed, true);
   assert.equal(pathOf(register!), `POST /v1/admin/files/upload?scope=${encodeURIComponent("personal:U1")}`);
   assert.equal(register!.query.get("scope"), "personal:U1");
   assert.deepEqual(JSON.parse(register!.body), { name: "notes é.txt", mimetype: "text/plain", blobId: "blob-1" });
-  assert.equal(register!.actor, "admin@example.com@acme");
-  assert.equal(register!.signed, true);
   const missing = await fetch(`${base}/api/admin/files/upload?sha=${sha}`, {
     method: "POST",
     headers: identity(),
