@@ -4,12 +4,21 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import type { Config } from "../src/config.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
-const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
+const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
+  stopAtEnd(
+    buildProductionApp(config, {
+      ...overrides,
+      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+    }),
+  );
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const MODEL_ID = "overlay-future-model";
@@ -196,7 +205,7 @@ test("OpenRouter failure rebuilds local choices", async () => {
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ openaiApiKey: "local-test-key" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -361,7 +370,10 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(received?.model, MODEL_ID);
     assert.equal(received?.max_tokens, 10_000);
     assert.equal(authorized, true);
-    const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
+    const agent = createAgent({
+      resolveProviderKeys: async () => ({ anthropic: "local-test-key" }),
+      captureRequests: false,
+    });
     const turn = {
       session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
       input: "Hello",

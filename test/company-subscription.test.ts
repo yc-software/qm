@@ -63,9 +63,10 @@ test("without a company subscription a plain OpenAI id stays metered", async (t)
 
 test("a subscription-only deployment's default utility model is served by the ChatGPT subscription", async (t) => {
   const urls = recordFetch(t);
-  const config = { ...loadConfig({}), codexAuthCredential: "cred-1" };
+  const settings = parseTenantSettings({ CODEX_AUTH_CREDENTIAL: "cred-1" });
   const agent = createAgent({
-    ...agentConfigOptions(config),
+    ...agentConfigOptions(loadConfig({})),
+    defaultModelId: () => defaultModelFor(settings),
     captureRequests: false,
     resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
     companyModelId: codexSubscriptionModelId,

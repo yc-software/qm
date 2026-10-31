@@ -13,7 +13,8 @@ import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
-import { TEST_TENANT, testTenantSettings } from "../support/build-app.ts";
+import { testTenantSettings } from "../support/build-app.ts";
+import { TEST_TENANT } from "../support/tenant.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 

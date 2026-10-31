@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { serverDeps } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { buildApp } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";

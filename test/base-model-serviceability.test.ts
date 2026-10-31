@@ -8,24 +8,32 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
-import { baseModelProviders, configuredModel, providerKeysPresent } from "../src/config.ts";
-import { defaultModel } from "../src/model/pi-models.ts";
+import type { ModelProvider } from "../src/model/model-credential-store.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
+import { testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
-  const built = stopAtEnd(buildApp(config));
+async function start(
+  keys: Partial<Record<ModelProvider, string>> = { anthropic: "deployment-anthropic-key" },
+  settings: TenantSettingValues = {},
+) {
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")) });
+  const built = stopAtEnd(buildApp(config, { tenantSettings: testTenantSettings(settings) }));
+  for (const [provider, key] of Object.entries(keys))
+    await built.modelCredentials.set(provider as ModelProvider, key, "test");
+  await built.tenantSettings.get();
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
     acl: built.acl,
     modelCredentials: built.modelCredentials,
-    baseModelDefault: defaultModel(configuredModel(config), baseModelProviders(config)),
-    providerKeys: providerKeysPresent(config),
+    tenantSettings: built.tenantSettings,
+    baseModelDefault: () => defaultModelFor(built.tenantSettings.peek()),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -60,9 +68,12 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
   }
 });
 
-test("ChatGPT OAuth stays separate from OpenAI API-key availability", () => {
-  const config = testConfig({ codexAuthCredential: "company-chatgpt" });
-  const configured = providerKeysPresent(config);
+test("ChatGPT OAuth stays separate from OpenAI API-key availability", async () => {
+  const built = stopAtEnd(
+    buildApp(testConfig(), { tenantSettings: testTenantSettings({ CODEX_AUTH_CREDENTIAL: "company-chatgpt" }) }),
+  );
+  await built.tenantSettings.get();
+  const configured = await built.modelCredentials.availability();
   assert.equal(configured.openai, false);
   assert.equal(configured.codexOAuth, true);
 });

@@ -1,5 +1,4 @@
 import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
-import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
@@ -17,8 +16,11 @@ import {
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
-import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { parseModelGateway, parseTenantSettings } from "../src/tenants/settings-parse.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -299,10 +301,8 @@ test("gateway-only fallback retains models hidden by picker aliases", async () =
   const f = fixture([group(target)], { "gpt-5.6-sol": target });
   await f.catalog.refresh();
   assert.ok(!builtInModelCatalog().some((model) => model.id === `gateway/${target}`));
-  const fallback = runtimeFallback({
-    deps: { providerKeys: { anthropic: false, openai: false, openrouter: false } },
-  });
-  assert.equal(fallback.modelId, `gateway/${target}`);
+  const fallback = defaultModelFor(parseTenantSettings({}), f.catalog.transport);
+  assert.equal(fallback, `gateway/${target}`);
   assert.ok(
     modelServiceable(fallback, {
       anthropic: false,

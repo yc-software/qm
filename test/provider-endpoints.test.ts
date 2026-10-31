@@ -7,10 +7,10 @@ import {
   setProviderBaseUrls,
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { createTenantModels } from "../src/model/tenant-models.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
-import { TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 
@@ -35,10 +35,10 @@ test("parseProviderBaseUrl rejects bad values", () => {
 });
 
 test("tenant settings read the provider base URL variables", () => {
-  const { providerBaseUrls } = parseTenantSettings(
-    { ANTHROPIC_BASE_URL: "https://a.example.com", OPENAI_BASE_URL: "https://o.example.com/v1/" },
-    "pi",
-  );
+  const { providerBaseUrls } = parseTenantSettings({
+    ANTHROPIC_BASE_URL: "https://a.example.com",
+    OPENAI_BASE_URL: "https://o.example.com/v1/",
+  });
   assert.deepEqual(providerBaseUrls, { anthropic: "https://a.example.com", openai: "https://o.example.com/v1" });
 });
 
@@ -67,9 +67,8 @@ tenantTest("a cloned model follows its template's override", () => {
   assert.equal(clone?.id, "claude-opus-5");
 });
 
-test("loadConfig parses provider base URLs", () => {
-  const config = loadConfig({
-    ...BASE_ENV,
+tenantTest("tenant settings parse provider base URLs", async () => {
+  const settings = testTenantSettings({
     ANTHROPIC_BASE_URL: "https://a.example.com/",
     OPENAI_BASE_URL: "https://o.example.com/v1",
   });
@@ -80,54 +79,46 @@ test("loadConfig parses provider base URLs", () => {
 });
 
 test("tenant settings reject an invalid provider base URL", () => {
-  assert.throws(() => parseTenantSettings({ OPENAI_BASE_URL: "nope" }, "pi"));
+  assert.throws(() => parseTenantSettings({ OPENAI_BASE_URL: "nope" }));
 });
 
-test("loadConfig leaves provider base URLs empty when no override is set", () => {
-  assert.deepEqual(loadConfig(BASE_ENV).providerBaseUrls, {});
+tenantTest("tenant settings leave provider base URLs empty when no override is set", async () => {
+  const settings = testTenantSettings();
+  assert.deepEqual((await settings.get()).providerBaseUrls, {});
 });
 
 test("tenant settings accept a complete model gateway and reject partial or malformed routing", () => {
-  const settings = parseTenantSettings(
-    {
-      MODEL_GATEWAY_URL: "http://gateway.internal:8080/",
-      MODEL_GATEWAY_API_KEY: "secret",
-      MODEL_GATEWAY_API_KEY_HEADER: "api-key",
-      MODEL_GATEWAY_MODELS: "claude-opus-5=router/opus,claude-haiku-4-5=router/haiku",
-    },
-    "pi",
-  );
+  const settings = parseTenantSettings({
+    MODEL_GATEWAY_URL: "http://gateway.internal:8080/",
+    MODEL_GATEWAY_API_KEY: "secret",
+    MODEL_GATEWAY_API_KEY_HEADER: "api-key",
+    MODEL_GATEWAY_MODELS: "claude-opus-5=router/opus,claude-haiku-4-5=router/haiku",
+  });
   assert.deepEqual(settings.modelGateway, {
     url: "http://gateway.internal:8080",
     apiKey: "secret",
     apiKeyHeader: "api-key",
     models: { "claude-opus-5": "router/opus", "claude-haiku-4-5": "router/haiku" },
   });
-  assert.throws(() => parseTenantSettings({ MODEL_GATEWAY_URL: "http://gateway.internal" }, "pi"), /required/);
+  assert.throws(() => parseTenantSettings({ MODEL_GATEWAY_URL: "http://gateway.internal" }), /required/);
   assert.throws(
     () =>
-      parseTenantSettings(
-        {
-          MODEL_GATEWAY_URL: "http://gateway.internal",
-          MODEL_GATEWAY_API_KEY: "secret",
-          MODEL_GATEWAY_API_KEY_HEADER: "bad header",
-          MODEL_GATEWAY_MODELS: "claude-opus-5=router/opus",
-        },
-        "pi",
-      ),
+      parseTenantSettings({
+        MODEL_GATEWAY_URL: "http://gateway.internal",
+        MODEL_GATEWAY_API_KEY: "secret",
+        MODEL_GATEWAY_API_KEY_HEADER: "bad header",
+        MODEL_GATEWAY_MODELS: "claude-opus-5=router/opus",
+      }),
     /HTTP header name/,
   );
   assert.throws(
     () =>
-      parseTenantSettings(
-        {
-          MODEL_GATEWAY_URL: "http://gateway.internal",
-          MODEL_GATEWAY_API_KEY: "secret",
-          MODEL_GATEWAY_API_KEY_HEADER: "api-key",
-          MODEL_GATEWAY_MODELS: "claude-opus-5",
-        },
-        "pi",
-      ),
+      parseTenantSettings({
+        MODEL_GATEWAY_URL: "http://gateway.internal",
+        MODEL_GATEWAY_API_KEY: "secret",
+        MODEL_GATEWAY_API_KEY_HEADER: "api-key",
+        MODEL_GATEWAY_MODELS: "claude-opus-5",
+      }),
     /invalid MODEL_GATEWAY_MODELS/,
   );
 });

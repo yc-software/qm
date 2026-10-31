@@ -2,7 +2,8 @@ import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { buildApp } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
@@ -162,8 +163,11 @@ test("Claude subscription browser requests fail without deriving or sending cred
 
 test("personal API keys bypass organization provider endpoint overrides", async (t) => {
   const built = stopAtEnd(buildApp(testConfig()));
-  setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
-  t.after(() => setProviderBaseUrls({}));
+  setProviderBaseUrls(TEST_TENANT, {
+    openai: "https://organization.invalid/v1",
+    anthropic: "https://organization.invalid",
+  });
+  t.after(() => setProviderBaseUrls(TEST_TENANT, {}));
   for (const provider of ["openai", "anthropic"] as const) {
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, provider);
@@ -209,18 +213,13 @@ test("company ChatGPT subscription auth uses the native subscription transport w
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  const built = stopAtEnd(
-    buildApp(
-      testConfig({
-        codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
-        openaiApiKey: "must-not-fallback",
-      }),
-    ),
-  );
+  const built = stopAtEnd(buildApp(testConfig()));
   await saveCompanyChatGPTLogin(built.keychain, {
     auth_mode: "chatgpt",
     tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
   });
+  await built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL });
+  await built.modelCredentials.set("openai", "must-not-fallback", "admin");
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");
