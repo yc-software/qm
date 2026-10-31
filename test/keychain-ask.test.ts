@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
+import type { InlineJobs } from "./support/inline-jobs.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -24,8 +25,6 @@ import {
 import { createAskExpirySweep, fireAskResolution } from "../src/triggers/keychain-ask.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -36,9 +35,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
@@ -291,7 +288,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
 });
 
-test("expiry sweep fires the resolution once and rides the scheduler tick", async () => {
+test("expiry sweep fires the resolution once", async () => {
   let t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);
@@ -304,20 +301,6 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   await sweep(t);
   assert.equal(fired.length, 1, "one resolution per expired ask, ever");
   assert.equal(fired[0]!.status, "expired");
-
-  const swept: number[] = [];
-  const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-    deliveries: createDeliveryStore(),
-    idempotency: idStore,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: async () => ({ status: "ok" }) as TurnResult,
-    sweepAsks: async (now) => void swept.push(now),
-  });
-  await scheduler.tick(42);
-  assert.deepEqual(swept, [42], "the ask sweep rides the scheduler's leader-leased tick");
 });
 
 test("sweep is the durable retry for approve/decline resolutions that never fired, and prunes old asks", async () => {
@@ -1189,7 +1172,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     );
   });
 
-  it("expiry: the scheduler sweep fires exactly one expired-resolution turn into the asking channel", async () => {
+  it("expiry: the ask-expiry job fires exactly one expired-resolution turn into the asking channel", async () => {
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1208,16 +1191,16 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
-    await built.scheduler.tick(Date.now());
+    await (built.jobs as InlineJobs).recurring.get("loops-and-asks:sweep")!();
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
     assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
 
-    await built.scheduler.tick(Date.now());
+    await (built.jobs as InlineJobs).recurring.get("loops-and-asks:sweep")!();
     assert.equal(
       (await resumeTurns(session!.id, /did not answer the access request/)).length,
       1,
-      "a second tick refires nothing — notifiedAt + fireKey both hold",
+      "a second sweep refires nothing — notifiedAt + fireKey both hold",
     );
   });
 });

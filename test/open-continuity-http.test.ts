@@ -11,6 +11,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inlineJobsSettled } from "./support/inline-jobs.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -80,7 +81,7 @@ async function fixture(t: TestContext) {
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
-    b.scheduler.stop();
+    b.jobs.stop();
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
@@ -251,7 +252,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   );
   await b.roster(["bob"]);
   const result = await b.scheduler.runNow(id);
-  if (result.started) await result.settled;
+  if (result.started) await inlineJobsSettled();
   assert.equal(
     (await b.deliveries.pending("slack")).filter((d) => d.text.includes("owner-credential-present")).length,
     1,
@@ -283,7 +284,7 @@ for (const isPrivate of [false, true]) {
       const id = response.body.cron.id;
       const initial = await b.scheduler.runNow(id);
       assert.equal(initial.started, true);
-      if (initial.started) await initial.settled;
+      if (initial.started) await inlineJobsSettled();
       assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("veto-credential-present")));
       const original = b.keychain.materializeOwnById.bind(b.keychain);
       let materializations = 0;
@@ -293,7 +294,7 @@ for (const isPrivate of [false, true]) {
       };
       await b.config.setSharingPosture(veto, "isolated");
       const revoked = await b.scheduler.runNow(id);
-      if (revoked.started) await revoked.settled;
+      if (revoked.started) await inlineJobsSettled();
       assert.equal(materializations, 0);
       assert.equal(
         (await b.deliveries.pending("slack")).filter((d) => d.text.includes("veto-credential-present")).length,
@@ -328,7 +329,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
   });
   const fired = await b.scheduler.runNow(cron.id);
   assert.equal(fired.started, true);
-  if (fired.started) await fired.settled;
+  if (fired.started) await inlineJobsSettled();
   const { runs } = await b.crons.listFires(cron.id);
   assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
   assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));

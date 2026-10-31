@@ -1,6 +1,7 @@
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { PoolClient } from "../persistence/pg-pool.ts";
 import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
@@ -56,7 +57,11 @@ export interface CronStore {
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
-  beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
+  beginFire(
+    id: string,
+    entry: CronFireLogEntry,
+    opts?: { exclusive?: boolean; enqueue?: (db: PoolClient) => Promise<void> },
+  ): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   pruneFires(now: number): Promise<number>;
   recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
@@ -166,7 +171,7 @@ export function createCronStore(
     },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };
-      if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs);
+      if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs, opts.enqueue);
       await fires.record(id, entry);
       return { begun: true };
     },

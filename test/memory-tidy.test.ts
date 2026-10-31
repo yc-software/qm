@@ -4,6 +4,7 @@ import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from 
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
+import { inlineJobsSettled } from "./support/inline-jobs.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -151,7 +152,7 @@ test("a failed tidy does not count, and run-now always runs", async () => {
   assert.ok(await f.service.skipFire(await f.cronOf(alice)));
   const result = await f.scheduler.runNow(id);
   assert.ok(result.started);
-  await result.settled;
+  await inlineJobsSettled();
   assert.equal(f.calls.length, 1);
 });
 

@@ -473,6 +473,8 @@ test("pg map: webhook history retains concurrent deliveries across store instanc
     receivedAt: 59,
     payload: "hello 🌊",
   });
+  assert.equal((await makeStore().listEvents(webhook.id)).length, 60, "unfired deliveries are all kept");
+  await Promise.all(Array.from({ length: 60 }, (_, i) => (i % 2 ? b : a).settleEvent(webhook.id, `event-${i}`)));
   const events = await makeStore().listEvents(webhook.id);
   assert.equal(events.length, 50);
   assert.equal(events[0]?.receivedAt, 59);

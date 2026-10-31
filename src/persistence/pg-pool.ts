@@ -34,6 +34,10 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 
 const migrationQueue = createKeyedQueue();
 
+export function pgPoolMax(kind: "query" | "session"): number {
+  return kind === "query" ? (poolingConfig.queryMax ?? 10) : (poolingConfig.sessionMax ?? 32);
+}
+
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
@@ -45,7 +49,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
+  const max = kind === "migration" ? 1 : pgPoolMax(kind);
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
   const connection = pgConnectionOptions(
@@ -99,6 +103,7 @@ export interface PgMigrationDefinition {
   statements: readonly string[];
   expectedChecksum?: string;
   legacyId?: string;
+  script?: boolean;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -188,12 +193,18 @@ export function pgMigrationChecksum(statements: readonly string[]): string {
     .digest("hex");
 }
 
-export function definePgMigration({ id, statements, expectedChecksum, legacyId }: PgMigrationDefinition): PgMigration {
+export function definePgMigration({
+  id,
+  statements,
+  expectedChecksum,
+  legacyId,
+  script,
+}: PgMigrationDefinition): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
   const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
-  for (const statement of normalized) assertOneStatement(statement);
+  if (!script) for (const statement of normalized) assertOneStatement(statement);
   const checksum = pgMigrationChecksum(normalized);
   if (expectedChecksum !== undefined && checksum !== expectedChecksum) {
     throw new Error(
