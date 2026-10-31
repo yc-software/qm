@@ -6,10 +6,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { eventually, runNowSettled } from "./support/settle.ts";
 import { retryDue } from "./support/absurd-clock.ts";
+import { ownTurnError } from "./support/turns.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -76,6 +78,11 @@ function freshApp(
   });
   config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   return buildApp(config, { ...appOverrides, ...(securityScreener ? { securityScreener } : {}) });
+}
+
+async function afterRetry(databaseUrl: string, turn: Promise<TurnResult>): Promise<TurnResult> {
+  await eventually(() => retryDue(databaseUrl), { until: (moved) => moved === 1, label: "the failed attempt's retry" });
+  return turn;
 }
 
 function spyProvisioning(sandbox: Sandbox) {
@@ -210,9 +217,10 @@ test("inbound file problems reach the model in the environment footer, not a log
 });
 
 test("a failed turn still records which inbound files did not arrive", async () => {
-  const { app, sessions, errors } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { sessions, errors } = built;
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
-  await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
+  assert.match(await ownTurnError(built, dm("!boom", { inboundNotes: [note] })), /boom/);
   const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
   const user = (await sessions.getEntries(sessionId!)).find((e) => e.type === "user");
   assert.match(String((user?.payload as { environment?: unknown } | undefined)?.environment), /screenshot\.png/);
@@ -409,12 +417,11 @@ test("a turn whose setup fails is retried before the next turn in the conversati
 });
 
 test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
-  const { app } = freshApp();
+  const databaseUrl = testMigratedDatabaseUrl();
+  const { app } = freshApp({ databaseUrl });
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
 
-  await assert.rejects(app.turn(req), /boom/);
-
-  const res = await app.turn(req);
+  const res = await afterRetry(databaseUrl, app.turn(req));
   assert.equal(res.status, "ok");
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original interrupted user entry");
   assert.equal(res.sourceAssistantEntrySeq, 3);
@@ -428,12 +435,11 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 });
 
 test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async () => {
-  const { app } = freshApp();
+  const databaseUrl = testMigratedDatabaseUrl();
+  const { app } = freshApp({ databaseUrl });
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
 
-  await assert.rejects(app.turn(req), /boom/);
-
-  const res = await app.turn(req);
+  const res = await afterRetry(databaseUrl, app.turn(req));
   assert.equal(res.status, "ok");
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original user entry");
 
@@ -597,10 +603,12 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
 });
 
 test("Composio backend access is announced without delivering the project key", async () => {
-  const { app, serviceCreds, acl, sandbox } = freshApp({
+  const built = freshApp({
     apiBaseUrl: "https://core.example.com",
     signingSecret: "test-secret",
+    maxAttempts: 1,
   });
+  const { app, serviceCreds, acl, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const provision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -630,8 +638,9 @@ test("Composio backend access is announced without delivering the project key", 
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
   assert.doesNotMatch(granted, /`composio`/);
-  await assert.rejects(
-    app.turn(
+  assert.match(
+    await ownTurnError(
+      built,
       dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
       }),
@@ -785,8 +794,10 @@ test("a credential flipped away from env between the metadata read and the secre
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
+    maxAttempts: 1,
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const built = buildApp(config);
+  const { sandbox, serviceCreds, acl } = built;
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -809,8 +820,9 @@ test("a credential flipped away from env between the metadata read and the secre
     return realProvision(layers, opts);
   };
 
-  await assert.rejects(
-    app.turn(
+  assert.match(
+    await ownTurnError(
+      built,
       dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:env4" },
       }),
@@ -1936,9 +1948,10 @@ test("a file shared with the session is counted, not named, in the system prompt
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });
 
-test("an unexpected turn fault is recorded to the error log (then rethrown → 500)", async () => {
-  const { app, errors } = freshApp();
-  await assert.rejects(app.turn(dm("!boom")), /boom: simulated turn fault/);
+test("an unexpected turn fault is recorded to the error log and fails the turn", async () => {
+  const built = freshApp({ maxAttempts: 1 });
+  const { errors } = built;
+  assert.match(await ownTurnError(built, dm("!boom")), /boom: simulated turn fault/);
   const turnError = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(turnError, "the turn fault should be recorded in the error log");
   assert.match(turnError!.message, /boom/);
@@ -4073,23 +4086,31 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
 });
 
 test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
-  const { app, runs, errors } = freshApp();
+  const databaseUrl = testMigratedDatabaseUrl();
+  const { app, runs, errors } = freshApp({ databaseUrl });
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
   const req = dm("!boom-always", { idempotencyKey: "exhaust-1" });
-  await assert.rejects(app.turn(req), /boom/);
-  await assert.rejects(app.turn(req), /boom/);
+  const turn = app.turn(req);
   let found = await app.getSession(t1.sessionId!);
-  assert.equal(
-    found!.entries.filter((e) => turnFailure(e)).length,
-    0,
-    "attempts with retry budget left write no failure record",
-  );
-  const midway = await runs.activeForThread("dm:U1:t1");
-  assert.equal(midway?.status, "pending", "the run really is mid-cycle — requeued, not parked");
+  let midway: Run | null = null;
+  for (const failures of [1, 2]) {
+    midway = await eventually(() => runs.activeForThread("dm:U1:t1"), {
+      until: (run) => run?.errorAttempts === failures,
+      label: `failed attempt ${failures} handed back`,
+    });
+    assert.equal(midway?.status, "pending", "the run really is mid-cycle — requeued, not parked");
+    found = await app.getSession(t1.sessionId!);
+    assert.equal(
+      found!.entries.filter((e) => turnFailure(e)).length,
+      0,
+      "attempts with retry budget left write no failure record",
+    );
+    assert.equal(await retryDue(databaseUrl), 1);
+  }
 
-  await assert.rejects(app.turn(req), /boom/);
+  assert.equal((await turn).status, "failed");
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "the run parked: no attempt is left to record it");
   assert.equal((await runs.get(midway!.id))?.status, "failed");
   found = await app.getSession(t1.sessionId!);
