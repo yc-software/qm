@@ -57,6 +57,7 @@ export function createWebhookDeliveryWorker(
             fireKey: provenance.fireKey,
             sourceScopeId: provenance.sourceScopeId,
             sourceThreadRef: provenance.sourceThreadRef,
+            ...(provenance.sourceRunId ? { sourceRunId: provenance.sourceRunId } : {}),
             ...(provenance.sourceRequestId ? { sourceRequestId: provenance.sourceRequestId } : {}),
           },
         });

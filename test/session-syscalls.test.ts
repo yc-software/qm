@@ -1217,6 +1217,42 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
   return { ...r, parent: parent.run, child, run, api };
 }
 
+test("a bound delegated follow-up does not overwrite its completed foreground response", async () => {
+  const r = await delegatedHumanRig({
+    surface: "web",
+    idempotencyKey: "foreground-request",
+    deliveryTarget: conversation.threadRef,
+    deliveryWebhook: { binding: "bound-conversation" },
+  });
+  const parent = await r.runs.claimById(r.parent.id, "parent", 60_000);
+  await r.runs.complete(r.parent.id, parent!.leaseToken!, { status: "ok", reply: "The delegated task is running." });
+  const foreground = runResultDelivery((await r.runs.get(r.parent.id))!);
+  assert.equal(foreground?.provenance.sourceRequestId, "foreground-request");
+  const child = await r.runs.claimById(r.run.id, "child", 60_000);
+  await r.runs.complete(r.run.id, child!.leaseToken!, { status: "ok", reply: "The delegated task finished." });
+  await deliverSubagentMail(
+    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+    (await r.runs.get(r.run.id))!,
+  );
+  const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+  const claimed = await r.runs.claimById(wake.id, "parent-followup", 60_000);
+  await r.runs.complete(wake.id, claimed!.leaseToken!, { status: "ok", reply: "Here is the delegated result." });
+  const completed = (await r.runs.get(wake.id))!;
+  const followup = runResultDelivery(completed);
+  assert.equal(followup?.provenance.sourceRequestId, undefined);
+  assert.equal(followup?.provenance.sourceRunId, wake.id);
+  assert.deepEqual(followup?.destination.webhook, { binding: "bound-conversation" });
+  const continuation = runResultDelivery({
+    ...completed,
+    request: {
+      ...completed.request,
+      idempotencyKey: "followup-approval-request",
+      approval: { requestId: "followup-approval", approved: true },
+    },
+  });
+  assert.equal(continuation?.provenance.sourceRequestId, "followup-approval-request");
+});
+
 test("delegated human origin retains live authority boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");

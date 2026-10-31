@@ -11,6 +11,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 
 const threadRef = "web:alice@example.test:conversation";
 const ownerScope = scopeId("personal", "alice@example.test");
@@ -184,7 +186,7 @@ test("permanent payload rejection delivers a bounded notice and unblocks later u
     assert.equal(received.length, 3);
     assert.equal(received[1]!.idempotencyKey, delivery.idempotencyKey);
     assert.equal(received[1]!.attachments, undefined);
-    assert.equal(received[1]!.provenance?.sourceRunId, undefined);
+    assert.equal(received[1]!.provenance?.sourceRunId, "rejected-run");
     assert.equal(received[1]!.provenance?.sourceRequestId, "original-request");
     assert.match(received[1]!.text, /limits/);
     assert.ok(
@@ -195,6 +197,54 @@ test("permanent payload rejection delivers a bounded notice and unblocks later u
     );
     assert.notEqual((await deliveries.get(next.id))?.deliveredAt, null);
   }
+});
+
+test("a bounded scheduled callback retains the run needed to render approvals alongside excessive files", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  await sessions.getOrCreateByThread(threadRef, "dm", ownerScope, undefined, "web");
+  const deliveries = createDeliveryStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const actor = { id: "alice@example.test", type: "internal" as const };
+  const submitted = (
+    await runs.enqueue({
+      sessionId: "cron:approval-files",
+      request: {
+        surface: "cron",
+        actor,
+        conversation: { kind: "dm", threadRef: "cron:approval-files", audience: [actor] },
+        origin: { kind: "automation", destination },
+        deliveryTarget: threadRef,
+        text: "Prepare files and request permission to publish them.",
+      },
+    })
+  ).run;
+  const claimed = await runs.claim("worker", 30_000);
+  const approvals = [{ requestId: "publish-files", command: "publish report", reason: "permission required" }];
+  await runs.complete(submitted.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "Files are prepared; publication needs approval.",
+    pendingApprovals: approvals,
+    attachments: Array.from({ length: 11 }, (_, i) => ({
+      blobId: `file-${i}`,
+      name: `${i}.txt`,
+      mimetype: "text/plain",
+      sizeBytes: 1,
+    })),
+  });
+  const delivery = await deliveries.enqueue(runResultDelivery((await runs.get(submitted.id))!)!);
+  const receivedApprovals: unknown[] = [];
+  await createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
+    const payload = JSON.parse(String(options?.body));
+    if (payload.attachments?.length > 10) return new Response(null, { status: 400 });
+    const result = payload.provenance?.sourceRunId
+      ? (await runs.get(payload.provenance.sourceRunId))?.result
+      : undefined;
+    receivedApprovals.push(...(result?.pendingApprovals ?? []));
+    return new Response(null, { status: 204 });
+  }).drain();
+  assert.deepEqual(receivedApprovals, approvals);
+  assert.notEqual((await deliveries.get(delivery.id))?.deliveredAt, null);
 });
 
 test("a rejected failure notice stays terminal without blocking another update", async (t) => {

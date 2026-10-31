@@ -70,7 +70,11 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
-  if (webhook && run.request.idempotencyKey && (origin.kind === "human" || run.request.approval))
+  if (
+    webhook &&
+    run.request.idempotencyKey &&
+    (run.request.approval || (origin.kind === "human" && !isSessionTurn(run.request)))
+  )
     provenance.sourceRequestId = run.request.idempotencyKey;
   if (webhook && run.result) {
     return {
