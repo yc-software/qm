@@ -1,0 +1,27 @@
+multiple sandbox images
+
+It would be really useful if a single QM deployment could use more than one
+sandbox image — e.g. a "commercial" image (research / CRM / enrichment CLIs +
+skills) and a "dev" image (git, browser, SF CLI, build tools + skills), instead
+of one fat image for every agent turn.
+
+What we'd want, roughly:
+- Admin (or deploy config) can register multiple named sandbox images
+  (digest / tag each), not only a single sandbox.image
+- each image can carry its own tools + skills pack appropriate to a function
+  (commercial vs eng vs …)
+- scopes / rooms / agents can be pinned to an image (or a default image with
+  optional override)
+- qm sandbox publish (or equivalent) can build/push one named image without
+  rebuilding all of them
+- clear docs on when to split images vs one image + many skills
+
+Why this belongs in QM: sandbox images are the runtime shape of the computer.
+Skills alone don't isolate heavy or sensitive toolchains; multiple images let
+orgs keep commercial agents lean and dev agents capable without shipping
+everything everywhere. Today the practical workaround is one mega-image or
+multiple QM deployments, both awkward.
+
+Happy for you to shape the selection model (per-scope, per-room, per-harness,
+label selectors, etc.) however fits core. Not a security report — just a
+product ask.
