@@ -8,7 +8,7 @@ Each turn carries at most 6,000 characters of memory, selected across every note
 the conversation may read and every provider routed to it. Each notebook, and each external
 provider within it, gets its own heading and its own ```untrusted-data block. Recalled text is
 reference data, never instructions: QM escapes triple backticks and closing tags (`</` becomes
-`<\/`) and prefixes heading-like lines (`#` followed by a space or another `#`) with a backslash, so a recalled row cannot close its
+`<\/`) and prefixes heading-like lines (`#` alone or followed by a space, tab or another `#`, even when indented) with a backslash, so a recalled row cannot close its
 block, end the `<environment>` section or pose as a heading. With PostgreSQL and an embedding
 model, facts are ranked by exact cosine similarity to the current message and recent
 dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
