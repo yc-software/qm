@@ -88,6 +88,9 @@ function versionAtLeast(version: unknown, floor: string): boolean {
 // falls back below these advisory fixes fails the release build.
 const advisoryFixes = {
   "@modelcontextprotocol/sdk": "1.31.0", // GHSA-6qxp-vccf-f47h
+  "follow-redirects": "1.16.2",
+  glob: "14.0.2",
+  minimatch: "11.0.1",
   "proxy-addr": "2.0.8", // GHSA-jqcg-44mw-7w3h
   "smol-toml": "1.9.0", // GHSA-r4xh-jqrq-34v2
 };

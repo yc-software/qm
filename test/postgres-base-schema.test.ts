@@ -9,29 +9,21 @@ import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations }
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
-async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
+async function withDatabase(run: (url: string, admin: pg.Client) => Promise<void>): Promise<void> {
   const parent = new pg.Pool({ connectionString: databaseUrl });
   const name = `base_schema_${randomUUID().replaceAll("-", "")}`;
   await parent.query(`CREATE DATABASE ${name}`);
   const url = new URL(databaseUrl!);
   url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const admin = new pg.Client({ connectionString: url.toString() });
   try {
+    await admin.connect();
     await run(url.toString(), admin);
   } finally {
     await admin.end();
-    await dropWhenIdle(parent, name);
+    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
     await parent.end();
   }
-}
-
-async function dropWhenIdle(parent: pg.Pool, name: string): Promise<void> {
-  const idleBy = Date.now() + 5_000;
-  const sessions = "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1";
-  while ((await parent.query(sessions, [name])).rows[0].n > 0 && Date.now() < idleBy) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
 }
 
 async function migrate(url: string): Promise<void> {
@@ -44,20 +36,22 @@ async function migrate(url: string): Promise<void> {
   }
 }
 
-async function migrateBase(url: string, admin: pg.Pool): Promise<void> {
+async function migrateBase(url: string): Promise<void> {
   createPostgresSessionStore(url);
   const runs = createPostgresRunStore(url);
+  const pool = new pg.Pool({ connectionString: url });
   try {
     await applyPgMigrations(
-      admin,
+      pool,
       registeredPgMigrations(url).filter((m) => !m.id.endsWith("-tenants")),
     );
   } finally {
+    await pool.end();
     await runs.close();
   }
 }
 
-const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
+const present = async (admin: pg.Client, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
 
 test("a fresh database gets the base schema without items.target_seq", { skip }, async () => {
   await withDatabase(async (url, admin) => {
@@ -83,7 +77,7 @@ test("a fully migrated database skips the base schema and drops only the retired
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
-    await migrateBase(url, admin);
+    await migrateBase(url);
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );

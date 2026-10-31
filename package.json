@@ -128,7 +128,9 @@
     },
     "ip-address": "10.7.4",
     "protobufjs": "7.6.5",
-    "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
+    "@earendil-works/pi-ai": "$@earendil-works/pi-ai",
+    "glob": "14.0.3",
+    "minimatch": "11.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
