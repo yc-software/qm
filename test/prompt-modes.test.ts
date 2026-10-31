@@ -30,6 +30,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
 function fakeSandbox(): Sandbox {

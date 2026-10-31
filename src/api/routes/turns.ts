@@ -6,6 +6,7 @@ import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { currentTenant } from "../../tenants/context.ts";
 
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
@@ -287,7 +288,7 @@ async function listDeliveries(ctx: ApiCtx): Promise<void> {
   const type = url.searchParams.get("type") ?? "";
   const claimMsRaw = Number(url.searchParams.get("claimMs") ?? 0);
   const claimMs = Number.isFinite(claimMsRaw) && claimMsRaw > 0 ? claimMsRaw : 0;
-  return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
+  return sendJson(res, 200, { tenant: currentTenant(), deliveries: await app.pendingDeliveries(type, claimMs) });
 }
 
 async function ackDelivery(ctx: ApiCtx): Promise<void> {

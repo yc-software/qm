@@ -13,6 +13,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.t
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("the org allowed-models list restricts the runtime-config picker and clearing restores the catalog", async () => {

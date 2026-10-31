@@ -14,6 +14,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.t
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
 const md = (front: string) => `---\n${front}\n---\n# Body\ntext`;

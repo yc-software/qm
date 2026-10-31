@@ -14,7 +14,7 @@ import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
 import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 

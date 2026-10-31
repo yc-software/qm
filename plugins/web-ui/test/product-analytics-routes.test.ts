@@ -3,7 +3,11 @@ import { test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
 const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+
+bindTestTenant();
 
 let coreStatus = 200;
 const turns: Record<string, unknown>[] = [];

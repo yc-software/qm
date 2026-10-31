@@ -10,6 +10,7 @@ import {
   type ExternalMember,
   type ExternalMemberStore,
 } from "./external-members.ts";
+import { perTenant } from "../tenants/context.ts";
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
@@ -121,19 +122,22 @@ export function createIdentityService(
 ): IdentityService {
   const store = opts.deactivations ?? createDeactivationStore();
   const externalStore = opts.externalMembers ?? createExternalMemberStore();
-  const deactivated = new Map<string, DeactivationRecord>();
-  const externals = new Map<string, ExternalMember>();
+  const roster = perTenant(() => ({
+    deactivated: new Map<string, DeactivationRecord>(),
+    externals: new Map<string, ExternalMember>(),
+    refreshedAt: 0,
+    refreshP: null as Promise<void> | null,
+    hydrateP: null as Promise<void> | null,
+  }));
   let directorySyncProtected: readonly string[] = [];
   const REFRESH_TTL_MS = 10_000;
-  let refreshedAt = 0;
-  let refreshP: Promise<void> | null = null;
-  let hydrateP: Promise<void> | null = null;
 
   const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
+    directorySyncProtected.some((id) => personKey(id) === key) || roster().externals.has(key);
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
 
   async function load(overwrite: boolean): Promise<void> {
+    const { deactivated, externals } = roster();
     await opts.principalLinks?.refresh(true);
     const [deactivations, members, kept] = await Promise.all([
       store.list(),
@@ -159,8 +163,8 @@ export function createIdentityService(
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
-    const record = deactivated.get(key);
-    const external = externals.get(key);
+    const record = roster().deactivated.get(key);
+    const external = roster().externals.get(key);
     const inactive =
       record?.source === "manual" ||
       (record?.source === "directory-sync" && !keptByDirectorySync(key)) ||
@@ -171,48 +175,48 @@ export function createIdentityService(
 
   async function deactivate(externalId: string, source: DeactivationSource = "manual"): Promise<void> {
     const key = personKey(externalId);
-    const existing = deactivated.get(key);
+    const existing = roster().deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
+    roster().deactivated.set(key, record);
     await store.put(record);
   }
 
   async function reactivate(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
+    roster().deactivated.delete(personKey(externalId));
     await store.remove(storeKeys(externalId));
   }
 
   async function refresh(force = false): Promise<void> {
-    const now = Date.now();
-    if (refreshP) return refreshP;
-    if (!force && now - refreshedAt < REFRESH_TTL_MS) return;
-    refreshP = load(true)
+    const state = roster();
+    if (state.refreshP) return state.refreshP;
+    if (!force && Date.now() - state.refreshedAt < REFRESH_TTL_MS) return;
+    state.refreshP = load(true)
       .then(() => {
-        refreshedAt = Date.now();
+        state.refreshedAt = Date.now();
       })
       .finally(() => {
-        refreshP = null;
+        state.refreshP = null;
       });
-    return refreshP;
+    return state.refreshP;
   }
 
   return {
     classify,
     deactivate,
     deactivationSource(externalId: string): DeactivationSource | undefined {
-      return deactivated.get(personKey(externalId))?.source;
+      return roster().deactivated.get(personKey(externalId))?.source;
     },
     reactivate,
     async recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome> {
       const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
       for (const id of removedIds) {
-        if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
+        if (keptByDirectorySync(personKey(id)) || roster().deactivated.has(personKey(id))) continue;
         await deactivate(id, "directory-sync");
         outcome.deactivated.push(id);
       }
       for (const id of presentIds) {
-        if (deactivated.get(personKey(id))?.source !== "directory-sync") continue;
+        if (roster().deactivated.get(personKey(id))?.source !== "directory-sync") continue;
         await reactivate(id);
         outcome.reactivated.push(id);
       }
@@ -220,22 +224,23 @@ export function createIdentityService(
     },
     async listExternalMembers(): Promise<ExternalMember[]> {
       await refresh();
-      return [...externals.values()];
+      return [...roster().externals.values()];
     },
     externalMember(principalId: string): ExternalMember | undefined {
-      return externals.get(personKey(principalId));
+      return roster().externals.get(personKey(principalId));
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
-      externals.set(personKey(m.email), m);
+      roster().externals.set(personKey(m.email), m);
       await externalStore.put(m);
     },
     async removeExternalMember(principalId: string): Promise<void> {
-      externals.delete(personKey(principalId));
+      roster().externals.delete(personKey(principalId));
       await externalStore.remove(storeKeys(principalId));
     },
     hydrate(): Promise<void> {
-      if (!hydrateP) hydrateP = load(false);
-      return hydrateP;
+      const state = roster();
+      state.hydrateP ??= load(false);
+      return state.hydrateP;
     },
     refresh,
     resolve(actor: ActorAssertion): Principal {

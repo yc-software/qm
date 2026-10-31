@@ -37,9 +37,8 @@ import {
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
-import { createMemoryEventBus } from "./util/event-bus.ts";
-import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
-import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
+import { emitRunReasoning, emitRunText, createRunStreamBus, serveRunStreamSync } from "./runs/run-stream-events.ts";
+import { perTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
@@ -379,6 +378,7 @@ import {
   modelRequestOverrides,
   auxiliaryModelForProvider,
   resolveModel,
+  resolveBuiltinModel,
   type HarnessId,
   modelSupportedByHarness,
 } from "./model/pi-models.ts";
@@ -1457,26 +1457,14 @@ export function buildApp(
     ? createPostgresCredentialUsageSink(config.databaseUrl)
     : createCredentialUsageSink();
   const egressAudit = config.databaseUrl ? createPostgresEgressAuditSink(config.databaseUrl) : createEgressAuditSink();
-  const runStreamEvents = config.databaseUrl
-    ? createPostgresNotifyBus<RunStreamEvent>(config.databaseUrl, "run_stream", "run-stream")
-    : createMemoryEventBus<RunStreamEvent>("run-stream");
+  const runStreamEvents = createRunStreamBus(config.databaseUrl);
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
     onChange: refreshRunStream,
   });
-  const stopStreamSync = runStreamEvents.subscribe((event) => {
-    if (event.kind !== "sync") return;
-    const text = turnStream.snapshot(event.runId);
-    const startOffset = turnStream.startOffset(event.runId);
-    const offset = Math.max(event.offset, startOffset);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
-    for (const block of turnStream.reasoning(event.runId)) {
-      const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
-      if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
-    }
-  });
+  const stopStreamSync = serveRunStreamSync(runStreamEvents, turnStream);
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = config.databaseUrl
     ? createPostgresSessionStateBus(config.databaseUrl)
@@ -1730,13 +1718,13 @@ export function buildApp(
   );
   const loopTables = createLoopTables(config.databaseUrl);
   const loopStore = createLoopStore(loopTables.loops);
-  const loopOwnerCache = new Map<string, string>();
+  const loopOwnerCache = perTenant(() => new Map<string, string>());
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
-      let owner = loopOwnerCache.get(event.loopId);
+      let owner = loopOwnerCache().get(event.loopId);
       if (owner === undefined) {
         owner = (await loopStore.get(event.loopId))?.owner ?? "";
-        loopOwnerCache.set(event.loopId, owner);
+        loopOwnerCache().set(event.loopId, owner);
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
@@ -1824,7 +1812,7 @@ export function buildApp(
     return screener;
   };
   const layerEnv = config.layerBrokerEnv ?? {};
-  const layerBrokerCache = new Map<string, AwsRoleBroker>();
+  const layerBrokerCache = perTenant(() => new Map<string, AwsRoleBroker>());
   const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
     const override = overrides.credentialBrokers?.[tool.service];
     if (override) return override;
@@ -1833,10 +1821,10 @@ export function buildApp(
     const region = (tool.broker.regionEnv ? layerEnv[tool.broker.regionEnv] : undefined) ?? tool.broker.region;
     if (!region) return undefined;
     const key = JSON.stringify([roleArn, region, tool.broker.sessionActions]);
-    let broker = layerBrokerCache.get(key);
+    let broker = layerBrokerCache().get(key);
     if (!broker) {
       broker = createAwsRoleBroker({ roleArn, region, sessionActions: tool.broker.sessionActions });
-      layerBrokerCache.set(key, broker);
+      layerBrokerCache().set(key, broker);
     }
     return broker;
   };

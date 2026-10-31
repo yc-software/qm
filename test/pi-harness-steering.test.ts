@@ -7,6 +7,9 @@ import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;

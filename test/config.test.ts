@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const productionEnv = {
   NODE_ENV: "production",

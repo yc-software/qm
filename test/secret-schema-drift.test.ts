@@ -7,6 +7,9 @@ import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
 import { tenantImportKeys } from "../src/tenants/settings-import.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(

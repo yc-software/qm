@@ -5,6 +5,9 @@ import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harne
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
 import { defaultModelFor } from "../src/model/tenant-models.ts";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company-account" } }),

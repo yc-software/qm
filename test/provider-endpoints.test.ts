@@ -11,6 +11,9 @@ import { createTenantModels } from "../src/model/tenant-models.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 

@@ -24,6 +24,8 @@ import { bindTestTenant, TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.t
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 const MODEL_ID = "overlay-future-model";
 
@@ -500,7 +502,6 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
-
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore();
   await config.setApprovedHarnesses(["pi", "claude"]);

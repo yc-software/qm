@@ -6,6 +6,8 @@ import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
   const tables = createMemoryConfigTables();
   const store = createMemoryConfigStore({ tables });

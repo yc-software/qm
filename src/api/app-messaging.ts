@@ -1,10 +1,10 @@
 import type { ScopeId } from "../types.ts";
+import { currentTenant, perTenant, tenantRootScope } from "../tenants/context.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
-import { currentTenant, tenantRootScope } from "../tenants/context.ts";
 import { contextOutcome, createContextRequestStore } from "./context-request-store.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -123,8 +123,8 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createContextRequestStore();
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
-  const contextRequestTokens = new Map<string, string>();
+  const contextRequestListeners = new Map<(request: SurfaceContextRequest) => void, string>();
+  const contextRequestTokens = perTenant(() => new Map<string, string>());
   const tokenKey = (id: string) => `${currentTenant()}\u0000${id}`;
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
@@ -316,7 +316,7 @@ export function createMessagingMethods(
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
-      if (self && (self.name || self.mentionId)) ambientSelf.set(`${currentTenant()}:${surface}`, self);
+      if (self && (self.name || self.mentionId)) ambientSelf().set(surface, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, events).catch(
@@ -365,7 +365,7 @@ export function createMessagingMethods(
         query: storedQuery,
       };
       await contextRequests.create(request);
-      if (viewerToken) contextRequestTokens.set(tokenKey(request.id), viewerToken);
+      if (viewerToken) contextRequestTokens().set(tokenKey(request.id), viewerToken);
       if (source === "web") {
         const outcome: { result?: SurfaceContextResult; error?: string } = await answerWebContextRequest(
           deps.sessions,
@@ -374,30 +374,31 @@ export function createMessagingMethods(
         await contextRequests.settle(request.id, contextOutcome(outcome));
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      const tenant = currentTenant();
+      for (const [l, t] of contextRequestListeners) if (t === tenant) l(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
+      contextRequestListeners.set(listener, currentTenant());
       return () => contextRequestListeners.delete(listener);
     },
     getContextRequest(id) {
       return contextRequests.get(id);
     },
     async deleteContextRequest(id) {
-      contextRequestTokens.delete(tokenKey(id));
+      contextRequestTokens().delete(tokenKey(id));
       return contextRequests.delete(id);
     },
     async pendingContextRequests(source) {
       const cutoff = Date.now() - CONTEXT_REQUEST_EXPIRY_MS;
-      for (const id of await contextRequests.expirePending(cutoff)) contextRequestTokens.delete(tokenKey(id));
+      for (const id of await contextRequests.expirePending(cutoff)) contextRequestTokens().delete(tokenKey(id));
       return (await contextRequests.pending(source, cutoff)).map((r) => {
-        const token = contextRequestTokens.get(tokenKey(r.id));
+        const token = contextRequestTokens().get(tokenKey(r.id));
         return token ? { ...r, query: { ...r.query, viewerToken: token } } : r;
       });
     },
     async fulfillContextRequest(id, outcome) {
-      contextRequestTokens.delete(tokenKey(id));
+      contextRequestTokens().delete(tokenKey(id));
       return contextRequests.settle(id, contextOutcome(outcome));
     },
     async ackDelivery(id, slackApiMs) {

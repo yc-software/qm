@@ -12,6 +12,8 @@ import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ORG = TEST_ROOT_SCOPE;
 const SCOPE = "personal:alice";
 const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };

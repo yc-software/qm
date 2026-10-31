@@ -20,6 +20,9 @@ import {
   codexSubscriptionModelId,
   modelSupportsFastMode,
 } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("every selectable base model resolves against the pi-ai registry", () => {
   for (const m of SELECTABLE_BASE_MODELS) {

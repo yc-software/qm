@@ -4,9 +4,9 @@ import { isTenantId } from "../tenants/context.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, perTenant } from "../tenants/context.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -517,10 +517,35 @@ export interface PublicOAuthClient {
   label: string;
 }
 
-const publicClients = new Map<string, PublicOAuthClient>();
-const publicProviders = new Map<string, OAuthProviderConfig>();
+const PUBLIC_CLIENTS_TTL_MS = 5 * 60_000;
+let publicClientSource: (() => Promise<PublicOAuthClient[]>) | undefined;
+const publicOAuth = perTenant(() => ({
+  clients: new Map<string, PublicOAuthClient>(),
+  providers: new Map<string, OAuthProviderConfig>(),
+  loadedAt: -Infinity,
+  loading: undefined as Promise<void> | undefined,
+}));
+
+export function setPublicOAuthClientSource(source: () => Promise<PublicOAuthClient[]>): void {
+  publicClientSource = source;
+}
+
+export async function publicOAuthClientsReady(): Promise<void> {
+  const state = publicOAuth();
+  const source = publicClientSource;
+  if (!source || Date.now() - state.loadedAt < PUBLIC_CLIENTS_TTL_MS) return;
+  state.loading ??= source()
+    .then(setPublicOAuthClients, reportFailureAs("oauth: load public clients", undefined))
+    .finally(() => {
+      state.loading = undefined;
+    });
+  await state.loading;
+}
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
+  const state = publicOAuth();
+  const { clients: publicClients, providers: publicProviders } = state;
+  state.loadedAt = Date.now();
   publicClients.clear();
   publicProviders.clear();
   for (const c of clients) {
@@ -546,16 +571,17 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
 }
 
 export function oauthProviderEntries(): Array<[string, OAuthProviderConfig]> {
-  return [...Object.entries(PROVIDERS), ...publicProviders.entries()];
+  return [...Object.entries(PROVIDERS), ...publicOAuth().providers.entries()];
 }
 
 export function oauthProvider(name: string): OAuthProviderConfig | undefined {
-  return PROVIDERS[name] ?? publicProviders.get(name);
+  return PROVIDERS[name] ?? publicOAuth().providers.get(name);
 }
 
 export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
   return async (provider, ctx) => {
-    const c = publicClients.get(provider);
+    await publicOAuthClientsReady();
+    const c = publicOAuth().clients.get(provider);
     return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
   };
 }
@@ -696,6 +722,7 @@ export async function exchangeCode(
     codeVerifier?: string;
   },
 ): Promise<{ hosts: string[]; token: OAuthToken }> {
+  await publicOAuthClientsReady();
   const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const adapter = p.exchange ?? defaultExchange;
@@ -712,7 +739,7 @@ export async function exchangeCode(
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
+  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicOAuth().providers]) {
     if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
   }
   return null;
@@ -728,6 +755,7 @@ export function makeRefresh(opts: {
   now?: () => number;
 }): OAuthRefresh {
   return async (host, token, ctx) => {
+    await publicOAuthClientsReady();
     const match = providerForHost(host);
     if (!match) throw new Error(`cannot refresh ${host} (unknown provider)`);
     if (match.config.refresh === null) throw new Error(`${match.name} tokens do not refresh — reconnect`);

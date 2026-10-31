@@ -19,6 +19,8 @@ import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {

@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createMemorySessionStateBus, type SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres session-state bus test";

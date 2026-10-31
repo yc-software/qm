@@ -6,6 +6,9 @@ import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/so
 import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/loops/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 import { adapterForItem } from "../src/loops/sources/index.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
   return {

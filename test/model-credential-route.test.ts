@@ -20,6 +20,8 @@ import { memoryModelTables } from "../src/model/model-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 const GATEWAY: TenantSettingValues = {

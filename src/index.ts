@@ -53,6 +53,9 @@ const server = createServer(built.app, {
   tenants: singleTenantResolver(config.databaseUrl ? pgTenants(createPgPool(config.databaseUrl)) : memoryTenants),
 });
 
+await built.config.hydrate?.();
+await built.identity.hydrate();
+await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 

@@ -9,6 +9,8 @@ import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ORG = TEST_ROOT_SCOPE;
 const PERSONAL = "personal:alice" as const;
 

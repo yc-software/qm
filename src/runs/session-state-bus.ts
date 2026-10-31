@@ -1,4 +1,5 @@
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
+import { tenantScopedBus } from "../tenants/bus.ts";
 
 type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
 
@@ -14,10 +15,11 @@ export interface SessionStateEvent {
   state: SessionState;
   ui?: UiSignal;
   at: number;
+  tenant?: string;
 }
 
 export type SessionStateBus = EventBus<SessionStateEvent>;
 
 export function createMemorySessionStateBus(): SessionStateBus {
-  return createMemoryEventBus<SessionStateEvent>("session-state");
+  return tenantScopedBus(createMemoryEventBus<SessionStateEvent>("session-state"));
 }

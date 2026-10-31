@@ -17,6 +17,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.t
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 async function start(

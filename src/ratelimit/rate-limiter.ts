@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/context.ts";
 interface RateDecision {
   allowed: boolean;
   retryAfterMs?: number;
@@ -15,9 +16,10 @@ export interface RateLimiterOptions {
 
 export function createRateLimiter(opts: RateLimiterOptions): RateLimiter {
   const now = opts.now ?? (() => Date.now());
-  const state = new Map<string, { windowStart: number; count: number }>();
+  const windows = perTenant(() => new Map<string, { windowStart: number; count: number }>());
   return {
     async check(principalId) {
+      const state = windows();
       const t = now();
       const s = state.get(principalId);
       if (!s || t - s.windowStart >= opts.windowMs) {

@@ -4,6 +4,9 @@ import { createServer } from "node:http";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const modelId = "gpt-5.4";
 

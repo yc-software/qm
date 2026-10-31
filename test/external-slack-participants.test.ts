@@ -15,6 +15,8 @@ import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const org = TEST_ROOT_SCOPE;
 const internalActor = { externalId: "U1" };
 const guest = { externalId: "G9", isExternalGuest: true };
