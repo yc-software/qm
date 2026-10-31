@@ -1,4 +1,4 @@
-import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
+import type { EventBus } from "../util/event-bus.ts";
 
 type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
 
@@ -17,7 +17,3 @@ export interface SessionStateEvent {
 }
 
 export type SessionStateBus = EventBus<SessionStateEvent>;
-
-export function createMemorySessionStateBus(): SessionStateBus {
-  return createMemoryEventBus<SessionStateEvent>("session-state");
-}

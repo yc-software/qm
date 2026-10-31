@@ -8,10 +8,9 @@ import {
   type FileUpload,
 } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
-before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 const url = process.env.DATABASE_URL;
 test(

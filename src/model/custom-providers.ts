@@ -1,18 +1,3 @@
-/**
- * Custom model providers.
- *
- * An org admin can register additional model providers that speak a wire
- * protocol we already run — OpenAI Chat Completions, OpenAI Responses,
- * or Anthropic Messages — by giving a base URL, an API key, and the model
- * ids to expose. Registered models resolve like built-ins (the pi
- * harness reaches them through the same request path), surface in the
- * catalog, and are gated to harnesses that route through pi-ai.
- *
- * Secrets never live here: this module holds the runtime registry
- * (everything except the key). Keys stay in the encrypted store and are
- * resolved per-call by wiring alongside the built-in provider keys.
- */
-
 import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "openai-responses", "anthropic"] as const;
@@ -24,14 +9,11 @@ interface CustomModelSpec {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-  /** USD per million input tokens. Defaults to 0 (unknown / not metered). */
   input?: number;
-  /** USD per million output tokens. Defaults to 0. */
   output?: number;
 }
 
 export interface CustomProviderSpec {
-  /** Slug: lowercase, digits, hyphens; also the model's `provider` value. */
   id: string;
   name: string;
   protocol: CustomProviderProtocol;
@@ -85,11 +67,6 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   }
 }
 
-/**
- * The wire-level shape pi-ai expects. We construct these without
- * importing pi-ai so this module stays dependency-free; pi-models casts
- * at its boundary, the same way it treats getBuiltinModel.
- */
 export interface CustomRuntimeModel {
   id: string;
   upstreamId: string;
@@ -134,12 +111,6 @@ let registry = new Map<string, CustomRuntimeModel>();
 let providers: CustomProviderSpec[] = [];
 let version = 0;
 
-/**
- * Called by wiring at boot and again after every admin write, with the
- * full current set of enabled providers. Last write wins; built-in model
- * ids shadow custom ones at resolution, so a collision can't hijack a
- * built-in.
- */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const snapshot = JSON.stringify(specs);
   if (snapshot === JSON.stringify(providers)) return;
@@ -155,7 +126,6 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
   version += 1;
 }
 
-/** Bumps on every registry change — lets callers cache derived artifacts. */
 export function customProvidersVersion(): number {
   return version;
 }
@@ -176,13 +146,6 @@ export function customModelCatalog(): Array<{ id: string; name: string; provider
   return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
 }
 
-/**
- * The models.json fragment pi-coding-agent understands. Materialized to a
- * temp file whenever the pi harness builds a model runtime, so the
- * runtime's own provider registry knows each custom provider natively —
- * a runtime API key alone is not enough (availability checks only cover
- * providers the ModelsStore knows).
- */
 export function customModelsJson(): { providers: Record<string, unknown> } | undefined {
   if (providers.length === 0) return undefined;
   return {

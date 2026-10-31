@@ -11,6 +11,8 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -71,6 +73,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       scheduler: built.scheduler,
       config: built.config,
@@ -789,7 +792,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("refuses webhook registration without a live person in personal and channel scopes", async () => {
     const webhooksBefore = await built.app.listWebhooks();
-    const auditBefore = await built.auditLog.events();
+    const auditBefore = (await built.auditLog.events()).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
       for (const extra of [
         {},
@@ -806,7 +809,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         assert.equal(res.status, 403, JSON.stringify({ scope, extra }));
         assert.equal(((await res.json()) as { error: string }).error, "forbidden");
         assert.deepEqual(await built.app.listWebhooks(), webhooksBefore);
-        assert.deepEqual(await built.auditLog.events(), auditBefore);
+        assert.deepEqual(
+          (await built.auditLog.events()).filter((e) => e.action !== "turn"),
+          auditBefore,
+        );
       }
     }
   });

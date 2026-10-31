@@ -59,3 +59,37 @@ export function parseRegisteredModel(value: unknown): RegisteredModel {
     ? embeddingSchema.parse(value)
     : parseModelOverlay(value);
 }
+
+let overlays = new Map<string, RegisteredModel>();
+let unavailableOverlays = new Map<string, string>();
+let version = 0;
+let snapshot = JSON.stringify([[], [], []]);
+
+export function overlayModel(id: string): RegisteredModel | undefined {
+  return overlays.get(id);
+}
+
+export function overlayModels(): RegisteredModel[] {
+  return [...overlays.values()];
+}
+
+export function overlayUnavailableReason(id: string): string | undefined {
+  return unavailableOverlays.get(id);
+}
+
+export function overlaysVersion(): number {
+  return version;
+}
+
+export function publishModelOverlays(
+  next: Map<string, RegisteredModel>,
+  unavailable: Map<string, string>,
+  deleted: readonly string[],
+): void {
+  const nextSnapshot = JSON.stringify([[...next], [...unavailable], deleted]);
+  if (nextSnapshot === snapshot) return;
+  overlays = next;
+  unavailableOverlays = unavailable;
+  snapshot = nextSnapshot;
+  version += 1;
+}

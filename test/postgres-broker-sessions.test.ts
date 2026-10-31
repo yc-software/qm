@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresBrokerSessions } from "../src/auth/broker-sessions.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const url = process.env.DATABASE_URL;
 

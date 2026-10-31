@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
+import { bindTestTenant, testTenantsSeeded } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire table tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
@@ -252,50 +257,4 @@ test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and ru
     0,
     "k3 outlived the cutoff; nothing else qualifies",
   );
-});
-
-test("pg cron_fires: existing legacy history and later legacy completions remain visible", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const client = new pg.Pool({ connectionString: URL! });
-  try {
-    await client.query(`CREATE TABLE IF NOT EXISTS cron_fire_log (
-      cron_id text NOT NULL, fire_key text NOT NULL, fired_at bigint NOT NULL, json jsonb NOT NULL,
-      PRIMARY KEY (cron_id, fire_key)
-    )`);
-    const initial = { fireKey: "legacy-k", threadRef: "legacy-thread", firedAt: 1000, status: "running" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      initial.fireKey,
-      initial.firedAt,
-      initial,
-    ]);
-    const fires = createPostgresCronFireStore(URL!);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [initial]);
-    const ended = { ...initial, endedAt: 2000, status: "ok", reply: "done" };
-    await client.query(`UPDATE cron_fire_log SET json = $1 WHERE cron_id = $2`, [ended, "legacy-c"]);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [ended]);
-    const oldTerminal = { fireKey: "legacy-old", threadRef: "legacy-thread", firedAt: 100, status: "ok" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      oldTerminal.fireKey,
-      oldTerminal.firedAt,
-      oldTerminal,
-    ]);
-    assert.equal((await fires.listByCron("legacy-c")).runs[0]?.endedAt, 100);
-    assert.ok((await fires.pruneEnded({ endedBefore: 500, keepPerCron: 1 })) >= 1);
-    assert.equal((await client.query("SELECT 1 FROM cron_fire_log WHERE fire_key = 'legacy-old'")).rowCount, 0);
-    const rebooted = createPostgresCronFireStore(URL!);
-    assert.deepEqual((await rebooted.listByCron("legacy-c")).runs, [ended]);
-    const later = { fireKey: "legacy-k2", threadRef: "legacy-thread", firedAt: 3000, status: "running" };
-    await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
-      "legacy-c",
-      later.fireKey,
-      later.firedAt,
-      later,
-    ]);
-    assert.deepEqual((await fires.listByCron("legacy-c")).runs, [ended, later]);
-  } finally {
-    await client.query("DROP TABLE IF EXISTS cron_fire_log");
-    await client.end();
-  }
 });

@@ -10,6 +10,8 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startSession } from "../src/api/start-session.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -42,6 +44,7 @@ describe("agent conversations self-API", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalUrl: "https://portal.example/",
       sessions: built.sessions,

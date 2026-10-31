@@ -21,11 +21,11 @@ function setup() {
 }
 const models = {
   baseModelDefault: "a",
-  baseModelOptions: [{ id: "a", name: "Alpha" }],
-  harnessDefault: "pi",
-  harnessOptions: ["pi", "claude"],
-  modelsByHarness: { pi: [{ id: "a", name: "Alpha" }], claude: [{ id: "b", name: "Beta" }] },
-  runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
+  baseModelOptions: [
+    { id: "a", name: "Alpha" },
+    { id: "b", name: "Beta" },
+  ],
+  runtime: { modelId: "a", effortLevel: "high", fastMode: true },
   fastModeModelIds: ["a"],
   webuiModels: [],
 };

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { testMap } from "./support/test-database.ts";
 
 test("a fresh record has no owner and the first set records who set it and when", async () => {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
   assert.deepEqual(await store.get(), { ownerDeploymentId: null, setAt: null, setBy: null });
   const before = Date.now();
   const state = await store.set({ ownerDeploymentId: "a", setBy: "a" });
@@ -15,7 +15,7 @@ test("a fresh record has no owner and the first set records who set it and when"
 });
 
 test("compare-and-swap refuses a stale expectation but accepts an idempotent retry", async () => {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
   await store.set({ ownerDeploymentId: "a", setBy: "a" });
   await assert.rejects(store.set({ ownerDeploymentId: "b", expectedOwnerDeploymentId: null, setBy: "b" }), /changed/);
   assert.equal((await store.get()).ownerDeploymentId, "a");
@@ -29,7 +29,7 @@ test("compare-and-swap refuses a stale expectation but accepts an idempotent ret
 });
 
 test("a member-protocol record is read as its enabled desired owner and stays readable by that protocol", async () => {
-  const map = createMemoryMap<BackgroundOwnership>();
+  const map = testMap<BackgroundOwnership>();
   const legacy = {
     enabled: true,
     generation: 7,
@@ -68,7 +68,7 @@ test("a member-protocol record is read as its enabled desired owner and stays re
 });
 
 test("a member-protocol transition written after the owner record wins until the next owner change", async () => {
-  const map = createMemoryMap<BackgroundOwnership>();
+  const map = testMap<BackgroundOwnership>();
   const store = createBackgroundOwnershipStore(map);
   await store.set({ ownerDeploymentId: "core:green", setBy: "core:green" });
   const stored = (await map.get("ownership")) as unknown as Record<string, unknown>;

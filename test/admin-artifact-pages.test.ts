@@ -100,7 +100,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
   }
 });
 
-test("an admin cannot repoint a grant-carrying cron; only its owner can", async () => {
+test("an admin cannot repoint someone else's grant-carrying cron; its owner can", async () => {
   const s = start();
   try {
     const cron = await s.built.app.createCron({
@@ -124,6 +124,27 @@ test("an admin cannot repoint a grant-carrying cron; only its owner can", async 
       "a caller-supplied audience cannot launder a room destination",
     );
     assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
+
+    const own = await s.built.app.createCron({
+      ownerScopeId: "personal:admin-alice",
+      owner: "admin-alice",
+      createdBy: "admin-alice",
+      schedule: { everyMs: 60_000 },
+      action: "review spend",
+      unattendedGrants: ["admin.spend.read"],
+    });
+    const moved = await fetch(
+      `${s.base}/v1/admin/crons/${encodeURIComponent(own.id)}/destination?scope=personal:admin-alice`,
+      {
+        method: "PUT",
+        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        body: JSON.stringify({ destination: { type: "slack", target: "C9", audienceScopeId: "channel:C9" } }),
+      },
+    );
+    assert.equal(moved.status, 200, "the owner, acting live, chooses where their cron's output goes");
+    const after = await s.built.app.getCron(own.id);
+    assert.equal(after?.destination?.target, "C9");
+    assert.deepEqual(after?.unattendedGrants, ["admin.spend.read"]);
   } finally {
     await s.close();
   }
@@ -387,7 +408,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
-    const runtime = { harnessId: "pi", modelId: "claude-sonnet-5" };
+    const runtime = { modelId: "claude-sonnet-5" };
     const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
       fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
         method: "PUT",

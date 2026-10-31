@@ -1,23 +1,31 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { RateLimiter } from "./rate-limiter.ts";
 
 export function createPostgresRateLimiter(
   connectionString: string,
   opts: { maxPerWindow: number; windowMs: number },
 ): RateLimiter {
-  const { q } = createPgPool(connectionString, "ratelimit/limiter/0001", [
-    `CREATE TABLE IF NOT EXISTS rate_limit_windows(
+  const { q } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    {
+      id: "ratelimit/limiter/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS rate_limit_windows(
       principal_id TEXT PRIMARY KEY,
       window_start BIGINT NOT NULL,
       count INTEGER NOT NULL
     )`,
+      ],
+    },
+    tenantTables("ratelimit/limiter/0002-tenants", [{ table: "rate_limit_windows", primaryKey: "principal_id" }]),
   ]);
   return {
     async check(principalId) {
       const now = Date.now();
       const rows = await q(
         `INSERT INTO rate_limit_windows(principal_id, window_start, count) VALUES ($1, $2, 1)
-         ON CONFLICT (principal_id) DO UPDATE SET
+         ON CONFLICT (tenant_id, principal_id) DO UPDATE SET
            count = CASE WHEN $2 - rate_limit_windows.window_start >= $3 THEN 1 ELSE rate_limit_windows.count + 1 END,
            window_start = CASE WHEN $2 - rate_limit_windows.window_start >= $3 THEN $2 ELSE rate_limit_windows.window_start END
          RETURNING window_start, count`,

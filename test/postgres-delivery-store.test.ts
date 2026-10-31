@@ -4,9 +4,10 @@ import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-s
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
+  exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
-import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
+import { bindTestTenant, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -14,13 +15,13 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
   await p.end();
-  await provisionTestTenants(URL);
 });
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {
@@ -98,4 +99,8 @@ test("pg delivery store: undelivered rows expire after the TTL instead of cloggi
 
 test("pg delivery store: once-ever keys revive after a TTL drop instead of deadlocking", { skip }, async () => {
   await exerciseDeliveryExpiryRevive((opts) => createPostgresDeliveryStore(URL!, opts));
+});
+
+test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
+  await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });

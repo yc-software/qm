@@ -5,7 +5,6 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -21,11 +20,13 @@ import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { OTHER_TENANT, provisionTestTenants, TEST_TENANT } from "./support/tenant.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { OTHER_TENANT, seedTestTenants, TEST_TENANT } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant claim tests";
-before(() => (URL ? provisionTestTenants(URL) : undefined));
+before(() => (URL ? seedTestTenants(URL) : undefined));
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request = (text: string): OrchestratorInput => ({
@@ -177,7 +178,7 @@ test("NOTIFY payloads carry the emitter's tenant to subscribers", { skip }, asyn
 });
 
 test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind their tenant", async () => {
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const dueUnder: Array<string | undefined> = [];
   const getUnder: Array<string | undefined> = [];
   const due = crons.due.bind(crons);
@@ -200,8 +201,8 @@ test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind 
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run: async () => ({ status: "ok" as const, reply: "" }),
     tenants: twoTenants,
   };
@@ -245,7 +246,7 @@ test("engaged sessions and session admission locks are keyed by tenant", async (
   await sweep.sweep();
   assert.deepEqual(swept, [OTHER_TENANT]);
 
-  const lock = createMemoryAdvisoryLock();
+  const lock = testAdvisoryLock();
   const admission = () => tenantKey("session-run-admission");
   const held = Promise.withResolvers<void>();
   const holding = withTenant(TEST_TENANT, () => lock.withLock(admission(), () => held.promise));

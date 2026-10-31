@@ -1,19 +1,24 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant, boundUrl, testTenantsSeeded } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
@@ -97,7 +102,7 @@ test("pg grant persistence: a warm cache sees writes that bypass the store entir
   await reader.all();
 
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   await p.query(
     "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
     [owner, "out-of-band.md", carol, "read", "U1"],
@@ -117,7 +122,7 @@ test("pg grant persistence: the snapshot is served from cache until the version 
   await reader.all();
 
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   try {
     await p.query("ALTER TABLE acl_grants DISABLE TRIGGER acl_grants_bump");
     await p.query("DELETE FROM acl_grants WHERE path = $1", ["cached.md"]);
@@ -184,7 +189,7 @@ test(
   "pg-backed AclStore: owner-only grant, dedup, permission-agnostic revoke, handle surfacing",
   { skip },
   async () => {
-    const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     for (const [id, name] of [
       ["owner-only", "owner-only.md"],
       ["poster", "poster.png"],

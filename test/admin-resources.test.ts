@@ -31,7 +31,7 @@ function credentialLayer(): string {
   return dir;
 }
 
-function start(harnessId = "pi", withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(withLayer = true): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-res-")),
@@ -47,7 +47,6 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
     serviceCreds: built.serviceCreds,
     featureFlags: built.featureFlags,
     channelPolicy: built.channelPolicy,
-    harnessId,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -203,40 +202,21 @@ test("branding governance validates, round-trips through surface-config, clears,
   }
 });
 
-test("surface-config filters persisted model choices to the active native harness", async () => {
-  const srv = start("claude");
-  try {
-    await srv.built.config.setBaseModel("org:default-org", "claude-opus-4-8");
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8", "gpt-5.6-sol"]);
-    const response = await fetch(`${srv.base}/v1/surface-config`);
-    const config = (await response.json()) as { harnessId: string; baseModel: string; webuiModels: string[] };
-    assert.equal(config.harnessId, "claude");
-    assert.equal(config.baseModel, "claude-opus-4-8");
-    assert.deepEqual(config.webuiModels, ["claude-opus-4-8"]);
-  } finally {
-    await srv.close();
-  }
-});
-
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
-  const srv = start("pi");
+  const srv = start();
   try {
-    await srv.built.config.setApprovedHarnesses(["pi", "claude"]);
     await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
+    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;
 
     const initial = (await fetch(url).then((r) => r.json())) as {
-      effective: { harnessId: string };
+      effective: { modelId: string };
       scopeOverride: unknown;
-      modelsByHarness: Record<string, string[]>;
+      models: string[];
     };
-    assert.equal(initial.effective.harnessId, "pi");
+    assert.equal(initial.effective.modelId, "claude-opus-4-8");
     assert.equal(initial.scopeOverride, null);
-    assert.deepEqual(initial.modelsByHarness.claude, ["claude-sonnet-4-6", "claude-opus-4-8"]);
-    assert.deepEqual(initial.modelsByHarness.pi, ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
-    assert.equal(initial.modelsByHarness.codex, undefined);
-    assert.equal(initial.modelsByHarness.opencode, undefined);
+    assert.deepEqual(initial.models, ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
 
     const set = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
@@ -244,7 +224,6 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       body: JSON.stringify({
         principalId: "alice",
         scopeId: "personal:alice",
-        harnessId: "pi",
         modelId: "gpt-5.5",
         effortLevel: "low",
         fastMode: true,
@@ -252,16 +231,15 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     });
     assert.equal(set.status, 200);
     const selected = (await set.json()) as {
-      effective: { harnessId: string; effortLevel: string; fastMode: boolean };
+      effective: { modelId: string; effortLevel: string; fastMode: boolean };
     };
     assert.deepEqual(selected.effective, {
-      harnessId: "pi",
       modelId: "gpt-5.5",
       effortLevel: "low",
       fastMode: false,
     });
 
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "claude", modelId: "claude-opus-4-8" });
+    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-sonnet-4-6" });
     assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
 
     const keep = await fetch(`${srv.base}/v1/runtime-config`, {
@@ -276,8 +254,8 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", inherit: true }),
     });
-    const inherited = (await inherit.json()) as { effective: { harnessId: string }; scopeOverride: unknown };
-    assert.equal(inherited.effective.harnessId, "claude");
+    const inherited = (await inherit.json()) as { effective: { modelId: string }; scopeOverride: unknown };
+    assert.equal(inherited.effective.modelId, "claude-sonnet-4-6");
     assert.equal(inherited.scopeOverride, null);
 
     await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
@@ -289,10 +267,10 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     });
     const keptLegacy = (await keepLegacy.json()) as {
       upgradeAvailable: boolean;
-      scopeOverride: { harnessId: string; modelId: string };
+      scopeOverride: { modelId: string };
     };
     assert.equal(keptLegacy.upgradeAvailable, false);
-    assert.deepEqual(keptLegacy.scopeOverride, { harnessId: "pi", modelId: "claude-sonnet-4-6", orgRevision: 2 });
+    assert.deepEqual(keptLegacy.scopeOverride, { modelId: "claude-sonnet-4-6", orgRevision: 2 });
   } finally {
     await srv.close();
   }
@@ -527,15 +505,13 @@ test("admin runtime saves reasoning level and fast mode with the default model",
   const srv = start();
   const url = `${srv.base}/v1/admin/scopes/org:default-org/runtime`;
   try {
-    await srv.built.config.setApprovedHarnesses(["pi", "claude"]);
     const saved = await fetch(url, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
+      body: JSON.stringify({ modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
     });
     assert.equal(saved.status, 200);
     assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
-      harnessId: "pi",
       modelId: "claude-opus-5",
       effortLevel: "high",
       fastMode: true,
@@ -550,7 +526,6 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     });
     assert.equal(changedModel.status, 200);
     assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
-      harnessId: "pi",
       modelId: "claude-fable-5",
       effortLevel: "high",
       fastMode: false,
@@ -561,24 +536,14 @@ test("admin runtime saves reasoning level and fast mode with the default model",
     const unsupported = await fetch(url, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ harnessId: "pi", modelId: "claude-fable-5", effortLevel: "low", fastMode: true }),
+      body: JSON.stringify({ modelId: "claude-fable-5", effortLevel: "low", fastMode: true }),
     });
     assert.equal(unsupported.status, 200);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
 
-    const claude = await fetch(url, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ harnessId: "claude", modelId: "claude-opus-5", effortLevel: "auto", fastMode: true }),
-    });
-    assert.equal(claude.status, 200);
-    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, true);
-
     for (const body of [
-      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
-      { harnessId: "codex", modelId: "gpt-5.5", effortLevel: "high", fastMode: false },
-      { harnessId: "opencode", modelId: "gpt-5.5", effortLevel: "high", fastMode: false },
-      { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
+      { modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
+      { modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
     ]) {
       assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);
     }
@@ -754,26 +719,23 @@ test("org purpose runtimes round-trip, validate, and clear independently", async
     assert.equal((await get()).subagentRuntime, null);
     for (const purpose of ["cron", "subagent", "fallback"] as const) {
       const resource = `${purpose}-runtime`;
-      const choice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low", fastMode: false };
+      const choice = { modelId: "claude-opus-5", effortLevel: "low", fastMode: false };
       assert.equal(
         (await put(resource, choice, "org:default-org", { ...ADMIN, "x-admin-actor": "nobody@default-org" })).status,
         403,
       );
       assert.equal((await put(resource, choice, "personal:alice")).status, 400);
       for (const bad of [
-        { ...choice, harnessId: "invalid" },
-        { ...choice, harnessId: "codex" },
         { ...choice, modelId: "invalid" },
         { ...choice, effortLevel: "invalid" },
         { ...choice, fastMode: "yes" },
         { ...choice, modelId: "claude-fable-5", fastMode: true },
-        { modelId: choice.modelId },
       ])
         assert.equal((await put(resource, bad)).status, 400);
       assert.equal((await put(resource, choice)).status, 200);
       assert.deepEqual((await get())[`${purpose}Runtime`], choice);
-      assert.equal((await put(resource, { harnessId: "pi", modelId: choice.modelId })).status, 200);
-      assert.deepEqual((await get())[`${purpose}Runtime`], { harnessId: "pi", modelId: choice.modelId });
+      assert.equal((await put(resource, { modelId: choice.modelId })).status, 200);
+      assert.deepEqual((await get())[`${purpose}Runtime`], { modelId: choice.modelId });
       assert.equal((await put(resource, { inherit: true })).status, 200);
       assert.equal((await get())[`${purpose}Runtime`], null);
       assert.equal((await put(resource, choice)).status, 200);

@@ -10,7 +10,7 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.boot();
 const { runtime } = built;
 runtime.start();
-console.log(`[qm:worker] draining runs (org=${config.orgId}, runStore=${config.runStore}, workers=${config.workers})`);
+console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
 
 let shuttingDown = false;
 function shutdown(signal: string): void {

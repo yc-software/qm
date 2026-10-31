@@ -1,6 +1,7 @@
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
-import type { Cron, CronFireLogEntry, CronSchedule, Destination, Webhook } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronSchedule, Webhook } from "../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -458,7 +459,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const refusal = await unattendedGrantRefusal(
           app,
           admin,
-          { owner: capability.actorId, ownerScopeId, ...(destination ? { destination } : {}) },
+          { owner: capability.actorId, ownerScopeId },
           capability,
         );
         if (refusal) return { ok: false, ...refusal };
@@ -694,12 +695,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         };
       }
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(
-          app,
-          admin,
-          { ...cron, destination: resolved.destination },
-          capability,
-        );
+        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
@@ -796,6 +792,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       const permission: Permission = req.permission === "write" ? "write" : "read";
+      const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
         return {
@@ -898,16 +895,19 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(home.id, req.email, capability.actorId)
+            ? await app.inviteToDeployment(home.id, req.email, capability.actorId, notify)
             : undefined;
         if (!invite)
-          await app.grant({
-            ownerScopeId: home.ownerScopeId,
-            ref: home.grantRef,
-            granteeScopeId: toScope,
-            permission,
-            grantedBy: capability.actorId,
-          });
+          await app.grant(
+            {
+              ownerScopeId: home.ownerScopeId,
+              ref: home.grantRef,
+              granteeScopeId: toScope,
+              permission,
+              grantedBy: capability.actorId,
+            },
+            notify,
+          );
         return {
           ok: true,
           verb: "share",

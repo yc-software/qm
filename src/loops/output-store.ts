@@ -1,5 +1,5 @@
-import type { LoopOutput, LoopOutputState, LoopShipResult } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { LoopOutput, LoopOutputState, LoopShipResult } from "./types.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -87,7 +87,7 @@ export function unresolvedOutput(output: LoopOutput): boolean {
 }
 
 export function createLoopOutputStore(
-  backing: DurableMap<LoopOutput> = createMemoryMap<LoopOutput>(),
+  backing: DurableMap<LoopOutput>,
   onEvent?: (output: LoopOutput) => void,
 ): LoopOutputStore {
   const forLoop = async (loopId: string): Promise<LoopOutput[]> =>
@@ -95,8 +95,6 @@ export function createLoopOutputStore(
 
   const byAttempt = async (itemId: string, attemptId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
-
-  if (!backing.update) throw new Error("loop outputs need atomic durable updates");
   const atomicUpdate = backing.update.bind(backing);
   const update = async (id: string, change: (output: LoopOutput) => LoopOutput): Promise<LoopOutput | null> => {
     const output = await atomicUpdate(id, change);

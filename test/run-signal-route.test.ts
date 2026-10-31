@@ -16,11 +16,14 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
 const core = createServer(built.app, {
+  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
   featureFlags: built.featureFlags,
@@ -149,7 +152,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal("unattendedGrants" in signal.request, false);
 });
 
-test("core route: a bare steer without a ts gets one minted so harnesses persist it", async () => {
+test("core route: a bare steer without a ts gets one minted so agents persist it", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") });
   const r = await coreSignal(run.id, { kind: "steer", text: "keep going" });
   assert.equal(r.status, 200);

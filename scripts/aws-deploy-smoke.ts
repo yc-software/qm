@@ -4,12 +4,17 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, vmFetch } from "../src/sandbox/aws-microvm-api.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { swallow } from "../src/util/errors.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+const maps = createPostgresMapFactory(databaseUrl);
+const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
 const { awsDeploy } = loadConfig();
 const region = awsDeploy.region;
@@ -17,7 +22,7 @@ const agentPort = awsDeploy.agentPort ?? 8080;
 const appPort = awsDeploy.appPort ?? 8081;
 
 const api = createMicrovmApi({ region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
-const store = createMemoryMap<StoredDeployBody>();
+const store = smokeMap<StoredDeployBody>("aws_deploy");
 const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store });
 
 function makeVersion(v: number): DeploymentVersion {

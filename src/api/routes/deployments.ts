@@ -1625,7 +1625,11 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     email?: unknown;
     access?: unknown;
     public?: unknown;
+    notify?: unknown;
   };
+  if (b.notify !== undefined && typeof b.notify !== "boolean")
+    return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
+  const notify = { notify: b.notify };
   if (b.public !== undefined) {
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });
@@ -1677,11 +1681,11 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   try {
     const invite =
       typeof b.email === "string" && permission === "read"
-        ? await app.inviteToDeployment(params.id!, b.email, capability.actorId)
+        ? await app.inviteToDeployment(params.id!, b.email, capability.actorId, notify)
         : undefined;
     const grantees =
       invite?.grantees ??
-      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }));
+      (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }, notify));
     const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
     if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;

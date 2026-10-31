@@ -1,14 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import { loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
-import {
-  defaultEffortForModel,
-  harnessSupportsFastMode,
-  harnessSupportsEffort,
-  runtimeModelOptions,
-  type EffortLevel,
-  type ModelOption,
-} from "./model-options";
+import { defaultEffortForModel, runtimeModelOptions, type EffortLevel, type ModelOption } from "./model-options";
 import { createModelPicker } from "./model-picker";
 import {
   loadoutActions,
@@ -16,7 +9,7 @@ import {
   saveLoadout,
   reconcileLoadout,
   upsertLoadout,
-  effortLevelsForHarness,
+  effortLevelsForModel,
   type LoadoutEntry,
 } from "./composer-loadout";
 import { modelSupportsFastMode } from "./pi-models";
@@ -83,39 +76,21 @@ export async function loadContextModel(scopeId: string, onChange: () => void): P
 }
 
 function optionsFor(config: RuntimeConfig): ModelOption[] {
-  return runtimeModelOptions(config.approvedHarnesses, config.modelsByHarness, config.modelCatalog);
+  return runtimeModelOptions(config.models, config.modelCatalog);
 }
 
-function optionLabel(option: ModelOption, multiHarness: boolean): string {
-  return multiHarness ? `${option.harnessLabel} · ${option.label}` : option.label;
-}
-
-function labelForRuntime(config: RuntimeConfig, runtime: { harnessId: string; modelId: string }): string {
-  const options = optionsFor(config);
-  const multiHarness = new Set(options.map((o) => o.harnessId)).size > 1;
-  const match = options.find((o) => o.value === `${runtime.harnessId}:${runtime.modelId}`);
-  return match ? optionLabel(match, multiHarness) : runtime.modelId;
+function labelForRuntime(config: RuntimeConfig, runtime: { modelId: string }): string {
+  return optionsFor(config).find((o) => o.value === runtime.modelId)?.label ?? runtime.modelId;
 }
 
 function selectedValue(config: RuntimeConfig): string {
-  return config.scopeOverride ? `${config.scopeOverride.harnessId}:${config.scopeOverride.modelId}` : INHERIT;
-}
-
-function effortLevelsFor(
-  harnessId: string,
-  model?: ModelOption["model"],
-): Array<{ value: EffortLevel; label: string }> {
-  if (!harnessSupportsEffort(harnessId)) return [];
-  return effortLevelsForHarness(harnessId, model);
+  return config.scopeOverride ? config.scopeOverride.modelId : INHERIT;
 }
 
 function selectedEffort(config: RuntimeConfig): string {
   return (
     config.effective.effortLevel ??
-    defaultEffortForModel(
-      optionsFor(config).find((option) => option.value === `${config.effective.harnessId}:${config.effective.modelId}`)
-        ?.model,
-    )
+    defaultEffortForModel(optionsFor(config).find((option) => option.value === config.effective.modelId)?.model)
   );
 }
 
@@ -132,8 +107,6 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
   contextModelState.noticeKind = "";
   redraw();
   try {
-    const sep = value.indexOf(":");
-    const harnessId = value.slice(0, sep);
     const model = contextModelState.config
       ? optionsFor(contextModelState.config).find((option) => option.value === value)?.model
       : undefined;
@@ -142,12 +115,9 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
       value === INHERIT
         ? { inherit: true }
         : {
-            harnessId,
-            modelId: value.slice(sep + 1),
-            fastMode: fast && harnessSupportsFastMode(harnessId) && modelSupportsFastMode(scope, value.slice(sep + 1)),
-            ...(effort && effortLevelsFor(harnessId, model).some((o) => o.value === effort)
-              ? { effortLevel: effort }
-              : {}),
+            modelId: value,
+            fastMode: fast && modelSupportsFastMode(scope, value),
+            ...(effort && effortLevelsForModel(model).some((o) => o.value === effort) ? { effortLevel: effort } : {}),
           },
     );
     if (seq !== loadSeq) return;
@@ -173,7 +143,7 @@ async function choose(scope: string, value: string, effort?: string, fast = fals
 
 function activeEntry(config: RuntimeConfig): LoadoutEntry {
   return {
-    value: contextModelState.pending || `${config.effective.harnessId}:${config.effective.modelId}`,
+    value: contextModelState.pending || config.effective.modelId,
     effort: (contextModelState.pendingEffort ?? selectedEffort(config)) as EffortLevel,
     fast: contextModelState.pendingFast ?? config.effective.fastMode === true,
   };

@@ -10,8 +10,8 @@ import {
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
+import { testMap } from "./support/test-database.ts";
 
 const HOST = "mcp.example.com";
 
@@ -86,7 +86,7 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
 });
 
 test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   const tokens = new Map<string, string>();
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
@@ -95,6 +95,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   });
   const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
   const service = createMcpToolService({
+    fetch: loopbackFetch,
     servers: store,
     userTokens: {
       connectorAccessToken: async (_host, principalId) => tokens.get(principalId) ?? null,
@@ -146,13 +147,14 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
 });
 
 test("stored oauth-user tools survive a restart but stay hidden from callers whose connection needs repair", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   await store.put(oauthServer({ tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }));
   const statuses: Record<string, { connected: boolean; needsReconnect?: boolean }> = {
     "internal:alice": { connected: true },
     "internal:carol": { connected: true, needsReconnect: true },
   };
   const service = createMcpToolService({
+    fetch: loopbackFetch,
     servers: store,
     userTokens: {
       connectorAccessToken: async () => null,
@@ -176,4 +178,23 @@ test("stored oauth-user tools survive a restart but stay hidden from callers who
     (await service.toolDefsFor("internal:dave")).map((d) => d.name),
     ["orders_sign_in"],
   );
+});
+
+test("token refresh only matches a provider's exact hosts, never subdomains of an admin-set host", async (t) => {
+  t.after(() => setPublicOAuthClients([]));
+  setPublicOAuthClients(mcpPublicOAuthClients([oauthServer({ credentialHost: "example.com" })]));
+  const resolve = withPublicOAuthClients(async () => {
+    throw new Error("secret resolver must not be used");
+  });
+  const urls: string[] = [];
+  const fetchImpl = async (url: string) => {
+    urls.push(url);
+    return { ok: true, status: 200, json: async () => ({ access_token: "fresh", expires_in: 60 }) };
+  };
+  const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
+  for (const host of [HOST, "api.slack.com"])
+    await assert.rejects(refresh(host, { accessToken: "a", refreshToken: "r" }), /unknown provider/);
+  assert.deepEqual(urls, []);
+  assert.equal((await refresh("example.com", { accessToken: "a", refreshToken: "r" })).accessToken, "fresh");
+  assert.deepEqual(urls, ["https://id.example.com/token"]);
 });

@@ -3,7 +3,7 @@ import {
   CODEX_SUBSCRIPTION_PROVIDER,
   DEFAULT_AGENT_MODEL_ID,
   DEFAULT_CODEX_MODEL_ID,
-  defaultModelForHarness,
+  defaultModel,
   defaultModelForProvider,
   resolveModel,
   isOverlayModel,
@@ -14,9 +14,8 @@ import {
 import type { UserModelCredential } from "../model/user-model-credential-store.ts";
 
 export type IndividualAuthRouting =
-  | { kind: "apikey"; provider: ModelProvider; harness: "pi"; model: string | undefined; apiKey: string }
-  | { kind: "oauth"; provider: "anthropic"; harness: "claude"; model: string }
-  | { kind: "oauth"; provider: "openai"; harness: "pi"; model: string }
+  | { kind: "apikey"; provider: ModelProvider; model: string | undefined; apiKey: string }
+  | { kind: "oauth"; provider: "anthropic" | "openai"; model: string }
   | null;
 
 export function resolveIndividualAuthRouting(
@@ -52,12 +51,9 @@ export function resolveIndividualAuthRouting(
     return {
       kind: "apikey",
       provider: pick.provider,
-      harness: "pi",
       apiKey: pick.cred.apiKey,
       model:
-        requestedModel && requestedProvider === pick.provider
-          ? requestedModel
-          : defaultModelForProvider("pi", pick.provider),
+        requestedModel && requestedProvider === pick.provider ? requestedModel : defaultModelForProvider(pick.provider),
     };
   }
   if (pick.cred.kind === "oauth" && pick.cred.oauth) {
@@ -65,17 +61,13 @@ export function resolveIndividualAuthRouting(
       return {
         kind: "oauth",
         provider: "anthropic",
-        harness: "claude",
         model:
-          requestedModel && requestedProvider === "anthropic"
-            ? requestedModel
-            : defaultModelForHarness("claude", DEFAULT_AGENT_MODEL_ID),
+          requestedModel && requestedProvider === "anthropic" ? requestedModel : defaultModel(DEFAULT_AGENT_MODEL_ID),
       };
     }
     return {
       kind: "oauth",
       provider: "openai",
-      harness: "pi",
       model: codexSubscriptionModelId(
         requestedModel && requestedProvider === "openai" ? requestedModel : DEFAULT_CODEX_MODEL_ID,
       ),

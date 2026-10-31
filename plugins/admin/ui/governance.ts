@@ -74,16 +74,6 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <div class="screening-details">
           <div class="governance-field-grid">
             <div>
-              <label for="auto-flagger-harness">Harness</label>
-              <select
-                id="auto-flagger-harness"
-                .value=${s.value("auto-flagger-harness")}
-                @change=${(event: Event) => changeField(s, "auto-flagger-harness", event)}
-              >
-                ${harnessOptions(s).map((id) => html`<option value=${id} ?selected=${id === s.draft.harnessId}>${({ pi: "Pi", claude: "Claude Code" } as Record<string, string>)[id] || id}</option>`)}
-              </select>
-            </div>
-            <div>
               <label for="auto-flagger-model">Model</label>
               <select
                 id="auto-flagger-model"
@@ -486,9 +476,6 @@ function changeField(s: GovernanceState, id: string, event: Event) {
   if (id === "governance-org-ambient") value = value === "on";
   if (id === "ambient-enabled") value = value === "default" ? null : value === "on";
   s.change(id, value);
-}
-function harnessOptions(s: GovernanceState): string[] {
-  return [...new Set<string>([...(s.context.harnessOptions || []), s.draft.harnessId].filter(Boolean))];
 }
 function sharingLabel(s: GovernanceState): string {
   const title = (value: string) => value[0].toUpperCase() + value.slice(1);

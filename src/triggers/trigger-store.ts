@@ -1,4 +1,5 @@
-import type { Destination, ScopeId, TriggerBase } from "../types.ts";
+import type { Destination, ScopeId } from "../types.ts";
+import type { TriggerBase } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";

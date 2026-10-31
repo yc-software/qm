@@ -1,6 +1,6 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
-import { tenantColumn } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
@@ -50,6 +50,7 @@ const HOLDS_QUOTA =
 
 export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
   const db = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "files/uploads/0001",
       statements: [
@@ -72,7 +73,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
         "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
       ],
     },
-    tenantColumn("file_uploads"),
+    tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),

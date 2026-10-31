@@ -35,8 +35,7 @@ const uploadRoute =
   async (ctx: ApiCtx): Promise<void> => {
     const { res, deps, capability, actor } = ctx;
     const uploads = deps.fileUploads;
-    if (!uploads)
-      return sendJson(res, 501, { error: "not_configured", message: "direct uploads require S3 and Postgres" });
+    if (!uploads) return sendJson(res, 501, { error: "not_configured", message: "direct uploads require S3" });
     const actorId = capability?.actorId ?? actor?.p;
     if (!actorId) return sendJson(res, 401, { error: "actor_required" });
     try {

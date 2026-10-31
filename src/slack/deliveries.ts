@@ -1,7 +1,7 @@
 import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
-import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
+import { approvalDeliveryKey, approvalDeliveryRecipient } from "./approval-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
@@ -45,6 +45,8 @@ const PERMANENT_POST_ERRORS = new Set([
   "cannot_reply_to_message",
   "message_not_found",
 ]);
+
+const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot"]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
@@ -176,6 +178,15 @@ export function createDeliveryPoller(deps: {
     (id: string) =>
     (stage: "post" | "ack", err: unknown, gaveUp: boolean): void => {
       const code = slackErrorCode(err);
+      if (stage === "post" && code && TERMINAL_POST_ERRORS.has(code)) {
+        deliveryTracker.clear(id);
+        console.error(
+          `[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry:`,
+          (err as Error).message,
+        );
+        void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
+        return;
+      }
       if (stage === "post" && gaveUp && code && PERMANENT_POST_ERRORS.has(code) && !undeliverableReported.has(id)) {
         if (undeliverableReported.size >= 5000) undeliverableReported.clear();
         undeliverableReported.add(id);

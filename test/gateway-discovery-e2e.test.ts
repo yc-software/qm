@@ -6,9 +6,10 @@ import { test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { oneShot } from "../src/harness/pi-harness.ts";
+import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -219,19 +220,19 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       apiKeyHeader: "x-gateway-key",
       models: {},
     };
-    const built = buildApp(
-      testConfig({
-        modelGateway: config,
-        harness: "pi",
-        modelId: "gateway/acme/future",
-      }),
+    const built = stopAtEnd(
+      buildApp(
+        testConfig({
+          modelGateway: config,
+          modelId: "gateway/acme/future",
+        }),
+      ),
     );
     await built.refreshModels();
     const runtime = await runtimeConfigBody(
       {
         deps: {
           config: built.config,
-          harnessId: "pi",
           baseModelDefault: "gateway/acme/future",
           modelCredentials: built.modelCredentials,
           refreshModels: built.refreshModels,
@@ -239,7 +240,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       },
       scopeId("org", "default-org"),
     );
-    assert.deepEqual(runtime.modelsByHarness.pi, ["gateway/acme/future"]);
+    assert.deepEqual(runtime.models, ["gateway/acme/future"]);
     assert.equal(runtime.modelCatalog["gateway/acme/future"]?.api, expectedApi);
     assert.doesNotMatch(JSON.stringify(runtime), /company-key|127\.0\.0\.1/);
     const catalog = createGatewayCatalog(config, fetch, () => Date.now() + clockOffset);
@@ -282,17 +283,19 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
   });
 
 test("gateway outage leaves direct providers available", async () => {
-  const built = buildApp(
-    testConfig({
-      anthropicApiKey: "independent-key",
-      modelGateway: {
-        url: "https://gateway.invalid",
-        apiKey: "company-key",
-        apiKeyHeader: "x-api-key",
-        models: {},
-      },
-    }),
-    { modelCredentialFetch: async () => new Response(null, { status: 503 }) },
+  const built = stopAtEnd(
+    buildApp(
+      testConfig({
+        anthropicApiKey: "independent-key",
+        modelGateway: {
+          url: "https://gateway.invalid",
+          apiKey: "company-key",
+          apiKeyHeader: "x-api-key",
+          models: {},
+        },
+      }),
+      { modelCredentialFetch: async () => new Response(null, { status: 503 }) },
+    ),
   );
   const providers = await built.modelCredentials.availability();
   assert.equal(providers.anthropic, true);

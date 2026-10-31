@@ -4,7 +4,6 @@ import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
-import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "./admin-grant-store.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -57,26 +56,13 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
   return grants;
 }
 
-function defaultAdminGrants(orgId: string): AdminGrant[] {
-  return [
-    { principalId: "admin-alice", scopeId: scopeId("org", orgId), role: "org_admin" },
-    { principalId: "admin-bob", scopeId: scopeId("org", orgId), role: "org_admin" },
-  ];
-}
-
-export function bootAdminGrantSeed(rawAdminGrants: string | undefined, orgId: string, durable: boolean): AdminGrant[] {
-  return parseAdminGrants(rawAdminGrants, orgId) ?? (durable ? [] : defaultAdminGrants(orgId));
-}
-
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
 }
 
-export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
+export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
   const orgId = configOrgId();
-  const grants: AdminGrantStore =
-    store ?? createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: defaultAdminGrants(orgId) });
   const now = opts.now ?? (() => Date.now());
 
   async function isOrgAdmin(actor: Principal): Promise<boolean> {

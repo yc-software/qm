@@ -1,28 +1,27 @@
-import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
-import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
+import { before } from "node:test";
 import { enterTenant } from "../../src/tenants/context.ts";
+import { OTHER_TENANT, seedTenant, seedTestTenants, TEST_TENANT } from "./tenant-seed.ts";
 
-export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
-export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
+export { OTHER_TENANT, seedTenant, seedTestTenants, TEST_TENANT };
+
+let seeding: Promise<void> | undefined;
+let hooked = false;
+
+export function testTenantsSeeded(): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  return url ? (seeding ??= seedTestTenants(url)) : Promise.resolve();
+}
 
 export function bindTestTenant(): void {
   enterTenant(TEST_TENANT);
+  if (hooked || !process.env.DATABASE_URL) return;
+  hooked = true;
+  before(testTenantsSeeded);
 }
 
-export async function provisionTestTenants(url: string): Promise<void> {
-  const pool = new pg.Pool({ connectionString: url });
-  try {
-    if (!(await pool.query("SELECT to_regclass('tenants') AS t")).rows[0].t) {
-      createPostgresSessionStore(url);
-      await migrateRegisteredPgSchemas(url);
-    }
-    await pool.query(
-      `INSERT INTO tenants(id, slug, name) VALUES ($1, 'test-tenant', 'Test'), ($2, 'other-tenant', 'Other')
-       ON CONFLICT DO NOTHING`,
-      [TEST_TENANT, OTHER_TENANT],
-    );
-  } finally {
-    await pool.end();
-  }
+export function boundUrl(url: string, id = TEST_TENANT): string {
+  const bound = new URL(url);
+  const options = bound.searchParams.get("options");
+  bound.searchParams.set("options", `${options ? `${options} ` : ""}-c qm.tenant_id=${id}`);
+  return bound.toString();
 }

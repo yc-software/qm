@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { chmod, chown, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -14,12 +15,9 @@ import {
   createRenderDeployArtifacts,
   type StoredRenderDeployCredential,
 } from "../src/deploy/render-deploy-artifacts.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { renderGatewayToken } from "../src/deploy/render-deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
@@ -27,6 +25,10 @@ import { createServer as createHttpServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { Duplex } from "node:stream";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testMap, testDatabaseUrl, testPgPool } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -42,11 +44,11 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
-  const credentials = createMemoryMap<StoredRenderDeployCredential>();
+  const deployments = testMap<Deployment>();
+  const archiveStore = testMap<DeployGitArchive>();
+  const credentials = testMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
-  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });
+  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore }, pg: testPgPool() });
   const d = await deployStore.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -80,8 +82,12 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     store: credentials,
     deployStore,
   });
-  const readerStore = createDeployStore({ deployments, git: { repoRoot: join(root, "reader"), archiveStore } });
-  const acl = createAclStore();
+  const readerStore = createDeployStore({
+    deployments,
+    git: { repoRoot: join(root, "reader"), archiveStore },
+    pg: testPgPool(),
+  });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: readerStore,
@@ -94,16 +100,20 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     acl,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
   });
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const app = createApp({
     deploy,
     deploymentGitPrincipals: artifacts,
     acl,
     identity,
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
-  const server = createServer(app, { signingSecret, identity });
+  const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret,
+    identity,
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);

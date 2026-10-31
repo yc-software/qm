@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import { boundTenant } from "../tenants/context.ts";
-import { tenantColumn } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -20,6 +20,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
+    ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
@@ -30,6 +31,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
   const db = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "delivery/store/0001",
       statements: [
@@ -78,7 +80,20 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
       ],
     },
-    tenantColumn("deliveries"),
+    {
+      id: "delivery/store/0007",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
+      ],
+    },
+    tenantTables("delivery/store/0008-tenants", [
+      {
+        table: "deliveries",
+        primaryKey: "id",
+        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
+      },
+    ]),
   ]);
   const { q, query } = db;
   const acrossTenants = (text: string, params: unknown[]): Promise<Rows> =>
@@ -114,7 +129,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const inserted = await q(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (idempotency_key) DO UPDATE
+         ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
@@ -124,6 +139,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
+             AND deliveries.failed_reason IS NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -192,11 +208,21 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         [id, at, slackApiMs ?? null],
       );
     },
+    async fail(id, reason, at) {
+      const rows = await q(
+        `UPDATE deliveries
+            SET expired_at = $3, failed_reason = $2, claim_expires_at = NULL
+          WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL
+          RETURNING *`,
+        [id, reason, at],
+      );
+      return rows[0] ? rowToDelivery(rows[0]) : null;
+    },
     async ackByKey(idempotencyKey, at) {
       await query(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, created_at, delivered_at)
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
-         ON CONFLICT (idempotency_key)
+         ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
                        expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
         [randomUUID(), idempotencyKey, at],

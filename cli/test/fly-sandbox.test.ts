@@ -266,7 +266,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
     services: ["core", "slack"],
     plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
     skills: [],
-    env: { core: { HARNESS: "pi" } },
+    env: {},
     imageOverrides: {},
     sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY", "COMPANY_TOKEN"] },
   };
