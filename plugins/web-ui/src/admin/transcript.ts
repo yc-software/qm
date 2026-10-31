@@ -10,7 +10,7 @@ type Row = Record<string, any>;
 
 const PAGE_SIZE = 500;
 
-export function payloadText(payload: unknown): string {
+function payloadText(payload: unknown): string {
   if (payload == null) return "";
   if (typeof payload === "string") return payload;
   const p = payload as Row;
@@ -19,7 +19,7 @@ export function payloadText(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
 
-export function units(data: Row) {
+function units(data: Row) {
   const entries: Row[] = data.entries || [];
   const results = new Map<string, Row>();
   for (const e of entries)

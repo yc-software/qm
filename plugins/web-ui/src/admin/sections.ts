@@ -67,7 +67,7 @@ export function settingsRoute(base: string) {
   return { view, params, session, pathScope: history && kind === "scopes" ? decode(id) : null };
 }
 
-export interface AdminResponse<T = any> {
+interface AdminResponse<T = any> {
   ok: boolean;
   status: number;
   data: T;
@@ -88,7 +88,7 @@ export interface AdminPage {
   current: () => boolean;
 }
 
-export type AdminModule = { mount: (page: AdminPage) => void | Promise<void> };
+type AdminModule = { mount: (page: AdminPage) => void | Promise<void> };
 
 const pages = {
   governance: () => import("./governance.ts"),
@@ -115,10 +115,10 @@ const pages = {
   skills: () => import("./artifacts-skills.ts"),
 } as Record<string, () => Promise<AdminModule>>;
 
-export const loadAdminPage = (view: string) =>
+const loadAdminPage = (view: string) =>
   Promise.all([import("./entry.ts"), pages[view]!()]).then(([, module]) => module);
 
-export async function adminApi(base: string, method: string, path: string, body?: unknown): Promise<AdminResponse> {
+async function adminApi(base: string, method: string, path: string, body?: unknown): Promise<AdminResponse> {
   let res: Response;
   let text: string;
   try {
@@ -141,7 +141,7 @@ export async function adminApi(base: string, method: string, path: string, body?
   return { ok: res.ok, status: res.status, data };
 }
 
-export function settingsHref(
+function settingsHref(
   base: string,
   view: string,
   params: Record<string, string | number | null | undefined> = {},

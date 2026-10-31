@@ -36,7 +36,7 @@ export function loadScope(data: any, scope: string) {
   }))
     states.get(key)!.load(data[field], scope, scope.startsWith("org:") && field in data);
 }
-export type Connector = {
+type Connector = {
   provider: string;
   configured?: boolean;
   clientId?: string;

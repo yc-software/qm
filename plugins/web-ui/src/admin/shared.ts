@@ -1,14 +1,8 @@
-import { html, render, nothing } from "lit";
+import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ArrowLeft, Search } from "lucide";
 import { icon } from "../icons.ts";
-
-export function node(template: unknown): HTMLElement {
-  const fragment = document.createDocumentFragment();
-  render(template, fragment);
-  return fragment.firstElementChild as HTMLElement;
-}
 
 export function badge(text: unknown, kind = "", title = "") {
   return html`<span class=${"badge" + (kind ? " " + kind : "")} title=${ifDefined(title || undefined)}>${text}</span>`;
@@ -102,15 +96,6 @@ export function pager(total: number, limit: number, offset: number, go: (page: n
   </div>`;
 }
 
-export function renderer(root: HTMLElement) {
-  const end = root.appendChild(document.createComment(""));
-  return (template: unknown) => {
-    if (end.parentNode === root) render(template, root, { renderBefore: end });
-  };
-}
-
-export const mount = (root: HTMLElement, template: unknown) => renderer(root)(template);
-
 export function denseList(items: any[], rowOf: (item: any) => any, open: (item: any) => void, none: string) {
   if (!items.length) return empty(none);
   return html`<div class="dense-list">
@@ -152,21 +137,7 @@ export function denseList(items: any[], rowOf: (item: any) => any, open: (item: 
   </div>`;
 }
 
-export function mountTemplate(selector: string, template: () => unknown) {
-  const placeholder = document.querySelector(selector);
-  if (!placeholder) return () => {};
-  const root = document.createDocumentFragment();
-  const draw = () => render(template(), root);
-  draw();
-  placeholder.replaceWith(root);
-  return draw;
-}
-
-export function scroller(from: Element): HTMLElement {
-  return from.closest<HTMLElement>(".pane") ?? (document.scrollingElement as HTMLElement);
-}
-
-export interface HeaderTab {
+interface HeaderTab {
   label: string;
   count?: number | null;
   active?: boolean;

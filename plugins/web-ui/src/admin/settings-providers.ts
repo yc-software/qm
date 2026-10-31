@@ -9,7 +9,7 @@ const labels: Record<string, string> = {
   "openai-responses": "OpenAI Responses",
   anthropic: "Anthropic Messages",
 };
-export const provider = {
+const provider = {
   draft: {} as Record<string, any>,
   editing: false,
   originalName: "",
@@ -26,7 +26,7 @@ function changeProvider(key: string, value: unknown) {
   provider.draft[key] = value;
   provider.revision++;
 }
-export function openProvider(item: any = null) {
+function openProvider(item: any = null) {
   provider.session++;
   provider.revision++;
   provider.editing = !!item;
@@ -136,7 +136,7 @@ export async function loadProviders() {
   provider.rows = (res.data?.providers || []).filter((p: any) => !p.disabled);
   redraw();
 }
-export function providerRows(compact: boolean) {
+function providerRows(compact: boolean) {
   return repeat(
     provider.rows,
     (p) => p.id,
@@ -204,7 +204,7 @@ function input(
       placeholder=${o.placeholder}
   /></label>`;
 }
-export function providerDialog() {
+function providerDialog() {
   return html`
     <dialog
       @click=${(e: MouseEvent) => {
