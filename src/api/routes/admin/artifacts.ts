@@ -69,7 +69,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, deployments });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
-  const skills = (orgWide ? await app.listSkills() : await app.skillsInScope(scope)).map((s) => {
+  const skills = (orgWide ? await app.listSkills() : await app.listSkills({ scope })).map((s) => {
     const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
     return {
       id: s.id,

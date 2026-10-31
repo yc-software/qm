@@ -82,13 +82,15 @@ export interface SkillStoreOptions {
   advisoryLock?: AdvisoryLock;
 }
 
+export type SkillListing = { scope: ScopeId } | { packIds: readonly string[] } | { archivedFor: string };
+
 export interface SkillQueries {
   get(id: string): Promise<Skill | null>;
   inScopes(scopes: readonly ScopeId[], name?: string): Promise<Skill[]>;
   publishedNamed(names: readonly string[]): Promise<Skill[]>;
   fromPacks(packIds: readonly string[]): Promise<Skill[]>;
   activePackIds(): Promise<string[]>;
-  archivedFor(scopes: readonly ScopeId[], createdBy: string): Promise<Skill[]>;
+  archivedFor(scopes: readonly ScopeId[], creators: readonly string[]): Promise<Skill[]>;
   search(query: string, limit: number): Promise<Skill[]>;
   listAll(): Promise<Skill[]>;
 }
@@ -189,7 +191,7 @@ export function skillStore(skills: SkillRows, opts: SkillStoreOptions = {}): Ski
   const secret = opts.signingSecret ?? randomUUID();
   const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
-    advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
+    advisoryLock.withLock(`skill-name:${currentTenant()}:${scopeId}:${name}`, fn);
 
   function sign(manifest: SkillManifest): string {
     const files = canonicalFiles(manifest.files);
@@ -244,7 +246,7 @@ export function skillStore(skills: SkillRows, opts: SkillStoreOptions = {}): Ski
     publishedNamed: (names) => skills.publishedNamed(names),
     fromPacks: (packIds) => skills.fromPacks(packIds),
     activePackIds: () => skills.activePackIds(),
-    archivedFor: (scopes, createdBy) => skills.archivedFor(scopes, createdBy),
+    archivedFor: (scopes, creators) => skills.archivedFor(scopes, creators),
     search: (query, limit) => skills.search(query, limit),
     listAll: () => skills.listAll(),
     ...(skills.close ? { close: skills.close } : {}),
@@ -380,8 +382,15 @@ function memorySkillRows(): SkillRows {
       const published = await where((s) => s.status === "published" && s.pack !== undefined);
       return [...new Set(published.map((s) => s.pack!.packId))].sort();
     },
-    archivedFor: (scopes, createdBy) =>
-      where((s) => s.status === "archived" && (scopes.includes(s.scopeId) || s.createdBy === createdBy)),
+    archivedFor(scopes, creators) {
+      const scopeKeys = new Set(scopes.map((scope) => scope.toLowerCase()));
+      const creatorKeys = new Set(creators.map((creator) => creator.toLowerCase()));
+      return where(
+        (s) =>
+          s.status === "archived" &&
+          (scopeKeys.has(s.scopeId.toLowerCase()) || creatorKeys.has(s.createdBy.toLowerCase())),
+      );
+    },
     async search(query, limit) {
       const terms = searchTerms(query);
       return (await where((s) => matchesSearchTerms(`${s.manifest.name} ${s.manifest.description}`, terms))).slice(

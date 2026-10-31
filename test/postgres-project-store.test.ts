@@ -99,21 +99,21 @@ test("projects are isolated per tenant and the same id can exist in both", { ski
 });
 
 test("the conversion backfills projects into the instance tenant and drops the old table", { skip }, async () => {
-  const legacy = {
+  const roadmap = {
     id: "p1",
     orgId: orgId(),
-    name: "Legacy",
+    name: "Roadmap",
     ownerId: "alice",
     memberIds: ["alice", "bob"],
     channelMemberIds: ["carol"],
-    slackChannel: { channelId: "C1", channelName: "legacy", linkedBy: "alice", linkedAt: 5 },
+    slackChannel: { channelId: "C1", channelName: "roadmap", linkedBy: "alice", linkedAt: 5 },
     createdAt: 1,
     updatedAt: 2,
   };
   await withTypedTableDb(
     make,
     async ({ store, admin, tenant }) => {
-      assert.deepEqual(await withTenant(tenant, () => store.get("p1")), legacy);
+      assert.deepEqual(await withTenant(tenant, () => store.get("p1")), roadmap);
       assert.deepEqual(await withTenant(tenant, () => store.get("p2")), {
         id: "p2",
         orgId: orgId(),
@@ -129,18 +129,38 @@ test("the conversion backfills projects into the instance tenant and drops the o
            FROM projects ORDER BY id`,
       );
       assert.deepEqual(rows, [
+        { tenant, id: "halfLink", dropped: true, versions: 0 },
+        { tenant, id: "noMembers", dropped: true, versions: 0 },
         { tenant, id: "p1", dropped: true, versions: 0 },
         { tenant, id: "p2", dropped: true, versions: 0 },
       ]);
+      const { slackChannel: _link, ...unlinked } = roadmap;
+      assert.deepEqual(await withTenant(tenant, () => store.get("halfLink")), { ...unlinked, id: "halfLink" });
+      assert.deepEqual((await withTenant(tenant, () => store.get("noMembers")))?.memberIds, ["alice"]);
     },
     (admin) =>
       seedKeyValueTable(admin, "projects", {
-        p1: legacy,
+        p1: roadmap,
         p2: { id: "p2", orgId: orgId(), name: "Plain", ownerId: "bob", memberIds: ["bob"], createdAt: 3, updatedAt: 4 },
-        noMembers: { ...legacy, id: "noMembers", memberIds: "alice" },
-        halfLink: { ...legacy, id: "halfLink", slackChannel: { channelId: "C2" } },
+        noMembers: { ...roadmap, id: "noMembers", memberIds: "alice" },
+        halfLink: { ...roadmap, id: "halfLink", slackChannel: { channelId: "C2" } },
+        ownerless: { ...roadmap, id: "ownerless", ownerId: undefined },
       }),
   );
+});
+
+test("project text with NUL bytes is stored without them", { skip }, async () => {
+  await withTypedTableDb(make, async ({ store, tenant }) => {
+    await withTenant(tenant, async () => {
+      const project = await store.create({ name: "Road\u0000map", ownerId: "alice" });
+      assert.equal((await store.rename(project.id, "alice", "Next\u0000step")).status, "ok");
+      const linked = await store.setSlackChannel(project.id, "alice", { channelId: "C1", channelName: "ch\u0000an" });
+      assert.equal(linked.status, "ok");
+      const got = await store.get(project.id);
+      assert.equal(got?.name, "Nextstep");
+      assert.equal(got?.slackChannel?.channelName, "chan");
+    });
+  });
 });
 
 test(

@@ -4,6 +4,7 @@ import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { pgTextSafe } from "../util/text.ts";
 import type { SkillFile } from "./skill-store.ts";
 
 export interface SkillBundle {
@@ -85,7 +86,7 @@ export function createPostgresSkillBundleStore(connectionString: string): SkillB
       await q(
         `INSERT INTO skill_bundles(pack_id, commit, files, hash) VALUES ($1, $2, $3, $4)
           ON CONFLICT (tenant_id, pack_id) DO UPDATE SET commit = EXCLUDED.commit, files = EXCLUDED.files, hash = EXCLUDED.hash`,
-        [bundle.packId, bundle.commit, jsonbStringify(bundle.files), bundle.hash],
+        [pgTextSafe(bundle.packId), pgTextSafe(bundle.commit), jsonbStringify(bundle.files), pgTextSafe(bundle.hash)],
       );
     },
     async delete(packId) {

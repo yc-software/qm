@@ -888,7 +888,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const resolved = (await app.listVisibleSkills(principalId)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archived = (await app.archivedSkillsFor(principalId)).map((skill) => ({ skill, shadowed: [] }));
+  const archived = (await app.listSkills({ archivedFor: principalId })).map((skill) => ({ skill, shadowed: [] }));
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),

@@ -41,7 +41,7 @@ async function listPacks(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const packs = await ctx.app.listSkillPacks();
   const importedByPack = new Map<string, Set<string>>();
-  for (const sk of await ctx.app.skillsFromPacks(packs.map((p) => p.id))) {
+  for (const sk of await ctx.app.listSkills({ packIds: packs.map((p) => p.id) })) {
     if (sk.status === "published" && sk.pack) {
       const set = importedByPack.get(sk.pack.packId) ?? new Set<string>();
       set.add(sk.pack.upstreamName);

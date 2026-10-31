@@ -5,6 +5,7 @@ import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { pgTextSafe } from "../util/text.ts";
 import type { PackConfig } from "./normalize.ts";
 
 type PackKind = "git";
@@ -78,6 +79,9 @@ export function createSkillPackStore(opts: { now?: () => number } = {}): SkillPa
   };
 }
 
+const IMPORT_COMPLETE =
+  "json->'lastImport'->>'at' IS NOT NULL AND json->'lastImport'->>'commit' IS NOT NULL AND json->'lastImport'->>'status' IN ('ok', 'error')";
+
 export const SKILL_PACKS_MIGRATION = typedTableMigration({
   table: "skill_packs",
   columns: [
@@ -107,11 +111,11 @@ export const SKILL_PACKS_MIGRATION = typedTableMigration({
   primaryKey: ["id"],
   backfill: {
     id: "id",
-    kind: "json->>'kind'",
+    kind: "'git'",
     url: "json->>'url'",
     ref: "json->>'ref'",
-    sync_mode: "json->>'syncMode'",
-    trust_tier: "json->>'trustTier'",
+    sync_mode: "CASE WHEN json->>'syncMode' = 'tracked' THEN 'tracked' ELSE 'pinned' END",
+    trust_tier: "CASE WHEN json->>'trustTier' = 'internal' THEN 'internal' ELSE 'third-party' END",
     config: "NULLIF(json->'config', 'null'::jsonb)",
     target_scope_id: "json->>'targetScopeId'",
     subset:
@@ -119,43 +123,39 @@ export const SKILL_PACKS_MIGRATION = typedTableMigration({
     auth_credential_slug: "json->>'authCredentialSlug'",
     created_by: "COALESCE(json->>'createdBy', '')",
     created_at: "COALESCE(round((json->>'createdAt')::numeric)::bigint, 0)",
-    last_import_at: "round((json->'lastImport'->>'at')::numeric)::bigint",
-    last_import_commit: "json->'lastImport'->>'commit'",
-    last_import_status: "json->'lastImport'->>'status'",
-    last_import_error: "json->'lastImport'->>'error'",
-    last_import_counts: "NULLIF(json->'lastImport'->'counts', 'null'::jsonb)",
+    last_import_at: `CASE WHEN ${IMPORT_COMPLETE} THEN round((json->'lastImport'->>'at')::numeric)::bigint END`,
+    last_import_commit: `CASE WHEN ${IMPORT_COMPLETE} THEN json->'lastImport'->>'commit' END`,
+    last_import_status: `CASE WHEN ${IMPORT_COMPLETE} THEN json->'lastImport'->>'status' END`,
+    last_import_error: `CASE WHEN ${IMPORT_COMPLETE} THEN json->'lastImport'->>'error' END`,
+    last_import_counts: `CASE WHEN ${IMPORT_COMPLETE} THEN NULLIF(json->'lastImport'->'counts', 'null'::jsonb) END`,
     update_available: "(json->>'updateAvailable')::boolean",
     available: "round((json->>'available')::numeric)::integer",
   },
-  where: [
-    "json->>'kind' = 'git'",
-    "json->>'url' IS NOT NULL",
-    "json->>'ref' IS NOT NULL",
-    "json->>'syncMode' IN ('pinned', 'tracked')",
-    "json->>'trustTier' IN ('internal', 'third-party')",
-    "json->>'targetScopeId' IS NOT NULL",
-    "(json->'lastImport' IS NULL OR (json->'lastImport'->>'at' IS NOT NULL AND json->'lastImport'->>'commit' IS NOT NULL AND json->'lastImport'->>'status' IN ('ok', 'error')))",
-  ].join(" AND "),
+  where: "json->>'url' IS NOT NULL AND json->>'ref' IS NOT NULL AND json->>'targetScopeId' IS NOT NULL",
 });
+
+function safeText(value: string | undefined): string | null {
+  return value === undefined ? null : pgTextSafe(value);
+}
 
 const PACK_COLUMNS: { [K in keyof SkillPack]-?: (pack: Partial<SkillPack>) => Record<string, unknown> } = {
   id: (p) => ({ id: p.id }),
   kind: (p) => ({ kind: p.kind }),
-  url: (p) => ({ url: p.url }),
-  ref: (p) => ({ ref: p.ref }),
+  url: (p) => ({ url: safeText(p.url) }),
+  ref: (p) => ({ ref: safeText(p.ref) }),
   syncMode: (p) => ({ sync_mode: p.syncMode }),
   trustTier: (p) => ({ trust_tier: p.trustTier }),
   config: (p) => ({ config: p.config ? jsonbStringify(p.config) : null }),
-  targetScopeId: (p) => ({ target_scope_id: p.targetScopeId }),
-  subset: (p) => ({ subset: p.subset === "all" || p.subset === undefined ? null : p.subset }),
-  authCredentialSlug: (p) => ({ auth_credential_slug: p.authCredentialSlug ?? null }),
-  createdBy: (p) => ({ created_by: p.createdBy }),
+  targetScopeId: (p) => ({ target_scope_id: safeText(p.targetScopeId) }),
+  subset: (p) => ({ subset: p.subset === "all" || p.subset === undefined ? null : p.subset.map(pgTextSafe) }),
+  authCredentialSlug: (p) => ({ auth_credential_slug: safeText(p.authCredentialSlug) }),
+  createdBy: (p) => ({ created_by: safeText(p.createdBy) }),
   createdAt: (p) => ({ created_at: p.createdAt }),
   lastImport: ({ lastImport: i }) => ({
     last_import_at: i?.at ?? null,
-    last_import_commit: i?.commit ?? null,
+    last_import_commit: safeText(i?.commit),
     last_import_status: i?.status ?? null,
-    last_import_error: i?.error ?? null,
+    last_import_error: safeText(i?.error),
     last_import_counts: i?.counts ? jsonbStringify(i.counts) : null,
   }),
   updateAvailable: (p) => ({ update_available: p.updateAvailable ?? null }),

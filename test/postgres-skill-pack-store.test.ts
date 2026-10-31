@@ -76,7 +76,7 @@ test("skill packs are isolated per tenant", { skip }, async () => {
 });
 
 test("the conversion backfills skill packs into the instance tenant and drops the old table", { skip }, async () => {
-  const legacy = {
+  const stored = {
     id: "p1",
     kind: "git",
     url: "https://example.com/skills.git",
@@ -94,19 +94,29 @@ test("the conversion backfills skill packs into the instance tenant and drops th
   await withTypedTableDb(
     makePacks,
     async ({ store, admin, tenant }) => {
-      assert.deepEqual(await withTenant(tenant, () => store.list()), [legacy]);
+      const { lastImport: _import, ...unimported } = stored;
+      assert.deepEqual(await withTenant(tenant, () => store.list()), [
+        { ...stored, id: "broken", syncMode: "pinned", trustTier: "third-party" },
+        { ...unimported, id: "halfImport" },
+        stored,
+      ]);
       const { rows } = await admin.query(
         `SELECT tenant_id::text AS tenant, id, to_regclass('skill_packs_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'skill_packs') AS versions
-           FROM skill_packs`,
+           FROM skill_packs ORDER BY id`,
       );
-      assert.deepEqual(rows, [{ tenant, id: "p1", dropped: true, versions: 0 }]);
+      assert.deepEqual(
+        rows.map((row) => row.id),
+        ["broken", "halfImport", "p1"],
+      );
+      assert.ok(rows.every((row) => row.tenant === tenant && row.dropped && row.versions === 0));
     },
     (admin) =>
       seedKeyValueTable(admin, "skill_packs", {
-        p1: legacy,
-        broken: { ...legacy, id: "broken", syncMode: "sometimes" },
-        halfImport: { ...legacy, id: "halfImport", lastImport: { at: 1 } },
+        p1: stored,
+        broken: { ...stored, id: "broken", syncMode: "sometimes", trustTier: "unknown" },
+        halfImport: { ...stored, id: "halfImport", lastImport: { at: 1 } },
+        urlless: { ...stored, id: "urlless", url: undefined },
       }),
   );
 });

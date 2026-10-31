@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHmac } from "node:crypto";
-import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
+import { installSeedSkills, lazySkillBoot, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
@@ -15,7 +15,8 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { currentTenant, withTenant } from "../src/tenants/context.ts";
 
 bindTestTenant();
 
@@ -346,4 +347,33 @@ test("installSeedSkills re-seeds when only a bundled asset changes", async () =>
   assert.deepEqual(rerun, { installed: [], updated: ["tooled"], skipped: [] });
   const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
   assert.equal(tooled.manifest.files?.find((f) => f.path === "scripts/hello.py")?.content, "v2\n");
+});
+
+test("lazy skill boot runs once per tenant in the caller's tenant and retries after a failure", async () => {
+  const OTHER = "00000000-0000-4000-8000-000000000002";
+  const hydrated: string[] = [];
+  const seeded: string[] = [];
+  let failNext = false;
+  const boot = lazySkillBoot(
+    async () => hydrated.push(currentTenant()),
+    async () => {
+      seeded.push(currentTenant());
+      if (failNext) {
+        failNext = false;
+        throw new Error("seed failed");
+      }
+    },
+  );
+  await boot.skillsReady();
+  await boot.layerReady();
+  await boot.skillsReady();
+  assert.deepEqual(seeded, [TEST_TENANT]);
+  assert.deepEqual(hydrated, [TEST_TENANT]);
+  failNext = true;
+  await withTenant(OTHER, () => boot.skillsReady());
+  assert.deepEqual(seeded, [TEST_TENANT, OTHER]);
+  await withTenant(OTHER, () => boot.skillsReady());
+  await withTenant(OTHER, () => boot.skillsReady());
+  assert.deepEqual(seeded, [TEST_TENANT, OTHER, OTHER]);
+  assert.deepEqual(hydrated, [TEST_TENANT, OTHER, OTHER]);
 });

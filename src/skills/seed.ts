@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
@@ -96,7 +97,7 @@ export function upsertSeedSkill(
   },
 ): Promise<UpsertOutcome> {
   const run = () => upsertSeedSkillUnsafe(skills, input);
-  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
+  return upsertQueue(`${currentTenant()}\0${input.scopeId}\0${input.manifest.name}`, () =>
     skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
   );
 }
@@ -160,22 +161,42 @@ export async function installSeedSkills(
   return result;
 }
 
+interface SkillBoot {
+  layer: Promise<unknown>;
+  skills: Promise<void>;
+}
+
 export function lazySkillBoot(
   hydrateLayer: () => Promise<unknown>,
   installCatalogs?: () => Promise<void>,
 ): { layerReady: () => Promise<unknown>; skillsReady: () => Promise<void> } {
-  let boot: { layer: Promise<unknown>; skills: Promise<void> } | undefined;
+  const boots = new Map<string, SkillBoot>();
   const start = () => {
-    if (boot) return boot;
+    const tenant = currentTenant();
+    const existing = boots.get(tenant);
+    if (existing) return existing;
     const layer = hydrateLayer();
     const layerSettled = layer.then(
-      () => undefined,
-      (e: unknown) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+      () => true,
+      (e: unknown) => {
+        console.error("[seed] deployment layer not ready:", errMessage(e));
+        return false;
+      },
     );
-    const catalogs = installCatalogs?.().catch((e: unknown) =>
-      console.error("[seed] failed to install seed skills:", errMessage(e)),
+    const catalogs = (installCatalogs?.() ?? Promise.resolve()).then(
+      () => true,
+      (e: unknown) => {
+        console.error("[seed] failed to install seed skills:", errMessage(e));
+        return false;
+      },
     );
-    boot = { layer, skills: Promise.all([catalogs, layerSettled]).then(() => undefined) };
+    const boot: SkillBoot = {
+      layer,
+      skills: Promise.all([catalogs, layerSettled]).then((settled) => {
+        if (!settled.every(Boolean) && boots.get(tenant) === boot) boots.delete(tenant);
+      }),
+    };
+    boots.set(tenant, boot);
     return boot;
   };
   return { layerReady: () => start().layer, skillsReady: () => start().skills };

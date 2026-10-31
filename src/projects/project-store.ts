@@ -9,6 +9,7 @@ import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const PROJECT_GROUP_PREFIX = "web-project-";
 
@@ -121,8 +122,10 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
   const isActiveMember = opts.isActiveMember ?? (() => true);
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
-  const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> =>
-    queue(id, () => advisoryLock.withLock(`project:${id}`, fn));
+  const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+    const key = `${currentTenant()}:${id}`;
+    return queue(key, () => advisoryLock.withLock(`project:${key}`, fn));
+  };
 
   async function update(id: string, fn: (project: Project) => Project): Promise<Project | null> {
     const project = await backing.get(id);
@@ -386,6 +389,10 @@ export function createProjectStore(opts: ProjectStoreOptions): ProjectStore {
   return projectStore(memoryProjectRows(), opts);
 }
 
+const SLACK_LINK_COMPLETE = ["channelId", "channelName", "linkedBy", "linkedAt"]
+  .map((field) => `json->'slackChannel'->>'${field}' IS NOT NULL`)
+  .join(" AND ");
+
 export const PROJECTS_MIGRATION = typedTableMigration({
   table: "projects",
   columns: [
@@ -413,31 +420,21 @@ export const PROJECTS_MIGRATION = typedTableMigration({
     org_id: "json->>'orgId'",
     name: "json->>'name'",
     owner_id: "json->>'ownerId'",
-    member_ids: "ARRAY(SELECT jsonb_array_elements_text(json->'memberIds'))",
+    member_ids:
+      "CASE WHEN jsonb_typeof(json->'memberIds') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'memberIds')) ELSE ARRAY[json->>'ownerId'] END",
     channel_member_ids:
       "CASE WHEN jsonb_typeof(json->'channelMemberIds') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'channelMemberIds')) END",
-    slack_channel_id: "json->'slackChannel'->>'channelId'",
-    slack_channel_name: "json->'slackChannel'->>'channelName'",
-    slack_linked_by: "json->'slackChannel'->>'linkedBy'",
-    slack_linked_at: "round((json->'slackChannel'->>'linkedAt')::numeric)::bigint",
-    created_at: "round((json->>'createdAt')::numeric)::bigint",
-    updated_at: "round((json->>'updatedAt')::numeric)::bigint",
+    slack_channel_id: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'channelId' END`,
+    slack_channel_name: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'channelName' END`,
+    slack_linked_by: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'linkedBy' END`,
+    slack_linked_at: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN round((json->'slackChannel'->>'linkedAt')::numeric)::bigint END`,
+    created_at: "round(COALESCE(json->>'createdAt', json->>'updatedAt', '0')::numeric)::bigint",
+    updated_at: "round(COALESCE(json->>'updatedAt', json->>'createdAt', '0')::numeric)::bigint",
   },
-  where: [
-    "json->>'orgId' IS NOT NULL",
-    "json->>'name' IS NOT NULL",
-    "json->>'ownerId' IS NOT NULL",
-    "jsonb_typeof(json->'memberIds') = 'array'",
-    "json->>'createdAt' IS NOT NULL",
-    "json->>'updatedAt' IS NOT NULL",
-    `(json->'slackChannel' IS NULL OR (json->'slackChannel'->>'channelId' IS NOT NULL
-      AND json->'slackChannel'->>'channelName' IS NOT NULL AND json->'slackChannel'->>'linkedBy' IS NOT NULL
-      AND json->'slackChannel'->>'linkedAt' IS NOT NULL))`,
-  ].join(" AND "),
+  where: "json->>'orgId' IS NOT NULL AND json->>'name' IS NOT NULL AND json->>'ownerId' IS NOT NULL",
   indexes: [
     "CREATE INDEX projects_by_org ON projects(tenant_id, org_id, updated_at DESC)",
     "CREATE INDEX projects_linked ON projects(tenant_id, org_id) WHERE slack_channel_id IS NOT NULL",
-    "CREATE INDEX projects_by_member ON projects USING GIN ((member_ids || COALESCE(channel_member_ids, '{}'::text[])))",
   ],
 });
 
@@ -459,15 +456,15 @@ const PROJECT_COLUMNS = [
 function projectRow(project: Project): unknown[] {
   const slack = project.slackChannel;
   return [
-    project.id,
-    project.orgId,
-    project.name,
-    project.ownerId,
-    project.memberIds,
-    project.channelMemberIds ?? null,
-    slack?.channelId ?? null,
-    slack?.channelName ?? null,
-    slack?.linkedBy ?? null,
+    pgTextSafe(project.id),
+    pgTextSafe(project.orgId),
+    pgTextSafe(project.name),
+    pgTextSafe(project.ownerId),
+    project.memberIds.map(pgTextSafe),
+    project.channelMemberIds?.map(pgTextSafe) ?? null,
+    slack ? pgTextSafe(slack.channelId) : null,
+    slack ? pgTextSafe(slack.channelName) : null,
+    slack ? pgTextSafe(slack.linkedBy) : null,
     slack?.linkedAt ?? null,
     project.createdAt,
     project.updatedAt,

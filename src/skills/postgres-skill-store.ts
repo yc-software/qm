@@ -18,8 +18,11 @@ import {
 } from "./skill-store.ts";
 
 const STATUSES = "'draft', 'reviewed', 'published', 'archived'";
-const TEXT_ARRAY = (path: string) => `ARRAY(SELECT jsonb_array_elements_text(COALESCE(${path}, '[]'::jsonb)))`;
-const ARRAY_OR_ABSENT = (path: string) => `COALESCE(jsonb_typeof(${path}), 'array') = 'array'`;
+const TEXT_ARRAY = (path: string) =>
+  `CASE WHEN jsonb_typeof(${path}) = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(${path})) ELSE '{}' END`;
+const PACK_COMPLETE = ["packId", "commit", "upstreamName"]
+  .map((field) => `json->'pack'->>'${field}' IS NOT NULL`)
+  .join(" AND ");
 const MILLIS = (field: string) => `round((json->>'${field}')::numeric)::bigint`;
 const SEARCH_VECTOR = `to_tsvector('simple', name || ' ' || description)`;
 
@@ -57,9 +60,9 @@ export const SKILLS_MIGRATION = typedTableMigration({
     description: "COALESCE(json->'manifest'->>'description', '')",
     required_capabilities: TEXT_ARRAY("json->'manifest'->'requiredCapabilities'"),
     body: "COALESCE(json->'manifest'->>'body', '')",
-    files: "NULLIF(json->'manifest'->'files', 'null'::jsonb)",
+    files: "CASE WHEN jsonb_typeof(json->'manifest'->'files') = 'array' THEN json->'manifest'->'files' END",
     signature: "COALESCE(json->>'signature', '')",
-    status: "json->>'status'",
+    status: `CASE WHEN json->>'status' IN (${STATUSES}) THEN json->>'status' ELSE 'draft' END`,
     created_by: "COALESCE(json->>'createdBy', '')",
     version: "COALESCE((json->>'version')::integer, 1)",
     granted_capabilities: TEXT_ARRAY("json->'grantedCapabilities'"),
@@ -67,25 +70,16 @@ export const SKILLS_MIGRATION = typedTableMigration({
     created_at: MILLIS("createdAt"),
     updated_at: MILLIS("updatedAt"),
     last_used_at: MILLIS("lastUsedAt"),
-    pack_id: "json->'pack'->>'packId'",
-    pack_commit: "json->'pack'->>'commit'",
-    pack_upstream_name: "json->'pack'->>'upstreamName'",
+    pack_id: `CASE WHEN ${PACK_COMPLETE} THEN json->'pack'->>'packId' END`,
+    pack_commit: `CASE WHEN ${PACK_COMPLETE} THEN json->'pack'->>'commit' END`,
+    pack_upstream_name: `CASE WHEN ${PACK_COMPLETE} THEN json->'pack'->>'upstreamName' END`,
   },
-  where: [
-    "json->>'scopeId' IS NOT NULL",
-    "json->'manifest'->>'name' IS NOT NULL",
-    `json->>'status' IN (${STATUSES})`,
-    ARRAY_OR_ABSENT("json->'manifest'->'requiredCapabilities'"),
-    ARRAY_OR_ABSENT("json->'grantedCapabilities'"),
-    ARRAY_OR_ABSENT("json->'approvals'"),
-    `(json->'pack' IS NULL OR (json->'pack'->>'packId' IS NOT NULL AND json->'pack'->>'commit' IS NOT NULL AND json->'pack'->>'upstreamName' IS NOT NULL))`,
-  ].join(" AND "),
+  where: "json->>'scopeId' IS NOT NULL AND json->'manifest'->>'name' IS NOT NULL",
   indexes: [
     "CREATE INDEX skills_by_scope_name ON skills(tenant_id, scope_id, name, status)",
     "CREATE INDEX skills_by_name ON skills(tenant_id, name, status)",
     "CREATE INDEX skills_by_pack ON skills(tenant_id, pack_id) WHERE pack_id IS NOT NULL",
     "CREATE INDEX skills_by_creator ON skills(tenant_id, created_by)",
-    `CREATE INDEX skills_search ON skills USING GIN (${SEARCH_VECTOR})`,
   ],
 });
 
@@ -153,25 +147,25 @@ function fromRow(row: Record<string, unknown>): Skill {
 function toRow(skill: Skill): unknown[] {
   const { manifest } = skill;
   return [
-    skill.id,
-    skill.scopeId,
-    manifest.name,
+    pgTextSafe(skill.id),
+    pgTextSafe(skill.scopeId),
+    pgTextSafe(manifest.name),
     pgTextSafe(manifest.description),
-    manifest.requiredCapabilities,
+    manifest.requiredCapabilities.map(pgTextSafe),
     pgTextSafe(manifest.body),
     manifest.files ? jsonbStringify(manifest.files) : null,
-    skill.signature,
+    pgTextSafe(skill.signature),
     skill.status,
-    skill.createdBy,
+    pgTextSafe(skill.createdBy),
     skill.version,
-    skill.grantedCapabilities,
-    skill.approvals,
+    skill.grantedCapabilities.map(pgTextSafe),
+    skill.approvals.map(pgTextSafe),
     skill.createdAt ?? null,
     skill.updatedAt ?? null,
     skill.lastUsedAt ?? null,
-    skill.pack?.packId ?? null,
-    skill.pack?.commit ?? null,
-    skill.pack?.upstreamName ?? null,
+    skill.pack ? pgTextSafe(skill.pack.packId) : null,
+    skill.pack ? pgTextSafe(skill.pack.commit) : null,
+    skill.pack ? pgTextSafe(skill.pack.upstreamName) : null,
   ];
 }
 
@@ -211,8 +205,11 @@ export function createPostgresSkillRows(connectionString: string): SkillRows {
       );
       return found.map((row) => String(row.pack_id));
     },
-    archivedFor: (scopes, createdBy) =>
-      select("status = 'archived' AND (scope_id = ANY($1::text[]) OR created_by = $2)", [[...scopes], createdBy]),
+    archivedFor: (scopes, creators) =>
+      select("status = 'archived' AND (lower(scope_id) = ANY($1::text[]) OR lower(created_by) = ANY($2::text[]))", [
+        scopes.map((scope) => scope.toLowerCase()),
+        creators.map((creator) => creator.toLowerCase()),
+      ]),
     async search(query, limit) {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];

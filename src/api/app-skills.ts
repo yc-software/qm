@@ -14,6 +14,7 @@ import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
+import { rosterIds } from "../directory/person.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 export async function skillVisibilityContext(deps: AppDeps, h: AppHelpers, principalId: string) {
@@ -214,9 +215,6 @@ export function createSkillMethods(
 ): Pick<
   App,
   | "listSkills"
-  | "archivedSkillsFor"
-  | "skillsInScope"
-  | "skillsFromPacks"
   | "getSkill"
   | "archiveSkill"
   | "listVisibleSkills"
@@ -236,18 +234,15 @@ export function createSkillMethods(
 > {
   const { canManageSkill, republishIfShared } = h;
   return {
-    listSkills() {
-      return deps.skills.listAll();
-    },
-    skillsInScope(scope) {
-      return deps.skills.inScopes([scope]);
-    },
-    skillsFromPacks(packIds) {
-      return deps.skills.fromPacks(packIds);
-    },
-    async archivedSkillsFor(principalId) {
+    async listSkills(only) {
+      if (!only) return deps.skills.listAll();
+      if ("scope" in only) return deps.skills.inScopes([only.scope]);
+      if ("packIds" in only) return deps.skills.fromPacks(only.packIds);
+      const principalId = only.archivedFor;
       const { ordered } = await skillVisibilityContext(deps, h, principalId);
-      const archived = await deps.skills.archivedFor(ordered, principalId);
+      const aliases = rosterIds(principalId);
+      const scopes = [...ordered, ...aliases.map((alias) => scopeId("personal", alias))];
+      const archived = await deps.skills.archivedFor(scopes, aliases);
       const manageable = await Promise.all(archived.map((skill) => canManageSkill(skill, principalId)));
       return archived.filter((_, i) => manageable[i]);
     },

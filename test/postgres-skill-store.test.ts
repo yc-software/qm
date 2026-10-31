@@ -69,11 +69,11 @@ test("skill queries hit only the rows each caller needs", { skip }, async () => 
       );
       assert.deepEqual(await store.activePackIds(), ["p1"]);
       assert.deepEqual(
-        (await store.archivedFor([TEAM], "nobody")).map((s) => s.id),
+        (await store.archivedFor([TEAM], ["nobody"])).map((s) => s.id),
         [archived.id],
       );
       assert.deepEqual(
-        (await store.archivedFor([], "alice")).map((s) => s.id),
+        (await store.archivedFor([], ["Alice"])).map((s) => s.id),
         [archived.id],
       );
       assert.deepEqual(
@@ -144,7 +144,7 @@ test("skills are isolated per tenant and the same scope and name coexist", { ski
 });
 
 test("the conversion backfills skills into the instance tenant and drops the old table", { skip }, async () => {
-  const legacy = {
+  const stored = {
     id: "s1",
     scopeId: ORG,
     manifest: {
@@ -168,7 +168,7 @@ test("the conversion backfills skills into the instance tenant and drops the old
   await withTypedTableDb(
     make,
     async ({ store, admin, tenant }) => {
-      assert.deepEqual(await withTenant(tenant, () => store.get("s1")), legacy);
+      assert.deepEqual(await withTenant(tenant, () => store.get("s1")), stored);
       assert.deepEqual(await withTenant(tenant, () => store.get("s2")), {
         id: "s2",
         scopeId: ALICE,
@@ -186,7 +186,13 @@ test("the conversion backfills skills into the instance tenant and drops the old
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'skills') AS versions
            FROM skills ORDER BY id`,
       );
+      assert.deepEqual(
+        await withTenant(tenant, async () => [(await store.get("broken"))?.status, (await store.get("badpack"))?.pack]),
+        ["draft", undefined],
+      );
       assert.deepEqual(rows, [
+        { tenant, id: "badpack", name: "y", required_capabilities: [], no_files: true, dropped: true, versions: 0 },
+        { tenant, id: "broken", name: "x", required_capabilities: [], no_files: true, dropped: true, versions: 0 },
         {
           tenant,
           id: "s1",
@@ -201,9 +207,9 @@ test("the conversion backfills skills into the instance tenant and drops the old
     },
     (admin) =>
       seedKeyValueTable(admin, "skills", {
-        s1: legacy,
+        s1: stored,
         s2: { id: "s2", scopeId: ALICE, manifest: { name: "bare" }, status: "draft" },
-        broken: { id: "broken", scopeId: ORG, manifest: { name: "x" }, status: "bogus" },
+        broken: { id: "broken", scopeId: ORG, manifest: { name: "x", requiredCapabilities: "net" }, status: "bogus" },
         nameless: { id: "nameless", scopeId: ORG, manifest: {}, status: "draft" },
         badpack: { id: "badpack", scopeId: ORG, manifest: { name: "y" }, status: "draft", pack: { packId: "p" } },
       }),
@@ -239,23 +245,23 @@ async function insertRaw(
   await admin.query(
     `INSERT INTO skills(tenant_id, id, scope_id, name, description, required_capabilities, body, signature, status,
                         created_by, version, granted_capabilities, approvals)
-     VALUES ($1, 'legacy', $2, $3, 'legacy', '{}', 'legacy', 'legacy', $4, 'legacy-import', 1, '{}', '{}')`,
+     VALUES ($1, 'unchecked', $2, $3, 'unchecked', '{}', 'unchecked', 'unchecked', $4, 'early-import', 1, '{}', '{}')`,
     [tenant, ORG, name, status],
   );
 }
 
-test("legacy unsafe skill names never reach materialization", { skip }, async () => {
+test("unsafe skill names stored before validation never reach materialization", { skip }, async () => {
   await withTypedTableDb(make, async ({ store, admin, tenant }) => {
     await insertRaw(admin, tenant, "foo/bar", "reviewed");
     await withTenant(tenant, async () => {
-      await assert.rejects(() => store.publish("legacy"), /skill name must/);
+      await assert.rejects(() => store.publish("unchecked"), /skill name must/);
       assert.deepEqual(await store.visibleFor([ORG]), []);
     });
   });
 });
 
 test(
-  "a legacy published skill with an unsafe name is quarantined without blocking layer replacement",
+  "a published skill stored with an unsafe name is quarantined without blocking layer replacement",
   { skip },
   async () => {
     await withTypedTableDb(make, async ({ store, admin, tenant }) => {
@@ -270,7 +276,7 @@ test(
         });
         await layer.put({ contract: 1, tools: [], skills: [] }, "test");
         assert.deepEqual(await store.visibleFor([ORG]), []);
-        assert.equal((await store.get("legacy"))?.status, "published");
+        assert.equal((await store.get("unchecked"))?.status, "published");
       });
     });
   },
