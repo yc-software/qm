@@ -184,7 +184,13 @@ const DEPLOYMENT_MIGRATIONS = [
          END IF;
          IF to_regclass('deployments') IS NOT NULL THEN
            UPDATE deployments d SET json = d.json - 'name'
-            WHERE EXISTS (SELECT 1 FROM deployments o WHERE o.json->>'name' = d.json->>'name' AND o.id < d.id);
+            WHERE EXISTS (
+              SELECT 1 FROM deployments o
+               WHERE o.json->>'name' = d.json->>'name'
+                 AND (COALESCE(CASE WHEN jsonb_typeof(o.json#>'{versions,0,createdAt}') = 'number'
+                           THEN (o.json#>>'{versions,0,createdAt}')::numeric END, 0), o.id)
+                   < (COALESCE(CASE WHEN jsonb_typeof(d.json#>'{versions,0,createdAt}') = 'number'
+                           THEN (d.json#>>'{versions,0,createdAt}')::numeric END, 0), d.id));
          END IF;
        END $prep$`,
     ],

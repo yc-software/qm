@@ -91,39 +91,51 @@ test("deployment names are unique across every tenant", { skip }, async () => {
   });
 });
 
-test("deployments backfill with their access times and keep the lowest id on a duplicate name", { skip }, async () => {
-  await withTypedTableDb(
-    stores,
-    async ({ store, tenant, admin }) => {
-      await withTenant(tenant, async () => {
-        const s = store.make(0);
-        assert.deepEqual(await s.get("dep-a"), { ...legacy("dep-a", { name: "doubled" }), lastAccessAt: 4_242 });
-        assert.deepEqual(await s.get("dep-b"), legacy("dep-b", { endpoint: null, alwaysOn: true, public: true }));
-        assert.equal((await s.getByName("doubled"))!.id, "dep-a");
-      });
-      const { rows } = await admin.query(
-        `SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv,
+const older = (id: string): Deployment =>
+  legacy(id, {
+    endpoint: null,
+    alwaysOn: true,
+    public: true,
+    versions: [{ version: 1, createdAt: 0, entrypoint: "node s.js", snapshotDir: "/snap" }],
+  });
+
+test(
+  "deployments backfill with their access times and keep a duplicate name on the oldest deployment",
+  { skip },
+  async () => {
+    await withTypedTableDb(
+      stores,
+      async ({ store, tenant, admin }) => {
+        await withTenant(tenant, async () => {
+          const s = store.make(0);
+          assert.deepEqual(await s.get("dep-a"), { ...legacy("dep-a"), lastAccessAt: 4_242 });
+          assert.deepEqual(await s.get("dep-b"), { ...older("dep-b"), name: "doubled" });
+          assert.equal((await s.getByName("doubled"))!.id, "dep-b");
+        });
+        const { rows } = await admin.query(
+          `SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv,
                 (SELECT count(*)::int FROM app_page_views) AS views`,
-      );
-      assert.deepEqual(rows[0], { access: null, kv: null, views: 1 });
-    },
-    async (admin) => {
-      await seedKeyValueTable(admin, "deployments", {
-        "dep-a": legacy("dep-a", { name: "doubled" }),
-        "dep-b": legacy("dep-b", { name: "doubled", endpoint: null, alwaysOn: true, public: true }),
-      });
-      await admin.query(
-        `CREATE TABLE deployment_access (id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+        );
+        assert.deepEqual(rows[0], { access: null, kv: null, views: 1 });
+      },
+      async (admin) => {
+        await seedKeyValueTable(admin, "deployments", {
+          "dep-a": legacy("dep-a", { name: "doubled" }),
+          "dep-b": { ...older("dep-b"), name: "doubled" },
+        });
+        await admin.query(
+          `CREATE TABLE deployment_access (id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
            last_access_at BIGINT NOT NULL)`,
-      );
-      await admin.query("INSERT INTO deployment_access VALUES ('dep-a', 4242)");
-      await admin.query(
-        `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id))`,
-      );
-      await admin.query("INSERT INTO app_page_views(deployment_id) VALUES ('dep-a')");
-    },
-  );
-});
+        );
+        await admin.query("INSERT INTO deployment_access VALUES ('dep-a', 4242)");
+        await admin.query(
+          `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id))`,
+        );
+        await admin.query("INSERT INTO app_page_views(deployment_id) VALUES ('dep-a')");
+      },
+    );
+  },
+);
 
 test("deploy search reads typed columns through its GIN index inside one tenant", { skip }, async () => {
   const search = (url: string) => ({ ...stores(url), search: createPostgresResourceSearch(createPgPool(url)) });
