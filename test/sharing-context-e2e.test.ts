@@ -19,7 +19,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   await built.identity.refresh();
   await built.deploymentLayerReady;
   t.after(async () => {
-    built.scheduler.stop();
+    built.jobs.stop();
     built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });

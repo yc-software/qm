@@ -3,9 +3,17 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import type { PoolClient } from "../src/persistence/pg-pool.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { ABSURD_MIGRATION, ABSURD_QUEUES, registerAbsurdSchema, type AbsurdQueue } from "../src/turns/absurd-schema.ts";
+import {
+  ABSURD_MIGRATION,
+  ABSURD_QUEUES,
+  TURN_QUEUES,
+  registerAbsurdSchema,
+  type AbsurdQueue,
+  type TurnQueue,
+} from "../src/turns/absurd-schema.ts";
 import {
   TaskCancelled,
+  absurdTable,
   awaitEvent,
   cancelTask,
   claimTasks,
@@ -37,7 +45,7 @@ async function connect(fakeNow?: Date): Promise<PoolClient> {
 
 async function runRow(queue: AbsurdQueue, runId: string) {
   const { rows } = await admin.query(
-    `SELECT state, attempt, claimed_by, failure_reason FROM absurd.${pg.escapeIdentifier(`r_${queue}`)} WHERE run_id = $1`,
+    `SELECT state, attempt, claimed_by, failure_reason FROM ${absurdTable(queue, "r_")} WHERE run_id = $1`,
     [runId],
   );
   return rows[0] as { state: string; attempt: number; claimed_by: string | null; failure_reason: { name?: string } };
@@ -304,4 +312,11 @@ test("cleanup deletes finished tasks and events past the TTL", { skip }, async (
   await emitEvent(then, "turns_background", "done:t1", {});
   assert.deepEqual(await cleanup(then, "turns_background", 7 * 86_400, 100), { tasks: 0, events: 0 });
   assert.deepEqual(await cleanup(later, "turns_background", 7 * 86_400, 100), { tasks: 1, events: 1 });
+});
+
+test("turn queues are a subset of the migrated queues and unknown queues are refused", () => {
+  const turns: readonly TurnQueue[] = TURN_QUEUES;
+  for (const queue of turns) assert.ok(ABSURD_QUEUES.includes(queue));
+  assert.equal(absurdTable("jobs", "t_"), 'absurd."t_jobs"');
+  assert.throws(() => absurdTable("nope" as AbsurdQueue, "t_"), /unknown queue/);
 });

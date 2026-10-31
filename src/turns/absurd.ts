@@ -13,6 +13,7 @@ export interface SpawnOptions {
   idempotencyKey?: string;
   maxAttempts: number | null;
   maxDurationSec?: number;
+  retryStrategy?: { kind: "fixed" | "exponential"; baseSeconds: number; factor?: number; maxSeconds?: number };
 }
 
 export interface SpawnedTask {
@@ -78,6 +79,18 @@ export async function spawnTask(
     idempotency_key: options.idempotencyKey,
     max_attempts: options.maxAttempts,
     ...(options.maxDurationSec ? { cancellation: { max_duration: options.maxDurationSec } } : {}),
+    ...(options.retryStrategy
+      ? {
+          retry_strategy: {
+            kind: options.retryStrategy.kind,
+            base_seconds: options.retryStrategy.baseSeconds,
+            ...(options.retryStrategy.factor !== undefined ? { factor: options.retryStrategy.factor } : {}),
+            ...(options.retryStrategy.maxSeconds !== undefined
+              ? { max_seconds: options.retryStrategy.maxSeconds }
+              : {}),
+          },
+        }
+      : {}),
   };
   const [row] = await call(
     db,

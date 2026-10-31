@@ -55,7 +55,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   await b.identity.refresh();
   await b.deploymentLayerReady;
   t.after(async () => {
-    b.scheduler.stop();
+    b.jobs.stop();
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
@@ -281,7 +281,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const b = buildApp(config);
   await b.identity.refresh();
   t.after(async () => {
-    b.scheduler.stop();
+    b.jobs.stop();
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });

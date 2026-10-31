@@ -8,10 +8,12 @@ const invalidRuns: Record<string, Partial<Run>> = {
   replaced: { attempts: 99 },
   "wrong token": { leaseToken: "replacement" },
   "missing token": { leaseToken: null },
-  "missing expiry": { leaseExpiresAt: null },
-  expired: { leaseExpiresAt: 1 },
 };
-for (const [name, fields] of Object.entries(invalidRuns)) {
+// "lost claim": the row still looks live, but the turn's Absurd claim is no longer held under this token.
+for (const [name, fields, lost] of [
+  ...Object.entries(invalidRuns).map(([name, fields]) => [name, fields, false] as const),
+  ["lost claim", {}, true] as const,
+]) {
   for (const atCommit of [false, true]) {
     test(`${name} run is rejected at ${atCommit ? "commit" : "admission"}`, async () => {
       const f = await swarmFixture();
@@ -23,6 +25,7 @@ for (const [name, fields] of Object.entries(invalidRuns)) {
           const run = await get(id);
           return run ? { ...run, ...fields } : null;
         };
+        if (lost) f.runs.leaseHeld = async () => false;
       };
       if (atCommit) {
         const update = f.store.update.bind(f.store);

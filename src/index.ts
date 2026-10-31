@@ -8,11 +8,13 @@ import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
-import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
+const JOB_START_RETRY_MS = 5000;
 const config = loadConfig();
 
 const built = buildApp(config);
@@ -81,8 +83,21 @@ if (config.deployProvider === "docker") {
   });
 }
 
+let shuttingDown = false;
+async function startJobs(): Promise<void> {
+  while (!shuttingDown) {
+    try {
+      await built.jobs.start();
+      return;
+    } catch (e) {
+      reportFailure("job worker start", e);
+      await sleep(JOB_START_RETRY_MS, { unref: true });
+    }
+  }
+}
+
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-  built.scheduler.start(1000);
+  void startJobs();
 } else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -132,7 +147,7 @@ if (built.backgroundOwnership) {
   let activationEpoch = 0;
   const stopPeriodic = () => {
     activationEpoch++;
-    periodicStop = built.scheduler.stopClaims();
+    periodicStop = built.jobs.stopClaims();
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
       .stopBackgroundClaims()
@@ -149,8 +164,7 @@ if (built.backgroundOwnership) {
       built.runtime.startBackground();
       await periodicStop;
       if (signal.aborted || epoch !== activationEpoch) return;
-      built.scheduler.start(1000);
-      await built.scheduler.ready();
+      await built.jobs.start();
       if (signal.aborted || epoch !== activationEpoch) return;
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
@@ -162,12 +176,12 @@ if (built.backgroundOwnership) {
     async relinquish() {
       await Promise.all([
         built.runtime.stopBackgroundClaims(),
-        built.scheduler.stopClaims(),
+        built.jobs.stopClaims(),
         ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
       ]);
     },
     async drained() {
-      await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
+      await Promise.all([built.runtime.backgroundDrained(), built.jobs.drained(), periodicStop]);
     },
     onError: reportFailureAs("background ownership", undefined),
   });
@@ -175,7 +189,6 @@ if (built.backgroundOwnership) {
   backgroundController.start();
 }
 
-let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -183,7 +196,7 @@ function shutdown(signal: string): void {
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
-  void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
+  void built.jobs.stop().catch((e: unknown) => console.error("[qm] job worker stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();

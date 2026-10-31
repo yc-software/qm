@@ -12,7 +12,7 @@ import { testMap, testAdvisoryLock } from "./support/test-database.ts";
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
   t.after(async () => {
-    built.scheduler.stop();
+    built.jobs.stop();
     built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
@@ -90,7 +90,7 @@ test("human-origin delegated input is screened before model execution", async (t
     },
   });
   t.after(async () => {
-    built.scheduler.stop();
+    built.jobs.stop();
     built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
@@ -128,7 +128,7 @@ for (const fork of [false, true]) {
     const { startSession } = await import("../src/api/start-session.ts");
     const built = buildApp(testConfig({ memoryCapture: "off" }));
     t.after(async () => {
-      built.scheduler.stop();
+      built.jobs.stop();
       built.deploymentLayerRefresh.stop();
       await built.runtime.stop();
     });

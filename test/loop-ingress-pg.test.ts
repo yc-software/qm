@@ -1,3 +1,4 @@
+import { createInlineJobs } from "./support/inline-jobs.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
@@ -29,6 +30,7 @@ test(
       const items = createLoopItemLedger(testMap(), undefined, { lock, accepts: async () => true });
       let worked = false;
       const ingress = createLoopIngress({
+        jobs: createInlineJobs(),
         enabledFor: async () => true,
         sources: testMap<LoopIngress>(),
         deliveries: testMap<IngressDelivery>(),

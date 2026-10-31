@@ -9,9 +9,11 @@ export const ABSURD_QUEUES: readonly AbsurdQueue[] = [...TURN_QUEUES, JOB_QUEUE]
 
 export const ABSURD_SQL_URL = new URL("./absurd.sql", import.meta.url);
 
+export const ABSURD_RETENTION_DAYS = 7;
+
 const queueSetup = (queue: string): string[] => [
   `SELECT absurd.create_queue('${queue}', 'unpartitioned')`,
-  `SELECT absurd.set_queue_policy('${queue}', '{"cleanup_ttl":"7 days"}'::jsonb)`,
+  `SELECT absurd.set_queue_policy('${queue}', '{"cleanup_ttl":"${ABSURD_RETENTION_DAYS} days"}'::jsonb)`,
 ];
 
 export const ABSURD_MIGRATION: PgMigrationDefinition = {

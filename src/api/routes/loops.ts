@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
@@ -29,6 +30,7 @@ export interface LoopServiceDeps {
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
   fire?: LoopFireService;
+  fireNow?: (loopId: string, fireKey: string) => Promise<void>;
   crons?: CronStore;
   config: ScopedConfigStore;
 }
@@ -525,9 +527,9 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
-  const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
-  void deps.fire.fire(loop.id, fireKey).catch((e: unknown) => swallow(`manual fire of loop ${loop.id}`, e));
+  if (!deps.fireNow) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  const fireKey = `loop:${loop.id}:manual:${randomUUID()}`;
+  await deps.fireNow(loop.id, fireKey);
   return sendJson(ctx.res, 200, { ok: true, fireKey });
 }
 

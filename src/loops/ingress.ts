@@ -14,6 +14,9 @@ import { isObj } from "./sources/adapter.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
+import type { JobWorker } from "../jobs/job-worker.ts";
+
+const LOOP_INGRESS_JOB = "loop-ingress";
 
 export interface LoopIngress {
   id: string;
@@ -105,6 +108,7 @@ export interface LoopIngressDeps {
   outputs: LoopOutputStore;
   fire: Pick<LoopFireService, "fire">;
   lock: AdvisoryLock;
+  jobs: Pick<JobWorker, "handle" | "spawn">;
   gmailConfig?: GmailPushConfig;
   gmailClient?: ReturnType<typeof createGmailPushClient>;
   verifyGoogle?: typeof verifyGmailPush;
@@ -254,13 +258,19 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
+  deps.jobs.handle(LOOP_INGRESS_JOB, async (params) => {
+    await process((params as { sourceId: string }).sourceId);
+    return "done";
+  });
+
   return {
     gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
     async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
       if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
       const source = await conversationSource(loop);
-      await enqueue(source, hashId(entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`)), { entries });
-      void process(source.id).catch((error) => swallow("Loop conversation event", error));
+      const deliveryId = hashId(entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`));
+      await enqueue(source, deliveryId, { entries });
+      await deps.jobs.spawn(LOOP_INGRESS_JOB, { sourceId: source.id }, `loop-ingress:${source.id}:${deliveryId}`);
       return true;
     },
     async list(loopId: string) {
