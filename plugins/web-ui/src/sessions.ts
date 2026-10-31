@@ -98,6 +98,8 @@ import {
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
+import { avatarInitial, groupAvatarStack } from "./group-avatars";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
 import { beginNavigation, endNavigation } from "./url-history";
@@ -447,6 +449,27 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
+let avatarWatch: (() => void) | null = null;
+
+function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
+  if (item.groupKind !== "group") return nothing;
+  const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
+  if (!context || context.project) return nothing;
+  const { shown, overflow } = groupAvatarStack(context.groupMembers, groupDmLabel(item.name)?.names);
+  if (!shown.length) return nothing;
+  avatarWatch ??= onSpeakerAvatars(() => renderList());
+  const everyone = (context.groupMembers ?? []).map((member) => member.displayName).join(", ");
+  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`} ${tip(everyone)}>
+    ${shown.map((member) => {
+      const url = speakerAvatar(member.principalId);
+      return url
+        ? html`<img class="group-avatar" src=${url} alt="" loading="lazy" referrerpolicy="no-referrer" />`
+        : html`<span class="group-avatar initial" aria-hidden="true">${avatarInitial(member.displayName)}</span>`;
+    })}
+    ${overflow ? html`<span class="group-avatar more" aria-hidden="true">+${overflow}</span>` : nothing}
+  </span>`;
+}
+
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
@@ -479,6 +502,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
+                ${groupAvatars(item)}
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
                 <button

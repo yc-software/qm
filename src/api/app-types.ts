@@ -719,6 +719,8 @@ export interface ContextSummary {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: ProjectView;
+  /** Other people in a Slack group DM (the viewer excluded), for the sidebar's avatar stack. */
+  groupMembers?: Array<{ principalId: string; displayName: string }>;
 }
 
 interface FileListItem {

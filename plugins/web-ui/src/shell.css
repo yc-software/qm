@@ -494,6 +494,36 @@ a.chat-row-open {
   font-weight: 400;
   text-align: center;
 }
+.group-avatar-stack {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+}
+.group-avatar {
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin-left: -6px;
+  border: 1.5px solid var(--sidebar, var(--background));
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--secondary);
+}
+.group-avatar:first-child {
+  margin-left: 0;
+}
+.group-avatar.initial,
+.group-avatar.more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--foreground);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
 .recent-project-new-chat {
   display: inline-flex;
   align-items: center;

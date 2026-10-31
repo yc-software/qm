@@ -29,7 +29,7 @@ import {
 import { samePerson } from "../directory/person.ts";
 import { actorAssertionActive } from "../identity/identity-service.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import { reportFailureAs, swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import {
   openGroupViaSurface,
@@ -368,6 +368,18 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if (scope.lastActivityAt !== null) ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, scope.lastActivityAt);
       byScope.set(scope.scopeId, ctx);
     }
+    await Promise.all(
+      [...byScope.values()].map(async (ctx) => {
+        if (ctx.kind !== "group" || ctx.project) return;
+        const members = await deps.directory
+          .conversationMembers("group", parseScopeId(ctx.scopeId).ref)
+          .catch(swallowAs("contexts: group DM members", undefined));
+        if (!members) return;
+        ctx.groupMembers = members
+          .filter((m) => !samePerson(m.principalId, principalId))
+          .map((m) => ({ principalId: m.principalId, displayName: m.displayName }));
+      }),
+    );
     return [...byScope.values()].sort((a, b) => {
       if (a.kind === "personal") return -1;
       if (b.kind === "personal") return 1;
