@@ -2624,16 +2624,16 @@ export function buildApp(
     jobs,
     fireConcurrency: config.cronFireConcurrency,
   });
-  jobs.every("loops:ingress-maintenance", LOOP_MAINTENANCE_INTERVAL_MS, () =>
-    admittedWork.run(() => loopIngress.maintain()).catch(swallowAs("Loop ingress maintenance", undefined)),
+  jobs.every("loops-and-asks:sweep", LOOP_MAINTENANCE_INTERVAL_MS, () =>
+    admittedWork.run(async () => {
+      const now = Date.now();
+      await Promise.all([
+        loopIngress.maintain().catch(swallowAs("Loop ingress maintenance", undefined)),
+        loopFire.sweepStale(now).catch(reportFailureAs("loops: stale-fire sweep", undefined)),
+        sweepAsks?.(now).catch(reportFailureAs("keychain: ask expiry sweep", undefined)),
+      ]);
+    }),
   );
-  jobs.every("loops:stale-fires", LOOP_MAINTENANCE_INTERVAL_MS, () =>
-    admittedWork.run(() => loopFire.sweepStale(Date.now())),
-  );
-  if (sweepAsks)
-    jobs.every("keychain:ask-expiry", LOOP_MAINTENANCE_INTERVAL_MS, () =>
-      admittedWork.run(() => sweepAsks(Date.now())),
-    );
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,

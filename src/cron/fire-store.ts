@@ -127,6 +127,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
   const { q, query, pool } = createPgPool(
     connectionString,
     [
+      { id: "cron/drop-pgboss", statements: ["DROP SCHEMA IF EXISTS pgboss CASCADE"] },
       {
         id: "cron/fires/0001",
         statements: [

@@ -21,7 +21,6 @@ export interface WebhookReceiverDeps extends TriggerDeps {
 const MAX_EVENT_CHARS = 16_000;
 const WEBHOOK_FIRE_JOB = "webhook-fire";
 const WEBHOOK_FIRE_MAX_ATTEMPTS = 3;
-const EVENT_EVICTED = "event dropped from the webhook's recent history before it could fire";
 
 interface WebhookFireJob {
   webhookId: string;
@@ -92,12 +91,17 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
   async function fire({ webhookId, deliveryId }: WebhookFireJob): Promise<void> {
     const wh = await deps.webhooks.get(webhookId);
-    if (!wh || !wh.enabled) return;
-    const event = (await deps.webhooks.listEvents(wh.id)).find((e) => e.deliveryId === deliveryId);
-    if (!event) {
-      await deps.webhooks.recordFire(wh.id, { at: Date.now(), deliveryId, error: EVENT_EVICTED });
-      return;
+    if (!wh) return;
+    try {
+      if (wh.enabled) await fireEvent(wh, deliveryId);
+    } finally {
+      await deps.webhooks.settleEvent(wh.id, deliveryId);
     }
+  }
+
+  async function fireEvent(wh: Webhook, deliveryId: string): Promise<void> {
+    const event = (await deps.webhooks.listEvents(wh.id)).find((e) => e.deliveryId === deliveryId);
+    if (!event?.pending) return;
     const rendered = renderEvent(wh, event);
     const destination: Destination | undefined = wh.destination;
     try {

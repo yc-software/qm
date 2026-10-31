@@ -12,7 +12,7 @@ import {
   scheduleRun,
   spawnTask,
 } from "../turns/absurd.ts";
-import { JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
+import { ABSURD_RETENTION_DAYS, JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { withPgTransaction, pgPoolMax } from "../persistence/pg-pool.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import { WorkAdmissionClosed } from "../util/admitted-work.ts";
@@ -42,24 +42,19 @@ const JOBS_READY_CHANNEL = "qm_jobs_ready";
 
 const UNKNOWN_JOB_RETRY_MS = 60_000;
 const BUSY_RETRY_MS = 5000;
-const JOB_SLOTS = 64;
 const POLL_MIN_MS = 250;
 const POLL_MAX_MS = 5000;
 const CLAIM_TIMEOUT_SEC = 120;
 const CLAIM_EXTEND_MS = 30_000;
-const RELEASE_RETRY_BASE_MS = 5000;
-const RELEASE_RETRY_MAX_MS = 5 * 60_000;
+const RETRY_STRATEGY = { kind: "exponential", baseSeconds: 5, factor: 2, maxSeconds: 300 } as const;
 const EVERY_PREFIX = "every:";
 const LIVE_STATES = ["pending", "running", "sleeping"];
 
-const DONE_RETENTION_SEC = 7 * 24 * 60 * 60;
+const DONE_RETENTION_SEC = ABSURD_RETENTION_DAYS * 24 * 60 * 60;
 const CLEANUP_BATCH = 1000;
 
 const claimBatch = () => Math.max(1, Math.floor(pgPoolMax("query") / 2));
-const clampConcurrency = (n: number) => Math.min(JOB_SLOTS, Math.max(1, Math.trunc(n)));
-
-const releaseRetryAt = (attempt: number, now = Date.now()): number =>
-  now + Math.min(RELEASE_RETRY_MAX_MS, RELEASE_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
+const clampConcurrency = (n: number) => Math.max(1, Math.trunc(n));
 
 function serializeStart(worker: JobWorker): JobWorker {
   let starting: Promise<void> | null = null;
@@ -79,8 +74,7 @@ async function settleJob(db: Db, task: ClaimedRun, disposition: JobDisposition):
   const pool = await db.pool();
   const { runId } = task;
   if (disposition === "done") await completeRun(pool, JOB_QUEUE, runId);
-  else if (disposition === "release")
-    await failRun(pool, JOB_QUEUE, runId, { message: "released unfinished" }, new Date(releaseRetryAt(task.attempt)));
+  else if (disposition === "release") await failRun(pool, JOB_QUEUE, runId, { message: "released unfinished" });
   else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
 }
 
@@ -164,26 +158,27 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     let idleMs = POLL_MIN_MS;
     while (started) {
       woken = false;
-      const free = Math.min(claimBatch(), JOB_SLOTS - active.size);
       let claimed = 0;
-      if (free > 0) {
-        try {
-          for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, free)) {
-            claimed++;
-            const work = runJob(db, handlers, task);
-            active.add(work);
-            void work.then((ran) => {
-              active.delete(work);
-              if (ran) poke();
-            });
-          }
-        } catch (e) {
-          reportFailure("jobs: claim", e);
+      let bounced = 0;
+      try {
+        for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, claimBatch())) {
+          claimed++;
+          const handler = handlers.get(task.taskName);
+          if (!handler || handler.running >= handler.concurrency) bounced++;
+          const work = runJob(db, handlers, task);
+          active.add(work);
+          void work.then((ran) => {
+            active.delete(work);
+            if (ran) poke();
+          });
         }
+      } catch (e) {
+        reportFailure("jobs: claim", e);
       }
       if (claimed > 0) idleMs = POLL_MIN_MS;
-      if ((claimed === 0 || active.size >= JOB_SLOTS) && !woken) {
-        await Promise.race([sleep(active.size >= JOB_SLOTS ? POLL_MAX_MS : idleMs, { unref: true }), wake.promise]);
+      const saturated = claimed > 0 && bounced === claimed;
+      if ((claimed === 0 || saturated) && !woken) {
+        await Promise.race([sleep(saturated ? POLL_MAX_MS : idleMs, { unref: true }), wake.promise]);
         idleMs = woken ? POLL_MIN_MS : Math.min(POLL_MAX_MS, idleMs * 2);
       }
       if (woken) wake = Promise.withResolvers<void>();
@@ -199,7 +194,11 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   ): Promise<void> {
     const ready = await db.pool();
     const pool = conn ?? ready;
-    const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts });
+    const spawned = await spawnTask(pool, JOB_QUEUE, name, params, {
+      idempotencyKey: key,
+      maxAttempts,
+      retryStrategy: RETRY_STRATEGY,
+    });
     if (!spawned.created && !(await retryTask(pool, JOB_QUEUE, spawned.taskId))) return;
     await pool.query("SELECT pg_notify($1, '1')", [JOBS_READY_CHANNEL]);
     poke();
@@ -222,7 +221,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     handle(name, run, opts = {}) {
       handlers.set(name, {
         run,
-        concurrency: clampConcurrency(opts.concurrency ?? JOB_SLOTS),
+        concurrency: clampConcurrency(opts.concurrency ?? Infinity),
         maxAttempts: opts.maxAttempts ?? 1,
         running: 0,
       });

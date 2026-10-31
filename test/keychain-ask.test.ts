@@ -1191,12 +1191,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const session = await built.sessions.getByThread("ch:C_INFRA-thread");
     assert.ok(session);
-    await (built.jobs as InlineJobs).recurring.get("keychain:ask-expiry")!();
+    await (built.jobs as InlineJobs).recurring.get("loops-and-asks:sweep")!();
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
     assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
 
-    await (built.jobs as InlineJobs).recurring.get("keychain:ask-expiry")!();
+    await (built.jobs as InlineJobs).recurring.get("loops-and-asks:sweep")!();
     assert.equal(
       (await resumeTurns(session!.id, /did not answer the access request/)).length,
       1,
