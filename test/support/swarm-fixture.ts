@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createMemoryMap } from "../../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createMemorySessionStore } from "../../src/sessions/memory-session-store.ts";
 import { createMemoryRunStore } from "../../src/runs/memory-run-store.ts";

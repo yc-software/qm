@@ -26,7 +26,6 @@ import {
 } from "../src/directory/person.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDeactivationStore, createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";

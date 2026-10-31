@@ -7,7 +7,7 @@ import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
 
 bindTestTenant();

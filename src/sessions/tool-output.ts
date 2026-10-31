@@ -86,7 +86,6 @@ export function createPostgresToolOutputStore(opts: {
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
-  let setting: { value: number; at: number } | null = null;
   return {
     async inlineTokens() {
       return DEFAULT_INLINE_TOKENS;

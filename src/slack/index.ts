@@ -1,4 +1,4 @@
-import { currentTenant, perTenant, withTenant } from "../tenants/context.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";

@@ -13,7 +13,6 @@ import { createMemoryEmbedder } from "../src/model/embeddings.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import {
   setModelOverlays,

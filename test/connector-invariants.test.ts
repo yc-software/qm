@@ -10,14 +10,13 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
-import { withTenant } from "../src/tenants/context.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { OTHER_TENANT, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 bindTestTenant();

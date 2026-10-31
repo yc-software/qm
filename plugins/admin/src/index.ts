@@ -10,7 +10,7 @@ import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/cor
 import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
-import { boundTenant, perTenant, withTenant } from "../../../src/tenants/context.ts";
+import { boundTenant, perTenant } from "../../../src/tenants/context.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {

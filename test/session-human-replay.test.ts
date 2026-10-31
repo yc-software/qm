@@ -5,7 +5,7 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 

@@ -1,7 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, TENANT, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
-import { currentTenant } from "../tenants/context.ts";
 
 export interface Environment {
   id: string;

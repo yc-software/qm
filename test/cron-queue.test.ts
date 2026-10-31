@@ -8,7 +8,6 @@ import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { bindTestTenant } from "./support/tenant.ts";
@@ -35,7 +34,6 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
 }
 
 function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
-  const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(createPostgresCronRows(URL!), fires ? { fires } : undefined);
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);

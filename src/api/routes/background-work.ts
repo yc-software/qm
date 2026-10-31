@@ -1,5 +1,4 @@
 import { isBearerSecret, isStrongSigningSecret } from "../../auth/source-auth.ts";
-import { timingSafeEqual } from "node:crypto";
 import { BackgroundOwnershipConflict, type BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";

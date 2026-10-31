@@ -1,5 +1,4 @@
 import type { ApprovalGrantModes, CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
 import { tenantRootScope, currentTenant } from "../tenants/context.ts";
 import { randomBytes } from "node:crypto";
 import { createKeyedQueue } from "../util/async.ts";

@@ -7,7 +7,6 @@ import {
   modelRequestOverrides,
   auxiliaryModelForProvider,
   resolveModel,
-  resolveBuiltinModel,
   type HarnessId,
   modelSupportedByHarness,
 } from "./model/pi-models.ts";
@@ -49,7 +48,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { emitRunReasoning, emitRunText, createRunStreamBus, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { perTenant, boundTenant, currentTenant, tenantKey, tenantRootScope, withoutTenant } from "./tenants/context.ts";
+import { perTenant, currentTenant, tenantKey, tenantRootScope, withoutTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
@@ -122,7 +121,7 @@ import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skil
 import { installSeedSkills, lazySkillBoot } from "./skills/seed.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
 import { memoryTenants, pgTenants } from "./tenants/resolver.ts";
-import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createMemoryMap, createPostgresMapFactory } from "./persistence/durable-map.ts";
 import { createPostgresModelTables, memoryModelTables } from "./model/model-tables.ts";
 import { createPostgresLinkTables, memoryLinkTables, type ComposioReturnRows } from "./connectors/link-tables.ts";
 import { createPostgresKeychainRows } from "./credentials/keychain-pg.ts";
@@ -618,8 +617,6 @@ export function buildApp(
   });
   const { databaseUrl } = config;
   const pgArtifactMap = databaseUrl ? createPostgresMapFactory(databaseUrl) : null;
-  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
   const modelTables = config.databaseUrl ? createPostgresModelTables(config.databaseUrl) : memoryModelTables();
   const linkTables = config.databaseUrl ? createPostgresLinkTables(config.databaseUrl) : memoryLinkTables();
   const tenantSettings =

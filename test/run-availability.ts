@@ -8,7 +8,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { bindTestTenant, boundUrl, seedTenant, provisionTestTenants, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, provisionTestTenants, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 

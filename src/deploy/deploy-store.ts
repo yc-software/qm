@@ -9,7 +9,6 @@ import {
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface DeploymentVersion {
   version: number;

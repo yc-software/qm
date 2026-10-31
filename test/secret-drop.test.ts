@@ -14,7 +14,6 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";

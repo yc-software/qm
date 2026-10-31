@@ -27,7 +27,6 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
 import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";

@@ -5,7 +5,6 @@ import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";

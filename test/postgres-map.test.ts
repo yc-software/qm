@@ -2,7 +2,6 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { scopeId } from "../src/types.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 
 const URL = process.env.DATABASE_URL;

@@ -28,13 +28,6 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS auth_broker_sessions_email ON auth_broker_sessions (email)`,
   `CREATE INDEX IF NOT EXISTS auth_broker_sessions_expiry ON auth_broker_sessions (expires_at)`,
 ];
-const TENANT_KEYED = [
-  `DELETE FROM auth_broker_sessions`,
-  `ALTER TABLE auth_broker_sessions ADD COLUMN tenant_id UUID NOT NULL`,
-  `DROP INDEX auth_broker_sessions_email`,
-  `CREATE INDEX auth_broker_sessions_tenant_email ON auth_broker_sessions (tenant_id, email)`,
-];
-
 export function createPostgresBrokerSessions(connectionString: string): BrokerSessionStore {
   const pg = createPgPool(connectionString, [
     TENANCY_BASE,

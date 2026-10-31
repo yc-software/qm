@@ -8,7 +8,6 @@ import {
   type StoredDeploymentLayer,
 } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { type ScopeId } from "../src/types.ts";
 import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";

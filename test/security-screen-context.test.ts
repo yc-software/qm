@@ -8,7 +8,6 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
-import { scopeId } from "../src/types.ts";
 
 bindTestTenant();
 

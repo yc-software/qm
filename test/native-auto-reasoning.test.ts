@@ -5,7 +5,7 @@ import { getRequiredModel, thinkingLevelsForHarness, safeModelMetadata } from ".
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/build-app.ts";

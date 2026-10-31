@@ -10,7 +10,6 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -30,7 +29,6 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";

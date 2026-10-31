@@ -1,7 +1,5 @@
 import type { GoalCreateInput } from "../harness/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import { jsonbStringify } from "../util/text.ts";
 import type { SwarmRunFence } from "./swarm-fence.ts";
 import type { SwarmRows } from "./swarm-table.ts";
 

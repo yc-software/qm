@@ -36,7 +36,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
 import { boundTenant } from "../../chassis/src/tenant.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
-import { currentTenant, perTenant, withTenant } from "../../../src/tenants/context.ts";
+import { currentTenant, perTenant } from "../../../src/tenants/context.ts";
 import { activeRuns, forgetRun, rememberRun } from "./active-runs.ts";
 import { addDeliveryClient, connectedUsers, deliveryClientsOf, everyDeliveryClient } from "./delivery-clients.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";

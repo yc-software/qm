@@ -1,5 +1,4 @@
 import { githubRepoUrl, isGitBranchName } from "../cli/src/render-source.ts";
-import { parseSandboxBackend } from "./tenants/settings-parse.ts";
 import { commitShaSchema } from "./util/ids.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";

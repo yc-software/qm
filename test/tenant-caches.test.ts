@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundTenant, perTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { createDeactivationStore, createIdentityService } from "../src/identity/identity-service.ts";
 import { createExternalMemberStore } from "../src/identity/external-members.ts";
 import { createPrincipalLinkService, createPrincipalLinkStore } from "../src/identity/principal-links.ts";
@@ -15,22 +15,12 @@ import {
 } from "../src/runs/run-stream-events.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import { cachedArtifactData } from "../src/files/artifact-data-cache.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+
 import { tenantScopedBus } from "../src/tenants/bus.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
-
-function tenantRows<T>(): DurableMap<T> {
-  const maps = perTenant(() => createMemoryMap<T>());
-  return new Proxy({} as DurableMap<T>, {
-    get:
-      (_target, key) =>
-      (...args: unknown[]) =>
-        (maps() as unknown as Record<string | symbol, (...a: unknown[]) => unknown>)[key]!(...args),
-  });
-}
 
 test("identity roster is cached per tenant", async () => {
   const identity = createIdentityService({

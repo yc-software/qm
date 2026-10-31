@@ -1,4 +1,3 @@
-import { boundTenant } from "../tenants/context.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { randomUUID } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";

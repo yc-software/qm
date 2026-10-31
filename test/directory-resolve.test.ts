@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
 import { signedRequestHeaders, canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
