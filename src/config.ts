@@ -105,9 +105,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
-  backgroundWorkEnabled: boolean;
-  backgroundDeploymentId?: string;
-  deploymentControlSecret?: string;
   spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
@@ -228,7 +225,6 @@ export const CONFIG_DEFAULTS = {
   runMaxAgeMs: 24 * 60 * 60_000,
   backgroundJobTtlSec: 1800,
   backgroundJobTtlMaxSec: 3600,
-  backgroundWorkEnabled: true,
   monitorPollMs: 10_000,
   skillSyncPollMs: 0,
   deployDialTimeoutMs: 20_000,
@@ -388,19 +384,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
       throw new Error(
         "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
-      );
-  }
-  if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
-    if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
-      throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
-    if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
-    if (
-      !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
-      !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
-      env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
-    )
-      throw new Error(
-        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
       );
   }
   const swarmDefaults = resolveSwarmSettings(
@@ -584,11 +567,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backgroundJobTtlMaxMs:
       (numEnvStrict("BACKGROUND_JOB_TTL_MAX_SEC", env.BACKGROUND_JOB_TTL_MAX_SEC) ??
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
-    backgroundWorkEnabled:
-      boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
-    ...(env.BACKGROUND_DEPLOYMENT_ID
-      ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
-      : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,

@@ -81,7 +81,6 @@ export interface TurnRunnerDeps {
   ready?: EventBus<string>;
   cancels?: EventBus<string>;
   yields?: EventBus<string>;
-  canClaim?: () => boolean;
   errors?: ErrorLog;
   pollMs?: number;
   retryDelayMs?: (priorErrors: number) => number;
@@ -336,7 +335,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   const pollMs = deps.pollMs ?? FALLBACK_POLL_MS;
   const inFlight = new Map<string, HeldTurn>();
   const overcommit = Math.max(1, Math.floor(deps.slots / 4));
-  const mayClaim = (): boolean => !stopped && (!deps.canClaim || deps.canClaim());
+  const mayClaim = (): boolean => !stopped;
 
   let stopped = true;
   let loopDone: Promise<void> | null = null;
@@ -394,10 +393,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     let idle = 0;
     while (!stopped) {
       const observed = generation;
-      if (deps.canClaim && !deps.canClaim()) {
-        await sleep(pollMs);
-        continue;
-      }
       try {
         let claimedAny = false;
         for (const queue of deps.queues) {

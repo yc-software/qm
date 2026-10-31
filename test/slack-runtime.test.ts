@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSlackRuntimeReconciler, SlackPluginStartCleanupError } from "../src/surfaces/slack-runtime.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresLeaderLease, type LeaderLease } from "../src/persistence/leader-lease.ts";
+import {
+  createSlackRuntimeReconciler,
+  holdSlackRuntimesByLease,
+  SlackPluginStartCleanupError,
+} from "../src/surfaces/slack-runtime.ts";
 
 test("Slack runtime activates, reloads, and removes durable admin configuration", async () => {
   let desired: { version: string; config: { botToken: string } } | null = null;
@@ -312,4 +319,68 @@ test("a controlled inactive Slack runtime cannot open a socket through configura
   await runtime.stop();
   await runtime.reconcile();
   assert.equal(starts, 1);
+});
+
+function countingRuntime() {
+  const state = { running: false, starts: 0, stops: 0 };
+  return {
+    state,
+    start() {
+      state.running = true;
+      state.starts++;
+    },
+    async stop() {
+      if (state.running) state.stops++;
+      state.running = false;
+    },
+  };
+}
+
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 500 && !check(); i++) await delay(10);
+  assert.ok(check(), "condition not reached");
+}
+
+test("exactly one process owns the Slack sockets and a successor takes over when it stops", async () => {
+  const pg = createPgPool(process.env.DATABASE_URL!);
+  try {
+    const a = countingRuntime();
+    const b = countingRuntime();
+    const ownerA = holdSlackRuntimesByLease({ lease: createPostgresLeaderLease(pg), runtimes: [a], retryMs: 20 });
+    const ownerB = holdSlackRuntimesByLease({ lease: createPostgresLeaderLease(pg), runtimes: [b], retryMs: 20 });
+    ownerA.start();
+    await until(() => a.state.running);
+    ownerB.start();
+    await delay(100);
+    assert.equal(b.state.starts, 0, "the second process stays idle while the first holds the lease");
+    await ownerA.stop();
+    assert.equal(a.state.running, false);
+    await until(() => b.state.running);
+    assert.equal(a.state.starts, 1);
+    await ownerB.stop();
+    assert.equal(b.state.running, false);
+  } finally {
+    await pg.close();
+  }
+});
+
+test("Slack sockets close when the lease is lost and reopen once it is regained", async () => {
+  let lose!: () => void;
+  let grants = 0;
+  const lease: LeaderLease = {
+    async hold(_key, fn) {
+      grants++;
+      return fn(new Promise<void>((resolve) => (lose = resolve)));
+    },
+  };
+  const runtime = countingRuntime();
+  const owner = holdSlackRuntimesByLease({ lease, runtimes: [runtime], retryMs: 20 });
+  owner.start();
+  await until(() => runtime.state.running);
+  lose();
+  await until(() => runtime.state.stops === 1);
+  await until(() => runtime.state.starts === 2);
+  assert.equal(grants, 2);
+  await owner.stop();
+  assert.equal(runtime.state.running, false);
 });

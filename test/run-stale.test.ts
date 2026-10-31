@@ -13,7 +13,6 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "run-stale-")),
-      backgroundWorkEnabled: false,
     }),
   );
   const ack = await built.app.turn({

@@ -1,3 +1,5 @@
+import type { LeaderLease } from "../persistence/leader-lease.ts";
+
 export class SlackPluginStartCleanupError extends AggregateError {
   readonly cleanup: () => Promise<void>;
 
@@ -110,6 +112,81 @@ export function createSlackRuntimeReconciler<Config>(opts: {
         stopping = null;
       });
       return stopping;
+    },
+  };
+}
+
+interface LeasedSlackRuntime {
+  start(): void;
+  stop(): Promise<void>;
+}
+
+export function holdSlackRuntimesByLease(opts: {
+  lease: LeaderLease;
+  runtimes: readonly LeasedSlackRuntime[];
+  retryMs?: number;
+  onError?: (error: unknown) => void;
+}) {
+  const retryMs = opts.retryMs ?? 5_000;
+  let stopped = true;
+  let release: (() => void) | null = null;
+  let wake: (() => void) | null = null;
+  let loop: Promise<void> | null = null;
+  const pause = () =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, retryMs);
+      timer.unref();
+      wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    }).finally(() => {
+      wake = null;
+    });
+  const stopAll = async (): Promise<void> => {
+    for (;;) {
+      const failures = (await Promise.allSettled(opts.runtimes.map((runtime) => runtime.stop()))).filter(
+        (result) => result.status === "rejected",
+      );
+      if (!failures.length) return;
+      for (const failure of failures) opts.onError?.(failure.reason);
+      await pause();
+    }
+  };
+  const own = async (lost: Promise<void>): Promise<void> => {
+    if (stopped) return;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    try {
+      for (const runtime of opts.runtimes) runtime.start();
+      await Promise.race([lost, released]);
+    } finally {
+      release = null;
+      await stopAll();
+    }
+  };
+  const run = async (): Promise<void> => {
+    while (!stopped) {
+      try {
+        await opts.lease.hold("slack:socket-owner", own);
+      } catch (error) {
+        opts.onError?.(error);
+      }
+      if (!stopped) await pause();
+    }
+  };
+  return {
+    start(): void {
+      if (loop) return;
+      stopped = false;
+      loop = run().finally(() => {
+        loop = null;
+      });
+    },
+    async stop(): Promise<void> {
+      stopped = true;
+      release?.();
+      wake?.();
+      await loop;
     },
   };
 }

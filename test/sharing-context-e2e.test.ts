@@ -161,7 +161,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
     token = opts?.env?.AGENT_API_TOKEN;
     return provision(layers, opts);
   };
-  b.runtime.startBackground();
+  b.runtime.start();
   const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
     const { run } = await b.runs.enqueue({
       sessionId: child.threadRef,
