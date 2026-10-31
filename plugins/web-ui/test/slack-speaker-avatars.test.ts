@@ -21,9 +21,9 @@ test("Slack conversations show directory Slack photos on messages and in the hea
     session,
     listSessions: [session],
     api: (path) => {
-      const m = path.match(/\/api\/directory\/resolve\?q=([^&]+)/);
-      if (!m) return undefined;
-      const id = decodeURIComponent(m[1]!);
+      const url = new URL(path, "http://localhost");
+      if (url.pathname !== "/api/directory/resolve") return undefined;
+      const id = url.searchParams.get("q")!;
       lookups.push(id);
       return Response.json({
         matches: photos[id] ? [{ principalId: id, displayName: id, type: "internal", avatarUrl: photos[id] }] : [],
