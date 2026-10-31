@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
+import { testMap } from "./support/test-database.ts";
 test("editing a webhook's action keeps its id (URL) and secret", async () => {
-  const store = createWebhookStore();
+  const store = createWebhookStore(testMap(), testMap());
   const wh = await store.create({
     owner: "u:a",
     createdBy: "u:a",

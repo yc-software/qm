@@ -1,10 +1,10 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const TENANT = "qm_tenant_id()";
+export const TENANT = "qm_bound_tenant()";
 
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
-    id: "sessions/store/0047-tenants",
+    id: "sessions/store/0048-tenants",
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       `CREATE TABLE tenants(
@@ -18,13 +18,14 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          AS $qm_tenant_unbound$ BEGIN
            RAISE 'No tenant is bound to this transaction' USING ERRCODE = 'insufficient_privilege';
          END $qm_tenant_unbound$`,
-      `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
-         AS $qm_tenant_id$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_tenant_id$`,
-      `ALTER TABLE items ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()`,
+      `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
+         AS $qm_bound_tenant$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_bound_tenant$`,
+      `ALTER TABLE items ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
       `ALTER TABLE items ENABLE ROW LEVEL SECURITY`,
       `ALTER TABLE items FORCE ROW LEVEL SECURITY`,
       `CREATE POLICY tenant_isolation ON items
-         USING (tenant_id = qm_tenant_id()) WITH CHECK (tenant_id = qm_tenant_id())`,
+         USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
+      `DROP FUNCTION qm_tenant_id()`,
       `DROP TABLE qm_tenant`,
     ],
   },

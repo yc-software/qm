@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildWakeEnvelope, buildWebhookWakeEnvelope } from "../src/core/wake-envelope.ts";
+import { buildWakeEnvelope, buildWebhookWakeEnvelope } from "../src/wake/wake-envelope.ts";
 
 const AT = new Date(0);
 

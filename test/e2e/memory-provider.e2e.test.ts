@@ -93,7 +93,6 @@ describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHR
     const built = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "mem-e2e-")),
-        harness: "pi",
         memoryProviderConfig,
         ...(process.env.PI_MODEL ? { modelId: process.env.PI_MODEL } : {}),
         ...(process.env.ANTHROPIC_API_KEY ? { anthropicApiKey: process.env.ANTHROPIC_API_KEY } : {}),

@@ -84,14 +84,13 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       if (init?.method === "PUT") selectedModelId = JSON.parse(String(init.body)).modelId;
       return Response.json({
         scopeId: row.scopeId,
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: modelDeleted ? ["replacement-api"] : ["gpt-5.6-sol"] },
+        models: modelDeleted ? ["replacement-api"] : ["gpt-5.6-sol"],
         modelCatalog: modelDeleted
           ? { "replacement-api": metadata("replacement-api", "Replacement API") }
           : { "gpt-5.6-sol": metadata("gpt-5.6-sol", "GPT-5.6 Sol") },
-        orgDefault: { harnessId: "pi", modelId: "gpt-5.6-sol", revision: 0 },
-        effective: { harnessId: "pi", modelId: selectedModelId },
-        scopeOverride: modelDeleted ? { harnessId: "pi", modelId: selectedModelId } : null,
+        orgDefault: { modelId: "gpt-5.6-sol", revision: 0 },
+        effective: { modelId: selectedModelId },
+        scopeOverride: modelDeleted ? { modelId: selectedModelId } : null,
         ...(modelDeleted && selectedModelId === "deleted-overlay"
           ? { unavailableReason: "Model has been deleted; select another model" }
           : {}),
@@ -388,9 +387,9 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.equal(host.querySelector("textarea"), null);
       assert.equal(host.querySelector("button.send-btn"), null);
       const replacement = host.querySelector<HTMLSelectElement>('select[aria-label="Replacement model"]')!;
-      assert.ok([...replacement.options].some((option) => option.value === "pi:replacement-api"));
+      assert.ok([...replacement.options].some((option) => option.value === "replacement-api"));
       const writes = requests.filter((request) => request.path === "/api/turn").length;
-      replacement.value = "pi:replacement-api";
+      replacement.value = "replacement-api";
       replacement.dispatchEvent(new Event("change", { bubbles: true }));
       await until(() => chat.composer.currentModelOption()?.model.id === "replacement-api");
       assert.equal(selectedModelId, "replacement-api");

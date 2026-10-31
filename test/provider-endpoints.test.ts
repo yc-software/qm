@@ -58,7 +58,7 @@ test("a cloned model follows its template's override", () => {
   assert.equal(clone?.id, "claude-opus-5");
 });
 
-test("loadConfig parses provider base URLs and feeds the child harness envs", () => {
+test("loadConfig parses provider base URLs", () => {
   const config = loadConfig({
     ...BASE_ENV,
     ANTHROPIC_BASE_URL: "https://a.example.com/",
@@ -68,17 +68,14 @@ test("loadConfig parses provider base URLs and feeds the child harness envs", ()
     anthropic: "https://a.example.com",
     openai: "https://o.example.com/v1",
   });
-  assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, "https://a.example.com");
 });
 
 test("loadConfig rejects an invalid provider base URL", () => {
   assert.throws(() => loadConfig({ ...BASE_ENV, OPENAI_BASE_URL: "nope" } as NodeJS.ProcessEnv));
 });
 
-test("loadConfig leaves child envs untouched when no override is set", () => {
-  const config = loadConfig(BASE_ENV);
-  assert.deepEqual(config.providerBaseUrls, {});
-  assert.equal(config.claudeProcessEnv.ANTHROPIC_BASE_URL, undefined);
+test("loadConfig leaves provider base URLs empty when no override is set", () => {
+  assert.deepEqual(loadConfig(BASE_ENV).providerBaseUrls, {});
 });
 
 test("loadConfig accepts a complete model gateway and rejects partial or malformed routing", () => {

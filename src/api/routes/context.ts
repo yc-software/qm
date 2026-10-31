@@ -1,4 +1,4 @@
-import type { SurfaceContextQuery, SurfaceContextResult } from "../../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";

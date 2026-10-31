@@ -217,8 +217,6 @@ test(
 
 test("pg directory: private nonmembership is definitive only after a membership-bearing push", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
-  const direct = (await freshPg(URL!)).query;
-  await direct("UPDATE directory_sync SET channel_members_synced = FALSE", []);
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }]);
   assert.equal(await store.channelMembership("C-privdef", "U-alice"), undefined);
   await store.replaceChannels([{ channelId: "C-privdef", name: "secret", isPrivate: true }], []);

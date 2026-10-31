@@ -1,8 +1,6 @@
 import { Type } from "typebox";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { buildModelRuntime, type ProviderKeys } from "../harness/pi-harness.ts";
-import { zeroUsage } from "../harness/replay.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
   codexSubscriptionModelId,
@@ -11,6 +9,7 @@ import {
 } from "./pi-models.ts";
 import type { resolveBrowserModel } from "./browser-model.ts";
 import type { UserModelCredentialStore } from "./user-model-credential-store.ts";
+import { buildModelRuntime, type ProviderKeys, zeroUsage } from "./model-runtime.ts";
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;

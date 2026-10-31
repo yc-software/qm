@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const request = (text: string, over: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
@@ -23,18 +22,7 @@ const subagentOf = (parent: Run, text: string) =>
 const swarm = { swarmId: "s", messageId: "m", recipientId: "r" };
 
 const backends: Array<{ name: string; skip: string | false; make: () => Promise<RunStore> }> = [
-  { name: "memory", skip: false, make: async () => createMemoryRunStore().runs },
-  {
-    name: "postgres",
-    skip: URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres run-priority tests",
-    make: async () => {
-      const pool = new (await import("pg")).default.Pool({ connectionString: URL });
-      await pool.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
-      await pool.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/%'").catch(() => {});
-      await pool.end();
-      return createPostgresRunStore(URL!).runs;
-    },
-  },
+  { name: "postgres", skip: false, make: async () => createPostgresRunStore(testDatabaseUrl()).runs },
 ];
 
 async function claimAll(runs: RunStore): Promise<string[]> {
@@ -129,8 +117,10 @@ async function withWorkers(
   count: number,
   body: (ctx: { runs: RunStore; log: string[]; sweep: () => Promise<boolean> }) => Promise<void>,
   maxClaims?: number,
+  setup?: (runs: RunStore) => Promise<void>,
 ): Promise<void> {
-  const { runs } = createMemoryRunStore(maxClaims ? { maxClaims } : undefined);
+  const { runs } = createPostgresRunStore(testDatabaseUrl(), maxClaims ? { maxClaims } : undefined);
+  await setup?.(runs);
   const log: string[] = [];
   const workers = Array.from({ length: count }, () =>
     createWorker({ runs, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
@@ -180,24 +170,32 @@ test("one waiting turn parks one run, even while that run is slow to stop", () =
     assert.deepEqual(parks.sort(), [0, 0, 1]);
   }));
 
-test("subagents of a person's turn and thrice-parked runs keep their worker", () =>
-  withWorkers(2, async ({ runs, sweep }) => {
-    const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
-    await until(status(runs, parent, "done"));
-    const capped = (
-      await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } })
-    ).run;
-    for (let i = 0; i < 3; i++) {
-      const lease = (await runs.claim("w", 60_000))!;
-      await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" });
-    }
-    const child = (await runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") })).run;
-    await until(status(runs, capped, "running"));
-    await until(status(runs, child, "running"));
-    await runs.enqueue({ sessionId: "dm", request: request("quick person") });
-    assert.equal(await sweep(), false);
-    assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend a swarm worker's claim budget");
-  }));
+test("subagents of a person's turn and thrice-parked runs keep their worker", () => {
+  let capped!: Run;
+  return withWorkers(
+    2,
+    async ({ runs, sweep }) => {
+      const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
+      await until(status(runs, parent, "done"));
+      const child = (await runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") })).run;
+      await until(status(runs, capped, "running"));
+      await until(status(runs, child, "running"));
+      await runs.enqueue({ sessionId: "dm", request: request("quick person") });
+      assert.equal(await sweep(), false);
+      assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend a swarm worker's claim budget");
+    },
+    undefined,
+    async (runs) => {
+      capped = (
+        await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } })
+      ).run;
+      for (let i = 0; i < 3; i++) {
+        const lease = (await runs.claim("w", 60_000))!;
+        await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" });
+      }
+    },
+  );
+});
 
 test("a tool result written after a park records the park, not a deploy", () => {
   const parked = new AbortController();

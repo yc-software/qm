@@ -1,19 +1,18 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
-import { zeroUsage } from "../src/harness/replay.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import { zeroUsage } from "../src/model/model-runtime.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 
 test("browser follows durable user AI access and personal model defaults", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   const input = {
     actorId: "U1",
     config: built.config,
@@ -42,7 +41,7 @@ test("browser follows durable user AI access and personal model defaults", async
 });
 
 test("ChatGPT browser inference uses refreshed subscription auth and native structured output", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "original-access",
     refreshToken: "never-forward-refresh",
@@ -128,7 +127,7 @@ test("ChatGPT browser inference uses refreshed subscription auth and native stru
 });
 
 test("Claude subscription browser requests fail without deriving or sending credentials", async () => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "anthropic", {
     accessToken: "claude-subscription",
     expiresAt: Date.now() + 3600_000,
@@ -162,7 +161,7 @@ test("Claude subscription browser requests fail without deriving or sending cred
 });
 
 test("personal API keys bypass organization provider endpoint overrides", async (t) => {
-  const built = buildApp(testConfig());
+  const built = stopAtEnd(buildApp(testConfig()));
   setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
   t.after(() => setProviderBaseUrls({}));
   for (const provider of ["openai", "anthropic"] as const) {
@@ -206,28 +205,22 @@ test("personal API keys bypass organization provider endpoint overrides", async 
   }
 });
 
-test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const authFile = join(dir, "auth.json");
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async () => {
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    }),
-    { mode: 0o600 },
+  const built = stopAtEnd(
+    buildApp(
+      testConfig({
+        codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
+        openaiApiKey: "must-not-fallback",
+      }),
+    ),
   );
-  const built = buildApp(
-    testConfig({
-      harness: "pi",
-      codexAuthFile: authFile,
-      openaiApiKey: "must-not-fallback",
-    }),
-  );
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
+  });
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

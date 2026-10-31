@@ -3,9 +3,9 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { getSlackInstallation, startSlackInstallation } from "../src/api/routes/admin/slack-installation.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { testMap } from "./support/test-database.ts";
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -21,7 +21,7 @@ type SlackSetupStatus = {
 };
 
 async function fixture(t: test.TestContext) {
-  const map = createMemoryMap();
+  const map = testMap();
   const store = createSlackInstallationStore(
     "test",
     map as Parameters<typeof createSlackInstallationStore>[1],

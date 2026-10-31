@@ -8,7 +8,6 @@ const config = testConfig({
   providerBaseUrls: { openai: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1` },
   databaseUrl: process.env.MODEL_OVERLAY_TEST_DATABASE_URL,
   adminGrants: "admin-alice:org_admin",
-  harness: "pi",
   modelId: "overlay-pg-model",
   openaiApiKey: "local-test-key",
 });

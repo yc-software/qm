@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -16,7 +15,7 @@ import {
 import { die, note, ok, warn } from "../log.ts";
 import { assertNodeEngine } from "../preflight.ts";
 import { cliPackageName, cliVersion } from "../manifest.ts";
-import { computedSecrets, renderEnvExample } from "../secrets.ts";
+import { computedSecrets, mintLocalSecret, renderEnvExample } from "../secrets.ts";
 import { renderSlackManifests, usesSlackOidc } from "../slack-manifests.ts";
 import { hostingProvider } from "../backends/registry.ts";
 
@@ -153,9 +152,10 @@ function envPathIsTracked(dir: string): boolean {
 
 function initialEnv(config: QmConfig): string {
   const generated = new Map(
-    computedSecrets(config)
-      .filter((secret) => secret.generate === "openssl rand -hex 32")
-      .map((secret) => [secret.name, randomBytes(32).toString("hex")]),
+    computedSecrets(config).flatMap((secret) => {
+      const value = mintLocalSecret(secret);
+      return value ? [[secret.name, value] as const] : [];
+    }),
   );
   return renderEnvExample(config)
     .replace(

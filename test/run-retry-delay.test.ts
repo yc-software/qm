@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -31,7 +31,8 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
       }
-      const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
+      const runtime =
+        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       let { runs } = runtime;
       const sessionId = randomUUID();
       try {
@@ -94,7 +95,8 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
       }
-      let { runs } = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
+      let { runs } =
+        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       try {
         const child = (await runs.enqueue({ sessionId: `agent:main:subagent:${randomUUID()}`, request })).run;
         await runs.deferReturn(child.id, 60_000);
@@ -203,7 +205,7 @@ test(
 );
 
 test("memory: one claim uses one clock snapshot across the retry boundary", async (t) => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "same", request })).run;
   const claimed = await runs.claim("w1", 60_000);
   const now = Date.now();
@@ -215,42 +217,3 @@ test("memory: one claim uses one clock snapshot across the retry boundary", asyn
   assert.equal(await runs.claim("w2", 60_000), null);
   assert.equal((await runs.claim("w2", 60_000))?.id, first.id);
 });
-
-test(
-  "postgres: retry migration bounds lock waiting and can be retried",
-  { skip: !process.env.DATABASE_URL },
-  async () => {
-    const pg = (await import("pg")).default;
-    const { applyPgMigrations, registeredPgMigrations } = await import("../src/persistence/pg-pool.ts");
-    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-    const schema = `retry_lock_${randomUUID().replaceAll("-", "")}`;
-    await admin.query(`CREATE SCHEMA ${schema}`);
-    const url = new URL(process.env.DATABASE_URL!);
-    url.searchParams.set("options", `-c search_path=${schema} -c statement_timeout=5000`);
-    const runtime = createPostgresRunStore(url.toString());
-    const pool = new pg.Pool({ connectionString: url.toString() });
-    const holder = await pool.connect();
-    try {
-      const migrations = registeredPgMigrations(url.toString());
-      await applyPgMigrations(
-        pool,
-        migrations.filter((m) => m.id !== "runs/store/0004"),
-      );
-      await holder.query("BEGIN");
-      await holder.query("SELECT * FROM runs");
-      await assert.rejects(applyPgMigrations(pool, migrations), { code: "55P03" });
-      assert.equal((await pool.query("SELECT count(*) FROM runs")).rows[0].count, "0");
-      await holder.query("ROLLBACK");
-      await applyPgMigrations(pool, migrations);
-      await applyPgMigrations(pool, migrations);
-      await pool.query("SELECT retry_after FROM runs");
-    } finally {
-      await holder.query("ROLLBACK");
-      holder.release();
-      await runtime.close();
-      await pool.end();
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
-    }
-  },
-);

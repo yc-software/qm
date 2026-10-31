@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
-const active: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
   actorId: "alice",
   scopeId: "personal:alice",
@@ -15,11 +15,10 @@ const claims: CapabilityClaims = {
   exp: Date.now() + 60000,
 };
 async function setup(allowed = true) {
-  const config = createMemoryConfigStore("default-org");
-  await config.setApprovedHarnesses(["pi", "claude"]);
+  const config = testConfigStore("default-org");
   await config.setRuntimeSelection("org:default-org", active);
   const service = createRuntimeService(
-    { config, harnessId: "pi", baseModelDefault: active.modelId },
+    { config, baseModelDefault: active.modelId },
     {
       authorizesCapabilityScope: async () => allowed,
     },
@@ -67,7 +66,7 @@ test("runtime changes reject revoked access, bots, triggers and foreign personal
 
 test("runtime rejects unsupported effort and fast mode instead of silently dropping them", async () => {
   const { service } = await setup();
-  assert.deepEqual(await service(claims, active, { action: "set", harness: "claude", effort: "ultracode" }), {
+  assert.deepEqual(await service(claims, active, { action: "set", effort: "extreme" }), {
     ok: false,
     error: "effort_not_supported",
   });
@@ -111,7 +110,7 @@ test("runtime recovery uses only durable decisions belonging to the same run and
 test("individual-account availability does not depend on organization provider keys", async () => {
   const { config } = await setup();
   const service = createRuntimeService(
-    { config, harnessId: "pi", providerKeys: { anthropic: false, openai: false, openrouter: false } },
+    { config, providerKeys: { anthropic: false, openai: false, openrouter: false } },
     { authorizesCapabilityScope: async () => true },
   );
   const ownRuntime = { ...active, modelId: "gpt-6-astra" };
@@ -119,7 +118,7 @@ test("individual-account availability does not depend on organization provider k
     claims,
     ownRuntime,
     { action: "set", effort: "xhigh" },
-    async (choice) => (choice.harnessId === "pi" && choice.modelId === "gpt-6-astra" ? null : "no account"),
+    async (choice) => (choice.modelId === "gpt-6-astra" ? null : "no account"),
     true,
   );
   assert.deepEqual(result, {

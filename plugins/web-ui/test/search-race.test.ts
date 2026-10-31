@@ -14,12 +14,11 @@ const sessions = ["old", "document", "first", "second", "chat", "chat1"].map((id
 }));
 const runtimeConfig = {
   scopeId: "personal:tester",
-  approvedHarnesses: [],
-  modelsByHarness: {},
+  models: [],
   modelCatalog: {},
-  orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
+  orgDefault: { modelId: "m", revision: 1 },
   scopeOverride: null,
-  effective: { harnessId: "pi", modelId: "m" },
+  effective: { modelId: "m" },
   upgradeAvailable: false,
 };
 const env = await browserEnv({

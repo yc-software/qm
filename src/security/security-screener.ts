@@ -1,10 +1,10 @@
-import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
 import type { SecurityScreenVerdict } from "./security-posture.ts";
 import { swallow } from "../util/errors.ts";
 import { retryAfterMs } from "../util/async.ts";
+import { readBoundedText } from "../util/bytes.ts";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
 
@@ -21,7 +21,6 @@ export interface SecurityScreenClassification {
  */
 export type SecurityScreenProbe = (input: {
   payload: string;
-  harnessId: string;
   modelId: string;
   systemPrompt: string;
   actorId: string;
@@ -104,33 +103,6 @@ async function classifyChunks<T>(
 
 async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch((error) => swallow("security screen response cancel", error));
-}
-
-async function responseText(response: Response): Promise<string> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_SECURITY_SCREEN_RESPONSE_BYTES) {
-    await cancelResponseBody(response);
-    throw new Error("Security screen proxy response exceeds the supported limit");
-  }
-  if (!response.body) return "";
-  const chunks: Buffer[] = [];
-  let total = 0;
-  const reader = response.body.getReader();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_SECURITY_SCREEN_RESPONSE_BYTES) {
-        await reader.cancel().catch((error) => swallow("security screen response cancel", error));
-        throw new Error("Security screen proxy response exceeds the supported limit");
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 function classification(body: string, provider: string): SecurityScreenClassification {
@@ -230,7 +202,14 @@ export function createSecurityScreenProxy(opts: {
               await cancelResponseBody(response);
               throw new Error(`Security screen proxy returned HTTP ${response.status}`);
             }
-            return classification(await responseText(response), opts.provider);
+            return classification(
+              await readBoundedText(
+                response,
+                MAX_SECURITY_SCREEN_RESPONSE_BYTES,
+                () => new Error("Security screen proxy response exceeds the supported limit"),
+              ),
+              opts.provider,
+            );
           }
           throw new Error("Security screen proxy retry loop exhausted");
         },

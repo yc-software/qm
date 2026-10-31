@@ -20,7 +20,7 @@ import {
   type Keychain,
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
-import { createMemoryMap, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
+import { type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -29,16 +29,17 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
 function kc(now?: () => number): Keychain {
   return createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     ...(now ? { now } : {}),
   });
@@ -89,7 +90,7 @@ test("listAllMetadata returns person-facing metadata only", async () => {
 
 test("listing and per-owner reads use the store's projected select and never a full all() scan", async () => {
   type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
-  const backing = createMemoryMap<Rec>();
+  const backing = testMap<Rec>();
   const calls: string[] = [];
   const creds: DurableMap<Rec> = {
     ...backing,
@@ -103,10 +104,10 @@ test("listing and per-owner reads use the store's projected select and never a f
     },
   };
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
   });
   const org = scopeId("org", "default-org");
@@ -223,12 +224,12 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 });
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
-  const grants = createMemoryMap<KeychainGrant>();
+  const grants = testMap<KeychainGrant>();
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
     grants,
-    asks: createMemoryMap(),
+    asks: testMap(),
     key: KEY,
   });
   const credential = await k.save(GH);
@@ -290,9 +291,9 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
-  const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = createMemoryMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-  const k = createKeychain({ lock: createMemoryAdvisoryLock(), creds, grants, asks: createMemoryMap(), key: KEY });
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
@@ -323,10 +324,10 @@ describe("connectors are grantable like any keychain record", () => {
   type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
-      lock: createMemoryAdvisoryLock(),
-      creds: createMemoryMap<Rec>(),
-      grants: createMemoryMap(),
-      asks: createMemoryMap(),
+      lock: testAdvisoryLock(),
+      creds: testMap<Rec>(),
+      grants: testMap(),
+      asks: testMap(),
       key: KEY,
       refreshConnector: async () => ({ accessToken: freshToken, expiresAt: Date.now() + 3_600_000 }),
     });
@@ -684,22 +685,22 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 });
 
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
-  const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: OTHER,
   });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
   const reader = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
   });
   await reader.save(GH);
@@ -713,19 +714,19 @@ test("materializeOwn skips a row that doesn't decrypt under the current key inst
 });
 
 test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
-  const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const grants = createMemoryMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
     grants,
-    asks: createMemoryMap(),
+    asks: testMap(),
     key: OTHER,
   });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ lock: createMemoryAdvisoryLock(), creds, grants, asks: createMemoryMap(), key: KEY });
+  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -824,22 +825,22 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
   await assert.rejects(
     k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
     (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-    "a single envKey in the harness namespace is rejected",
+    "a single envKey in the reserved AGENT_* namespace is rejected",
   );
   await assert.rejects(
     k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
     (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-    "a field envKey in the harness namespace is rejected",
+    "a field envKey in the reserved AGENT_* namespace is rejected",
   );
 });
 
 test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", async () => {
-  const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
   });
   const meta = await k.save({
@@ -1043,6 +1044,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       keychain: built.keychain,
       workspace: built.workspace,
@@ -1402,10 +1404,10 @@ test("prepared grants reject credential rotation without consuming a single use"
 test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
   let refreshes = 0;
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     refreshConnector: async () => {
       refreshes++;
@@ -1469,10 +1471,10 @@ test("Composio keys remain backend-only across all materialization paths includi
 test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
   let now = Date.parse("2030-01-01T00:00:00Z");
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     now: () => now,
   });

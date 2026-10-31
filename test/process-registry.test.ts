@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  createMemoryProcessRegistry,
   createPostgresProcessRegistry,
   isDeclaredKind,
   type ProcessRegistry,
 } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
-  return [{ name: "memory", make: () => createMemoryProcessRegistry() }];
+  return [{ name: "memory", make: () => createPostgresProcessRegistry(testDatabaseUrl()) }];
 }
 
 for (const b of backends()) {
@@ -161,7 +161,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
 });
 
 for (const [name, make] of [
-  ["memory", () => createMemoryProcessRegistry()],
+  ["memory", () => createPostgresProcessRegistry(testDatabaseUrl())],
   ...(PG_URL ? [["postgres", () => createPostgresProcessRegistry(PG_URL)] as const] : []),
 ] as const) {
   test(`[${name}] background credential files survive a new registry until settled`, async () => {
@@ -201,7 +201,7 @@ function id(n: number): string {
 }
 
 test("registry preserves purpose without replacing the command and accepts legacy rows", async () => {
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   for (const purpose of [undefined, "Preview app server"]) {
     const row = await registry.register({
       processId: purpose ?? "legacy",

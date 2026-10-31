@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySurfaceCache, createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
@@ -8,6 +8,7 @@ import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
@@ -21,7 +22,9 @@ for (const postgres of [false, true]) {
       skip: postgres && !process.env.DATABASE_URL,
     },
     async () => {
-      const cache = postgres ? createPostgresSurfaceCache(process.env.DATABASE_URL!) : createMemorySurfaceCache();
+      const cache = postgres
+        ? createPostgresSurfaceCache(process.env.DATABASE_URL!)
+        : createPostgresSurfaceCache(testDatabaseUrl());
       const container = `fidelity-${Date.now()}-${postgres}`;
       const read = async () => (await cache.readMessages(container, { at: "1", includeDeleted: true }))[0]!;
       try {
@@ -79,12 +82,14 @@ test("mirror and live render the same allowed message subtypes", async () => {
     "channel_topic",
     "tombstone",
   ].map((subtype, i) => ({ ts: `1000.00000${i}`, text: `body-${i}`, user: "U1", subtype }));
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest(raw.map((m) => toEvent(slackMessageToIngestEvent({ ...m, channel: "C" }, ids))!));
   const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
   const client = { conversations: { history: async () => ({ messages: raw.slice().reverse(), has_more: false }) } };
   const views = [];
-  const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+  const emptyCore = {
+    readSurfaceMessages: createPostgresSurfaceCache(testDatabaseUrl()).readMessages,
+  } as SlackCoreClient;
   for (const reader of [emptyCore, core]) {
     const serializer = createConversationSerializer({
       ids,
@@ -104,7 +109,7 @@ test("mirror and live render the same allowed message subtypes", async () => {
 });
 
 test("fallback prefers fresh live duplicates and replaces removed files", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([{ container: "C", ts: "2", sub: "1", text: "stale", files: [{ fileId: "FOLD" }] }]);
   const core = {
     readSurfaceMessages: cache.readMessages,
@@ -135,7 +140,7 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
 });
 
 test("event mirroring preserves mention IDs for current-context rendering", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const core = {
     ingestSurfaceEvents: async (events) => {
       await cache.ingest(events);
@@ -163,7 +168,9 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
   assert.equal(stored.text, "Hi <@U1> and <@U2> & welcome");
   assert.deepEqual(stored.mentions, { U1: "Old name", U2: "Old name" });
   const shaped = [];
-  const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+  const emptyCore = {
+    readSurfaceMessages: createPostgresSurfaceCache(testDatabaseUrl()).readMessages,
+  } as SlackCoreClient;
   for (const reader of [emptyCore, core]) {
     const readHistory = createSlackHistoryReader({ core: reader, ids });
     const serializer = createConversationSerializer({
@@ -189,7 +196,9 @@ for (const postgres of [false, true]) {
       skip: postgres && !process.env.DATABASE_URL,
     },
     async () => {
-      const cache = postgres ? createPostgresSurfaceCache(process.env.DATABASE_URL!) : createMemorySurfaceCache();
+      const cache = postgres
+        ? createPostgresSurfaceCache(process.env.DATABASE_URL!)
+        : createPostgresSurfaceCache(testDatabaseUrl());
       const container = `presentation-${Date.now()}-${postgres}`;
       const raw = {
         channel: container,
@@ -228,7 +237,9 @@ for (const postgres of [false, true]) {
           },
         };
         const views = [];
-        const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+        const emptyCore = {
+          readSurfaceMessages: createPostgresSurfaceCache(testDatabaseUrl()).readMessages,
+        } as SlackCoreClient;
         for (const reader of [emptyCore, core]) {
           const serializer = createConversationSerializer({
             ids,

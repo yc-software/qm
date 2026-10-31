@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
-import { forModelContext } from "../src/harness/context-compaction.ts";
-import { createGoalRecord } from "../src/harness/goal.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { forModelContext } from "../src/agent/context-compaction.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
 test("compaction leaves the session goal on its row and writes no goal entries", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("goal", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
@@ -25,8 +26,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   const compaction = createCompaction({
     sessions,
     maxContextTokens: 400,
-    harness: { models: { compactHistory: async () => "Earlier work." }, turns: {} },
-    modelGateway: { recordCall() {} },
+    agent: { compactHistory: async () => "Earlier work." },
   } as unknown as OrchestratorDeps);
   try {
     for (let round = 0; round < 2; round++) {
@@ -35,7 +35,6 @@ test("compaction leaves the session goal on its row and writes no goal entries",
         lease,
         visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
         scopeId: scope,
-        orgScopeId: "org:test",
         actorId: "test",
       });
       assert.ok(rebuilt.some((entry) => (entry.payload as { kind?: string }).kind === "context_summary"));
@@ -52,7 +51,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
 });
 
 test("background compaction cannot revive an older goal over one closed while it summarized", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("goal-race", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
@@ -67,21 +66,16 @@ test("background compaction cannot revive an older goal over one closed while it
   const compaction = createCompaction({
     sessions,
     maxContextTokens: 400,
-    harness: {
-      models: {
-        compactHistory: async () => {
-          started.resolve();
-          return finish.promise;
-        },
+    agent: {
+      compactHistory: async () => {
+        started.resolve();
+        return finish.promise;
       },
-      turns: {},
     },
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   compaction.scheduleBackgroundCompaction({
     sessionId: session.id,
     scopeId: scope,
-    orgScopeId: "org:test",
     actorId: "test",
   });
   await started.promise;

@@ -37,19 +37,20 @@ kapi() {
     fi
   else
     python3 - "$1" "$2" "${3:-}" <<'PY'
-import json, os, sys, urllib.error, urllib.request
+import json, os, subprocess, sys
 method, path, body = sys.argv[1:4]
 req = {"credential": "kernel", "method": method, "url": "https://api.onkernel.com" + path}
 if body:
     req["headers"] = {"content-type": "application/json"}
     req["body"] = body
-r = urllib.request.Request(os.environ["AGENT_API_URL"] + "/v1/credentials/broker",
-    data=json.dumps(req).encode(), method="POST",
-    headers={"x-agent-capability": os.environ["AGENT_CREDENTIAL_TOKEN"], "content-type": "application/json"})
-try:
-    env = json.load(urllib.request.urlopen(r))
-except urllib.error.HTTPError as e:
-    sys.stderr.write(f"broker {e.code}: {e.read().decode()[:500]}\n"); sys.exit(1)
+r = subprocess.run(["curl", "-sS", "--fail-with-body", "-X", "POST",
+    os.environ["AGENT_API_URL"] + "/v1/credentials/broker",
+    "-H", "x-agent-capability: " + os.environ["AGENT_CREDENTIAL_TOKEN"],
+    "-H", "content-type: application/json", "--data-binary", "@-"],
+    input=json.dumps(req), capture_output=True, text=True)
+if r.returncode:
+    sys.stderr.write(f"broker: {(r.stdout or r.stderr)[:500]}\n"); sys.exit(1)
+env = json.loads(r.stdout)
 if not 200 <= env.get("status", 0) < 300:
     sys.stderr.write(f"kernel {env.get('status')}: {(env.get('body') or '')[:500]}\n"); sys.exit(1)
 sys.stdout.write(env.get("body") or "")

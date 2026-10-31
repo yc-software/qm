@@ -10,7 +10,8 @@ import { cliVersion } from "../src/manifest.ts";
 import { validateSandboxLayer } from "../src/sandbox-layer.ts";
 import { parseToolDescriptor } from "../src/tool-descriptor.ts";
 import { SERVICE_NAMES, VIRTUAL_SERVICE_NAMES } from "../src/services.ts";
-import { renderEnvExample } from "../src/secrets.ts";
+import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
+import { readEnvFile } from "../src/util.ts";
 import { runChecks } from "../src/commands/check.ts";
 import { renderTerraformVars } from "../src/terraform.ts";
 import { requiredSlackScopes, slackManifestBotScopes } from "../src/backends/doctor.ts";
@@ -58,7 +59,6 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.orgId, "acme");
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
-    assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.sandbox, undefined);
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
@@ -79,7 +79,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.ok(skillSecret, "init generates a strong skill signing key");
     assert.notEqual(coreSecret, skillSecret, "generated keys are independent");
     assert.equal(statSync(join(dir, ".env")).mode & 0o777, 0o600, ".env is owner-readable only");
-    for (const stale of ["HARNESS=", "ORG_ID=", "PORT=", "SESSION_STORE"]) {
+    for (const stale of ["HARNESS=", "ORG_ID=", "PORT="]) {
       assert.ok(!env.includes(stale), `.env.example should not offer ${stale} as a value to fill in`);
     }
 
@@ -119,6 +119,25 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(layer.tools.length, 1);
     assert.equal(layer.skills.length, 1);
     assert.ok(layer.tools[0]!.executablePath, "the example tool ships an executable");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("init mints every locally mintable secret, including the broker signing key", () => {
+  const base = mkdtempSync(join(tmpdir(), "qm-init-"));
+  try {
+    const dir = join(base, "acme");
+    quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+    const { config } = loadConfigInDir(dir);
+    const env = readEnvFile(join(dir, ".env"));
+    const mintable = computedSecrets(config).filter((secret) => secret.required && secret.generate);
+    assert.ok(
+      mintable.some((secret) => secret.name === "AUTH_SIGNING_JWK"),
+      "the broker signing key is mintable",
+    );
+    for (const secret of mintable) assert.ok(env.get(secret.name), `init should mint ${secret.name}`);
+    assert.doesNotThrow(() => JSON.parse(env.get("AUTH_SIGNING_JWK")!), "the broker signing key is a JSON Web Key");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -228,7 +247,6 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.equal(config.target, "aws");
     assert.equal(config.publicUrl, "https://acme.example.com");
     assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
-    assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.env.core?.AWS_DEPLOY_IMAGE, "acme-qm-sandbox");
     assert.equal(config.env.core?.AWS_PUBLIC_ORIGIN_URL, "http://replace-with-alb-hostname");
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");

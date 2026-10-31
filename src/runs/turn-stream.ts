@@ -1,4 +1,4 @@
-import type { GoalRecord } from "../harness/goal.ts";
+import type { GoalRecord } from "../agent/goal.ts";
 import type { TurnRuntime } from "../types.ts";
 
 export interface GoalView {
