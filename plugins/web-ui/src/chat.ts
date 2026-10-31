@@ -28,6 +28,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
@@ -377,7 +378,11 @@ export function createChatSurface(
     const speakerId = (message as { speakerId?: string }).speakerId;
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
-    return project?.members.find((m) => m.principalId === speakerId);
+    const member = project?.members.find((m) => m.principalId === speakerId);
+    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    // Slack conversations rarely map to a project. Use the same directory record (Slack users.list
+    // image_72, synced into directory_members.avatar_url) that the inbox reads for its avatars.
+    return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -795,8 +800,14 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
   }
 
+  const stopAvatarWatch = onSpeakerAvatars(() => {
+    if (chatState.agent) drawActiveChat();
+    else readonlyRedraw?.();
+  });
+
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    stopAvatarWatch();
     stopPrefsWatch();
     teardownActiveChat();
   }
@@ -1261,7 +1272,7 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack")}
+            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack", shownMessages)}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1838,13 +1849,43 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
+  type Participant = { key: string; name: string; avatarUrl?: string };
+
+  function conversationParticipants(messages: AgentMessage[]): Participant[] {
+    const seen = new Map<string, Participant>();
+    for (const message of messages) {
+      const name = (message as { speaker?: string }).speaker?.trim();
+      if (!name) continue;
+      const member = speakerMember(message);
+      const key = member?.principalId ?? name;
+      if (!seen.has(key)) seen.set(key, { key, name, avatarUrl: member?.avatarUrl });
+    }
+    return [...seen.values()];
+  }
+
+  function participantStack(people: Participant[]): TemplateResult | typeof nothing {
+    if (!people.length) return nothing;
+    const shown = people.slice(0, 5);
+    const rest = people.slice(5);
+    return html`<div class="chat-participants" role="list" aria-label=${`${people.length} participants`}>
+      ${shown.map((person) => html`<span role="listitem" class="chat-participant">${avatarTpl(person)}</span>`)}
+      ${rest.length ? html`<span class="chat-participant-more" ${tip(rest.map((p) => p.name).join(", "))}>+${rest.length}</span>` : nothing}
+    </div>`;
+  }
+
+  function chatHeader(
+    title: string | TemplateResult,
+    detail: string,
+    readOnly: boolean,
+    messages: AgentMessage[] = [],
+  ): TemplateResult {
     return html`
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title" dir="auto">${title}</div>
           <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
         </div>
+        ${participantStack(conversationParticipants(messages))}
       </header>
     `;
   }

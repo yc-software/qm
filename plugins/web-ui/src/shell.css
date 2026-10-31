@@ -12633,3 +12633,25 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-weight: 600;
   margin-right: 4px;
 }
+
+/* Conversation participants (Slack avatars) in the chat header. */
+.chat-participants {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-left: 6px;
+}
+.chat-participant {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--background);
+}
+.chat-participant:first-child {
+  margin-left: 0;
+}
+.chat-participant-more {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
