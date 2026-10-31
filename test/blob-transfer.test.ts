@@ -27,9 +27,7 @@ import {
   S3_PART_BYTES,
   type BlobTransferStore,
 } from "../src/persistence/blob-transfer.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => void } = {}) {
   const objects = new Map<string, { body: Buffer; lastModified: Date }>();

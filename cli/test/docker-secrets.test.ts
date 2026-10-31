@@ -102,7 +102,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
         },
         env: {
           core: {
-            HARNESS: "pi",
             CORE_SIGNING_SECRET: "config-placeholder",
             DATABASE_URL: "postgres://config/placeholder",
             PUBLIC_API_URL: "https://config-placeholder.invalid",
@@ -119,7 +118,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
           .map(([k, v]) => `${k}=${v}`),
         "ANTHROPIC_API_KEY=",
         "EMPTY_TOKEN=",
-        "HARNESS=pi",
+        "STRAY_KEY=1",
       ].join("\n"),
     );
     const fake = fakeDocker(dir);
@@ -161,7 +160,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "virtual-service env folds into the core env",
     );
     assert.ok(
-      lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("HARNESS")),
+      lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("STRAY_KEY")),
       "unforwarded .env keys are warned about",
     );
 

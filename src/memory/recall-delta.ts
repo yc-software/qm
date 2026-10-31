@@ -1,4 +1,4 @@
-import { retainedSnapshot } from "../harness/context-snapshot.ts";
+import { retainedSnapshot } from "../agent/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
 import { renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";

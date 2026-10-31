@@ -14,16 +14,14 @@ import {
   renderAppStoragePolicy,
   type StoredRenderAppStorage,
 } from "../src/deploy/render-app-storage.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 type StorageOptions = Parameters<typeof createRenderAppStorage>[0];
 
 function fixture(handle: (call: FakeRenderApiCall) => unknown, extra: Partial<StorageOptions> = {}) {
-  const store = createMemoryMap<StoredRenderAppStorage>();
+  const store = testMap<StoredRenderAppStorage>();
   const api = createFakeRenderApi((call) => {
     if (call.path === "/services/srv-minio" && call.method === "GET")
       return { ownerId: "tea-test", environmentId: "env-test", type: "web_service" };

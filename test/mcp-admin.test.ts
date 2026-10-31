@@ -5,22 +5,23 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
+import { errMessage } from "../src/util/errors.ts";
+import { testMap } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -123,7 +124,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 
-test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {
+test("production wiring never uses operator fallback tokens for per-user MCP calls and refuses private MCP addresses", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-wiring-"));
   const previous = process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
   process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = "operator-token";
@@ -132,7 +133,6 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     tools: [{ name: "identity", inputSchema: { type: "object" } }],
     call: (_name, _args, authorization) => ({ content: [{ type: "text", text: authorization ?? "" }] }),
   });
-  const calls = () => remote.requests.filter((r) => r.rpc === "tools/call").length;
   t.after(async () => {
     built.mcpToolService.close();
     if (previous === undefined) delete process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
@@ -143,9 +143,10 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     id: "crm",
     name: "CRM",
     url: `${remote.url}/mcp`,
-    auth: "none",
+    auth: "oauth-user",
     credentialScope: "per-user",
     credentialHost: "accounts.example.com",
+    tools: [{ name: "identity", description: "", inputSchema: { type: "object" } }],
     readOnly: true,
     enabled: true,
     updatedAt: Date.now(),
@@ -156,75 +157,77 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"),
     "operator-token",
   );
-  await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Connect your account/);
-  assert.equal(calls(), 0);
+  assert.match(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Sign in to CRM/);
+  assert.equal(remote.requests.length, 0);
   await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
     accessToken: "alice-only",
   });
-  assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
-  assert.equal(calls(), 1);
+  await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), (e: unknown) =>
+    /private network address/.test(errMessage(e)),
+  );
+  assert.equal(remote.requests.length, 0, "production wiring refuses a loopback MCP server");
 });
 
-test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadata, and never shadows built-in connectors", async (t) => {
+test("MCP admin accepts per-user OAuth servers, discovers endpoints only from public addresses, and never shadows built-in connectors", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,
   });
-  const issuer = createServer((req, res) => {
-    const base = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
-    const metadata: Record<string, object> = {
-      "/.well-known/oauth-authorization-server/id": {
-        authorization_endpoint: `${base}/id/authorize`,
-        token_endpoint: `${base}/id/token`,
-      },
-      "/.well-known/oauth-protected-resource/mcp": {
-        resource: `${base}/mcp`,
-        authorization_servers: [`${base}/id`],
-        scopes_supported: ["mcp:write"],
-      },
-    };
-    const meta = metadata[req.url ?? ""];
-    if (!meta) return void res.writeHead(404).end();
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(meta));
-  });
   server.listen(0, "127.0.0.1");
-  issuer.listen(0, "127.0.0.1");
-  await Promise.all([once(server, "listening"), once(issuer, "listening")]);
+  await once(server, "listening");
   t.after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => issuer.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   });
-  const issuerUrl = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers`;
   const put = (id: string, body: object) =>
     fetch(`${base}/${id}`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ url: `${issuerUrl}/mcp`, auth: "oauth-user", ...body }),
+      body: JSON.stringify({ url: "https://127.0.0.1/mcp", auth: "oauth-user", ...body }),
     });
 
-  const undiscoverable = await put("orders", { clientId: "c", url: `${issuerUrl}/elsewhere` });
-  assert.equal(undiscoverable.status, 400);
-  assert.match(((await undiscoverable.json()) as { message: string }).message, /discovery: .*HTTP 404/);
+  const issuer = "https://mcp.example.com";
+  const metadata: Record<string, object> = {
+    [`${issuer}/.well-known/oauth-authorization-server/id`]: {
+      authorization_endpoint: `${issuer}/id/authorize`,
+      token_endpoint: `${issuer}/id/token`,
+    },
+    [`${issuer}/.well-known/oauth-protected-resource/mcp`]: {
+      resource: `${issuer}/mcp`,
+      authorization_servers: [`${issuer}/id`],
+      scopes_supported: ["mcp:write"],
+    },
+  };
+  const metadataFetch = async (input: string | URL) => {
+    const meta = metadata[String(input)];
+    return meta ? Response.json(meta) : new Response(null, { status: 404 });
+  };
+  assert.deepEqual(await discoverOAuth(new URL(`${issuer}/mcp`), metadataFetch), {
+    authorize: `${issuer}/id/authorize`,
+    token: `${issuer}/id/token`,
+    scopes: ["mcp:write"],
+    errors: [],
+  });
+  assert.match((await discoverOAuth(new URL(`${issuer}/elsewhere`), metadataFetch)).errors.join("; "), /HTTP 404/);
+
+  const plainHttp = await put("orders", { clientId: "c", url: "http://127.0.0.1/mcp" });
+  assert.equal(plainHttp.status, 400);
+  assert.equal(((await plainHttp.json()) as { message: string }).message, "per-user credentials require HTTPS");
+  const privateIssuer = await put("orders", { clientId: "c" });
+  assert.equal(privateIssuer.status, 400);
+  assert.match(
+    ((await privateIssuer.json()) as { message: string }).message,
+    /discovery: .*127\.0\.0\.1 is a private network address/,
+  );
+  assert.ok(!(await store.get("orders")));
   assert.equal((await put("github", { clientId: "c" })).status, 400, "built-in connector ids are reserved");
   assert.equal((await put("orders", { clientId: "c", credentialHost: "github.com" })).status, 400);
   assert.equal((await put("orders", { clientId: "c", oauthTokenUrl: "http://id.example.com/token" })).status, 400);
-
-  assert.equal((await put("orders", { clientId: " c " })).status, 200);
-  const record = (await store.get("orders"))!;
-  assert.equal(record.credentialScope, "per-user");
-  assert.equal(record.credentialHost, "127.0.0.1");
-  assert.equal(record.clientId, "c");
-  assert.equal(record.oauthAuthorizeUrl, `${issuerUrl}/id/authorize`);
-  assert.equal(record.oauthTokenUrl, `${issuerUrl}/id/token`);
-  assert.deepEqual(record.oauthScopes, ["mcp:write"]);
-  assert.equal(record.clientSecret, undefined);
 
   assert.equal(
     (
@@ -239,14 +242,19 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadat
     200,
     "explicit endpoints skip discovery",
   );
-  assert.deepEqual((await store.get("manual"))!.oauthScopes, ["a", "b"]);
+  const record = (await store.get("manual"))!;
+  assert.equal(record.credentialScope, "per-user");
+  assert.equal(record.credentialHost, "tools.example.com");
+  assert.equal(record.clientId, "c");
+  assert.equal(record.clientSecret, undefined);
+  assert.deepEqual(record.oauthScopes, ["a", "b"]);
 });
 
 test("MCP admin save stores the server's own description from the probe", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-about-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,

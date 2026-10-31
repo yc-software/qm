@@ -23,7 +23,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-for (const [i, change] of [{ inherit: true }, { keep: true }, { harnessId: "pi", modelId: "new-model" }].entries()) {
+for (const [i, change] of [{ inherit: true }, { keep: true }, { modelId: "new-model" }].entries()) {
   test(`successful runtime saves update one shared snapshot for every view: ${JSON.stringify(change)}`, async () => {
     const scope = `scope:save-${i}`;
     const config = runtimeConfig(scope, { upgradeAvailable: false });
@@ -64,7 +64,7 @@ test("boot hydration and derived options are shared, not consumed by a pane", as
   };
   assert.equal(await loadRuntimeConfig(config.scopeId), config);
   assert.equal(await loadRuntimeConfig(config.scopeId), config);
-  assert.equal(defaultModelValue(config.scopeId), "pi:model");
+  assert.equal(defaultModelValue(config.scopeId), "model");
   assert.equal(getRuntimeConfig("scope:unknown"), null);
 });
 
@@ -117,14 +117,14 @@ test("writes serialize per scope; reads during a save wait, and another scope is
     const { scopeId, modelId } = JSON.parse(String(init.body));
     calls.push(modelId);
     if (modelId === "first") return first.promise;
-    return Response.json(runtimeConfig(scopeId, { effective: { harnessId: "pi", modelId } }));
+    return Response.json(runtimeConfig(scopeId, { effective: { modelId } }));
   };
   const save1 = saveRuntimeConfig(scope, { modelId: "first" });
   const save2 = saveRuntimeConfig(scope, { modelId: "second" });
   const read = loadRuntimeConfig(scope);
   await saveRuntimeConfig("scope:independent", { modelId: "other" });
   assert.deepEqual(calls, ["first", "other"]);
-  first.resolve(Response.json(runtimeConfig(scope, { effective: { harnessId: "pi", modelId: "first" } })));
+  first.resolve(Response.json(runtimeConfig(scope, { effective: { modelId: "first" } })));
   await Promise.all([save1, save2]);
   assert.equal((await read)?.effective.modelId, "second");
   assert.equal(getRuntimeConfig(scope)?.effective.modelId, "second");
@@ -192,7 +192,7 @@ test("account changes invalidate all scopes and prevent stale requests from repu
   const pending = loadRuntimeConfig(scope);
   invalidateRuntimeConfigs();
   assert.equal(getRuntimeConfig(other), null);
-  const personal = runtimeConfig(scope, { effective: { harnessId: "pi", modelId: "personal" } });
+  const personal = runtimeConfig(scope, { effective: { modelId: "personal" } });
   globalThis.fetch = async () => {
     reads++;
     return Response.json(personal);

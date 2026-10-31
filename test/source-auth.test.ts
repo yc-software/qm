@@ -6,7 +6,8 @@ import {
   verifySignature,
   SOURCE_AUTH_REPLAY_WINDOW_MS,
 } from "../src/auth/source-auth.ts";
-import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "unit-test-secret";
 const W = SOURCE_AUTH_REPLAY_WINDOW_MS;
@@ -25,7 +26,11 @@ test("a non-numeric timestamp is rejected even when the signature matches the Na
 
 test("verify: accepts a fresh signed request once, rejects the replay as a duplicate", async () => {
   const clock = 1_000_000_000_000;
-  const auth = createSourceAuth({ signingSecret: SECRET, now: () => clock });
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
   const req = signedReq(Math.floor(clock / 1000), "hello");
   assert.deepEqual(await auth.verify(req), { ok: true });
   const replay = await auth.verify(req);
@@ -36,7 +41,11 @@ test("verify: accepts a fresh signed request once, rejects the replay as a dupli
 test("dedupe covers the FULL acceptance window: a future-stamped request can't be replayed late in its life", async () => {
   let clock = 1_000_000_000_000;
   const t0 = clock;
-  const auth = createSourceAuth({ signingSecret: SECRET, now: () => clock });
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
 
   const futureTs = Math.floor((t0 + W) / 1000);
   const req = signedReq(futureTs, "future-stamped");
@@ -60,7 +69,11 @@ test("dedupe covers the FULL acceptance window: a future-stamped request can't b
 
 test("a replay at the exact staleness boundary (|now - ts| == window) is still a duplicate", async () => {
   let clock = 1_000_000_000_000;
-  const auth = createSourceAuth({ signingSecret: SECRET, now: () => clock });
+  const auth = createSourceAuth({
+    dedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    now: () => clock,
+  });
   const ts = Math.floor(clock / 1000);
   const req = signedReq(ts, "boundary");
   assert.deepEqual(await auth.verify(req), { ok: true });
@@ -74,7 +87,7 @@ test("a replay at the exact staleness boundary (|now - ts| == window) is still a
 test("a shared dedupe store closes the cross-instance replay window", async () => {
   const clock = 1_000_000_000_000;
   const now = () => clock;
-  const shared = createMemoryReplayDedupe(now);
+  const shared = createPostgresReplayDedupe(testDatabaseUrl());
   const instanceA = createSourceAuth({ signingSecret: SECRET, now, dedupe: shared });
   const instanceB = createSourceAuth({ signingSecret: SECRET, now, dedupe: shared });
 

@@ -6,7 +6,7 @@ import type {
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
-} from "../types.ts";
+} from "./types.ts";
 
 export type LedgerState = "pending" | "processed" | "held" | "actioned" | "dismissed" | "failed";
 

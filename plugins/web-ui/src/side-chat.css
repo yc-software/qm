@@ -11,8 +11,8 @@
   min-width: 0;
 }
 .side-chat-panel {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   position: absolute;
   left: clamp(12px, var(--side-chat-left, 16px), max(12px, calc(100% - 372px)));
   top: var(--side-chat-top, 16px);
@@ -34,6 +34,9 @@
 .side-chat-panel:not(.maximized):has(.message-row) {
   height: auto;
   max-height: min(440px, calc(100% - 24px));
+}
+.side-chat-panel:has(> .side-chat-excerpt) {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .side-chat-panel.maximized {
   inset: 12px;
@@ -87,7 +90,7 @@
 }
 .side-chat-header .icon-btn:disabled,
 .side-chat-discuss:disabled {
-  cursor: wait;
+  cursor: default;
   opacity: 0.6;
 }
 .side-chat-conversation {
@@ -96,6 +99,9 @@
   display: flex;
   flex-direction: column;
 }
+.side-chat-conversation > .custom-chat > .side-chat-layout {
+  height: auto;
+}
 .side-chat-conversation > .custom-chat {
   flex: 1;
   min-height: 0;
@@ -103,7 +109,7 @@
 .side-chat-conversation .custom-chat-shell {
   --chat-font-size: var(--font-14);
 }
-.side-chat-panel .custom-chat-shell > .chat-bottom-dock {
+.side-chat-panel .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
   margin-top: 0;
 }
 .side-chat-conversation .composer-wrap {
@@ -176,6 +182,9 @@
   margin-left: auto;
   padding: 6px;
   cursor: pointer;
+}
+.side-chat-panel .chat-scroll {
+  overscroll-behavior-y: contain;
 }
 .side-chat-panel:not(.maximized) .chat-scroll {
   container-type: inline-size;
@@ -310,4 +319,40 @@
   .side-chat-highlight {
     transition: none;
   }
+}
+
+.side-chat-conversation[hidden] {
+  display: none;
+}
+.side-chat-pending {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.side-chat-pending .side-chat-excerpt {
+  margin: 0 16px 12px;
+}
+.side-chat-draft {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: auto 10px 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.side-chat-draft textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  height: 32px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+}
+.side-chat-draft .send-btn {
+  cursor: default;
 }

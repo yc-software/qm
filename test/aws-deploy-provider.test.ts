@@ -11,13 +11,11 @@ import {
   type MicrovmDescription,
   type MicrovmLifecycleState,
 } from "../src/sandbox/aws-microvm-api.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const REGION = "us-west-2";
 
@@ -182,7 +180,7 @@ function fakeSts() {
 function provider(
   api: AwsMicrovmApi,
   fetchImpl: typeof fetch,
-  store = createMemoryMap<StoredDeployBody>(),
+  store = testMap<StoredDeployBody>(),
   extra: Record<string, unknown> = {},
 ) {
   return createAwsDeployProvider({
@@ -315,7 +313,7 @@ test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated �
 test("resolveEndpoint (warm): a running, fresh body is reused — no relaunch — with a refreshed token", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   const first = await p.apply(d, version(localSnapshot("a", "1")));
@@ -331,7 +329,7 @@ test("resolveEndpoint (warm): a running, fresh body is reused — no relaunch �
 test("resolveEndpoint (suspended): resumes the body and serves it warm", async () => {
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -361,7 +359,7 @@ test("apply: an idle app stays suspended for its whole lifetime instead of being
 test("apply: an explicit suspended-duration setting still wins", async () => {
   const { api, launches } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
   assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
 });
@@ -381,7 +379,7 @@ test("rotation: the replacement body is launched before the old one is terminate
     return realTerminate(id);
   };
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -402,7 +400,7 @@ test("rotation: the replacement body is launched before the old one is terminate
 test("rotation: a replacement left behind by a crash mid-rotation is terminated on the next attempt", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -420,7 +418,7 @@ test("rotation: a replacement left behind by a crash mid-rotation is terminated 
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -438,7 +436,7 @@ test("resolveEndpoint: an app in use is served from cache and re-checked in the 
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -448,7 +446,7 @@ test("resolveEndpoint: an app in use is served from cache and re-checked in the 
   t.mock.timers.tick(60_000);
   const hot = await p.resolveEndpoint!(d, version("/unused"));
   assert.equal(hot!.host, first!.host, "the visit is answered from cache");
-  await new Promise((r) => setImmediate(r));
+  for (let i = 0; i < 400 && counts.describe === describes; i++) await new Promise((r) => setTimeout(r, 5));
   assert.equal(counts.describe, describes + 1, "a background re-check refreshed the verdict");
 
   const moved = { ...d, endpoint: { host: "elsewhere.on.aws", port: 443 } };
@@ -460,7 +458,7 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -477,7 +475,7 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
 test("park: suspends the app's machine unless it is always-on", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -491,7 +489,7 @@ test("park: suspends the app's machine unless it is always-on", async () => {
 test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -513,7 +511,7 @@ test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", 
 test("resolveEndpoint: a control-plane 5xx serves the stored endpoint rather than failing the reach", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -533,7 +531,7 @@ test("resolveEndpoint: a control-plane 5xx serves the stored endpoint rather tha
 test("resolveEndpoint: a control-plane 429 serves the stored endpoint like a 5xx", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -550,7 +548,7 @@ test("resolveEndpoint: a control-plane 429 serves the stored endpoint like a 5xx
 test("resolveEndpoint: a resolve racing a body swap neither caches the old endpoint nor drops the new pointer", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -581,7 +579,7 @@ test("resolveEndpoint: a resolve racing a body swap neither caches the old endpo
 test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -609,7 +607,7 @@ test("resolveEndpoint: an app whose process and supervisor are both gone returns
 test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply) and clears the pointer", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -624,7 +622,7 @@ test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply
 test("resolveEndpoint (near the 8h cap): a stale-but-alive body returns null so the caller rotates to a fresh one", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
@@ -734,7 +732,7 @@ test("apply: a healthy app still publishes — the readiness gate does not fire 
 test("destroy: terminates the body and clears its pointer", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -755,7 +753,7 @@ test("app data: a fresh body hydrates /data from the S3 snapshot before the app 
   const { api } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
   const { s3, objects } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TARBYTES")]]));
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
 
   assert.ok(
@@ -779,7 +777,7 @@ test("app data: rotating a body past the 8h window snapshots /data to S3 before 
     readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from("NEWTAR").toString("base64") : ""),
   });
   const { s3, objects } = fakeS3();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -802,7 +800,7 @@ test("app data: an empty /data is never uploaded — a fresh body can't clobber 
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("exit 3") ? 3 : 0) });
   const { s3, calls } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("PRECIOUS")]]));
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -822,7 +820,7 @@ test("app data: a warm reach past the snapshot interval snapshots /data and stam
     readB64: (p) => (p.startsWith("/tmp/qm-data-") ? Buffer.from("LIVE").toString("base64") : ""),
   });
   const { s3, objects } = fakeS3();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, snapshotIntervalMs: 0 });
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -842,7 +840,7 @@ test("app data: a failed rotate snapshot defers the rotation — the stale body 
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const { s3 } = fakeS3();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -863,7 +861,7 @@ test("app data: a failed hydrate terminates the fresh body instead of leaking it
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("tar -xf") ? 1 : 0) });
   const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TAR")]]));
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 });
   await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /hydrate extract failed/);
   assert.equal(counts.terminate, 1, "the un-pointered body is terminated, not leaked to the 8h cap");
 });
@@ -872,7 +870,7 @@ test("app data: an over-cap /data is skipped loudly, never uploaded or thrown", 
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("wc -c") ? 4 : 0) });
   const { s3, calls } = fakeS3();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -889,7 +887,7 @@ test("app data: a deferred rotation serves the stale body from resolveEndpoint i
   const { api, counts, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const { s3 } = fakeS3();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3 });
   const d = deployment(ID);
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
@@ -916,7 +914,7 @@ test("litestream: shadow-WAL dir is excluded from both snapshot and hydrate", as
   });
   const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("TAR")]]));
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -937,7 +935,7 @@ test("litestream: the start script verifies replica auth and daemon liveness", a
   const { fetchImpl, execs } = fakeDaemon();
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), {
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",
     s3,
     sts,
@@ -957,7 +955,7 @@ test("litestream: replicators are found by what they are running, so a lost pid 
   const { fetchImpl, execs } = fakeDaemon();
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), {
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",
     s3,
     sts,
@@ -986,7 +984,7 @@ test("every script the provider hands the exec daemon parses under the shell tha
   const { fetchImpl, execs } = fakeDaemon();
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), {
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",
     s3,
     sts,
@@ -1006,7 +1004,7 @@ test("litestream: a failed start un-pointers and terminates the body so reaches 
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("litestream replicate") ? 22 : 0) });
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))), /litestream start failed/);
   assert.equal(await store.get(ID), null, "pointer cleared");
@@ -1023,7 +1021,7 @@ test("app data: destroy tears down the runtime but preserves durable data — ar
     ]),
   );
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -1038,7 +1036,7 @@ test("litestream: apply stages prefix-scoped creds + config, restores before the
   const { fetchImpl, execs, writes } = fakeDaemon();
   const { s3 } = fakeS3();
   const { sts, assumes } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   await p.apply(deployment(ID), version(localSnapshot("a", "1")));
 
@@ -1066,7 +1064,7 @@ test("litestream: a warm reach with stale creds re-mints and bounces litestream"
   const { fetchImpl, execs } = fakeDaemon();
   const { s3 } = fakeS3();
   const { sts, assumes } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   const d = deployment(ID);
   await p.apply(d, version(localSnapshot("a", "1")));
@@ -1089,7 +1087,7 @@ test("litestream: the tar snapshot excludes app.db so the replica owns the datab
   });
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   vms.set("mvm-old", { state: "RUNNING", endpoint: "mvm-old.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -1112,7 +1110,7 @@ test("litestream: hydrate never extracts a legacy tar'd app.db — a stale db wo
   const { fetchImpl, execs } = fakeDaemon();
   const { s3 } = fakeS3(new Map([[`deploy-data/${TEST_TENANT}/${ID}.tar`, Buffer.from("LEGACY-TAR-WITH-DB")]]));
   const { sts } = fakeSts();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), {
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",
     s3,
     sts,
@@ -1135,7 +1133,7 @@ test("litestream: a failed restore aborts materialize instead of starting the ap
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("litestream restore") ? 21 : 0) });
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), {
+  const p = provider(api, fetchImpl, testMap<StoredDeployBody>(), {
     dataBucket: "bkt",
     s3,
     sts,
@@ -1152,7 +1150,7 @@ test("litestream: a reused body on a binary-less image is marked for rotation, n
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("command -v litestream") ? 24 : 0) });
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   vms.set("mvm-live", { state: "RUNNING", endpoint: "mvm-live.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -1174,7 +1172,7 @@ test("litestream: a reused body's failed refresh (non-24) defers rotation with a
   const { fetchImpl } = fakeDaemon({ execCode: (cmd) => (cmd.includes("litestream replicate") ? 22 : 0) });
   const { s3 } = fakeS3();
   const { sts } = fakeSts();
-  const store = createMemoryMap<StoredDeployBody>();
+  const store = testMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store, { dataBucket: "bkt", s3, sts, dataRoleArn: "arn:aws:iam::1:role/data" });
   vms.set("mvm-live", { state: "RUNNING", endpoint: "mvm-live.lambda-microvm.us-west-2.on.aws" });
   await store.put(ID, {
@@ -1203,7 +1201,7 @@ test("app data: $DATA_DIR is only advertised to the app when persistence is actu
 
   const on = fakeDaemon();
   const { s3 } = fakeS3();
-  await provider(api, on.fetchImpl, createMemoryMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).apply(
+  await provider(api, on.fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).apply(
     deployment(ID),
     version(localSnapshot("a", "1")),
   );
@@ -1227,7 +1225,7 @@ test("profile: advertises the durable dataDir only when persistence is wired", (
   const { s3 } = fakeS3();
   assert.equal(provider(api, fetchImpl).profile.dataDir, undefined, "no bucket → no durable-data contract");
   assert.equal(
-    provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).profile.dataDir,
+    provider(api, fetchImpl, testMap<StoredDeployBody>(), { dataBucket: "bkt", s3 }).profile.dataDir,
     "/data",
   );
 });

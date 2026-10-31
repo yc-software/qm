@@ -83,15 +83,13 @@ export function createEnvelopeStaging(
         if (staged.account !== opts.account) continue;
         if (staged.receivedAt > at - staleAfterMs || (staged.claimedUntil ?? 0) > at) continue;
         if (staged.attempts >= maxAttempts) continue;
-        let won = !map.update;
+        let won = false;
         const claim = { attempts: staged.attempts + 1, claimedUntil: at + CLAIM_MS };
-        const claimed = map.update
-          ? await map.update(key, (v) => {
-              if ((v.claimedUntil ?? 0) > at) return v;
-              won = true;
-              return { ...v, ...claim };
-            })
-          : await map.merge(key, claim);
+        const claimed = await map.update(key, (v) => {
+          if ((v.claimedUntil ?? 0) > at) return v;
+          won = true;
+          return { ...v, ...claim };
+        });
         if (!claimed || !won) continue;
         if (claimed.attempts >= maxAttempts)
           console.error(

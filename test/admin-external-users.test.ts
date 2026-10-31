@@ -18,9 +18,6 @@ import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/ext
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -70,7 +67,10 @@ function start(
     ...(opts.emailAuthPrincipals ? { emailAuthPrincipals: opts.emailAuthPrincipals } : {}),
   };
   const server = opts.signed
-    ? createServer(built.app, { ...deps, signingSecret: SECRET })
+    ? createServer(built.app, {
+        ...deps,
+        signingSecret: SECRET,
+      })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

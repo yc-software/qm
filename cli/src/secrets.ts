@@ -1,3 +1,4 @@
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { serviceHost, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
@@ -53,9 +54,16 @@ export function missingRequiredSecrets(
     .map((secret) => secret.name);
 }
 
-export const MINT_LOCALLY = "openssl rand -hex 32";
+const MINT_LOCALLY = "openssl rand -hex 32";
 export const MINT_JWK =
   "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
+
+export function mintLocalSecret(secret: { generate?: string }): string | undefined {
+  if (secret.generate === MINT_LOCALLY) return randomBytes(32).toString("hex");
+  if (secret.generate === MINT_JWK)
+    return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
+  return undefined;
+}
 
 export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
@@ -97,7 +105,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PUBLIC_API_URL",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "HARNESS", value: "pi" } },
+    required: true,
     description: "Public core self-API URL reachable from agent sandboxes.",
     managedBy: { render: "render" },
   },
@@ -224,15 +232,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AGENT37_API_KEY",
     service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "sandbox-backend", backend: "agent37" },
-          { kind: "env-equals", service: "core", name: "SANDBOX_SECONDARY_BACKEND", value: "agent37" },
-        ],
-      },
-    },
+    required: { when: { kind: "sandbox-backend", backend: "agent37" } },
     description: "Agent37 API key for the agent-computer substrate.",
     generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
   },

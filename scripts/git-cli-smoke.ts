@@ -113,8 +113,6 @@ export async function main(): Promise<void> {
   const built = buildApp({
     ...config,
     dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-git-cli-smoke-")),
-    sessionStore: "memory",
-    runStore: "memory",
   });
 
   const command = buildGitCliSmokeCommand({ requireGlab, requireGhAuth, requireGlabAuth });

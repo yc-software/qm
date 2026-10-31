@@ -1,8 +1,7 @@
-import { nativeDocumentFormat } from "../src/harness/document-inputs.ts";
+import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
-import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
@@ -12,13 +11,14 @@ import {
   modelIdReserved,
   modelUnavailableReason,
   modelServiceable,
-  modelSupportedByHarness,
+  modelSupported,
   resolveModel,
   safeModelMetadata,
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -102,8 +102,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.equal(validateWebTurnModelOptions({ model: id }, null, availability), null);
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
-  assert.equal(modelSupportedByHarness(id, "pi"), true);
-  assert.equal(modelSupportedByHarness(id, "claude"), false);
+  assert.equal(modelSupported(id), true);
   assert.equal(modelServiceable(id, { anthropic: true, openai: true, openrouter: true }), false);
   assert.equal(
     modelServiceable(id, { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) }),
@@ -238,15 +237,21 @@ test("custom provider models live in their own namespace, never the gateway one"
 });
 
 test("removed gateway selections never fall back to a different org or direct model", async () => {
-  const store = createMemoryConfigStore("default-org");
+  const store = testConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
-  const fallback = { harnessId: "pi" as const, modelId: "claude-opus-5" };
-  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  const fallback = { modelId: "claude-opus-5" };
+  await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
+  await assert.rejects(
+    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
   await store.setRuntimeSelection(org, fallback);
-  await store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  await store.setRuntimeSelection(personal, { modelId: "gateway/removed" });
+  await assert.rejects(
+    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
 });
 
 test("gateway aliases hide duplicate picker options while preserving saved routes", async () => {
@@ -294,7 +299,7 @@ test("gateway-only fallback retains models hidden by picker aliases", async () =
   await f.catalog.refresh();
   assert.ok(!builtInModelCatalog().some((model) => model.id === `gateway/${target}`));
   const fallback = runtimeFallback({
-    deps: { harnessId: "pi", providerKeys: { anthropic: false, openai: false, openrouter: false } },
+    deps: { providerKeys: { anthropic: false, openai: false, openrouter: false } },
   });
   assert.equal(fallback.modelId, `gateway/${target}`);
   assert.ok(

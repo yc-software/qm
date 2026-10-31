@@ -5,7 +5,7 @@ type Subscription = { channel: string; receive: (payload: string) => void; resyn
 const listeners = new Map<string, ReturnType<typeof createListener>>();
 
 function createListener(connectionString: string) {
-  const pg = createPgPool(connectionString, []);
+  const pg = createPgPool(connectionString);
   const subscriptions = new Set<Subscription>();
   const ready = new Set<Subscription>();
   const channels = new Set<string>();

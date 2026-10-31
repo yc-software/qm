@@ -1,5 +1,5 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -7,20 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createErrorLog } from "../src/admin/error-log.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -34,18 +26,23 @@ import {
   forModelContext,
   overBudgetFraction,
   planCompaction,
-} from "../src/harness/context-compaction.ts";
+} from "../src/agent/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
-import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
+import type { Agent, CompactInput } from "../src/agent/agent.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
@@ -60,29 +57,25 @@ const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor
 const PERSONAL = scopeId("personal", "U1");
 const TEAM = scopeId("team", "eng");
 
-function spyHarness(opts: { withSummarizer?: boolean } = {}) {
-  const base = createMockHarness();
-  const compactCalls: HarnessCompactInput[] = [];
+function spyAgent(opts: { withSummarizer?: boolean } = {}) {
+  const base = createMockAgent();
+  const compactCalls: CompactInput[] = [];
   const resetCalls: string[] = [];
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      resetSession(sessionId: string) {
-        resetCalls.push(sessionId);
-      },
+    resetSession(sessionId: string) {
+      resetCalls.push(sessionId);
     },
-    models: { ...base.models },
   };
   if (opts.withSummarizer === false) {
-    delete harness.models.compactHistory;
+    delete agent.compactHistory;
   } else {
-    harness.models.compactHistory = async (input: HarnessCompactInput) => {
+    agent.compactHistory = async (input: CompactInput) => {
       compactCalls.push(input);
-      return base.models.compactHistory!(input);
+      return base.compactHistory!(input);
     };
   }
-  return { harness, compactCalls, resetCalls };
+  return { agent, compactCalls, resetCalls };
 }
 
 function fakeSandbox(): Sandbox {
@@ -108,21 +101,21 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildOrchestrator(
-  harness: Harness,
+  agent: Agent,
   maxContextTokens?: number,
   defaultTurnWallClockMs?: number,
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
   teams?: TeamStore,
 ) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const errors = createErrorLog();
-  const sessions = swarm?.sessions ?? createMemorySessionStore();
+  const config = testConfigStore(ORG);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const errors = createPostgresErrorLog(testDatabaseUrl());
+  const sessions = swarm?.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "cc-deploy"),
     auditLog,
@@ -131,26 +124,25 @@ function buildOrchestrator(
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     config,
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: swarm?.sandbox ?? fakeSandbox(),
     ...(swarm ? { swarms: swarm.service, sandboxResources: swarm.sandboxes } : {}),
     ...(teams ? { teams } : {}),
-    modelGateway: createModelGateway(),
     auditLog,
     errors,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
     maxContextTokens,
     defaultTurnWallClockMs,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
+      { config, baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
     ),
   });
@@ -215,8 +207,8 @@ async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, de
 }
 
 test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { agent, compactCalls, resetCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(
     sessions,
@@ -243,8 +235,8 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
 });
 
 test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", async () => {
-  const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { agent } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
   const holders: Array<string | undefined> = [];
   const acquire = sessions.acquireLease.bind(sessions);
   sessions.acquireLease = async (sessionId, holder) => {
@@ -269,8 +261,8 @@ test("the background pass labels the lease it takes, so a turn it locks out can 
 });
 
 test("token overflow triggers compaction with only a few huge entries", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 50);
+  const { agent, compactCalls, resetCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, 50);
 
   const big = "many different tokens here ".repeat(25);
   const sid = await seed(
@@ -282,7 +274,7 @@ test("token overflow triggers compaction with only a few huge entries", async ()
   assert.equal(res.status, "ok");
 
   assert.ok(compactCalls.length >= 1, "token overflow must trigger compaction despite the low entry count");
-  assert.equal(resetCalls[0], sid, "compaction resets the harness session");
+  assert.equal(resetCalls[0], sid, "compaction resets the agent session");
   const summaries = await summaryEntries(sessions, sid);
   assert.ok(summaries.length >= 1, "a summary entry is written");
   assert.ok(
@@ -292,8 +284,8 @@ test("token overflow triggers compaction with only a few huge entries", async ()
 });
 
 test("a prior summary that still fits is reused, not regenerated", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
+  const { agent, compactCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
 
   const sid = await seed(sessions, [
     { payload: { text: "old 0" } },
@@ -318,10 +310,10 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
   assert.equal(res.reply, "history:2", "reuse returns [summary, recent raw…]");
 });
 
-test("with no harness summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
-  const { harness, compactCalls, resetCalls } = spyHarness({ withSummarizer: false });
-  assert.equal(harness.models.compactHistory, undefined, "fixture: summarizer is absent");
-  const { orch, sessions } = buildOrchestrator(harness, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
+test("with no agent summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
+  const { agent, compactCalls, resetCalls } = spyAgent({ withSummarizer: false });
+  assert.equal(agent.compactHistory, undefined, "fixture: summarizer is absent");
+  const { orch, sessions } = buildOrchestrator(agent, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
   const sid = await seed(
     sessions,
@@ -339,11 +331,11 @@ test("with no harness summarizer, overflow falls back to a plain slice — no su
 });
 
 test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", async () => {
-  const { harness, compactCalls } = spyHarness();
+  const { agent, compactCalls } = spyAgent();
   const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
   const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
   const { orch, sessions } = buildOrchestrator(
-    harness,
+    agent,
     budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
   );
 
@@ -370,8 +362,8 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
 });
 
 test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", async () => {
-  const { harness } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+  const { agent } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(sessions, [
     { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
@@ -395,8 +387,8 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
 });
 
 test("a summary uses the session scope regardless of the source entry scopes", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetKeepingOnlyNewest("team 4", "recent 5"));
+  const { agent, compactCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("team 4", "recent 5"));
 
   const sid = await seed(sessions, [
     { payload: { text: "team 0" }, scopeLabel: TEAM },
@@ -545,8 +537,8 @@ for (const [kind, mkTurn] of [
   ["DM", turn],
 ] as const) {
   test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
-    const { harness, compactCalls } = spyHarness();
-    const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
     const sid = await seed(
       sessions,
       msgTexts(8).map((text) => ({ payload: { text } })),
@@ -563,12 +555,12 @@ for (const [kind, mkTurn] of [
 }
 
 test("a model-overridden session's background pass sizes against the override's budget, not the scope default", async () => {
-  const { harness, compactCalls } = spyHarness();
+  const { agent, compactCalls } = spyAgent();
   const OVERRIDE = "tiny-context-model";
   const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
-  harness.models.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
+  agent.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
     model === OVERRIDE ? overrideBudget : 1_000_000;
-  const { orch, sessions } = buildOrchestrator(harness);
+  const { orch, sessions } = buildOrchestrator(agent);
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -588,8 +580,8 @@ test("a model-overridden session's background pass sizes against the override's 
 });
 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
+  const { agent, compactCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
   await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -602,8 +594,8 @@ test("a rapid follow-up that outran the background pass AND is over the HARD lim
 });
 
 test("a session UNDER the soft threshold triggers no compaction at all (background pass is a no-op)", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, 1_000_000);
+  const { agent, compactCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
   await seed(
     sessions,
     Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
@@ -616,13 +608,13 @@ test("a session UNDER the soft threshold triggers no compaction at all (backgrou
 });
 
 test("a DM follow-up after the background pass reuses the summary — no blocking summarizer call on its hot path", async () => {
-  const { harness, compactCalls } = spyHarness();
-  harness.models.compactHistory = async (input: HarnessCompactInput) => {
+  const { agent, compactCalls } = spyAgent();
+  agent.compactHistory = async (input: CompactInput) => {
     compactCalls.push(input);
     return "tiny recap";
   };
   const messages = msgTexts(8).map((text) => `${text} ${"history ".repeat(1000)}`);
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...messages)));
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...messages)));
   const sid = await seed(
     sessions,
     messages.map((text) => ({ payload: { text } })),
@@ -636,7 +628,7 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   const expectedHistory = forModelContext(await sessions.getEntries(sid));
   assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
   assert.ok(expectedHistory.some((entry) => entry.type === "user"));
-  delete harness.models.compactHistory;
+  delete agent.compactHistory;
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -660,8 +652,8 @@ test("forModelContext strips thinking/text (never laundered into a durable summa
 });
 
 test("background compaction excludes thinking entries from the summary batch (Bugbot: history filter)", async () => {
-  const { harness, compactCalls } = spyHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { agent, compactCalls } = spyAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(sessions, [
     ...msgTexts(8).map((text) => ({ payload: { text } })),
     { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
@@ -679,9 +671,9 @@ test("background compaction excludes thinking entries from the summary batch (Bu
 });
 
 test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", async () => {
-  const { harness, compactCalls } = spyHarness();
+  const { agent, compactCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(
-    harness,
+    agent,
     budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
   );
   await seed(sessions, [
@@ -717,9 +709,9 @@ test("the deterministic fallback keeps the newest entries — a late stated cons
 });
 
 test("a runaway summarizer output does not commit a compaction checkpoint", async () => {
-  const { harness } = spyHarness();
-  harness.models.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
-  const { orch, sessions, errors } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
+  const { agent } = spyAgent();
+  agent.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
+  const { orch, sessions, errors } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
   const sid = await seed(
     sessions,
     msgTexts(12).map((text) => ({ payload: { text } })),
@@ -747,16 +739,13 @@ function assertSummaryBoundary(history: SessionEntry[], label: string): void {
   }
 }
 
-function captureHarness(harness: Harness) {
+function captureAgent(agent: Agent) {
   const seen: SessionEntry[][] = [];
-  const wrapped: Harness = {
-    ...harness,
-    turns: {
-      ...harness.turns,
-      runTurn: (input) => {
-        seen.push(input.history);
-        return harness.turns.runTurn(input);
-      },
+  const wrapped: Agent = {
+    ...agent,
+    runTurn: (input) => {
+      seen.push(input.history);
+      return agent.runTurn(input);
     },
   };
   return { wrapped, seen };
@@ -789,9 +778,9 @@ test("forModelContext applies the latest-summary boundary: one summary, nothing 
   );
 });
 
-test("under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history", async () => {
-  const base = spyHarness();
-  const { wrapped, seen } = captureHarness(base.harness);
+test("under-HARD turn: the agent sees the boundary-filtered context, not stacked summaries over raw history", async () => {
+  const base = spyAgent();
+  const { wrapped, seen } = captureAgent(base.agent);
   const { orch, sessions } = buildOrchestrator(wrapped, 1_000_000);
   await seed(sessions, stackedLog());
 
@@ -803,8 +792,8 @@ test("under-HARD turn: the harness sees the boundary-filtered context, not stack
 });
 
 test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
-  const base = spyHarness();
-  const { wrapped, seen } = captureHarness(base.harness);
+  const base = spyAgent();
+  const { wrapped, seen } = captureAgent(base.agent);
   const { orch, sessions } = buildOrchestrator(
     wrapped,
     Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
@@ -818,8 +807,8 @@ test("over-HARD turn with a summarizer: the rebuilt context honors the boundary"
 });
 
 test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
-  const base = spyHarness({ withSummarizer: false });
-  const { wrapped, seen } = captureHarness(base.harness);
+  const base = spyAgent({ withSummarizer: false });
+  const { wrapped, seen } = captureAgent(base.agent);
   const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
   await seed(sessions, stackedLog());
 
@@ -861,19 +850,19 @@ test("the context window start never regresses as the log grows", () => {
   }
 });
 
-function gatedHarness() {
-  const { harness, compactCalls, resetCalls } = spyHarness();
+function gatedAgent() {
+  const { agent, compactCalls, resetCalls } = spyAgent();
   let open = (): void => {};
   const gate = new Promise<void>((resolve) => {
     open = () => resolve();
   });
-  const summarize = harness.models.compactHistory!;
-  harness.models.compactHistory = async (input: HarnessCompactInput) => {
+  const summarize = agent.compactHistory!;
+  agent.compactHistory = async (input: CompactInput) => {
     const text = await summarize(input);
     await gate;
     return text;
   };
-  return { harness, compactCalls, resetCalls, open };
+  return { agent, compactCalls, resetCalls, open };
 }
 
 async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_000): Promise<void> {
@@ -885,8 +874,8 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
 }
 
 test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
-  const { harness, compactCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { agent, compactCalls, open } = gatedAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -904,16 +893,16 @@ test("the background pass leaves the session writable while it summarizes — a 
 });
 
 test("the background pass summarizes first and requests its lease only after the summarizer returns", async () => {
-  const { harness, compactCalls, open } = gatedHarness();
+  const { agent, compactCalls, open } = gatedAgent();
   const events: string[] = [];
-  const gated = harness.models.compactHistory!;
-  harness.models.compactHistory = async (input: HarnessCompactInput) => {
+  const gated = agent.compactHistory!;
+  agent.compactHistory = async (input: CompactInput) => {
     events.push("summarize:start");
     const text = await gated(input);
     events.push("summarize:end");
     return text;
   };
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const acquire = sessions.acquireLease.bind(sessions);
   sessions.acquireLease = async (sessionId, holder) => {
     if (holder === "compaction") events.push("acquire:compaction");
@@ -945,8 +934,8 @@ test("the background pass summarizes first and requests its lease only after the
 });
 
 test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
-  const { harness, compactCalls, resetCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { agent, compactCalls, resetCalls, open } = gatedAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -968,9 +957,9 @@ test("the background pass waits out a turn that holds the lock rather than throw
 });
 
 test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
-  const { harness, compactCalls, open } = gatedHarness();
+  const { agent, compactCalls, open } = gatedAgent();
   const paddedTexts = Array.from({ length: 15 }, (_, i) => `msg ${i} ${"padding ".repeat(1000)}`);
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
   const sid = await seed(
     sessions,
     paddedTexts.map((text) => ({ payload: { text } })),
@@ -1002,8 +991,8 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 });
 
 test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
-  const { harness, compactCalls, resetCalls, open } = gatedHarness();
-  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { agent, compactCalls, resetCalls, open } = gatedAgent();
+  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -1046,45 +1035,42 @@ test("the token estimate counts the environment note persisted on a user entry",
 });
 
 test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
-  const base = createMockHarness();
-  const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
+  const base = createMockAgent();
+  const seen: import("../src/agent/agent.ts").AgentTurnInput[] = [];
   let resets = 0;
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
-  const harness: Harness = {
+  const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      resetSession: async () => {
-        resets++;
-      },
-      runTurn: async (input) => {
-        seen.push(input);
-        if (seen.length === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-          await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
-          });
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
-        }
-        assert.deepEqual(input.runtime, choice);
-        assert.equal(input.runId, "runtime-run");
-        assert.ok(input.history.some((e) => e.type === "tool_result"));
-        assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
-        await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
-        return { reply: "continued", modelCalls: 1 };
-      },
+    resetSession: async () => {
+      resets++;
+    },
+    runTurn: async (input) => {
+      seen.push(input);
+      if (seen.length === 1) {
+        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+        await input.emit({
+          type: "tool_result",
+          payload: {
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            runId: input.runId,
+            actorId: actor.id,
+            runtimeHandoff: { choice, lifetime: "task" },
+          },
+          scopeLabel: input.scopeLabel,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
+      }
+      assert.deepEqual(input.runtime, choice);
+      assert.equal(input.runId, "runtime-run");
+      assert.ok(input.history.some((e) => e.type === "tool_result"));
+      assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
+      await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
+      return { reply: "continued", modelCalls: 1 };
     },
   };
-  const { orch, sessions } = buildOrchestrator(harness, undefined, 60000);
+  const { orch, sessions } = buildOrchestrator(agent, undefined, 60000);
   await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
   assert.equal(seen.length, 2);
   assert.equal(resets, 1);
@@ -1097,61 +1083,55 @@ test("runtime handoff continues once with saved results under the original run a
 });
 
 test("runtime handoff cannot restart a stopped task", async () => {
-  const base = createMockHarness();
+  const base = createMockAgent();
   let calls = 0;
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async () => {
-        calls++;
-        return {
-          reply: "",
-          stopped: true,
-          runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
-        };
-      },
+    runTurn: async () => {
+      calls++;
+      return {
+        reply: "",
+        stopped: true,
+        runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
+      };
     },
   };
-  const { orch } = buildOrchestrator(harness);
+  const { orch } = buildOrchestrator(agent);
   await orch.handleTurn({ ...turn("switch"), surfaceTools: false });
   assert.equal(calls, 1);
 });
 
 test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
-  const base = createMockHarness();
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
+  const base = createMockAgent();
+  const choice = { modelId: "gpt-6-astra" };
   let calls = 0;
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      resetSession: async () => {
-        throw new Error("worker died during reset");
-      },
-      runTurn: async (input) => {
-        calls++;
-        if (calls === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-          await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
-          });
-          return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
-        }
-        assert.deepEqual(input.runtime, choice);
-        return { reply: "resumed" };
-      },
+    resetSession: async () => {
+      throw new Error("worker died during reset");
+    },
+    runTurn: async (input) => {
+      calls++;
+      if (calls === 1) {
+        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+        await input.emit({
+          type: "tool_result",
+          payload: {
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            runId: input.runId,
+            actorId: actor.id,
+            runtimeHandoff: { choice, lifetime: "task" },
+          },
+          scopeLabel: input.scopeLabel,
+        });
+        return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
+      }
+      assert.deepEqual(input.runtime, choice);
+      return { reply: "resumed" };
     },
   };
-  const { orch } = buildOrchestrator(harness);
+  const { orch } = buildOrchestrator(agent);
   const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
@@ -1159,40 +1139,37 @@ test("a retry restores a committed runtime decision after reset crashes, without
 });
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
-  const base = createMockHarness();
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
+  const base = createMockAgent();
+  const active = { modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
   const outcomes: { surface: string; ok: boolean }[] = [];
   let resumed = 0;
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        if (input.runtime?.modelId === "gpt-6-astra") {
-          resumed++;
-          return { reply: "handled" };
-        }
-        const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
-        outcomes.push({ surface: input.input, ok: result.ok });
-        if (result.ok && result.handoff) {
-          await input.emit({
-            type: "tool_result",
-            scopeLabel: input.scopeLabel,
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: result.handoff,
-            },
-          });
-          return { reply: "", runtimeHandoff: result.handoff };
-        }
-        return { reply: "denied" };
-      },
+    runTurn: async (input) => {
+      if (input.runtime?.modelId === "gpt-6-astra") {
+        resumed++;
+        return { reply: "handled" };
+      }
+      const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
+      outcomes.push({ surface: input.input, ok: result.ok });
+      if (result.ok && result.handoff) {
+        await input.emit({
+          type: "tool_result",
+          scopeLabel: input.scopeLabel,
+          payload: {
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            runId: input.runId,
+            actorId: actor.id,
+            runtimeHandoff: result.handoff,
+          },
+        });
+        return { reply: "", runtimeHandoff: result.handoff };
+      }
+      return { reply: "denied" };
     },
   };
-  const { orch } = buildOrchestrator(harness);
+  const { orch } = buildOrchestrator(agent);
   for (const surface of ["cron", "webhook"]) {
     await orch.handleTurn({
       ...turn(surface),
@@ -1224,26 +1201,23 @@ test("only a cron automation receives task-runtime authority and each fire start
 });
 
 test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
-  const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+  const base = createMockAgent();
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
-  const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
-  const adapter: Harness = {
+  const seen: import("../src/agent/agent.ts").RuntimeChoice[] = [];
+  const adapter: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        seen.push(input.runtime as typeof category);
-        const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
-        assert.ok(state.ok);
-        assert.deepEqual(state.effective, category);
-        if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-        return { reply: "done" };
-      },
+    runTurn: async (input) => {
+      seen.push(input.runtime as typeof category);
+      const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
+      assert.ok(state.ok);
+      assert.deepEqual(state.effective, category);
+      if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+      return { reply: "done" };
     },
   };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-    resolveRuntimeChoiceDurable(
+  const router = withResolvedRuntime(adapter, (input) =>
+    resolveRuntimeChoice(
       built.config,
       "org:default-org",
       input.scopeLabel,
@@ -1254,9 +1228,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     ),
   );
   const built = buildOrchestrator(router);
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setRuntimeSelection(PERSONAL, {
-    harnessId: "pi",
     modelId: "claude-sonnet-5",
     effortLevel: "high",
   });
@@ -1275,21 +1247,18 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
 });
 
 test("human child continuations respect non-fast category defaults", async () => {
-  const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const base = createMockAgent();
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const seen: unknown[] = [];
-  const adapter: Harness = {
+  const adapter: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        seen.push(input.runtime);
-        return { reply: "done" };
-      },
+    runTurn: async (input) => {
+      seen.push(input.runtime);
+      return { reply: "done" };
     },
   };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-    resolveRuntimeChoiceDurable(
+  const router = withResolvedRuntime(adapter, (input) =>
+    resolveRuntimeChoice(
       built.config,
       "org:default-org",
       input.scopeLabel,
@@ -1300,7 +1269,6 @@ test("human child continuations respect non-fast category defaults", async () =>
     ),
   );
   const built = buildOrchestrator(router);
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setInteractiveFastMode(true);
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
@@ -1318,13 +1286,12 @@ test("human child continuations respect non-fast category defaults", async () =>
 });
 
 test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
-  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const handoff = { ...category, modelId: "gpt-6-sol" };
   for (const configured of [false, true]) {
     const f = await swarmFixture({
       runtime: {
-        harness: inherited.harnessId,
         model: inherited.modelId,
         thinkingLevel: inherited.effortLevel,
         fastMode: inherited.fastMode,
@@ -1336,21 +1303,18 @@ test("verified swarm workers resolve their own defaults instead of copying the r
     assert.equal(worker.kind, "agent");
     if (worker.kind !== "agent") throw new Error("expected worker");
     const run = (await f.runs.get(worker.claims.runId!))!;
-    const base = createMockHarness();
+    const base = createMockAgent();
     const seen: unknown[] = [];
-    const adapter: Harness = {
+    const adapter: Agent = {
       ...base,
-      turns: {
-        ...base.turns,
-        runTurn: async (input) => {
-          seen.push(input.runtime);
-          if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-          return { reply: "done" };
-        },
+      runTurn: async (input) => {
+        seen.push(input.runtime);
+        if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
+        return { reply: "done" };
       },
     };
-    const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-      resolveRuntimeChoiceDurable(
+    const router = withResolvedRuntime(adapter, (input) =>
+      resolveRuntimeChoice(
         built.config,
         "org:default-org",
         input.scopeLabel,
@@ -1361,14 +1325,10 @@ test("verified swarm workers resolve their own defaults instead of copying the r
       ),
     );
     const built = buildOrchestrator(router, undefined, undefined, f);
-    await built.config.setApprovedHarnesses(["pi"]);
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
     assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [
-      configured ? category : { harnessId: inherited.harnessId, modelId: inherited.modelId },
-      handoff,
-    ]);
+    assert.deepEqual(seen, [configured ? category : { modelId: inherited.modelId }, handoff]);
     assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
   }
 });
@@ -1387,18 +1347,15 @@ test("a teamed owner's swarm worker can start its default computer mid-turn", as
     isMember: async (id) => id === "alice",
     apply: async () => {},
   };
-  const base = createMockHarness();
-  const harness: Harness = {
+  const base = createMockAgent();
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (turn) => {
-        const result = await turn.tools.execute("true");
-        return { reply: `exit ${result.code}` };
-      },
+    runTurn: async (turn) => {
+      const result = await turn.tools.execute("true");
+      return { reply: `exit ${result.code}` };
     },
   };
-  const built = buildOrchestrator(harness, undefined, undefined, f, teams);
+  const built = buildOrchestrator(agent, undefined, undefined, f, teams);
   const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
   assert.equal(result.status, "ok", JSON.stringify(result));
   assert.equal(result.reply, "exit 0");
@@ -1406,12 +1363,11 @@ test("a teamed owner's swarm worker can start its default computer mid-turn", as
 });
 
 test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
-  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   for (const configured of [false, true]) {
     const f = await swarmFixture({
       runtime: {
-        harness: inherited.harnessId,
         model: inherited.modelId,
         thinkingLevel: inherited.effortLevel,
         fastMode: inherited.fastMode,
@@ -1431,19 +1387,16 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
       const worker = await f.workerCaller(peer.id);
       if (worker.kind !== "agent") throw new Error("expected worker");
       const run = (await f.runs.get(worker.claims.runId!))!;
-      const base = createMockHarness();
-      const adapter: Harness = {
+      const base = createMockAgent();
+      const adapter: Agent = {
         ...base,
-        turns: {
-          ...base.turns,
-          runTurn: async (input) => {
-            seen.set(peer.id, input.runtime);
-            return { reply: "done" };
-          },
+        runTurn: async (input) => {
+          seen.set(peer.id, input.runtime);
+          return { reply: "done" };
         },
       };
-      const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
-        resolveRuntimeChoiceDurable(
+      const router = withResolvedRuntime(adapter, (input) =>
+        resolveRuntimeChoice(
           built.config,
           "org:default-org",
           input.scopeLabel,
@@ -1454,85 +1407,75 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         ),
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
-      await built.config.setApprovedHarnesses(["pi"]);
       if (configured) await built.config.setPurposeRuntime("subagent", category);
       assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
     }
     assert.deepEqual(seen.get(full!.id), {
-      harnessId: "pi",
       modelId: "gpt-6-sol",
       effortLevel: "medium",
       fastMode: false,
     });
     assert.deepEqual(
       seen.get(partial!.id),
-      configured
-        ? { ...category, effortLevel: "medium" }
-        : { harnessId: inherited.harnessId, modelId: inherited.modelId, effortLevel: "medium" },
+      configured ? { ...category, effortLevel: "medium" } : { modelId: inherited.modelId, effortLevel: "medium" },
     );
   }
 });
 
 for (const explicit of [false, true]) {
   test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, async () => {
-    const base = createMockHarness();
-    const seen: Parameters<Harness["turns"]["runTurn"]>[0][] = [];
+    const base = createMockAgent();
+    const seen: Parameters<Agent["runTurn"]>[0][] = [];
     let summaries = 0;
     let effects = 0;
-    const harness: Harness = {
+    const agent: Agent = {
       ...base,
-      models: {
-        ...base.models,
-        compactHistory: async () => {
-          summaries++;
-          throw new Error("summary refused");
-        },
+      compactHistory: async () => {
+        summaries++;
+        throw new Error("summary refused");
       },
-      turns: {
-        ...base.turns,
-        runTurn: async (input) => {
-          seen.push(input);
-          if (explicit && seen.length === 1) {
-            await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-            await input.emit({
-              type: "tool_call",
-              payload: { tool: "files", callId: "effect", action: "write" },
-              scopeLabel: input.scopeLabel,
-            });
-            effects++;
-            await input.emit({
-              type: "tool_result",
-              payload: { tool: "files", callId: "effect", result: "stored" },
-              scopeLabel: input.scopeLabel,
-            });
-            await input.emit({
-              type: "tool_call",
-              payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
-              scopeLabel: input.scopeLabel,
-            });
-            await input.emit({
-              type: "tool_result",
-              payload: { tool: "context", callId: "reduce", result: "requested" },
-              scopeLabel: input.scopeLabel,
-            });
-            return { reply: "not final", runtimeHandoff: { context: "recent" } };
-          }
-          if (seen.length === (explicit ? 2 : 1)) {
-            assert.ok(estimateHistoryTokens(input.history) <= 600);
-            assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
-            assert.ok(
-              input.input.includes("finish the request") ||
-                input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
-            );
-            assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
-            if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
-          }
-          await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
-          return { reply: "finished" };
-        },
+      runTurn: async (input) => {
+        seen.push(input);
+        if (explicit && seen.length === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({
+            type: "tool_call",
+            payload: { tool: "files", callId: "effect", action: "write" },
+            scopeLabel: input.scopeLabel,
+          });
+          effects++;
+          await input.emit({
+            type: "tool_result",
+            payload: { tool: "files", callId: "effect", result: "stored" },
+            scopeLabel: input.scopeLabel,
+          });
+          await input.emit({
+            type: "tool_call",
+            payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
+            scopeLabel: input.scopeLabel,
+          });
+          await input.emit({
+            type: "tool_result",
+            payload: { tool: "context", callId: "reduce", result: "requested" },
+            scopeLabel: input.scopeLabel,
+          });
+          return { reply: "not final", runtimeHandoff: { context: "recent" } };
+        }
+        if (seen.length === (explicit ? 2 : 1)) {
+          assert.ok(estimateHistoryTokens(input.history) <= 600);
+          assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
+          assert.ok(
+            input.input.includes("finish the request") ||
+              input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
+          );
+          assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
+          if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
+        }
+        await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
+        return { reply: "finished" };
       },
     };
-    const { orch, sessions } = buildOrchestrator(harness, 1000);
+    const { orch, sessions } = buildOrchestrator(agent, 1000);
     const sid = await seed(
       sessions,
       explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
@@ -1551,29 +1494,23 @@ for (const explicit of [false, true]) {
 }
 
 test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
-  const base = createMockHarness();
+  const base = createMockAgent();
   let mainCalls = 0;
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    models: {
-      ...base.models,
-      compactHistory: async () => {
-        throw new Error("summary refused");
-      },
+    compactHistory: async () => {
+      throw new Error("summary refused");
     },
-    turns: {
-      ...base.turns,
-      runTurn: async (input) => {
-        mainCalls++;
-        assert.equal(input.input, "finish the stored request");
-        assert.equal(input.continueTurn, undefined);
-        assert.ok(!input.history.some((e) => e.type === "user"));
-        await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
-        return { reply: "resumed" };
-      },
+    runTurn: async (input) => {
+      mainCalls++;
+      assert.equal(input.input, "finish the stored request");
+      assert.equal(input.continueTurn, undefined);
+      assert.ok(!input.history.some((e) => e.type === "user"));
+      await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
+      return { reply: "resumed" };
     },
   };
-  const { orch, sessions } = buildOrchestrator(harness, 500);
+  const { orch, sessions } = buildOrchestrator(agent, 500);
   await seed(sessions, [
     { payload: { text: "finish the stored request" } },
     { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },

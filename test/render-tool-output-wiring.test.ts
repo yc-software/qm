@@ -14,7 +14,7 @@ mock.module("../src/sessions/tool-output.ts", {
     ...toolOutput,
     createPostgresToolOutputStore: (options: ToolOutputOptions) => {
       bytes = options.bytes;
-      return toolOutput.createMemoryToolOutputStore();
+      return toolOutput.createPostgresToolOutputStore(options);
     },
   },
 });
@@ -37,8 +37,6 @@ test("parked tool output uses the configured S3 endpoint and bucket path", async
   });
   const config = testConfig({
     sandboxBackend: "local",
-    databaseUrl: "postgres://unused/unused",
-    sessionStore: "postgres",
     snapshotStore: "s3",
     s3Bucket: "qm-storage",
     s3Region: "us-east-1",

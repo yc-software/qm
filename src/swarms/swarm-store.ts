@@ -1,10 +1,11 @@
-import type { GoalCreateInput } from "../harness/goal.ts";
+import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
-import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
@@ -112,7 +113,6 @@ export function createSwarmStore(
   backing: DurableMap<SwarmStorage>,
   authority?: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get">; pg?: PgPool },
 ): SwarmStore {
-  if (!backing.update) throw new Error("swarm storage requires atomic updates");
   async function fencedWrite(
     id: string,
     mutate: (value: SwarmStorage | null) => SwarmStorage,
@@ -156,7 +156,7 @@ export function createSwarmStore(
       throw new Error("capability session mismatch");
     const run = await authority.runs.get(fence.runId);
     assertSwarmRun(fence, run);
-    const updated = await backing.update!(id, (current) => {
+    const updated = await backing.update(id, (current) => {
       assertSwarmRun(fence, run);
       return mutate(current);
     });
@@ -190,7 +190,7 @@ export function createSwarmStore(
           );
         return encode(next);
       };
-      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update!(id, apply);
+      const updated = fence ? await fencedWrite(id, apply, fence) : await backing.update(id, apply);
       if (!updated) throw new Error("swarm not found");
       return decode(updated);
     },

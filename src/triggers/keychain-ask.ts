@@ -1,7 +1,8 @@
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { Cron, Destination, ScopeId } from "../types.ts";
+import type { Destination, ScopeId } from "../types.ts";
+import type { Cron } from "./types.ts";
 import { runTrigger, destinationVisible, type TriggerDeps, type TriggerOutcome } from "./run-trigger.ts";
 import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
 import { swallow } from "../util/errors.ts";

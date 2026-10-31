@@ -3,7 +3,6 @@ import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 type SecretGate =
   | "production"
   | "background-work-control"
-  | "postgres"
   | "sprites"
   | "smolmachines"
   | "e2b"
@@ -45,7 +44,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   {
     name: "DATABASE_URL",
-    requiredWhen: ["production", "postgres"],
+    requiredWhen: "production",
     reason:
       "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
   },
@@ -74,7 +73,6 @@ function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolea
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
-  postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => sandboxBackendSelected(env, "sprites"),
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
   e2b: (env) => sandboxBackendSelected(env, "e2b"),
@@ -94,8 +92,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
   "email-auth": (env) => env.AUTH_ALLOWED_EMAILS !== undefined,
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
-  "model-openai": (env) =>
-    env.MODEL_PROVIDER?.trim() === "openai" && !(env.CODEX_AUTH_FILE?.trim() || env.CODEX_AUTH_CREDENTIAL?.trim()),
+  "model-openai": (env) => env.MODEL_PROVIDER?.trim() === "openai" && !env.CODEX_AUTH_CREDENTIAL?.trim(),
   "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
 };
 

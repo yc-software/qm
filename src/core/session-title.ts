@@ -1,5 +1,5 @@
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { Harness } from "../harness/harness.ts";
+import type { Agent } from "../agent/agent.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
@@ -16,7 +16,7 @@ function fallbackSessionTitle(text: string): string | undefined {
 
 export function createSessionTitles(deps: {
   sessions: SessionStore;
-  harness: Harness;
+  agent: Agent;
   sessionStateBus?: SessionStateBus;
   errors?: ErrorLog;
 }) {
@@ -30,7 +30,7 @@ export function createSessionTitles(deps: {
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.harness.models.generateTitle?.(transcript);
+      title = await deps.agent.generateTitle?.(transcript);
     } catch (e) {
       deps.errors?.record(
         {
@@ -71,7 +71,7 @@ export function createSessionTitles(deps: {
     void write
       .then(() => announce(session).catch(swallowAs("session title: sidebar refresh", undefined)))
       .then(async () => {
-        if (!deps.harness.models.generateTitle) return;
+        if (!deps.agent.generateTitle) return;
         if (await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`))
           await announce(session);
       })

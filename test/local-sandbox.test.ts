@@ -16,11 +16,8 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const oneTenant = { q: async () => [{ n: 1 }] };
-
-bindTestTenant();
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");

@@ -1,13 +1,12 @@
 import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 import { errMessage } from "../util/errors.ts";
+import { publicFetch, type AddressFetch } from "../util/network.ts";
 
 export function httpsUrl(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   try {
     const u = new URL(v.trim());
-    return u.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
-      ? u.toString()
-      : undefined;
+    return u.protocol === "https:" ? u.toString() : undefined;
   } catch {
     return undefined;
   }
@@ -27,10 +26,14 @@ export interface DiscoveredOAuth {
   errors: string[];
 }
 
-async function fetchMeta(url: string, errors: string[]): Promise<Record<string, unknown> | undefined> {
+async function fetchMeta(
+  fetchFn: AddressFetch,
+  url: string,
+  errors: string[],
+): Promise<Record<string, unknown> | undefined> {
   let r: Response;
   try {
-    r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    r = await fetchFn(url, { redirect: "error", signal: AbortSignal.timeout(5_000) });
   } catch (e) {
     errors.push(`${url}: ${errMessage(e)}`);
     return undefined;
@@ -50,10 +53,10 @@ function wellKnown(base: URL, suffix: string): string[] {
   return [...new Set([`${base.origin}/.well-known/${suffix}${path}`, `${base.origin}/.well-known/${suffix}`])];
 }
 
-export async function discoverOAuth(resource: URL): Promise<DiscoveredOAuth> {
+export async function discoverOAuth(resource: URL, fetchFn: AddressFetch = publicFetch): Promise<DiscoveredOAuth> {
   const errors: string[] = [];
   for (const url of wellKnown(resource, "oauth-protected-resource")) {
-    const meta = await fetchMeta(url, errors);
+    const meta = await fetchMeta(fetchFn, url, errors);
     const issuer = Array.isArray(meta?.authorization_servers) ? httpsUrl(meta.authorization_servers[0]) : undefined;
     if (!issuer) {
       if (meta) errors.push(`${url}: no HTTPS authorization_servers entry`);
@@ -62,7 +65,7 @@ export async function discoverOAuth(resource: URL): Promise<DiscoveredOAuth> {
     const scopes = parseScopes(meta?.scopes_supported);
     for (const { url } of buildDiscoveryUrls(issuer)) {
       const candidate = url.href;
-      const server = await fetchMeta(candidate, errors);
+      const server = await fetchMeta(fetchFn, candidate, errors);
       if (!server) continue;
       const authorize = httpsUrl(server.authorization_endpoint);
       const token = httpsUrl(server.token_endpoint);

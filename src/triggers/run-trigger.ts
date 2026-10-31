@@ -3,13 +3,13 @@ import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { turnModelOptions } from "../core/turn-options.ts";
+import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { grantsStayWithOwner } from "../cron/authority.ts";
+import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
@@ -34,8 +34,8 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
-  runtime?: import("../harness/harness.ts").RuntimeChoice | null;
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
+  runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
@@ -287,8 +287,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
-        ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
+        ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
+        ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
         ...turnModelOptions({
           triggered: true,
           surface: spec.surface,
@@ -296,7 +296,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           fastMode: spec.fastMode ?? spec.runtime?.fastMode,
         }),
         ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.harness ? { harness: spec.harness } : {}),
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),

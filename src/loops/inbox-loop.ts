@@ -1,4 +1,4 @@
-import type { Loop, LoopItem } from "../types.ts";
+import type { Loop, LoopItem } from "./types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { scopeId } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";

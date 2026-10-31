@@ -13,9 +13,6 @@ import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
   return {
@@ -310,6 +307,7 @@ test("a user entry carrying huge model-only context no longer hides the turns be
         text: `ask ${turn}`,
         environment: context,
         environmentSnapshot: { hashes: { Skills: "abc" }, sessionId: "s" },
+        rosterSnapshot: { roster: [{ id: "U1", name: "a" }], sessionId: "s" },
         memoryRecall: { body: context },
       },
     });

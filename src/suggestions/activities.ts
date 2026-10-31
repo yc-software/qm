@@ -4,7 +4,8 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
-import { scopeId, type Cron } from "../types.ts";
+import { scopeId } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate five suggested activities for the owner of this personal session's new-chat screen.
 First look for urgent work the owner owes another person and has not yet done: an unanswered direct question or request, a promise they made, a review or approval someone is waiting on, a reply in a thread where someone is waiting on them, an assigned ticket someone is blocked on, or an action only they can take that blocks a teammate. Their own project work counts only if a specific person is waiting on it. Check the sources you can already access (messages, email, assigned issues, review requests, recent conversations, memory, and scheduled-task notes), confirm each item is still open, and drop anything already handled or stale. Rank owed items by how blocked the other person is, explicit deadlines, how long they have waited, and how many people are affected. Never invent an obligation.
@@ -22,6 +23,7 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   timezone: string;
   lastSeenAt: number;
   lastBootstrapAt?: number;
+  dismissalRefreshAt?: number;
   managedAction?: string;
   seeds?: SuggestedActivity[];
   dismissed?: DismissedActivity[];
@@ -140,8 +142,30 @@ export function createSuggestedActivityService(deps: {
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
       if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
-        const result = await deps.scheduler.runNow(cron.id);
-        pending = result.started || result.reason === "already_running";
+        let won = false;
+        await deps.store.update(principalId, (value) => {
+          won = (value.dismissalRefreshAt ?? 0) < dismissedAt;
+          return won ? { ...value, dismissalRefreshAt: dismissedAt } : value;
+        });
+        if (!won) pending = true;
+        else {
+          const release = async () => {
+            await deps.store.update(principalId, (value) =>
+              value.dismissalRefreshAt === dismissedAt ? { ...value, dismissalRefreshAt: 0 } : value,
+            );
+          };
+          const result = await deps.scheduler.runNow(cron.id).catch(async (err: unknown) => {
+            await release().catch((releaseErr: unknown) => {
+              throw new AggregateError(
+                [err, releaseErr],
+                "runNow failed and releasing the dismissal refresh claim failed",
+              );
+            });
+            throw err;
+          });
+          pending = result.started || result.reason === "already_running";
+          if (!pending) await release();
+        }
       } else if (
         !pending &&
         cron.enabled &&
@@ -149,7 +173,7 @@ export function createSuggestedActivityService(deps: {
         (profile.lastBootstrapAt ?? 0) <= now() - REFRESH_AFTER_MS
       ) {
         const timestamp = now();
-        const claimed = await deps.store.update?.(principalId, (value) =>
+        const claimed = await deps.store.update(principalId, (value) =>
           (value.lastBootstrapAt ?? 0) > timestamp - REFRESH_AFTER_MS
             ? value
             : { ...value, lastBootstrapAt: timestamp },
@@ -177,7 +201,7 @@ export function createSuggestedActivityService(deps: {
           { id, title: activity.title, at: now() },
         ].slice(-MAX_DISMISSED),
       });
-      const updated = await deps.store.update?.(principalId, dismiss);
+      const updated = await deps.store.update(principalId, dismiss);
       if (!updated) return false;
       if (owned(cron, principalId)) await syncAction(cron, updated);
       return true;

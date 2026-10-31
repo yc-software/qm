@@ -243,7 +243,7 @@ test("fly secrets push stages core, virtual-service and plugin secrets and no sa
     services: ["core", "slack"],
     plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
     skills: [],
-    env: { core: { HARNESS: "pi" } },
+    env: {},
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
