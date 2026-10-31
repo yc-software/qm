@@ -1,0 +1,49 @@
+import { boundTenant } from "../tenants/context.ts";
+
+export interface EngagedSession {
+  tenantId?: string;
+  threadRef: string;
+}
+
+export interface EngagedRegistry {
+  engage(threadRef: string): void;
+  settle(threadRef: string): void;
+  list(): EngagedSession[];
+}
+
+<<<<<<<
+export function createEngagedRegistry(): EngagedRegistry {
+  const engaged = new Map<string, EngagedSession>();
+  const key = (threadRef: string) => `${boundTenant() ?? ""}\n${threadRef}`;
+=======
+export function createEngagedRegistry(opts: { maxAgeMs?: number; now?: () => number } = {}): EngagedRegistry {
+  const engaged = new Map<string, number>();
+  const now = opts.now ?? Date.now;
+  const prune = (): void => {
+    if (opts.maxAgeMs === undefined) return;
+    const cutoff = now() - opts.maxAgeMs;
+    for (const [threadRef, at] of engaged) if (at < cutoff) engaged.delete(threadRef);
+  };
+>>>>>>>
+  return {
+<<<<<<<
+    engage(threadRef) {
+      const tenantId = boundTenant();
+      engaged.set(key(threadRef), { ...(tenantId ? { tenantId } : {}), threadRef });
+    },
+    settle: (threadRef) => void engaged.delete(key(threadRef)),
+    list: () => [...engaged.values()],
+=======
+    engage: (threadRef) => {
+      engaged.delete(threadRef);
+      engaged.set(threadRef, now());
+      if (engaged.size > 1_000) prune();
+    },
+    settle: (threadRef) => void engaged.delete(threadRef),
+    list: () => {
+      prune();
+      return [...engaged.keys()];
+    },
+>>>>>>>
+  };
+}

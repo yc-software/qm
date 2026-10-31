@@ -1,0 +1,94 @@
+{{- $root := . -}}
+{{- $services := .Values.services }}
+{{- $core := $services.core }}
+{{- $portal := $services.portal.enabled }}
+{{- range $module := list "auth" "admin" }}
+{{- if and (index $services $module).enabled (not $portal) }}
+{{- fail (printf "%s requires services.portal.enabled=true" $module) }}
+{{- end }}
+{{- end }}
+{{- $authEnabled := $services.auth.enabled }}
+{{- $fullname := include "qm.fullname" . }}
+{{- $coreUrl := printf "http://%s-core.%s.svc.cluster.local:%v" $fullname .Release.Namespace $core.port }}
+{{- $claim := "" }}
+{{- if $core.persistence.enabled }}
+{{- $claim = $core.persistence.existingClaim | default (printf "%s-core-data" $fullname) }}
+{{- end }}
+{{- $authUpstream := "http://127.0.0.1:8099" }}
+{{- $base := trimSuffix "/" (.Values.publicUrl | default "") }}
+{{- $issuer := printf "%s/idp" $base }}
+{{- range $workload := list "edge" "harness" }}
+{{- $spec := index $core $workload }}
+{{- $front := and (eq $workload "edge") $portal }}
+{{- $wired := dict }}
+{{- if $root.Values.publicUrl }}
+{{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}
+{{- $_ := set $wired "PUBLIC_WEB_URL" $root.Values.publicUrl }}
+{{- $_ := set $wired "WEB_UI_PUBLIC_URL" $root.Values.publicUrl }}
+{{- end }}
+{{- $hosted := dict }}
+{{- if $front }}
+{{- $_ := set $wired "PUBLIC_PORT" (toString $core.publicPort) }}
+{{- $_ := set $wired "ADMIN_ENABLED" (ternary "1" "0" $services.admin.enabled) }}
+{{- $_ := set $wired "ADMIN_BASE_PATH" "/admin" }}
+{{- if $root.Values.publicUrl }}
+{{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}
+{{- end }}
+{{- if $authEnabled }}
+{{- $_ := set $wired "AUTH_EMBEDDED" "1" }}
+{{- $_ := set $wired "AUTH_BROKER_UPSTREAM" $authUpstream }}
+{{- $_ := set $wired "AUTH_BROKER_PREFIX" "/idp" }}
+{{- $_ := set $wired "AUTH_ISSUER" $issuer }}
+{{- $_ := set $wired "AUTH_CLIENT_ID" "qm-portal" }}
+{{- $_ := set $wired "AUTH_REDIRECT_URI" (printf "%s/auth/callback" $base) }}
+{{- end }}
+{{- range $module := list "portal" "auth" "admin" }}
+{{- if (index $services $module).enabled }}
+{{- range $k, $v := (index $services $module).env }}
+{{- if and (hasKey $hosted $k) (ne (toString (index $hosted $k)) (toString $v)) }}
+{{- fail (printf "Conflicting %s settings in services hosted by edge" $k) }}
+{{- end }}
+{{- $_ := set $hosted $k $v }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $hosted (deepCopy ($core.env | default dict)) }}
+{{- range $key := splitList " " (include "qm.webUiAccessKeys" $root) }}
+{{- $_ := unset $env $key }}
+{{- end }}
+{{- $ports := dict "PORT" $core.port }}
+{{- if $front }}
+{{- $_ := set $ports "PUBLIC_PORT" $core.publicPort }}
+{{- end }}
+{{- range $key, $port := $ports }}
+{{- if and (hasKey $env $key) (ne (toString (index $env $key)) (toString $port)) }}
+{{- fail (printf "%s %s conflicts with services.core.%s; configure the port there" $workload $key (ternary "port" "publicPort" (eq $key "PORT"))) }}
+{{- end }}
+{{- $_ := set $env $key (toString $port) }}
+{{- end }}
+{{- if $claim }}
+{{- if and (hasKey $env "DATA_DIR") (ne (index $env "DATA_DIR") "/data") }}
+{{- fail "core persistence requires DATA_DIR=/data" }}
+{{- end }}
+{{- $_ := set $env "DATA_DIR" "/data" }}
+{{- end }}
+{{- $containerPorts := list (dict "name" "http" "port" $core.port) }}
+{{- if $front }}
+{{- $containerPorts = append $containerPorts (dict "name" "public" "port" $core.publicPort) }}
+{{- end }}
+---
+{{ include "qm.deployment" (dict "root" $root "name" $workload "imageName" "core" "svc" $core "replicas" $spec.replicas "claim" $claim "colocateWith" (ternary "edge" "" (eq $workload "harness")) "grace" $spec.terminationGracePeriodSeconds "command" $spec.command "ports" $containerPorts "env" $env "startupProbe" $core.startupProbe "healthPath" $core.healthPath "readinessPath" $core.readinessPath "probePort" $core.port "resources" $spec.resources) }}
+{{- end }}
+{{- $proxy := index $services "egress-proxy" }}
+{{- if $proxy.enabled }}
+{{- if ne (int $proxy.port) 48080 }}
+{{- fail "services.egress-proxy.port must be 48080: the Envoy listener is fixed in the image" }}
+{{- end }}
+{{- $env := mergeOverwrite (dict "CORE_API_URL" $coreUrl) (deepCopy ($root.Values.env | default dict)) (deepCopy ($proxy.env | default dict)) }}
+{{- range $key := splitList " " (include "qm.webUiAccessKeys" $root) }}
+{{- $_ := unset $env $key }}
+{{- end }}
+---
+{{ include "qm.deployment" (dict "root" $root "name" "egress-proxy" "imageName" "egress-proxy" "svc" $proxy "replicas" $proxy.replicas "claim" "" "colocateWith" "" "grace" $proxy.terminationGracePeriodSeconds "command" $proxy.command "ports" (list (dict "name" "proxy" "port" $proxy.port)) "env" $env "startupProbe" $proxy.startupProbe "healthPath" $proxy.healthPath "readinessPath" $proxy.readinessPath "probePort" $proxy.port "resources" $proxy.resources "securityContext" $proxy.securityContext) }}
+{{- end }}

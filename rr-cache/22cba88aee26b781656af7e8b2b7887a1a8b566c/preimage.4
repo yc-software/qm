@@ -1,0 +1,291 @@
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
+import type { RuntimeControl } from "../src/agent/runtime-types.ts";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+<<<<<<<
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
+import { type OrchestratorInput } from "../src/core/turn-input.ts";
+import { createIdentityService } from "../src/identity/identity-service.ts";
+=======
+import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+>>>>>>>
+import { createAclStore } from "../src/acl/acl-store.ts";
+import { createResolutionService } from "../src/resolution/resolution-service.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import type { Agent } from "../src/agent/agent.ts";
+import { turnToolOptions } from "../src/harness/turn-support.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
+import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
+import { createDeployService } from "../src/deploy/deploy-service.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { type FeatureName } from "../src/feature-flags.ts";
+import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
+import { scopeId, type Principal, type Session } from "../src/types.ts";
+import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import type { Run } from "../src/runs/run-store.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testAdvisoryLock } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
+import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+
+type Call = { tool: string; args: Record<string, unknown> };
+type Turn = {
+  ref: Parameters<typeof createAgentTools>[0];
+  runtime?: RuntimeControl;
+  requestedRuntime?: Partial<RuntimeChoice>;
+  options: AgentToolsOptions;
+  tools: string[];
+  systemPrompt: string;
+  results: Array<{ isError?: unknown }>;
+  started: Session[];
+};
+
+const actor: Principal = { id: "U1", type: "internal" };
+const scope = scopeId("personal", "U1");
+const SUBAGENT_EXCEPTIONS = {
+  surfaceTools: "a subagent's result returns to its parent, which owns posting to the conversation",
+  delegateWork: "a subagent is the delegate, so it does the work instead of delegating again",
+} satisfies Partial<Record<keyof AgentToolsOptions, string>>;
+const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
+
+async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const featureFlags = testFeatureFlagStore();
+  for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
+  const sidebar: Session[] = [];
+  const sessionSyscalls = createSessionSyscalls({
+    advisoryLock: testAdvisoryLock(),
+    sessions,
+    runs,
+    mailbox: testSessionMailbox(),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    maxAttempts: 1,
+    conversations: {
+      list: async () => sidebar,
+      start: async (_actorId, input) => {
+        const session = await sessions.getOrCreateByThread(`web:U1:started-${sidebar.length}`, "dm", input.scopeId);
+        await sessions.addParticipant(session.id, actor.id);
+        await sessions.setSpawnMeta(session.id, {
+          surface: "web",
+          actor,
+          conversation: { kind: "dm", threadRef: session.threadRef, audience: [actor] },
+        });
+        sidebar.push(session);
+        return { session };
+      },
+    },
+  });
+  const turns = new Map<string, Turn>();
+  const agent: Agent = {
+    async runTurn(turn) {
+      const results: Turn["results"] = [];
+      const ref = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+          if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+          return turn.emit(entry);
+        },
+        screenToolResult: turn.screenToolResult,
+        pendingApprovals: [],
+      };
+      const options = turnToolOptions({}, turn);
+      const tools = createAgentTools(ref, options);
+      const record: Turn = {
+        ref,
+        runtime: turn.runtimeControl,
+        requestedRuntime: turn.runtime,
+        options,
+        tools: tools.map((t) => t.name).sort(),
+        systemPrompt: turn.systemPrompt,
+        results,
+        started: sidebar,
+      };
+      turns.set(turn.session.threadRef, record);
+      for (
+        let call = next(record, !!turn.session.parentSessionId);
+        call;
+        call = next(record, !!turn.session.parentSessionId)
+      ) {
+        const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
+          id: string,
+          input: unknown,
+        ) => Promise<unknown>;
+        await execute(`call-${results.length}`, call.args);
+      }
+      return { reply: "done", modelCalls: 1 };
+    },
+  };
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const config = testConfigStore();
+  await config.setInteractiveFastMode(true);
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
+  const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
+    config,
+    runtime: createRuntimeService(
+      { config, baseModelDefault: () => "claude-opus-5" },
+      { authorizesCapabilityScope: async () => true },
+    ),
+    identity: testIdentityService(),
+    resolution: createResolutionService(config, acl),
+    sessions,
+    runs,
+    workspace,
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
+    auditLog,
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
+    deploy: createDeployService({
+      ...singleProcessDeps(),
+      deployStore: createDeployStore(testDeployBackings()),
+      provider: createDockerDeployProvider(),
+      deployDir: join(tmpdir(), "subagent-parity-deploy"),
+      auditLog,
+      acl,
+    }),
+    acl,
+    deliveries: createDeliveryStore(),
+    featureFlags,
+    sessionSyscalls,
+    mcp: {
+      toolDefsFor: async (principalId?: string) =>
+        principalId === actor.id
+          ? [
+              {
+                name: "orders_search",
+                serverId: "orders",
+                serverName: "Orders",
+                remoteName: "search",
+                description: "Search orders",
+                inputSchema: { type: "object", properties: {} },
+                readOnly: true,
+              },
+            ]
+          : [],
+    } as unknown as McpToolService,
+  });
+  const execute = async (run: Run) => {
+    const result = await orchestrator.handleTurn({ ...run.request, runId: run.id });
+    assert.equal(result.status, "ok", result.reply);
+  };
+  const parentTurn = async (surface: string, threadRef: string) => {
+    const conversation = { kind: "dm" as const, threadRef, audience: [actor] };
+    const request: OrchestratorInput = { surface, actor, conversation, origin: { kind: "human" }, text: "go" };
+    await execute((await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 })).run);
+    const parent = (await sessions.getByThread(threadRef))!;
+    const [child] = await sessions.childrenOf(parent.id);
+    assert.ok(child, "the parent opened a subagent");
+    await execute((await runs.latestForThread(child.threadRef))!);
+    return { parent: turns.get(threadRef)!, child: turns.get(child.threadRef)! };
+  };
+  return { parentTurn };
+}
+
+const failed = (result: Turn["results"][number]) => result.isError === true;
+
+function script(turn: Turn, subagent: boolean): Call | undefined {
+  const calls: Call[] = [
+    ...(turn.tools.includes("sessions")
+      ? [
+          { tool: "sessions", args: { action: "list" } },
+          { tool: "sessions", args: { action: "new", text: "draft the memo", title: "Memo" } },
+          {
+            tool: "sessions",
+            args: { action: "send_message", target: turn.started.at(-1)?.id, text: "add a summary" },
+          },
+        ]
+      : []),
+    ...(subagent ? [] : [{ tool: "subagents", args: { action: "open", task: "repeat what your parent did" } }]),
+  ];
+  return calls[turn.results.length];
+}
+
+test("the sessions tool lists, starts and messages sessions through the real tool context", async () => {
+  const w = await world(["persistent_subagents"], script);
+  const { parent } = await w.parentTurn("web", "web:U1:sessions");
+  assert.equal(parent.results.length, 4);
+  assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
+});
+
+for (const [surface, flags] of [
+  ["web", ["persistent_subagents"]],
+  ["slack", ["responsive_spine"]],
+] as const) {
+  test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
+    const w = await world([...flags], script);
+    const { parent, child } = await w.parentTurn(surface, `${surface}:U1:parity`);
+    const omit = (options: AgentToolsOptions) =>
+      Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_EXCEPTIONS)));
+    assert.deepEqual(omit(child.options), omit(parent.options));
+    assert.deepEqual(
+      parent.options.mcpTools?.map((tool) => tool.name),
+      ["orders_search"],
+      "the turn's actor gets the MCP tools resolved for them",
+    );
+    for (const turn of [parent, child]) {
+      assert.ok(turn.tools.includes("tool_search") && turn.tools.includes("mcp_call"));
+      assert.ok(!turn.tools.includes("orders_search"));
+      assert.ok(turn.systemPrompt.endsWith("\n- Orders [orders] (1 tool)\n  - search // Search orders"));
+    }
+    assert.equal(parent.ref.current?.humanTurn, true);
+    assert.equal(child.ref.current?.humanTurn, undefined);
+    assert.equal(parent.requestedRuntime?.fastMode, true);
+    assert.equal(child.requestedRuntime?.fastMode, undefined);
+    const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
+    assert.deepEqual(
+      createAgentTools(child.ref, asParent)
+        .map((t) => t.name)
+        .sort(),
+      parent.tools,
+    );
+    assert.deepEqual(
+      child.results.map(failed),
+      parent.results.slice(0, child.results.length).map(failed),
+      JSON.stringify(child.results),
+    );
+  });
+}
+
+test("human-descended tasks cannot finish silently without surface tools", async () => {
+  const w = await world(["persistent_subagents"], (turn, child) => {
+    if (turn.results.length) return;
+    return child
+      ? { tool: "finish_silently", args: {} }
+      : { tool: "subagents", args: { action: "open", task: "report the result" } };
+  });
+  const { child } = await w.parentTurn("web", "web:U1:silence");
+  assert.equal(child.results[0]?.isError, true);
+});
+
+test("human-descended tasks can change their runtime but not scope defaults", async () => {
+  const w = await world(["persistent_subagents"], script);
+  const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
+  const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+  assert.ok(child.runtime);
+  assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
+  assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {
+    ok: false,
+    error: "live_actor_required",
+  });
+  assert.equal((await parent.runtime!(active, { action: "set", model: "Astra", lifetime: "scope" })).ok, true);
+});

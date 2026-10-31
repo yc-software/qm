@@ -1,0 +1,86 @@
+app = "qm-core"
+primary_region = "sjc"
+
+[env]
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  PORT = "8080"
+<<<<<<<
+  CORE_API_URL = "http://qm-core.internal:8080"
+=======
+  ORG_ID = "acme"
+  SNAPSHOT_STORE = "s3"
+  TRANSFER_STORE = "s3"
+  S3_BUCKET = "acme-data"
+  S3_REGION = "auto"
+  DATA_DIR = "/data"
+  PUBLIC_WEB_URL = "https://agent.example.com"
+  WEB_UI_PUBLIC_URL = "https://agent.example.com"
+  REQUIRE_SIGNED_PORTAL_IDENTITY = "1"
+  FLY_ORG = "personal"
+  FLY_DEPLOY_APP_PREFIX = "qm-d"
+  SANDBOX_BACKEND = "sprites"
+  SECURITY_SCREEN = "off"
+  ADMIN_BASE_PATH = "/admin"
+>>>>>>>
+  PORTAL_PUBLIC_URL = "https://agent.example.com"
+<<<<<<<
+  PUBLIC_PORT = "8000"
+  ADMIN_ENABLED = "1"
+  OIDC_ALLOWED_EMAIL_DOMAIN = "example.com"
+  OIDC_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+  OIDC_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+  OIDC_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
+  OIDC_ISSUER = "https://accounts.google.com"
+  OIDC_JWKS_URI = "https://www.googleapis.com/oauth2/v3/certs"
+  OIDC_SCOPES = "openid email profile"
+  OIDC_PRINCIPAL_CLAIM = "email"
+[deploy]
+  strategy = "bluegreen"
+
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "performance-2x"
+  memory = "4gb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "300s"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "20s"
+
+[processes]
+  app = "node src/edge/main.ts"
+=======
+  WEB_UI_UPSTREAM = "http://qm-web-ui.flycast"
+  ADMIN_UPSTREAM = "http://qm-web-ui.flycast/admin"
+>>>>>>>
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[http_service.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250

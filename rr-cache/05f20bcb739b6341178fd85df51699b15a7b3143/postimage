@@ -1,0 +1,40 @@
+app = "qm-harness"
+primary_region = "sjc"
+
+[env]
+  QM_DEPLOYMENT_ID = "qm-v2:personal:acme:qm"
+  PORT = "8080"
+  SNAPSHOT_STORE = "s3"
+  TRANSFER_STORE = "s3"
+  S3_BUCKET = "acme-data"
+  S3_REGION = "auto"
+  DATA_DIR = "/data"
+  PUBLIC_WEB_URL = "https://agent.example.com"
+  FLY_ORG = "personal"
+  FLY_DEPLOY_APP_PREFIX = "qm-d"
+  WEB_UI_PUBLIC_URL = "https://agent.example.com"
+[deploy]
+  strategy = "bluegreen"
+
+[[restart]]
+  policy = "always"
+
+[[vm]]
+  size = "performance-2x"
+  memory = "4gb"
+
+kill_signal = "SIGTERM"
+kill_timeout = "300s"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 8080
+    method = "get"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "20s"
+
+[processes]
+  app = "node src/harness/main.ts"

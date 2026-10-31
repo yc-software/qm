@@ -1,0 +1,773 @@
+import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { CORE_WORKLOADS, serviceHost, serviceWorkloads, type DeclaredServiceName } from "./services.ts";
+import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
+import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
+import { deploymentSecretValue, isInvalidSecret } from "./util.ts";
+import { isTenantSetting } from "./tenant-setting-names.ts";
+
+export type SecretCondition =
+  | { kind: "sandbox-backend"; backend: string }
+  | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
+  | { kind: "env-absent"; service: DeclaredServiceName; name: string }
+  | { kind: "env-all-absent"; service: DeclaredServiceName; names: string[] }
+  | { kind: "env-present"; service: DeclaredServiceName; name: string }
+  | { kind: "service-enabled"; service: DeclaredServiceName }
+  | { kind: "service-absent"; service: DeclaredServiceName }
+  | { kind: "all"; conditions: SecretCondition[] }
+  | { kind: "any"; conditions: SecretCondition[] }
+  | { kind: "target"; target: QmConfig["target"] }
+  | { kind: "model-provider"; provider: ModelProvider };
+
+export interface SecretSpec {
+  name: string;
+  service: DeclaredServiceName;
+  envName?: string;
+  required: boolean | { when: SecretCondition; optional?: true; optionalOtherwise?: true };
+  description: string;
+  generate?: string;
+  managedBy?: ManagedBy | Partial<Record<QmConfig["target"] | "default", ManagedBy>>;
+}
+
+type ManagedBy = "operator" | "terraform" | "render";
+
+export function managedByFor(spec: SecretSpec, target: QmConfig["target"]): ManagedBy {
+  if (typeof spec.managedBy === "string") return spec.managedBy;
+  return spec.managedBy?.[target] ?? spec.managedBy?.default ?? "operator";
+}
+
+export interface ComputedSecret {
+  name: string;
+  services: string[];
+  description: string;
+  required: boolean;
+  generate?: string;
+  managedBy: ManagedBy;
+  aliases?: Array<{ service: DeclaredServiceName; name: string }>;
+}
+
+export function missingRequiredSecrets(
+  secrets: readonly ComputedSecret[],
+  valueFor: (name: string) => string | undefined,
+): string[] {
+  return secrets
+    .filter((secret) => secret.required && isInvalidSecret(secret.name, valueFor(secret.name)))
+    .map((secret) => secret.name);
+}
+
+const MINT_LOCALLY = "openssl rand -hex 32";
+export const MINT_JWK =
+  "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
+
+export function mintLocalSecret(secret: { generate?: string }): string | undefined {
+  if (secret.generate === MINT_LOCALLY) return randomBytes(32).toString("hex");
+  if (secret.generate === MINT_JWK)
+    return JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" }));
+  return undefined;
+}
+
+export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
+  {
+    name: "RENDER_API_KEY",
+    service: "core",
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "target", target: "render" },
+          { kind: "env-equals", service: "core", name: "SANDBOX_BACKEND", value: "render" },
+          { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "render" },
+        ],
+      },
+    },
+    description: "Render API key for this deployment, sandboxes, and published apps.",
+  },
+  {
+    name: "ANTHROPIC_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "anthropic" }, optionalOtherwise: true },
+    description:
+      'Anthropic API key: bills the base model when modelProvider is "anthropic", an optional deployment fallback otherwise.',
+  },
+  {
+    name: "OPENROUTER_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "openrouter" }, optionalOtherwise: true },
+    description:
+      'OpenRouter API key: bills the base model when modelProvider is "openrouter", an optional deployment fallback otherwise.',
+  },
+  {
+    name: "OPENAI_API_KEY",
+    service: "core",
+    required: { when: { kind: "model-provider", provider: "openai" }, optionalOtherwise: true },
+    description:
+      'OpenAI API key: bills the base model when modelProvider is "openai", an optional deployment fallback otherwise.',
+  },
+  {
+    name: "PUBLIC_API_URL",
+    service: "core",
+    required: true,
+    description: "Public core self-API URL reachable from agent sandboxes.",
+    managedBy: { render: "render" },
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "core",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "DEPLOYMENT_CONTROL_SECRET",
+    service: "core",
+    required: true,
+    description:
+      "Operator credential held only by core and the deployment operator: background ownership, the install tenant and its settings.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CAPABILITY_SECRET",
+    service: "core",
+    required: true,
+    description: "Signing key for scoped agent capabilities and egress grants; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "core",
+    required: true,
+    description: "Signing key for portal-bound user identity; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CONNECTOR_SECRET_KEY",
+    service: "core",
+    required: true,
+    description: "Encryption key for durable connector credentials; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "SKILL_SIGNING_SECRET",
+    service: "core",
+    required: true,
+    description: "Stable signing key for reviewed skills.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "FLY_DEPLOY_API_TOKEN",
+    service: "core",
+    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "fly" } },
+    description: "Fly publisher token: app-scoped for FLY_DEPLOY_SHARED_APP_NAME, organization-scoped otherwise.",
+  },
+  {
+    name: "FLY_DEPLOY_WIREGUARD_PEERS",
+    service: "core",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "fly" },
+          { kind: "env-present", service: "core", name: "FLY_DEPLOY_SHARED_APP_NAME" },
+        ],
+      },
+    },
+    description: "JSON array of distinct private ingress WireGuard peer configurations for shared Fly publishing.",
+  },
+  {
+    name: "PORTER_DEPLOY_API_TOKEN",
+    service: "core",
+    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" } },
+    description:
+      "Admin-role Porter API token for the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
+    generate:
+      "create an Admin-role API token in the Porter dashboard (https://dashboard.porter.run → Settings → API tokens)",
+  },
+  {
+    name: "SPRITES_TOKEN",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "sprites" } },
+    description: "Fly Sprites API token for the agent-computer substrate.",
+    generate: "sprite login   # then copy the token from ~/.sprite/credentials",
+  },
+  {
+    name: "E2B_API_KEY",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "e2b" } },
+    description: "E2B API key used by the e2b sandbox backend (from e2b.dev dashboard).",
+  },
+  {
+    name: "DO_AGENTS_API_TOKEN",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "do-managed-agents" } },
+    description:
+      "DigitalOcean IAM token for the DigitalOcean Managed Agents sandbox backend. Carries the team identity that owns the sandbox sessions, and authenticates both the session REST calls and the port-forward tunnel that carries exec and file transfer.",
+    generate: "doctl auth init   # then create a personal access token at cloud.digitalocean.com/account/api/tokens",
+  },
+  {
+    name: "MODAL_TOKEN_ID",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "modal" } },
+    description: "Modal token id used by the modal sandbox backend.",
+    generate: "modal token new   # or create a token in the Modal dashboard",
+  },
+  {
+    name: "MODAL_TOKEN_SECRET",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "modal" } },
+    description: "Modal token secret paired with MODAL_TOKEN_ID.",
+  },
+  {
+    name: "SMOLMACHINES_TOKEN",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "smolmachines" } },
+    description: "smolmachines API key for the agent-computer substrate.",
+    generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
+  },
+  {
+    name: "DATABASE_URL",
+    service: "core",
+    required: { when: { kind: "target", target: "aws" } },
+    description: "Postgres URL of the qm_app login: not the table owner, no superuser, no BYPASSRLS.",
+    managedBy: { default: "terraform", render: "render" },
+  },
+  {
+    name: "DATABASE_OWNER_URL",
+    service: "core",
+    required: { when: { kind: "target", target: "aws" } },
+    description:
+      "Postgres URL of the login that owns the tables; core uses it only for migrations and cross-tenant claims.",
+    managedBy: { default: "terraform", render: "render" },
+  },
+  {
+    name: "DATABASE_READER_URL",
+    service: "core",
+    required: { when: { kind: "target", target: "aws" } },
+    description: "Postgres URL of the qm_reader login, limited to reading its tenant's rows.",
+    managedBy: { default: "terraform", render: "render" },
+  },
+  {
+    name: "DATABASE_POOL_URL",
+    service: "core",
+    required: false,
+    description: "Transaction-mode PgBouncer URL using the direct database's company credentials and database name.",
+  },
+  {
+    name: "DATABASE_POOL_CA_CERT",
+    service: "core",
+    required: false,
+    description: "PEM CA certificate used to verify the transaction pooler's TLS identity.",
+  },
+  {
+    name: "DATABASE_CA_CERT",
+    service: "core",
+    required: false,
+    description:
+      "Extra root CA (PEM content) trusted for the Postgres connection, for providers that pin a private root (e.g. Supabase's pooler). Verification stays on.",
+  },
+  {
+    name: "AWS_DEPLOY_GATE_SECRET",
+    service: "core",
+    required: {
+      when: {
+        kind: "any",
+        conditions: [
+          { kind: "env-present", service: "core", name: "AWS_DEPLOY_APPS_DOMAIN" },
+          { kind: "env-present", service: "core", name: "DEPLOY_APPS_DOMAIN" },
+        ],
+      },
+    },
+    description: "HMAC key protecting public deployment-app URLs on the apps domain.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "GOOGLE_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "GOOGLE_OAUTH_CLIENT_ID" } },
+    description: "Google OAuth client secret.",
+  },
+  {
+    name: "DROPBOX_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "DROPBOX_OAUTH_CLIENT_ID" } },
+    description: "Dropbox OAuth client secret.",
+  },
+  {
+    name: "LINEAR_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "LINEAR_OAUTH_CLIENT_ID" } },
+    description: "Linear OAuth client secret.",
+  },
+  {
+    name: "SLACK_BOT_TOKEN",
+    service: "slack",
+    required: false,
+    description: "Optional at first deploy; Slack bot OAuth token.",
+  },
+  {
+    name: "SLACK_APP_TOKEN",
+    service: "slack",
+    required: false,
+    description: "Optional at first deploy; Slack Socket Mode app token.",
+  },
+  {
+    name: "SLACK_SIGNING_SECRET",
+    service: "slack",
+    required: { when: { kind: "env-equals", service: "slack", name: "SLACK_EVENTS_MODE", value: "http" } },
+    description: "Slack request-signing secret (from the Slack app's Basic Information page); HTTP events mode only.",
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "slack",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "web-ui",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "admin",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "OIDC_CLIENT_ID",
+    service: "portal",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "service-absent", service: "auth" },
+          { kind: "env-absent", service: "portal", name: "OIDC_CLIENT_ID" },
+        ],
+      },
+    },
+    description: "Deployment-specific OIDC client identifier when it should not be committed.",
+  },
+  {
+    name: "OIDC_CLIENT_SECRET",
+    service: "portal",
+    required: { when: { kind: "service-absent", service: "auth" } },
+    description:
+      "Client secret issued by an external identity provider; the built-in auth broker mints its own instead.",
+  },
+  {
+    name: "PORTAL_EXPECTED_TEAM_ID",
+    service: "portal",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "service-absent", service: "auth" },
+          {
+            kind: "env-all-absent",
+            service: "portal",
+            names: ["OIDC_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAIL_DOMAIN", "PORTAL_EXPECTED_TEAM_ID"],
+          },
+        ],
+      },
+    },
+    description: "Deployment-specific OIDC workspace trust boundary when it should not be committed.",
+  },
+  {
+    name: "PORTAL_SESSION_SECRET",
+    service: "portal",
+    required: true,
+    description: "Cookie-signing secret for portal sessions.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "portal",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "portal",
+    required: true,
+    description: "Signing key shared with core for portal-bound user identity.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "web-ui",
+    required: true,
+    description: "Signing key shared with core for portal-bound user identity.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "PORTAL_IDENTITY_SECRET",
+    service: "admin",
+    required: true,
+    description: "Signing key shared with core for portal-bound user identity.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "auth",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CAPABILITY_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "Signing key for scoped agent capabilities and egress grants; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "AUTH_SIGNING_JWK",
+    service: "auth",
+    required: true,
+    description:
+      "P-256 private JSON Web Key the broker signs id_tokens with; the portal verifies it through the broker's JWKS.",
+    generate: MINT_JWK,
+  },
+  {
+    name: "AUTH_TOKEN_SECRET",
+    service: "auth",
+    required: true,
+    description:
+      "Key the broker seals sign-in links, authorization codes, and access tokens with; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "AUTH_CLIENT_SECRET",
+    service: "auth",
+    required: true,
+    description: "Client secret the portal presents to the built-in auth broker; the CLI generates it for both sides.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "AUTH_CLIENT_SECRET",
+    service: "portal",
+    envName: "OIDC_CLIENT_SECRET",
+    required: { when: { kind: "service-enabled", service: "auth" } },
+    description: "Client secret the portal presents to the built-in auth broker.",
+  },
+  {
+    name: "AUTH_ALLOWED_EMAILS",
+    service: "auth",
+    required: { when: { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" } },
+    description: "Comma-separated email addresses allowed to sign in through the built-in broker.",
+  },
+  {
+    name: "AUTH_ALLOWED_EMAILS",
+    service: "core",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "service-enabled", service: "auth" },
+          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+        ],
+      },
+    },
+    description: "Email-auth principals protected from unrelated directory-source deactivation.",
+  },
+  {
+    name: "AUTH_ALLOWED_EMAILS",
+    service: "portal",
+    envName: "OIDC_ALLOWED_EMAILS",
+    required: {
+      when: {
+        kind: "all",
+        conditions: [
+          { kind: "service-enabled", service: "auth" },
+          { kind: "env-absent", service: "auth", name: "AUTH_ALLOWED_EMAIL_DOMAIN" },
+        ],
+      },
+    },
+    description: "Email addresses allowed to sign in; the portal enforces the same list the broker does.",
+  },
+  {
+    name: "AUTH_PASSWORD_USERS",
+    service: "auth",
+    required: false,
+    description:
+      "Optional <email>:<scrypt-hash> entries that may sign in with a password while email or an identity provider is still being set up; each address must also be allowed to sign in.",
+  },
+  {
+    name: "AUTH_EMAIL_FROM",
+    service: "auth",
+    required: false,
+    description: 'Verified sender for sign-in links and external-user invitations, e.g. "Acme <no-reply@acme.com>".',
+  },
+  {
+    name: "AUTH_EMAIL_FROM",
+    service: "core",
+    required: false,
+    description:
+      "Sender for external-user invitations sent from the admin Users tab or by chatting with QM; the same verified sender the sign-in broker uses.",
+  },
+  {
+    name: "RESEND_API_KEY",
+    service: "auth",
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "resend" },
+      optional: true,
+    },
+    description: "Resend API key used to deliver sign-in links and external-user invitations.",
+  },
+  {
+    name: "RESEND_API_KEY",
+    service: "core",
+    required: false,
+    description:
+      "Lets core email invitations to external users, added from the admin Users tab or by chatting with QM, through Resend.",
+  },
+  {
+    name: "SMTP_HOST",
+    service: "auth",
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
+    description: "SMTP relay hostname used to deliver sign-in links.",
+  },
+  {
+    name: "SMTP_USERNAME",
+    service: "auth",
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
+    description: "SMTP username for the sign-in-link relay.",
+  },
+  {
+    name: "SMTP_PASSWORD",
+    service: "auth",
+    required: {
+      when: { kind: "env-equals", service: "auth", name: "AUTH_EMAIL_TRANSPORT", value: "smtp" },
+      optional: true,
+    },
+    description: "SMTP password for the sign-in-link relay.",
+  },
+];
+
+function conditionMatches(config: QmConfig, condition: SecretCondition): boolean {
+  if (condition.kind === "sandbox-backend") {
+    const backend =
+      config.env.core?.SANDBOX_BACKEND ??
+      config.sandbox?.backend ??
+      targetEnvDefault(config, "core", "SANDBOX_BACKEND");
+    return backend?.trim() === condition.backend;
+  }
+  if (condition.kind === "service-enabled") return config.services.includes(condition.service);
+  if (condition.kind === "service-absent") return !config.services.includes(condition.service);
+  if (condition.kind === "all") return condition.conditions.every((nested) => conditionMatches(config, nested));
+  if (condition.kind === "any") return condition.conditions.some((nested) => conditionMatches(config, nested));
+  if (condition.kind === "target") return config.target === condition.target;
+  if (condition.kind === "model-provider") return effectiveModelProvider(config) === condition.provider;
+  if (condition.kind === "env-all-absent") {
+    return condition.names.every((name) => !config.env[condition.service]?.[name]?.trim());
+  }
+  const configuredSandboxBackend =
+    condition.service === "core" && condition.name === "SANDBOX_BACKEND" ? config.sandbox?.backend : undefined;
+  const value = (
+    config.env[condition.service]?.[condition.name] ??
+    configuredSandboxBackend ??
+    targetEnvDefault(config, condition.service, condition.name)
+  )?.trim();
+  if (condition.kind === "env-absent") return !value;
+  if (condition.kind === "env-present") return Boolean(value);
+  return value === condition.value;
+}
+
+function targetEnvDefault(config: QmConfig, service: string, name: string): string | undefined {
+  return TARGET_ENV_DEFAULTS[config.target](config, service, name);
+}
+
+function requirementFor(config: QmConfig, spec: SecretSpec): boolean | null {
+  if (typeof spec.required === "boolean") return spec.required;
+  if (conditionMatches(config, spec.required.when)) return !spec.required.optional;
+  return spec.required.optionalOtherwise ? false : null;
+}
+
+export function emailSecretNames(config: QmConfig): string[] {
+  if (!config.services.includes("auth")) return [];
+  return [
+    "AUTH_EMAIL_FROM",
+    ...(config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp"
+      ? ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]
+      : ["RESEND_API_KEY"]),
+  ];
+}
+
+export function computedSecrets(config: QmConfig): ComputedSecret[] {
+  const byName = new Map<string, ComputedSecret>();
+  for (const spec of FIRST_PARTY_SECRET_SPECS) {
+    if (!config.services.includes(spec.service)) continue;
+    const required = requirementFor(config, spec);
+    if (required === null) continue;
+    const current = byName.get(spec.name);
+    if (current) {
+      if (spec.envName) {
+        if (!(current.aliases ?? []).some((alias) => alias.service === spec.service && alias.name === spec.envName)) {
+          current.aliases = [...(current.aliases ?? []), { service: spec.service, name: spec.envName }];
+        }
+      } else if (!current.services.includes(spec.service)) current.services.push(spec.service);
+      current.required ||= required;
+      continue;
+    }
+    byName.set(spec.name, {
+      name: spec.name,
+      services: spec.envName ? [] : [spec.service],
+      description: spec.description,
+      required,
+      ...(spec.generate ? { generate: spec.generate } : {}),
+      managedBy: managedByFor(spec, config.target),
+      ...(spec.envName ? { aliases: [{ service: spec.service, name: spec.envName }] } : {}),
+    });
+  }
+  for (const plugin of config.plugins) {
+    const signing = byName.get("CORE_SIGNING_SECRET");
+    if (plugin.coreAccess !== false && signing && !signing.services.includes(plugin.name))
+      signing.services.push(plugin.name);
+    for (const spec of plugin.secrets ?? []) {
+      const required = spec.required !== false;
+      const current = byName.get(spec.name);
+      if (current) {
+        if (!current.services.includes(plugin.name)) current.services.push(plugin.name);
+        current.required ||= required;
+      } else {
+        byName.set(spec.name, {
+          name: spec.name,
+          services: [plugin.name],
+          description: spec.description ?? `Secret used by the ${plugin.name} plugin.`,
+          required,
+          managedBy: "operator",
+        });
+      }
+    }
+  }
+  for (const [service, entries] of Object.entries(config.secretEnv ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    if (!config.services.includes(service as DeclaredServiceName)) continue;
+    for (const [envName, storeName] of Object.entries(entries ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+      let current = byName.get(storeName);
+      if (!current) {
+        current = {
+          name: storeName,
+          services: [],
+          description: `Operator secret declared by config secretEnv.${service}.`,
+          required: true,
+          managedBy: "operator",
+        };
+        byName.set(storeName, current);
+      }
+      current.required = true;
+      if (envName === storeName) {
+        if (!current.services.includes(service)) current.services.push(service);
+      } else if (!(current.aliases ?? []).some((alias) => alias.service === service && alias.name === envName)) {
+        current.aliases = [...(current.aliases ?? []), { service: service as DeclaredServiceName, name: envName }];
+      }
+    }
+  }
+  const control = byName.get("DEPLOYMENT_CONTROL_SECRET");
+  if (control && (control.services.some((service) => service !== "core") || control.aliases?.length))
+    throw new Error("DEPLOYMENT_CONTROL_SECRET must be delivered only to core under its original name");
+  const secrets = [...byName.values()]
+    .map((secret) => ({
+      ...secret,
+      services: [...secret.services].sort(),
+      ...(secret.aliases
+        ? {
+            aliases: [...secret.aliases].sort(
+              (a, b) => a.service.localeCompare(b.service) || a.name.localeCompare(b.name),
+            ),
+          }
+        : {}),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return secrets;
+}
+
+export function validatedSecrets(config: QmConfig): ComputedSecret[] {
+  const secrets = computedSecrets(config);
+  const delivered = new Map<string, string>();
+  for (const secret of secrets) {
+    for (const [workload, names] of secretDestinations(secret)) {
+      for (const name of names) {
+        const key = `${workload}:${name}`;
+        const prior = delivered.get(key);
+        if (prior !== undefined && prior !== secret.name) {
+          throw new Error(`${workload} would receive env ${name} from both ${prior} and ${secret.name}`);
+        }
+        delivered.set(key, secret.name);
+      }
+    }
+  }
+  return secrets;
+}
+
+export function secretDestinations(
+  secret: ComputedSecret,
+  pluginNames: readonly string[] = [],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const add = (workload: string, name: string): void => {
+    if (isTenantSetting(name)) return;
+    out.set(workload, (out.get(workload) ?? new Set()).add(name));
+  };
+  for (const service of secret.services) {
+<<<<<<<
+    add(serviceHost(service), secret.name);
+=======
+    if (service === "sandbox") for (const workload of CORE_WORKLOADS) add(workload, `FLY_RESIDENT_ENV_${secret.name}`);
+    else for (const workload of serviceWorkloads(service)) add(workload, secret.name);
+>>>>>>>
+  }
+  for (const alias of secret.aliases ?? []) {
+    for (const workload of serviceWorkloads(alias.service)) add(workload, alias.name);
+  }
+  if (secret.name === "CORE_SIGNING_SECRET") {
+    for (const plugin of pluginNames) add(plugin, secret.name);
+  }
+  return out;
+}
+
+export function runtimeSecretNames(
+  workload: string,
+  secret: ComputedSecret,
+  pluginNames: readonly string[] = [],
+): string[] {
+  return [...(secretDestinations(secret, pluginNames).get(serviceHost(workload)) ?? [])];
+}
+
+export function secretsForService(
+  config: QmConfig,
+  service: string,
+  pluginNames: readonly string[] = [],
+): ComputedSecret[] {
+  return computedSecrets(config).filter((secret) => secretDestinations(secret, pluginNames).has(serviceHost(service)));
+}
+
+export function serviceSecretValue(
+  config: QmConfig,
+  service: DeclaredServiceName,
+  name: string,
+  values: ReadonlyMap<string, string>,
+): string | undefined {
+  let value = config.env[service]?.[name];
+  for (const secret of validatedSecrets(config)) {
+    if (!runtimeSecretNames(service, secret).includes(name)) continue;
+    const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
+    if (supplied !== undefined) value = supplied;
+  }
+  return value;
+}

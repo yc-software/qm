@@ -1,0 +1,70 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { brokerWiring, hostedServiceEnv, runnableImages, runnableServices } from "../src/services.ts";
+import { secretDestinations } from "../src/secrets.ts";
+
+test("core runs as edge and harness, and every surface but the egress proxy runs inside the edge", () => {
+  assert.deepEqual(runnableServices(["core", "slack", "web-ui", "admin", "portal", "auth"]), ["edge", "harness"]);
+  assert.deepEqual(runnableServices(["core", "portal", "egress-proxy"]), ["edge", "harness", "egress-proxy"]);
+  assert.deepEqual(runnableImages(["core", "portal", "egress-proxy"]), ["core", "egress-proxy"]);
+});
+
+test("the edge absorbs hosted component settings, keeps core's last, and rejects conflicts between them", () => {
+  const env = { core: { A: "core" }, portal: { A: "portal", B: "1" }, auth: { C: "2" }, slack: { D: "3" } };
+  assert.deepEqual(hostedServiceEnv(["core", "slack", "portal", "auth"], env, "edge"), {
+    A: "core",
+    B: "1",
+    C: "2",
+    D: "3",
+  });
+  assert.deepEqual(hostedServiceEnv(["core", "slack", "portal", "auth"], env, "harness"), { A: "core" });
+  assert.throws(
+    () => hostedServiceEnv(["core", "portal", "auth"], { portal: { A: "1" }, auth: { A: "2" } }, "edge"),
+    /Conflicting A settings in services hosted by edge/,
+  );
+  assert.deepEqual(hostedServiceEnv(["core", "auth"], { auth: { A: "1" } }, "egress-proxy"), {});
+});
+
+test("broker stays private inside the edge and keeps its public issuer and callback", () => {
+  const env = brokerWiring({ publicUrl: "https://agent.example.com/" });
+  assert.equal(env.AUTH_EMBEDDED, "1");
+  assert.equal(env.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(env.AUTH_ISSUER, "https://agent.example.com/idp");
+  assert.equal(env.AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
+  assert.equal(env.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+});
+
+<<<<<<<
+test("secrets for core reach both workloads while front-door secrets reach only the edge", () => {
+  const client = secretDestinations({
+=======
+test("the broker client secret reaches the portal only under its own name", () => {
+  const destinations = secretDestinations({
+>>>>>>>
+    name: "AUTH_CLIENT_SECRET",
+    services: ["auth"],
+    aliases: [{ service: "portal", name: "OIDC_CLIENT_SECRET" }],
+    description: "test",
+    required: true,
+    managedBy: "operator",
+  });
+<<<<<<<
+  assert.deepEqual([...client], [["edge", new Set(["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"])]]);
+  const core = secretDestinations({
+    name: "CORE_SIGNING_SECRET",
+    services: ["core", "slack"],
+    description: "test",
+    required: true,
+    managedBy: "operator",
+  });
+  assert.deepEqual(
+    [...core],
+    [
+      ["edge", new Set(["CORE_SIGNING_SECRET"])],
+      ["harness", new Set(["CORE_SIGNING_SECRET"])],
+    ],
+  );
+=======
+  assert.deepEqual([...destinations], [["portal", new Set(["AUTH_CLIENT_SECRET"])]]);
+>>>>>>>
+});

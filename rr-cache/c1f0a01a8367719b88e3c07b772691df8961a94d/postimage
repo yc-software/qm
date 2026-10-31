@@ -1,0 +1,135 @@
+image:
+  repository: ghcr.io/yc-software/qm
+  separator: "/"
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+nameOverride: ""
+fullnameOverride: ""
+
+publicUrl: ""
+
+env: {}
+
+envFrom: []
+
+secretEnv:
+  CORE_SIGNING_SECRET: ""
+  CAPABILITY_SECRET: ""
+  PORTAL_IDENTITY_SECRET: ""
+  CONNECTOR_SECRET_KEY: ""
+  SKILL_SIGNING_SECRET: ""
+  ANTHROPIC_API_KEY: ""
+  DATABASE_URL: ""
+  DATABASE_OWNER_URL: ""
+  DATABASE_READER_URL: ""
+  DEPLOYMENT_CONTROL_SECRET: ""
+  PUBLIC_API_URL: ""
+  SANDBOX_BACKEND: ""
+  DEPLOY_PROVIDER: ""
+  PORTER_DEPLOY_API_TOKEN: ""
+  PORTER_DEPLOY_URL: ""
+  PORTER_DEPLOY_PROJECT_ID: ""
+  PORTER_DEPLOY_CLUSTER_ID: ""
+  PORTER_SANDBOX_IMAGE: "ghcr.io/porter-dev/qm-sandbox:latest"
+  PORTER_DEPLOY_RUNNER_IMAGE: "ghcr.io/porter-dev/qm-app-runner:latest"
+  DEPLOY_APPS_DOMAIN: ""
+  PORTER_DEPLOY_APPS_DOMAIN: ""
+  AUTH_CLIENT_SECRET: ""
+  AUTH_TOKEN_SECRET: ""
+  AUTH_SIGNING_JWK: ""
+  AUTH_EMAIL_FROM: ""
+  RESEND_API_KEY: ""
+  PORTAL_SESSION_SECRET: ""
+
+tenant: main
+
+tenantSettings: {}
+
+ingress:
+  enabled: false
+  service: portal
+  className: nginx
+  hosts: []
+  tls: true
+  clusterIssuer: letsencrypt-prod
+  tlsSecretName: ""
+  annotations: {}
+
+services:
+  core:
+    image: core
+    port: 8080
+    publicPort: 8000
+    healthPath: /healthz
+    readinessPath: /readyz
+    startupProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 60
+    persistence:
+      enabled: false
+      existingClaim: ""
+      size: 10Gi
+      storageClass: null
+    env: {}
+    edge:
+      replicas: 1
+      command: ["node", "src/edge/main.ts"]
+      terminationGracePeriodSeconds: 300
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 2Gi
+    harness:
+      replicas: 1
+      command: ["node", "src/harness/main.ts"]
+      terminationGracePeriodSeconds: 300
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 2Gi
+
+  portal:
+    enabled: true
+    env: {}
+
+  auth:
+    enabled: true
+    env: {}
+
+  admin:
+    enabled: true
+    env: {}
+
+  egress-proxy:
+    enabled: true
+    image: egress-proxy
+    type: worker
+    port: 48080
+    replicas: 1
+    command: ["/app/start.sh"]
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"]
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    env: {}
