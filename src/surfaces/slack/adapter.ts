@@ -11,23 +11,15 @@ export const SLACK_MENTION_SYNTAX =
 const LABEL = "Slack";
 
 export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface {
-  const accounts: SlackNative["accounts"] = new Map();
-  const identityOf = (account: string) => {
-    const identity = accounts.get(account);
-    if (!identity) throw new Error(`Slack account ${account} has no registered identity`);
-    return identity;
-  };
   const slack: SlackNative = {
-    accounts,
     userFrom(user, account) {
-      const classified = classifyUser(user, identityOf(account).ownTeamId);
-      const email = user?.profile?.email;
+      const classified = classifyUser(user, account.ownTeamId, account.identityMode);
       const timezone = slackUserTimezone(user);
       return {
         surface: "slack",
-        account,
-        id: classified.externalId,
-        ...(email ? { email } : {}),
+        account: account.id,
+        id: String(user?.id ?? ""),
+        ...(classified.externalId.includes("@") ? { email: classified.externalId } : {}),
         ...(classified.displayName ? { displayName: classified.displayName } : {}),
         ...(classified.isBot ? { bot: true } : {}),
         ...(classified.isExternalGuest ? { guest: true } : {}),
@@ -53,7 +45,6 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
         type: "slack",
         target: ref.container,
         slackAccountId: ref.account,
-        slackTeamId: identityOf(ref.account).ownTeamId,
       };
       await reachEnqueue({
         deliveries: deps.deliveries,
@@ -76,7 +67,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
           },
         },
         "",
-        identityOf(user.account).identityMode,
+        user.email ? "email" : "slack-id",
       );
     },
     mention: (user) => `<@${user.id}>`,

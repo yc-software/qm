@@ -67,8 +67,10 @@ interface MessageRef {
 }
 
 export interface SlackNative {
-  accounts: Map<string, { ownTeamId: string; identityMode: SlackIdentityMode }>;
-  userFrom(user: SlackUser | undefined, account: string): SurfaceUser;
+  userFrom(
+    user: SlackUser | undefined,
+    account: { id: string; ownTeamId: string; identityMode: SlackIdentityMode },
+  ): SurfaceUser;
 }
 
 interface SurfaceNatives {

@@ -61,22 +61,19 @@ test("slack adapter principals match classifyUser for every identity mode", () =
   ];
   for (const identityMode of ["slack-id", "email"] as SlackIdentityMode[]) {
     const surface = slackSurface();
-    const slack = surface.native("slack")!;
-    slack.accounts.set("default", { ownTeamId: "T1", identityMode });
+    const account = { id: "default", ownTeamId: "T1", identityMode };
     for (const user of users)
       assert.deepEqual(
-        surface.principalFor(slack.userFrom(user, "default")),
+        surface.principalFor(surface.native("slack")!.userFrom(user, account)),
         classifyUser(user, "T1", identityMode),
         `${identityMode} ${user?.id}`,
       );
-    assert.throws(() => surface.principalFor({ surface: "slack", account: "other", id: "U1" }), /other/);
   }
 });
 
-test("slack adapter post enqueues the destination turn replies use for the account", async () => {
+test("slack adapter post enqueues the account-routed destination the slack drainer reads", async () => {
   const deliveries = createDeliveryStore();
   const surface = createSlackSurface({ deliveries });
-  surface.native("slack")!.accounts.set("default", { ownTeamId: "T1", identityMode: "email" });
   await surface.post(
     { surface: "slack", account: "default", kind: "channel", container: "C1", thread: "1700.0001" },
     { text: "in thread" },
@@ -84,12 +81,8 @@ test("slack adapter post enqueues the destination turn replies use for the accou
   );
   await surface.post({ surface: "slack", account: "default", kind: "dm", container: "D1" }, { text: "dm" }, "k2");
   const byKey = new Map((await deliveries.pending("slack")).map((d) => [d.idempotencyKey, d]));
-  const account = { slackAccountId: "default", slackTeamId: "T1" };
+  const account = { slackAccountId: "default" };
   assert.deepEqual(byKey.get("k1")?.destination, { type: "slack", target: "C1:1700.0001", ...account });
   assert.equal(byKey.get("k1")?.text, "in thread");
   assert.deepEqual(byKey.get("k2")?.destination, { type: "slack", target: "D1", ...account });
-  await assert.rejects(
-    surface.post({ surface: "slack", account: "other", kind: "dm", container: "D1" }, { text: "x" }, "k3"),
-    /other/,
-  );
 });
