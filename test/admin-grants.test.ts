@@ -10,10 +10,11 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

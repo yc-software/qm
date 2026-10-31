@@ -56,7 +56,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
-  allowUnauthenticatedCore: boolean;
   port: number;
   dataDir: string;
   orgId: string;
@@ -64,6 +63,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   databaseCaCert?: string;
   databaseCaCertFile?: string;
   databasePoolUrl?: string;
+  databaseOwnerUrl?: string;
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
@@ -117,7 +117,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
-  requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
   secretsBackend: "env" | "aws";
@@ -496,7 +495,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
       : {}),
     production: env.NODE_ENV === "production",
-    allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
@@ -505,6 +503,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
+    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
     ...(env.DATABASE_DIRECT_POOL_MAX
@@ -604,7 +603,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     capabilityTokenCompression:
       boolEnvStrict("CAPABILITY_TOKEN_COMPRESSION", env.CAPABILITY_TOKEN_COMPRESSION) ?? false,
-    requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),

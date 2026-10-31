@@ -25,6 +25,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -207,7 +208,7 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
     brokerFetch: fetchImpl,
   };
   const server = admin
-    ? createInsecureTestServer(built.app, deps)
+    ? createInsecureTestServer(TEST_TENANT, built.app, deps)
     : createServer(built.app, {
         replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
         ...deps,

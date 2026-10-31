@@ -30,6 +30,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { TENANT_HEADERS } from "./support/tenant.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -217,7 +218,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   const signed = (method: string, rawPath: string, body: string, owner?: string | null) => {
     const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
     const headers: Record<string, string> = {
-      ...signedRequestHeaders(SECRET, method, path, body),
+      ...signedRequestHeaders(SECRET, method, path, body, { ...TENANT_HEADERS }),
       ...(owner !== null ? { "x-drop-owner": owner ?? "U_A", "x-drop-owner-org": "acme" } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     };
@@ -699,7 +700,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
         const r = await fetch(`${base}${path}`, {
           method: "POST",
           headers: {
-            ...signedRequestHeaders(SECRET, "POST", path, body),
+            ...signedRequestHeaders(SECRET, "POST", path, body, { ...TENANT_HEADERS }),
             "x-drop-owner": "U_A",
             "x-drop-owner-org": "acme",
             "content-type": "application/json",

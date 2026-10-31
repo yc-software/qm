@@ -7,11 +7,21 @@ import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sig
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "../src/invite-login.ts";
 import { deriveKey, openSession } from "../src/session.ts";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
+
 const coreSecret = "invite-route-core-secret";
 const sessionSecret = "invite-route-session-secret";
 const origin = "http://127.0.0.1:19997";
-const requests: { path: string; body: string; signature: string | undefined; timestamp: string | undefined }[] = [];
+const requests: {
+  path: string;
+  body: string;
+  signature: string | undefined;
+  timestamp: string | undefined;
+  tenant: string | undefined;
+}[] = [];
 const upstream = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   void (async () => {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -24,6 +34,7 @@ const upstream = createServer((req, res) => {
       body,
       signature: req.headers["x-signature"] as string | undefined,
       timestamp: req.headers["x-timestamp"] as string | undefined,
+      tenant: req.headers["x-qm-tenant"] as string | undefined,
     });
     const { token } = JSON.parse(body);
     if (token === "disconnected") return req.socket.destroy();
@@ -113,15 +124,18 @@ test("redemption signs the core request and issues a session for the verified te
   const request = requests.at(-1)!;
   assert.equal(new URL(request.path, upstreamUrl).pathname, "/v1/auth/invitations/redeem");
   assert.equal(request.body, JSON.stringify({ token: "valid" }));
+  assert.equal(request.tenant, TENANT);
   assert.equal(
     request.signature,
-    signRequest(coreSecret, Number(request.timestamp), canonicalPayload("POST", request.path, request.body)),
+    signRequest(coreSecret, Number(request.timestamp), canonicalPayload("POST", request.path, request.body, TENANT)),
   );
   const cookies = response.headers.getSetCookie();
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("portal_session="))!;
   const token = sessionCookie.split(";")[0]!.slice("portal_session=".length);
-  const session = openSession(token, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), "invite-test");
+  const session = openSession(token, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), TENANT);
   assert.equal(session?.sub, "teammate@example.test");
+  assert.equal(session?.tenant, TENANT);
+  assert.equal(openSession(token, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), OTHER_TENANT), null);
   assert.ok(session?.auth);
   assert.match(sessionCookie, /HttpOnly/);
   assert.ok(cookies.some((cookie) => /^portal_impersonate=;.*Max-Age=0/.test(cookie)));

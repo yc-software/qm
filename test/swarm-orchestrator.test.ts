@@ -16,6 +16,7 @@ import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -310,10 +311,15 @@ test("HTTP root spawns three peers and receives their replies using real orchest
       conversation: { kind: "dm", threadRef: "http-swarm-root" },
       text: "http-swarm-root",
     });
+    const portal = await mintPortalIdentity(
+      { t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 },
+      config.portalIdentitySecret!,
+    );
     const rootResponse = await fetch(`${base}/v1/turns`, {
       method: "POST",
       headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
         "content-type": "application/json",
+        "x-portal-identity": portal,
       }),
       body,
     });
@@ -375,7 +381,6 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     const cancelRunId = await withTimeout(() => entered.promise, 15_000, "worker start");
     const stopPath = `/v1/runs/${cancelRunId}/signal`;
     const stopBody = JSON.stringify({ kind: "abort" });
-    const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
     const stopped = await fetch(`${base}${stopPath}`, {
       method: "POST",
       headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {

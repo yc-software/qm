@@ -20,6 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -30,7 +31,15 @@ function session(sub: string, appOnly?: true): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(appOnly ? { appOnly } : {}) }),
+    JSON.stringify({
+      k: "session",
+      sub,
+      org: "acme",
+      tenant: TEST_TENANT,
+      iat: now,
+      exp: now + 3600,
+      ...(appOnly ? { appOnly } : {}),
+    }),
   ).toString("base64url");
   return `portal_session=${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
@@ -85,13 +94,14 @@ async function agent(log: AppPageViewLog) {
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
     appPageViews: log,
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   return {

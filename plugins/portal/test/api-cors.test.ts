@@ -5,7 +5,10 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isChatApiRoute, parseAllowedOrigins } from "../src/cors.ts";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   req.resume();
   req.on("end", () => {
     if (req.url === "/api/whoami") {
@@ -41,12 +44,12 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("api-cors-test-portal-secret-0123456789", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, tenant: TENANT, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 function impersonating(actor: string, target: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, org: "acme", iat, exp: iat + 3600 }, impersonateKey))}`;
+  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, tenant: TENANT, iat, exp: iat + 3600 }, impersonateKey))}`;
 }
 
 test.after(() => {

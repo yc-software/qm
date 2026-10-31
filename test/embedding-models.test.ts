@@ -24,6 +24,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const definition = {
   kind: "embedding",
@@ -147,7 +148,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   });
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;

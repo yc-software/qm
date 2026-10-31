@@ -583,7 +583,6 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
-    REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");
@@ -5216,7 +5215,7 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
       assert.equal(headers.host, "api.acme.example");
       assert.equal(
         headers["x-signature"],
-        `v0=${createHmac("sha256", TEST_SECRET_VALUE).update(`v0:${headers["x-timestamp"]}:${options.method}\n${url.pathname}${url.search}\n${body}`).digest("hex")}`,
+        `v0=${createHmac("sha256", TEST_SECRET_VALUE).update(`v0:${headers["x-timestamp"]}:${options.method}\n${url.pathname}${url.search}\n\n${body}`).digest("hex")}`,
       );
     }
     assert.match(readFileSync(fake.log, "utf8"), /describe-load-balancers --names inactive-stack/);
@@ -5290,7 +5289,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
       assert.equal(
         headers["x-signature"],
         `v0=${createHmac("sha256", TEST_SECRET_VALUE)
-          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n${init.body ?? ""}`)
+          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n\n${init.body ?? ""}`)
           .digest("hex")}`,
       );
     }
@@ -6039,7 +6038,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
         assert.equal(
           headers.get("x-signature"),
           `v0=${createHmac("sha256", TEST_SECRET_VALUE)
-            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n${body}`)
+            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n\n${body}`)
             .digest("hex")}`,
         );
         assert.deepEqual(request, {
@@ -6062,7 +6061,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
       const body = String(init?.body ?? "");
       const signature = createHmac("sha256", TEST_SECRET_VALUE)
-        .update(`v0:${headers.get("x-timestamp")}:${init?.method}\n/v1/background-work\n${body}`)
+        .update(`v0:${headers.get("x-timestamp")}:${init?.method}\n/v1/background-work\n\n${body}`)
         .digest("hex");
       assert.equal(headers.get("x-signature"), `v0=${signature}`);
       if (init?.method === "POST") {

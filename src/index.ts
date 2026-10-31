@@ -11,7 +11,8 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { pgTenants, singleTenantResolver } from "./tenants/resolver.ts";
 import { instanceTenant } from "./tenants/instance.ts";
 import { enterTenant } from "./tenants/context.ts";
 
@@ -43,6 +44,7 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: singleTenantResolver(pgTenants(createPgPool(config.databaseUrl!))),
 });
 
 await built.config.hydrate?.();

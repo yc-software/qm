@@ -16,6 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
@@ -69,7 +70,7 @@ test("org-owned grants have no single owner, so revoke is not owner-gated (same 
 test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "revoke-")) }));
   await putFile(built.files, owner);
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: unknown) =>

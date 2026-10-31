@@ -134,7 +134,7 @@ export function deploymentLayerBody(sandboxDir: string): string {
 
 function signingHeaders(secret: string, method: string, path: string, body: string): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const canonical = `${method}\n${path}\n${body}`;
+  const canonical = `${method}\n${path}\n\n${body}`;
   const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${canonical}`).digest("hex");
   return {
     "content-type": "application/json",
@@ -198,7 +198,7 @@ export type DeploymentLayerTransport = (
 export function httpDeploymentLayerTransport(
   o: {
     urlOf?: (config: QmConfig) => URL;
-    secretFallback?: (config: QmConfig) => string | undefined;
+    secretFallback?: (config: QmConfig, name: string) => string | undefined;
     timeoutMs?: number;
     request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
   } = {},
@@ -206,13 +206,17 @@ export function httpDeploymentLayerTransport(
   return async (opts) => {
     const envPath = opts.envFile ?? join(opts.configDir, ".env");
     const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
-    let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
-    if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
+    const read = (name: string) => deploymentSecretValue(name, env.get(name)) ?? o.secretFallback?.(opts.config, name);
+    const secret = read("CORE_SIGNING_SECRET");
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
+    const control = read("DEPLOYMENT_CONTROL_SECRET");
     const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
     const init: RequestInit = {
       method: opts.method,
-      headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
+      headers: {
+        ...signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
+        ...(control ? { authorization: `Bearer ${control}` } : {}),
+      },
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
       redirect: "error",

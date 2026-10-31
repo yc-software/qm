@@ -6,6 +6,8 @@ import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../../chassis/src/external-members.ts";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const secret = "app-only-session-test-secret";
 const origin = "http://portal.test";
 const sessionKey = deriveKey(secret, "portal.session.v1");
@@ -18,6 +20,7 @@ let nonce = "";
 const email = "guest@partner.test";
 const seen: Array<{ path: string; headers: Record<string, unknown> }> = [];
 const upstream = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   void (async () => {
     const path = new URL(req.url!, origin).pathname;
     res.setHeader("content-type", "application/json");
@@ -82,7 +85,7 @@ test.after(() => {
 
 function appCookie() {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: email, org: "acme", appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
+  return `portal_session=${seal({ k: "session", sub: email, tenant: TENANT, appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
 }
 async function signIn(cookie = "") {
   const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent("https://demo.apps.example.test/")}`, {

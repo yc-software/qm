@@ -18,6 +18,7 @@ const upstreamBase = `http://127.0.0.1:${(admin.address() as AddressInfo).port}`
 const portal = createServer((req, res) => {
   res.setHeader("referrer-policy", "no-referrer");
   proxyToSurface(req, res, {
+    tenant: "00000000-0000-4000-8000-000000000001",
     upstreamBase,
     forwardPath: req.url ?? "/",
     search: "",

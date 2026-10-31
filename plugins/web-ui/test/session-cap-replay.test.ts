@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const seenSignatures = new Set<string>();
 let sessionCapMints = 0;
@@ -64,7 +65,10 @@ test.after(() => {
 const FROZEN_NOW = 1_800_000_000_000;
 
 test("same-second session-cap mints stay unique past core's replay dedupe", async () => {
-  const token = mintPortalIdentity({ p: "alice", exp: FROZEN_NOW + 60_000 }, "session-cap-replay-test-secret");
+  const token = mintPortalIdentity(
+    { t: TEST_TENANT, p: "alice", exp: FROZEN_NOW + 60_000 },
+    "session-cap-replay-test-secret",
+  );
   const headers = { [PORTAL_IDENTITY_HEADER]: token };
 
   const realNow = Date.now;

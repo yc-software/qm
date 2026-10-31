@@ -183,13 +183,13 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     return url;
   },
   request: awsCoreRequest,
-  secretFallback: (config) =>
+  secretFallback: (config, name) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [
           "secretsmanager",
           "get-secret-value",
           "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
+          `${config.aws.secretsPrefix}${name}`,
           "--query",
           "SecretString",
           "--output",
@@ -443,9 +443,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
           : {}),
       }),
     );
-  }
-  if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
-    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
@@ -2982,7 +2979,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n\n${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +23,7 @@ await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always
 mkdirSync(join(DATA, "workspaces", "org__acme"), { recursive: true });
 writeFileSync(join(DATA, "workspaces", "org__acme", "announce.txt"), "GLOBAL-ANNOUNCE-OK: org-wide announcement.\n");
 
-const server = createInsecureTestServer(built.app);
+const server = createInsecureTestServer(randomUUID(), built.app);
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 

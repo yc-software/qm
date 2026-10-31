@@ -111,7 +111,8 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
+import { ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -435,6 +436,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  rowTenants: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -551,10 +553,12 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
+  const rowTenants = ownerRowTenants(createPgPool(databaseUrl));
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
     ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
@@ -2567,6 +2571,7 @@ export function buildApp(
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
+    rowTenants,
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -2973,6 +2978,7 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    rowTenants,
     modelGatewayTransport: gatewayTransport,
     budget,
     resolveBrowserCompanyKeys,
@@ -3075,13 +3081,11 @@ export function serverDeps(
           deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
         }
       : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
@@ -3109,6 +3113,7 @@ export function serverDeps(
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
+    rowTenants: built.rowTenants,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),

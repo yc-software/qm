@@ -11,7 +11,7 @@ const headers = { "content-type": "application/json", "x-admin-actor": "admin-al
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
   const built = stopAtEnd(buildApp(config));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
     const result = await fetch(
@@ -141,7 +141,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
       },
     }),
   );
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: object, actor = "admin-alice@default-org") =>
@@ -185,7 +185,7 @@ test("enable rechecks serving credentials before mutating the picker", async () 
   let onProbe: () => Promise<void> = async () => {};
   const config = testConfig({ anthropicApiKey: "test-key" });
   const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
   const enable = () =>
@@ -216,6 +216,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

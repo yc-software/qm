@@ -1,8 +1,10 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
+import { isTenantId } from "../tenants/context.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { publicFetch } from "../util/network.ts";
@@ -591,7 +593,7 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  orgId?: string;
+  tenant: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -608,7 +610,7 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
+    isTenantId(s.tenant) &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
@@ -617,7 +619,7 @@ function isOAuthState(v: unknown): v is OAuthState {
 }
 
 export function sealOAuthState(
-  state: Omit<OAuthState, "issuedAt" | "nonce"> & { issuedAt?: number; nonce?: string },
+  state: Omit<OAuthState, "issuedAt" | "nonce" | "tenant"> & { issuedAt?: number; nonce?: string },
   opts: { secret: string; now?: () => number } = { secret: "" },
 ): Promise<string> {
   if (!opts.secret) throw new Error("OAuth state secret required");
@@ -626,6 +628,7 @@ export function sealOAuthState(
       ...state,
       issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
       nonce: state.nonce ?? randomUUID(),
+      tenant: currentTenant(),
     },
     opts.secret,
   );

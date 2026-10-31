@@ -13,6 +13,7 @@ import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function loadViewerCacheHelpers(): {
   callCacheUsage: (q: unknown) => { cacheRead: number; cacheWrite: number; uncachedInput: number } | null;
@@ -61,7 +62,7 @@ function loadViewerCacheHelpers(): {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cache-obs-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

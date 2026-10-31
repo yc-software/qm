@@ -20,12 +20,14 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { boundTenant } from "../tenants/context.ts";
+import { capabilityToken, requestCapability, withRequestTenant } from "./tenant-ingress.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, tenantHeader, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -73,18 +75,6 @@ function canonicalPath(req: IncomingMessage, pathname: string): boolean {
   return (req.url ?? "/").split("?", 1)[0] === pathname && !pathname.split("%").slice(1).some(needlessEscape);
 }
 
-function capabilityFromHeaders(req: IncomingMessage): string | null {
-  const h = req.headers[CAPABILITY_HEADER];
-  return typeof h === "string" && h ? h : null;
-}
-
-function bearerFromHeaders(req: IncomingMessage): string | null {
-  const apiKey = req.headers["x-api-key"];
-  if (typeof apiKey === "string" && apiKey) return apiKey;
-  const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
-  return bearer?.[1] ?? null;
-}
-
 interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
@@ -96,7 +86,6 @@ interface Wiring {
   deps: ServerDeps;
   secret: string | undefined;
   auth: SourceAuth | null;
-  requirePortalIdentity: boolean;
   allowUnsignedSourceAuth: boolean;
 }
 
@@ -120,14 +109,13 @@ async function verifyCapability(
   required: { aud: string; bearer?: true } | null,
 ): Promise<CapabilityClaims | null> {
   const requiredAud = required?.aud ?? null;
-  const capToken = capabilityFromHeaders(req) ?? (required?.bearer ? bearerFromHeaders(req) : null);
+  const capToken = capabilityToken(req, required?.bearer === true);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
   }
-  const capSecret = deps.capabilitySecret ?? secret;
-  const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
-  if (!capability) {
+  const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
+  if (!capability || capability.tenant !== boundTenant()) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
   }
@@ -201,12 +189,12 @@ async function gate(
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
-  const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
+  const { deps, secret, auth, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
-  const capToken = capabilityFromHeaders(req);
+  const capToken = capabilityToken(req, false);
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
@@ -234,7 +222,7 @@ async function gate(
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, raw),
+      canonicalPayload(method, pathname + url.search, raw, tenantHeader(req)),
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -280,7 +268,7 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (!isPublicRoute && !allowUnsignedSourceAuth) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
@@ -477,8 +465,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
-function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
-  const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
+function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | null): Server {
+  const allowUnsignedSourceAuth = unsignedTenant !== null;
   if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
   const auth =
     deps.signingSecret && deps.replayDedupe
@@ -489,8 +477,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
     secret: deps.signingSecret,
     auth,
-    requirePortalIdentity,
     allowUnsignedSourceAuth,
+  };
+  const tenantDeps = {
+    ...(deps.tenants ? { tenants: deps.tenants } : {}),
+    capabilitySecret: deps.capabilitySecret ?? deps.signingSecret,
+    ...(deps.deploymentControlSecret ? { controlSecret: deps.deploymentControlSecret } : {}),
+    unsignedTenant,
   };
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());
@@ -520,18 +513,19 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
-      if (typeof routeAuth === "object") {
-        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
-        if (!base.capability) return void req.resume();
-      }
-      await run(raw.route, raw.params, base);
-      return;
+      return withRequestTenant(req, res, raw.route, tenantDeps, async () => {
+        if (typeof routeAuth === "object") {
+          base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
+          if (!base.capability) return void req.resume();
+        }
+        await run(raw.route, raw.params, base);
+      });
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
-    if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
+    if (wiring.secret && !capabilityToken(req, false) && routeAuth !== "public" && acceptsSourceAuth) {
       const timestamp = Number(req.headers["x-timestamp"] ?? 0);
       if (
         !Number.isFinite(timestamp) ||
@@ -547,7 +541,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
-    routing(req, res);
+    await withRequestTenant(req, res, matched?.route, tenantDeps, () => routing(req, res));
   }
   return server;
 }
@@ -559,18 +553,12 @@ export function loggablePath(url: string | undefined): string {
 }
 
 export function createServer(app: App, deps: ServerOptions = {}): Server {
-  if (!deps.signingSecret && deps.allowUnauthenticatedCore) {
-    console.warn(
-      "[server] ALLOW_UNAUTHENTICATED_CORE=1 — HTTP ingress is UNAUTHENTICATED (intentionally isolated deployments only).",
-    );
-    return buildServer(app, deps, true);
-  }
   if (!isStrongSigningSecret(deps.signingSecret)) {
     throw new Error(
       `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,
     );
   }
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (deps.production) {
     const shared = (name: string, value: string | undefined): string | null => {
       if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
       return value === deps.signingSecret ? `${name} must differ from CORE_SIGNING_SECRET` : null;
@@ -586,10 +574,12 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
         `signed portal identity is required but ${problem}. Provision distinct secrets or enforcement is bypassable.`,
       );
   }
-  return buildServer(app, deps, false);
+  if (deps.production && (!deps.tenants || !deps.rowTenants))
+    throw new Error("a production server needs a tenant resolver and an owner row lookup");
+  return buildServer(app, deps, null);
 }
 
-export function createInsecureTestServer(app: App, deps: ServerOptions = {}): Server {
+export function createInsecureTestServer(tenant: string, app: App, deps: ServerOptions = {}): Server {
   if (deps.signingSecret) throw new Error("createInsecureTestServer must not receive a signing secret");
-  return buildServer(app, deps, true);
+  return buildServer(app, deps, tenant);
 }

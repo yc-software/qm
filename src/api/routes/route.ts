@@ -47,6 +47,8 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   admin?: AdminAccess;
   allowedInStrict?: true;
   maxBodyBytes?: number;
+  unbound?: true;
+  tenantFromHost?: true;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {
