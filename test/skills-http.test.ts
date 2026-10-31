@@ -429,6 +429,7 @@ async function startSecure() {
       signingSecret: SECRET,
     }),
   );
+  await built.identity.ready();
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,

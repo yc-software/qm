@@ -63,6 +63,7 @@ export function createIdentityService(
       deactivated: new Map<string, DeactivationRecord>(),
       externals: new Map<string, ExternalMember>(),
       loaded: false,
+      firstLoad: null as Promise<void> | null,
       refresh: createTtlRefresh(10_000, () =>
         exclusive(async () => {
           await opts.principalLinks?.refresh(true);
@@ -165,7 +166,14 @@ export function createIdentityService(
       });
     },
     refresh,
-    ready: () => (roster().loaded ? Promise.resolve() : refresh()),
+    ready(): Promise<void> {
+      const state = roster();
+      if (state.loaded) return Promise.resolve();
+      state.firstLoad ??= state.refresh(true).finally(() => {
+        state.firstLoad = null;
+      });
+      return state.firstLoad;
+    },
     resolve(actor: ActorAssertion): Principal {
       const p = classify(actor.externalId, actor.isExternalGuest);
       return {

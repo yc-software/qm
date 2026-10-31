@@ -10,7 +10,6 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -38,6 +37,7 @@ import {
   testAdvisoryLock,
   testDeployBackings,
   testMap,
+  testIdentity,
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -89,7 +89,7 @@ const skills = {
   visibleFor: async () => [{ skill: { manifest: { name: "deploy", description: "Deploy the app" } }, shadowed: [] }],
 } as unknown as SkillStore;
 
-function buildOrchestrator(
+async function buildOrchestrator(
   extra: {
     blobTransfer?: BlobTransferStore;
     agent?: Agent;
@@ -120,7 +120,7 @@ function buildOrchestrator(
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
@@ -161,7 +161,7 @@ const slackDm = (thread: string, text: string, extra: Partial<OrchestratorInput>
 });
 
 test("system prompt is ordered cached-prefix → volatile tail, with memory LAST (after every other block)", async () => {
-  const { orchestrator: orch, memory } = buildOrchestrator();
+  const { orchestrator: orch, memory } = await buildOrchestrator();
 
   await memory.capture(scopeId("personal", actor.id), ["my favorite color is chartreuse"], Date.now());
 
@@ -207,7 +207,7 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
 
 test("Open carries only the live actor's personal reads into a shared turn and audits actual access", async () => {
   const teammate: Principal = { id: "U2", type: "internal" };
-  const { orchestrator, config, workspace, files, auditLog } = buildOrchestrator({
+  const { orchestrator, config, workspace, files, auditLog } = await buildOrchestrator({
     sandbox: readSandbox(),
     isCurrentSharedScopeMember: async (_principalId, sourceScope) => sourceScope === scopeId("channel", "C1"),
   });
@@ -322,7 +322,7 @@ test("Open advertises the source and audits a carried skill read without grantin
   });
   await skills.review(skill.id, actor.id, []);
   await skills.publish(skill.id);
-  const { orchestrator, config, auditLog, acl } = buildOrchestrator({
+  const { orchestrator, config, auditLog, acl } = await buildOrchestrator({
     skills,
     isCurrentSharedScopeMember: async () => true,
   });
@@ -370,7 +370,7 @@ test("Open advertises the source and audits a carried skill read without grantin
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
   let member = true;
-  const { orchestrator, config, memory, files } = buildOrchestrator({
+  const { orchestrator, config, memory, files } = await buildOrchestrator({
     sandbox: readSandbox(),
     isCurrentSharedScopeMember: async (principalId, sourceScope) =>
       member && principalId === actor.id && sourceScope === scopeId("channel", "C1"),
@@ -461,7 +461,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
 
 test("the system prompt is byte-identical across two turns a minute apart; the clock rides the environment note", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const { orchestrator: orch } = buildOrchestrator();
+  const { orchestrator: orch } = await buildOrchestrator();
 
   const turn = (): OrchestratorInput =>
     dm("dm:U1:cache-stable", "!sysprompt", {
@@ -501,7 +501,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   });
   let visible = [mkSkill("alpha"), mkSkill("midway"), mkSkill("zeta")];
   const churningSkills = { visibleFor: async () => [...visible] } as unknown as SkillStore;
-  const { orchestrator: orch } = buildOrchestrator({ skills: churningSkills });
+  const { orchestrator: orch } = await buildOrchestrator({ skills: churningSkills });
 
   const prefixOf = (prompt: string): string => prompt.split("\n\n<environment>")[0]!;
   const turn = () => dm("dm:U1:skill-order", "!sysprompt", { timezone: "America/New_York" });
@@ -545,7 +545,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
     action: "channel-only digest",
   });
 
-  const { orchestrator: orch } = buildOrchestrator({ crons });
+  const { orchestrator: orch } = await buildOrchestrator({ crons });
   const b = await orch.handleTurn(dm("dm:U1:obl", "!sysprompt"));
   assert.equal(b.status, "ok");
   const prompt = b.reply ?? "";
@@ -567,7 +567,7 @@ test("sandboxes render as one provider line without the substrate spec; no resiz
       spec: { ...fakeSandbox().profile.spec, cpus: 4, memoryMb: 8192 },
     },
   };
-  const b = await buildOrchestrator({ sandbox: sized }).orchestrator.handleTurn(dm("dm:U1:rz1", "!sysprompt"));
+  const b = await (await buildOrchestrator({ sandbox: sized })).orchestrator.handleTurn(dm("dm:U1:rz1", "!sysprompt"));
   assert.equal(b.status, "ok");
   const prompt = b.reply ?? "";
   assert.doesNotMatch(prompt, /## Resizing this computer/);
@@ -576,7 +576,7 @@ test("sandboxes render as one provider line without the substrate spec; no resiz
 });
 
 test("Slack turns get the terse-response style instruction; other surfaces do not", async () => {
-  const { orchestrator: orch } = buildOrchestrator();
+  const { orchestrator: orch } = await buildOrchestrator();
 
   const slack = await orch.handleTurn(slackDm("dm:U1:slack-style", "!sysprompt"));
   assert.equal(slack.status, "ok");
@@ -598,7 +598,7 @@ test("a project session names its linked Slack home channel; unlinked projects g
     slackChannel: async (ref: string) =>
       ref === "web-project-linked" ? { channelId: "C-ENG", channelName: "eng" } : undefined,
   };
-  const { orchestrator: orch } = buildOrchestrator({ managedGroups });
+  const { orchestrator: orch } = await buildOrchestrator({ managedGroups });
 
   const group = (ref: string, thread: string): OrchestratorInput => ({
     surface: "test",
@@ -630,7 +630,7 @@ test("a project session names its linked Slack home channel; unlinked projects g
 
 for (const mode of ["off", "writable", "skip"] as const) {
   test(`Open respects memory ${mode}`, async () => {
-    const { orchestrator, config, memory } = buildOrchestrator({
+    const { orchestrator, config, memory } = await buildOrchestrator({
       sandbox: readSandbox(),
       memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
       isCurrentSharedScopeMember: async () => true,
@@ -675,7 +675,7 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
     listDir: async () => [],
     removeDir: async () => {},
   };
-  const { orchestrator, config, memory } = buildOrchestrator({
+  const { orchestrator, config, memory } = await buildOrchestrator({
     sandbox: box,
     isCurrentSharedScopeMember: async () => true,
   });
@@ -773,7 +773,7 @@ for (const location of [
       },
       listDir: async () => [],
     };
-    const { orchestrator, config } = buildOrchestrator({
+    const { orchestrator, config } = await buildOrchestrator({
       skills,
       skillBundles: bundles,
       sandbox,
@@ -862,7 +862,7 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
       return { verdict: { decision: payload.includes("!security-risk") ? "strict" : "auto" }, score: 0, threshold: 1 };
     },
   };
-  const { orchestrator, config } = buildOrchestrator({
+  const { orchestrator, config } = await buildOrchestrator({
     skills,
     securityScreener,
     isCurrentSharedScopeMember: async () => true,
@@ -917,7 +917,7 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
     }
     return { reply: "done" };
   };
-  const { orchestrator, config, files } = buildOrchestrator({ agent, sandbox, blobTransfer });
+  const { orchestrator, config, files } = await buildOrchestrator({ agent, sandbox, blobTransfer });
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
@@ -951,7 +951,7 @@ test("read-only turns report steered files as unavailable without provisioning a
     });
     return { reply: "done" };
   };
-  const { orchestrator, config } = buildOrchestrator({ agent });
+  const { orchestrator, config } = await buildOrchestrator({ agent });
   await config.setSecurityPosture(scopeId("org", ORG), "strict");
   const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
   assert.equal(result.status, "ok", result.reason);
@@ -994,7 +994,7 @@ test("steered documents use the inbound security screen before writing their con
       threshold: 1,
     }),
   };
-  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
+  const { orchestrator } = await buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("web:alice:inbox", "hello", { surface: "web" }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
@@ -1044,7 +1044,7 @@ test("inbound files are screened in bounded chunks with the request they arrived
       return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
     },
   };
-  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
+  const { orchestrator } = await buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn({
     ...dm("screen-requests", "turn request"),
     attachments: [
@@ -1100,7 +1100,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
         assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
     };
-    const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
+    const { orchestrator, config } = await buildOrchestrator({ agent, sandbox, blobTransfer });
     await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn({
       ...dm(`steer-budget-${budget}`, "hello"),
@@ -1155,7 +1155,7 @@ test("steered native office documents are screened after extraction", async () =
       return { verdict: { decision: blocked ? "strict" : "auto" }, score: 0, threshold: 1 };
     },
   };
-  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
+  const { orchestrator } = await buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.equal(screened, true);
@@ -1193,7 +1193,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
     return { reply: "read after switching" };
   };
-  const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
+  const { orchestrator, config } = await buildOrchestrator({ agent, sandbox, blobTransfer });
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
   assert.equal(result.status, "ok", result.reason);
@@ -1213,7 +1213,7 @@ for (const surfaceTools of [false, true]) {
         return { reply: "ok" };
       },
     };
-    const { orchestrator, memory, sessions } = buildOrchestrator({ agent });
+    const { orchestrator, memory, sessions } = await buildOrchestrator({ agent });
     const personal = scopeId("personal", actor.id);
     await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
     const input = slackDm("memory-once", "hello", { surfaceTools });
@@ -1246,7 +1246,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
     seen.push(turn);
     return runTurn(turn);
   };
-  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, agent });
+  const { orchestrator, sessions } = await buildOrchestrator({ crons, sandbox, agent });
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
@@ -1305,7 +1305,7 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
         return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
       },
     };
-    const { orchestrator, config } = buildOrchestrator({ agent, securityScreener });
+    const { orchestrator, config } = await buildOrchestrator({ agent, securityScreener });
     if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
     assert.equal(result.status, "ok", result.reason);

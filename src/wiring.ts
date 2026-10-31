@@ -627,7 +627,7 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  if (boundTenant()) void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
+  if (boundTenant()) void identity.ready().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),

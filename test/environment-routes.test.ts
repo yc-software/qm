@@ -44,6 +44,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
       [{ channelId: "C-eng", principalId: "U-owner" }],
     );
     server = createServer(built.app, {
+      identity: built.identity,
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       scheduler: built.scheduler,
