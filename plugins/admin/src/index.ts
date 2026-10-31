@@ -11,7 +11,6 @@ import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts"
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
@@ -100,13 +99,23 @@ const cookiePrincipal = (req: IncomingMessage): string | null => {
   return principal ?? (!CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY ? cookie(req, "admin") : null);
 };
 
-const inboxPermissions = (principal: string): string[] =>
-  principalInAllowlist(principal, process.env.INBOX_USERS) ? ["inbox"] : [];
-
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 function portalIdentityHeader(): Record<string, string> {
   const t = portalTokenStore.getStore();
   return t ? { [PORTAL_IDENTITY_HEADER]: t } : {};
+}
+
+async function inboxPermissions(principal: string): Promise<string[]> {
+  const corePath = `/v1/inbox/access?principalId=${encodeURIComponent(principal)}`;
+  try {
+    const r = await fetch(`${CORE}${corePath}`, {
+      headers: { ...signedHeaders("GET", corePath, ""), ...portalIdentityHeader() },
+      signal: AbortSignal.timeout(2_000),
+    });
+    return r.ok && ((await r.json()) as { enabled?: unknown }).enabled === true ? ["inbox"] : [];
+  } catch {
+    return [];
+  }
 }
 
 function pipeBody(res: ServerResponse, body: Response["body"]): void {
@@ -400,9 +409,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && (pathname === "/api/me" || pathname === "/api/whoami")) {
     const p = cookiePrincipal(req);
     if (!p) return json(res, 401, { error: "signed_out" });
-    const who = await coreWhoami(p);
+    const [who, permissions] = await Promise.all([coreWhoami(p), inboxPermissions(p)]);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who, permissions: inboxPermissions(p) });
+    return json(res, 200, { principal: p, org: ORG, ...who, permissions });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {
@@ -516,7 +525,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
     const viewer = cookiePrincipal(req);
-    if (!viewer || !principalInAllowlist(viewer, process.env.INBOX_USERS)) {
+    if (!viewer || !(await inboxPermissions(viewer)).length) {
       return json(res, 404, { error: "not_found" });
     }
     return serveShell();

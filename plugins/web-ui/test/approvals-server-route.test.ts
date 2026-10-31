@@ -259,17 +259,14 @@ test("subagent approvals require the child session to be visible and on the same
   }
 });
 
-test("inbox approval replay requires both current gates and preserves the screened snapshot", async () => {
-  const previous = process.env.INBOX_USERS;
+test("inbox approval replay requires the current feature flag and preserves the screened snapshot", async () => {
   try {
-    for (const [allowlist, enabled, id, status] of [
-      ["bob", true, "a-inbox", 403],
-      ["alice", false, "a-inbox", 403],
-      ["alice", true, "a-inbox-other", 403],
-      ["alice", true, "a-inbox-channel", 403],
-      ["alice", true, "a-inbox", 200],
+    for (const [enabled, id, status] of [
+      [false, "a-inbox", 403],
+      [true, "a-inbox-other", 403],
+      [true, "a-inbox-channel", 403],
+      [true, "a-inbox", 200],
     ] as const) {
-      process.env.INBOX_USERS = allowlist;
       inboxEnabled = enabled;
       const before = calls.length;
       const response = await fetch(`${base}/api/approvals/${id}`, {
@@ -277,14 +274,12 @@ test("inbox approval replay requires both current gates and preserves the screen
         headers,
         body: JSON.stringify({ approved: true }),
       });
-      assert.equal(response.status, status, `${allowlist}/${enabled}/${id}`);
+      assert.equal(response.status, status, `${enabled}/${id}`);
       const posts = turnPosts(before);
       assert.equal(posts.length, status === 200 ? 1 : 0);
       if (status === 200) assert.equal(posts[0]!.body.conversationHeader, "Stored inbox snapshot");
     }
   } finally {
-    if (previous === undefined) delete process.env.INBOX_USERS;
-    else process.env.INBOX_USERS = previous;
     inboxEnabled = false;
   }
 });
