@@ -14,6 +14,8 @@ import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/sour
 import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SOURCE = "tenant-binding-source-secret-0123456789abcdef";
 const IDENTITY = "tenant-binding-identity-secret-0123456789ab";
@@ -52,7 +54,7 @@ describe("tenant resolution", () => {
     const token = await mintPortalIdentity({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
     assert.equal((await withTenant(TEST_TENANT, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
     assert.equal(await withTenant(OTHER_TENANT, () => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
-    assert.equal(await verifyPortalIdentity(token, IDENTITY, Date.now()), null);
+    assert.equal(await withoutTenant(() => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
     const tenantless = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
     assert.equal(await withTenant(TEST_TENANT, () => verifyPortalIdentity(tenantless, IDENTITY, Date.now())), null);
   });
@@ -74,6 +76,7 @@ describe("core ingress binds the verified tenant", () => {
   before(async () => {
     const built = buildApp(testConfig());
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: TEST_CAPABILITY_SECRET,
       portalIdentitySecret: IDENTITY,

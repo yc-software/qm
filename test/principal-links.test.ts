@@ -397,6 +397,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
     await built.identity.refresh(true);
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       portalIdentitySecret: PID,
       scheduler: built.scheduler,
@@ -509,6 +510,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
     await app.identity.refresh(true);
     const server = createServer(app.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       portalIdentitySecret: secret,
       identity: app.identity,

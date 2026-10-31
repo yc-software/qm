@@ -59,6 +59,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 
   it("rejects a capability carrying another tenant on a host that serves this tenant", async () => {
     const hosted = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
       scheduler: built.scheduler,
