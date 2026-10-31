@@ -251,5 +251,6 @@ test("the runtime listing says which account each model bills", async () => {
   assert.equal(listed.modelCatalog["claude-sonnet-5"]?.billing, "org_key");
   assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "model_gateway");
   const personal = await runtimeConfigBody({ deps }, orgScope(), async () => null);
-  assert.ok(Object.values(personal.modelCatalog).every((model) => model.billing === "personal_account"));
+  assert.equal(personal.modelCatalog["claude-sonnet-5"]?.billing, "personal_account");
+  assert.equal(personal.modelCatalog["gpt-6-astra"]?.billing, "personal_account");
 });
