@@ -109,6 +109,27 @@ test("blank sandbox identities coexist and default changes never copy files or r
   assert.equal(a.resourceId, first.id);
 });
 
+test("new computers record the provider name, retries keep it, and the backend reads stored names", async () => {
+  let lookup: ((scopeId: string) => Promise<string | null>) | undefined;
+  const { resources, records } = fixture((backend) => {
+    backend.scopeName = (scopeId) => `qm-${scopeId.replace(":", "-")}`;
+    backend.useStoredNames = (fn) => {
+      lookup = fn;
+    };
+  });
+  const created = await resources.create("alice", "personal:alice", "local", "build");
+  assert.equal(created.providerName, `qm-${created.backingScopeId}`);
+  assert.equal(await lookup!(created.backingScopeId), `qm-${created.backingScopeId}`);
+  await records.update("existing-personal-alice", (r) => ({ ...r, providerName: "qm-personal-alice-0a1b2c" }));
+  assert.equal(await lookup!("personal:alice"), "qm-personal-alice-0a1b2c");
+  assert.equal(await resources.providerNameFor("local", "personal:bob"), null);
+  await records.put("retry", { ...created, id: "retry", state: "failed", providerName: "qm-earlier-name" });
+  assert.equal(
+    (await resources.create("alice", "personal:alice", "local", "build", "retry")).providerName,
+    "qm-earlier-name",
+  );
+});
+
 test("provisioning a running computer does not wait behind a long-running command on it", async () => {
   const { resources, router, layers } = fixture();
   const handle = await router.provision(layers);

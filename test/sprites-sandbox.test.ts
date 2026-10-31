@@ -345,6 +345,16 @@ test("teardown checkpoints a changed home, throttles repeats, and destroy delete
   assert.ok(!fake.names().includes(h.id));
 });
 
+test("a stored provider name addresses the existing sprite for provisioning, status and retirement", async () => {
+  sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
+  const h = await sandbox.provision(layers);
+  assert.equal(h.id, "qmt-legacy-name");
+  assert.equal(sandbox.scopeName!(scope), sandboxScopeName("qmt", scope));
+  assert.equal((await sandbox.computerStatus!(scope)).provisioned, true);
+  await sandbox.destroyScope!(scope);
+  assert.ok(!fake.names().includes("qmt-legacy-name"));
+});
+
 test("an unchanged home is not checkpointed once its state is known", async () => {
   const s = make({ checkpointIntervalMs: 1 });
   const h = await s.provision(layers);

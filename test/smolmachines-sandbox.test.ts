@@ -58,6 +58,16 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
+test("a stored provider name addresses the existing machine for provisioning, status and retirement", async () => {
+  sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
+  const h = await sandbox.provision(layers);
+  assert.equal(h.id, "qmt-legacy-name");
+  assert.equal(sandbox.scopeName!(scope), scopeName());
+  assert.equal((await sandbox.computerStatus!(scope)).provisioned, true);
+  await sandbox.destroyScope!(scope);
+  assert.ok(!fake.names().includes("qmt-legacy-name"));
+});
+
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);

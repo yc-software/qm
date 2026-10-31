@@ -63,6 +63,7 @@ export interface ExecSandboxBaseDeps {
   ensureEgress?(name: string): Promise<void>;
   installLayerTools?: LayerToolInstaller;
   combineLayerToolPrep?: boolean;
+  nameFor?(scope: string): Promise<string>;
 }
 
 export interface ExecSandboxBase {
@@ -168,7 +169,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix, scope);
+      name = deps.nameFor ? await deps.nameFor(scope) : sandboxScopeName(prefix, scope);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
     }

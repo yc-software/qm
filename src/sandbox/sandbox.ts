@@ -244,6 +244,8 @@ export interface Sandbox {
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
   persistHomeSnapshot?(scopeId: string): Promise<void>;
   computerStatus?(scopeId: string): Promise<ComputerStatus>;
+  scopeName?(scopeId: string): string;
+  useStoredNames?(lookup: (scopeId: string) => Promise<string | null>): void;
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
   destroyScope?(scopeId: string): Promise<void>;
