@@ -631,7 +631,8 @@ export function buildApp(
       membership.managesArtifactHome!(scopeId, authoredBy ?? "", principalId),
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
-  const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
+  const { databaseUrl } = config;
+  const pgArtifactMap = databaseUrl ? createPostgresMapFactory(databaseUrl) : null;
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
   setProviderBaseUrls(config.providerBaseUrls);
@@ -669,16 +670,14 @@ export function buildApp(
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
   const principalLinks = createPrincipalLinkService(
-    config.databaseUrl ? createPostgresPrincipalLinkStore(config.databaseUrl) : createPrincipalLinkStore(),
+    databaseUrl ? createPostgresPrincipalLinkStore(databaseUrl) : createPrincipalLinkStore(),
     advisoryLock,
   );
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService({
-    deactivations: config.databaseUrl ? createPostgresDeactivationStore(config.databaseUrl) : createDeactivationStore(),
+    deactivations: databaseUrl ? createPostgresDeactivationStore(databaseUrl) : createDeactivationStore(),
     directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: config.databaseUrl
-      ? createPostgresExternalMemberStore(config.databaseUrl)
-      : createExternalMemberStore(),
+    externalMembers: databaseUrl ? createPostgresExternalMemberStore(databaseUrl) : createExternalMemberStore(),
     principalLinks,
   });
   const leaderLease: LeaderLease = pgArtifactMap
@@ -691,13 +690,11 @@ export function buildApp(
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
   void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
-  const { skills, skillPacks, skillBundles } = createSkillStores(config.databaseUrl, {
+  const { skills, skillPacks, skillBundles } = createSkillStores(databaseUrl, {
     advisoryLock,
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
-  const featureFlags = config.databaseUrl
-    ? createPostgresFeatureFlagStore(config.databaseUrl)
-    : createFeatureFlagStore();
+  const featureFlags = databaseUrl ? createPostgresFeatureFlagStore(databaseUrl) : createFeatureFlagStore();
   const teams = config.databaseUrl
     ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
     : undefined;
@@ -1870,9 +1867,7 @@ export function buildApp(
     isActiveMember: (principalId: string) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   };
-  const projects = config.databaseUrl
-    ? createPostgresProjectStore(config.databaseUrl, projectOpts)
-    : createProjectStore(projectOpts);
+  const projects = databaseUrl ? createPostgresProjectStore(databaseUrl, projectOpts) : createProjectStore(projectOpts);
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
@@ -2050,7 +2045,6 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const { databaseUrl } = config;
   const approvals = databaseUrl
     ? createPostgresApprovalStore(databaseUrl, deliveries)
     : createApprovalStore(deliveries);
@@ -2137,7 +2131,7 @@ export function buildApp(
       );
     },
   });
-  const uiState = config.databaseUrl ? createPostgresUiStateStore(config.databaseUrl) : createUiStateStore();
+  const uiState = databaseUrl ? createPostgresUiStateStore(databaseUrl) : createUiStateStore();
   const orchestratorDeps: OrchestratorDeps = {
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
@@ -2249,9 +2243,7 @@ export function buildApp(
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
   const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
-  const idempotency = config.databaseUrl
-    ? createPostgresIdempotencyStore(config.databaseUrl)
-    : createIdempotencyStore();
+  const idempotency = databaseUrl ? createPostgresIdempotencyStore(databaseUrl) : createIdempotencyStore();
   const skillFetcher = createGitFetcher(
     keychain
       ? {
@@ -3182,7 +3174,7 @@ export function buildApp(
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
-    sessionShares: config.databaseUrl ? createPostgresSessionShareStore(config.databaseUrl) : createSessionShareStore(),
+    sessionShares: databaseUrl ? createPostgresSessionShareStore(databaseUrl) : createSessionShareStore(),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({
