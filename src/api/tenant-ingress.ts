@@ -48,12 +48,14 @@ async function claimedTenant(
 export async function withRequestTenant(
   req: IncomingMessage,
   res: ServerResponse,
-  route: Pick<Route, "auth" | "unbound"> | undefined,
+  route: Pick<Route, "auth" | "unbound" | "tenantFromHost"> | undefined,
   deps: { tenants?: TenantResolver; capabilitySecret: string | undefined; unsignedTenant: string | null },
   next: () => Promise<void> | void,
 ): Promise<void> {
   if (route?.auth === "public") return next();
-  const tenant = (await claimedTenant(req, route?.auth, deps.capabilitySecret)) ?? deps.unsignedTenant;
+  const claimed = (await claimedTenant(req, route?.auth, deps.capabilitySecret)) ?? deps.unsignedTenant;
+  const fromHost = !claimed && route?.tenantFromHost && deps.tenants;
+  const tenant = fromHost ? await deps.tenants!.forHost(requestHost(req)) : claimed;
   if (!tenant && route?.unbound) return next();
   if (!tenant) {
     sendJson(res, 401, { error: "unauthorized", message: "this request carries no verifiable tenant" });

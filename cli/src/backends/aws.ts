@@ -2981,7 +2981,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n\n${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,

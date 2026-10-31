@@ -237,7 +237,7 @@ test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC s
     assert.equal(request.url, "/v1/deployment-layer");
     assert.equal(request.body, JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))));
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:PUT\n/v1/deployment-layer\n${request.body}`)
+      .update(`v0:${request.timestamp}:PUT\n/v1/deployment-layer\n\n${request.body}`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`);
   } finally {
@@ -310,9 +310,9 @@ test("conformance passes against a live core: base-port override, signed request
     assert.equal(request.url, "/v1/deployment-layer");
     assert.match(request.timestamp, /^\d+$/, "x-timestamp is unix seconds");
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n`)
+      .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n\n`)
       .digest("hex");
-    assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\nbody");
+    assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\ntenant\\nbody");
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
@@ -465,7 +465,7 @@ test("a publicUrl with a base path keeps it in the request path and the signed c
     const request = captured[0]!;
     assert.equal(request.url, "/base/v1/deployment-layer");
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:PUT\n/base/v1/deployment-layer\n${request.body}`)
+      .update(`v0:${request.timestamp}:PUT\n/base/v1/deployment-layer\n\n${request.body}`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`);
   } finally {

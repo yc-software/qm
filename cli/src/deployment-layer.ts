@@ -134,7 +134,7 @@ export function deploymentLayerBody(sandboxDir: string): string {
 
 function signingHeaders(secret: string, method: string, path: string, body: string): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const canonical = `${method}\n${path}\n${body}`;
+  const canonical = `${method}\n${path}\n\n${body}`;
   const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${canonical}`).digest("hex");
   return {
     "content-type": "application/json",

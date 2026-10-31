@@ -139,6 +139,14 @@ describe("core ingress binds the verified tenant", () => {
     assert.match(capability.body.message ?? "", /another tenant/);
   });
 
+  it("binds the host's tenant for operator routes whose signed request names none", async () => {
+    const headers = signedRequestHeaders(SOURCE, "GET", "/v1/deployment-layer");
+    assert.equal((await call("a.example", "/v1/deployment-layer", headers)).status, 404);
+    const unknown = await call("unknown.example", "/v1/deployment-layer", headers);
+    assert.equal(unknown.status, 401);
+    assert.match(unknown.body.message ?? "", /no verifiable tenant/);
+  });
+
   it("requires a portal identity on person routes even with a valid signature", async () => {
     const path = "/v1/runs/nope";
     const headers = signedRequestHeaders(SOURCE, "GET", path, "", { [TENANT_HEADER]: TEST_TENANT });
