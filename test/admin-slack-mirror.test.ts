@@ -220,19 +220,43 @@ const seedContainers = (built: ReturnType<typeof start>["built"], count: number)
     })),
   );
 
+test("the Slack mirror index and search leave out Discord containers", async () => {
+  const s = start();
+  try {
+    await seed(s.built);
+    await s.built.app.ingestSurfaceEvents([
+      {
+        container: "1300000000000000010",
+        ts: "1300000000000000011",
+        text: "different discord channel",
+        createdAt: 6000,
+      },
+    ]);
+    const index = await getJson(s.base, "/v1/admin/slack-mirror");
+    assert.deepEqual(index.containers.map((c: any) => c.container).sort(), ["C1", "C2"]);
+    const found = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=different");
+    assert.deepEqual(
+      found.messages.map((m: any) => m.container),
+      ["C2"],
+    );
+  } finally {
+    await s.close();
+  }
+});
+
 test("the mirror index reports hasMore when more containers exist than the page cap", async () => {
   const s = start();
   try {
     await seedContainers(s.built, 401);
     await new Promise((r) => setTimeout(r, 5));
     await s.built.app.ingestSurfaceEvents([
-      { container: "FRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
+      { container: "CFRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
     ]);
     const d = await getJson(s.base, "/v1/admin/slack-mirror");
     assert.equal(d.containers.length, 400);
     assert.equal(d.hasMore, true);
     assert.equal(d.limit, 400);
-    assert.equal(d.containers[0].container, "FRESH", "the page keeps the most recently active containers");
+    assert.equal(d.containers[0].container, "CFRESH", "the page keeps the most recently active containers");
   } finally {
     await s.close();
   }

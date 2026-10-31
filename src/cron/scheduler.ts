@@ -8,7 +8,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
+import { BUSY_DEFER_MAX_LATE_MS, runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -26,7 +26,6 @@ const CRON_FIRE_REPLY_MAX_CHARS = 2000;
 const STRANDED_SWEEP_INTERVAL_MS = 10 * 60_000;
 const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
-const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 const MAINTENANCE_INTERVAL_MS = 5000;
 const REPAIR_INTERVAL_MS = 60_000;
 
@@ -277,6 +276,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       .at(-1);
     const failingAlready = previous?.status === "failed" || previous?.status === "refused";
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
+    const onTime = scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
       outcome = await runTrigger(
@@ -309,7 +309,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
                 errorNotice: (reason: string) =>
                   `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason.endsWith(".") ? reason.slice(0, -1) : reason}. Later failures go only to its run log until it runs successfully again.`,
               }),
-          deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
+          mayDefer: onTime,
+          mayDeferReaders: onTime,
         },
       );
     } catch (e) {
@@ -333,7 +334,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         endedAt: now(),
         ...(scheduledAt !== undefined ? { scheduledAt } : {}),
         status: "deferred",
-        note: `session busy — retrying at ${utcMinute(deferUntil)}`,
+        note: `${outcome.note} at ${utcMinute(deferUntil)}`,
       });
       await deps.crons.defer(cron.id, deferUntil);
       return { authzFailed: false, deferred: true };
@@ -354,7 +355,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
     else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
     if (outcome.authzFailed) return { authzFailed: true };
-    if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
+    if (isOneShotSchedule(cron.schedule) && !(outcome.readersUnknown && scheduledAt === undefined))
+      await deps.crons.setEnabled(cron.id, false);
     return { authzFailed: false };
   }
 

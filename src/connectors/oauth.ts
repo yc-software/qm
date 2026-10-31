@@ -28,8 +28,10 @@ interface OAuthSetupGuide {
   scopesRationale?: string;
 }
 
+type TokenEndpoint = Pick<OAuthProviderConfig, "tokenUrl" | "hosts" | "authParams">;
+
 interface OAuthAdapterArgs {
-  provider: OAuthProviderConfig;
+  provider: TokenEndpoint;
   client: ResolvedClient;
   redirectUri: string;
   fetchImpl: FetchLike;
@@ -110,7 +112,7 @@ export async function oauthFailure(action: string, res: { status: number; json()
   return new Error(`${action} failed (${res.status})${detail ? `: ${detail}` : ""}`);
 }
 
-const resourceBody = (p: OAuthProviderConfig): Record<string, string> =>
+const resourceBody = (p: TokenEndpoint): Record<string, string> =>
   p.authParams?.resource ? { resource: p.authParams.resource } : {};
 
 function makeTokenAdapters(opts: {
@@ -705,6 +707,23 @@ export async function exchangeCode(
     ...(opts.accountType ? { accountType: opts.accountType } : {}),
     ...(opts.codeVerifier ? { codeVerifier: opts.codeVerifier } : {}),
   });
+}
+
+export async function exchangeAuthorizationCode(
+  tokenUrl: string,
+  code: string,
+  redirectUri: string,
+  opts: { client: ResolvedClient; fetchImpl?: FetchLike; now?: number },
+): Promise<OAuthToken> {
+  const { token } = await defaultExchange({
+    provider: { tokenUrl, hosts: [] },
+    client: opts.client,
+    code,
+    redirectUri,
+    fetchImpl: opts.fetchImpl ?? realFetch,
+    now: opts.now ?? Date.now(),
+  });
+  return token;
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {

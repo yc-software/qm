@@ -3,7 +3,8 @@ import { orgId as configOrgId } from "../config.ts";
 import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
-import { personKey, samePerson } from "../directory/person.ts";
+import { foldPrincipalId, personKey, samePerson } from "../directory/person.ts";
+import type { PrincipalLinkService } from "../identity/principal-links.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -59,14 +60,33 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
+  principalLinks: PrincipalLinkService;
 }
 
-export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
+export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {
   const orgId = configOrgId();
   const now = opts.now ?? (() => Date.now());
 
   async function isOrgAdmin(actor: Principal): Promise<boolean> {
     return adminStatusFromGrants(await grants.list(), actor.id).role === "org_admin";
+  }
+
+  const links = opts.principalLinks;
+
+  function refuseAlias(principalId: string, canonical: string): never {
+    throw new AdminError(409, `${principalId} is linked to ${canonical}; grant the canonical person instead`);
+  }
+
+  async function grantable<T>(
+    principalId: string,
+    write: () => Promise<T>,
+    onAlias: (canonical: string) => T = (canonical) => refuseAlias(principalId, canonical),
+  ): Promise<T> {
+    return links.exclusive(async () => {
+      await links.refresh(true);
+      const canonical = links.canonical(foldPrincipalId(principalId));
+      return canonical === undefined ? write() : onAlias(canonical);
+    });
   }
 
   return {
@@ -100,7 +120,11 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         grantedBy: `trusted-oidc:${issuer}`,
         createdAt: now(),
       };
-      const created = await grants.addIfAbsent(grant);
+      const created = await grantable(
+        principalId,
+        () => grants.addIfAbsent(grant),
+        () => false,
+      );
       return { grant, created };
     },
     listGrants() {
@@ -119,7 +143,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, `org_admin scope must be org:${orgId}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
-      await grants.add(grant);
+      await grantable(principalId, () => grants.add(grant));
       return grant;
     },
     async revokeGrant(actor, principalId, scope, role) {

@@ -46,6 +46,15 @@ interface HarnessOptions {
   welcome?: boolean;
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
+  discordReturn?:
+    | "success"
+    | "expired"
+    | "cancelled"
+    | "wrong-account"
+    | "admin-link"
+    | "both-code-and-error"
+    | "complete-failed"
+    | "state-mismatch";
   returnWidget?: string;
   returnReplaces?: string;
   openNewChat?: boolean;
@@ -98,6 +107,17 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         expiresAt: Date.now() + (opts.slackReturn === "expired" ? -60000 : 60000),
       }),
     );
+  if (opts.discordReturn)
+    dom.window.sessionStorage.setItem(
+      "qm-discord-account",
+      JSON.stringify({
+        user: opts.discordReturn === "wrong-account" ? "test:other" : "test:tester",
+        state: opts.discordReturn === "state-mismatch" ? "other-state" : "qa-discord-state",
+        nonce: "test-nonce-1234567890123456789012",
+        expiresAt: Date.now() + (opts.discordReturn === "expired" ? -60000 : 60000),
+      }),
+    );
+  let discordLinked = false;
   let connectedItems: unknown[] = opts.connectionReturn ? [{ id: "ca_test", toolkit: "gmail" }] : [];
   let connectedStatus = 200;
   if (opts.connectionReturn)
@@ -145,6 +165,24 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
     if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
+    if (path === "/api/discord/link/complete") {
+      if (opts.discordReturn === "complete-failed")
+        return Response.json(
+          { error: "oauth_failed", message: "Discord did not confirm the account. Try again." },
+          { status: 400 },
+        );
+      discordLinked = true;
+      return Response.json({ linked: true, tag: "ana_d" });
+    }
+    if (path === "/api/discord/link") {
+      const isAdmin = opts.discordReturn === "admin-link";
+      return Response.json({
+        available: true,
+        linked: discordLinked,
+        canUnlink: isAdmin ? false : true,
+        ...(discordLinked ? { tag: "ana_d" } : {}),
+      });
+    }
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
     if (path.startsWith("/api/composio/toolkits"))

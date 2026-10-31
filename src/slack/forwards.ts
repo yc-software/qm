@@ -1,6 +1,6 @@
 import type { SlackFile } from "./attachments.ts";
+import { appendRenderedLines, bracketedLine, forwardLabel, MAX_RENDERED_FORWARDS } from "../surfaces/forwards.ts";
 
-const MAX_RENDERED_FORWARDS = 5;
 const MAX_FORWARD_DEPTH = 4;
 
 interface ForwardedMessage {
@@ -61,9 +61,8 @@ export function messageWithForwardedContent(message: ForwardedMessage): { text: 
       let channel: string | undefined;
       if (attachment.channel_name) channel = `#${attachment.channel_name}`;
       else if (attachment.channel_id) channel = `channel ${attachment.channel_id}`;
-      const label = `forwarded message${author ? ` from ${author}` : ""}${channel ? ` in ${channel}` : ""}`;
       const body = String(attachment.text || attachment.fallback || "").trim();
-      rendered.push(body ? `[${label}] ${body}` : `[${label}]`);
+      rendered.push(bracketedLine(forwardLabel({ author, channel }), body));
 
       for (const file of Array.isArray(attachment.files) ? attachment.files : []) addFile(file, attachment.author_id);
       for (const nested of nestedMessages(attachment)) visit(nested, depth + 1);
@@ -73,8 +72,5 @@ export function messageWithForwardedContent(message: ForwardedMessage): { text: 
   for (const file of Array.isArray(message.files) ? message.files : []) addFile(file);
   visit(message, 0);
 
-  const base = String(message.text ?? "");
-  let text = base;
-  if (rendered.length) text = base ? `${base}\n${rendered.join("\n")}` : rendered.join("\n");
-  return { text, files };
+  return { text: appendRenderedLines(String(message.text ?? ""), rendered), files };
 }

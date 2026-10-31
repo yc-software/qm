@@ -3,6 +3,7 @@ import { composioSlackConnection, hasSlackAccount } from "./slack-composio.ts";
 import { parseSlackThreadRef } from "../../slack/message-gating.ts";
 import { sendJson } from "../http.ts";
 import { reportFailure } from "../../util/errors.ts";
+import { SLACK_CONTAINER } from "../../surfaces/message-ids.ts";
 import { activePrincipal } from "./shared.ts";
 import type { ApiCtx } from "./route.ts";
 
@@ -16,7 +17,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   const source = await ctx.app.getSessionForViewer(body.sessionId, ctx.actor.p);
   if (!source) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = parseSlackThreadRef(source.session.threadRef);
-  if (!target || !/^[CDG][A-Z0-9]+$/.test(target.container) || (target.root && !/^\d+\.\d+$/.test(target.root)))
+  if (!target || !SLACK_CONTAINER.test(target.container) || (target.root && !/^\d+\.\d+$/.test(target.root)))
     return sendJson(ctx.res, 400, { error: "not_slack" });
   if (
     send &&

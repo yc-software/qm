@@ -1,8 +1,8 @@
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Lease, SessionStore } from "../sessions/session-store.ts";
-import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
+import { surfaceCapabilities } from "../surfaces/surface-capabilities.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
-import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { isoFromTs, messageTsMs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
 
 export interface MessageRevisionPayload {
@@ -156,12 +156,13 @@ async function recordWhenIdle(
 export async function recordMessageRevisions(
   sessions: RevisionSessions,
   events: readonly IngestEvent[],
+  surface: string,
   retry: IdleRetry = DEFAULT_IDLE_RETRY,
 ): Promise<void> {
+  const tracking = surfaceCapabilities(surface)?.revisions;
+  if (!tracking) return;
   for (const event of events.filter(isRevisionEvent)) {
-    const refs = await sessions.sessionsByThreadRefs(
-      slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined),
-    );
+    const refs = await sessions.sessionsByThreadRefs(tracking.threadRefsFor(event));
     for (const ref of refs) await recordWhenIdle(sessions, ref, event, retry);
   }
 }
@@ -181,12 +182,8 @@ export async function revisionAnchorAt(
   return undefined;
 }
 
-export function slackTsToMs(ts: string | undefined): number | undefined {
-  const seconds = Number(ts);
-  return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds * 1000) : undefined;
-}
-
 export async function reconcileMessageRevisions(opts: {
+  surface: string;
   sessions: Pick<SessionStore, "append" | "getEntries">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
   lease: Lease;
@@ -194,11 +191,18 @@ export async function reconcileMessageRevisions(opts: {
   anchorAt: number | undefined;
   fallbackSince: number;
   triggerTs?: string;
+  channelRef?: string;
 }): Promise<number> {
-  const ref = parseSlackThreadRef(opts.session.threadRef);
-  if (!ref) return 0;
-  const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
-  const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
+  const scans = surfaceCapabilities(opts.surface)?.revisions.scansFor(opts.session.threadRef, opts.channelRef) ?? [];
+  if (!scans.length) return 0;
+  const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, messageTsMs(opts.triggerTs) ?? Infinity));
+  const revised = (
+    await Promise.all(
+      scans.map((scan) =>
+        opts.surfaceCache.revisedSince(scan.container, since, scan.root ? { thread: scan.root } : {}),
+      ),
+    )
+  ).flat();
   if (!revised.length) return 0;
   const entries = await opts.sessions.getEntries(opts.session.id);
   let recorded = 0;

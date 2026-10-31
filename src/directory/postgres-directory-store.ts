@@ -3,15 +3,22 @@ import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
-import { foldPrincipalId, rosterIds } from "./person.ts";
+import { discordExternalId } from "../discord/config.ts";
+import { SNOWFLAKE_SOURCE } from "../util/snowflake.ts";
+import { foldPrincipalId, rosterIds, samePerson } from "./person.ts";
 import {
   MAX_CANDIDATES,
+  mergeSlicePicks,
+  isSurfaceChannel,
+  type ChannelSurface,
+  isDiscordMember,
   groupParticipantsKey,
   normDirectoryQuery,
   type ChannelMembership,
   type DirectoryChannel,
   type DirectoryMember,
   type DirectoryStore,
+  type SlicePick,
 } from "./directory-store.ts";
 
 const INITIAL_SCHEMA = [
@@ -142,6 +149,17 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
   };
 }
 
+type SyncHashColumn = "members_hash" | "channels_hash" | "discord_channels_hash" | "groups_hash";
+
+const DISCORD_CHANNEL_ID_SQL = `(channel_id ~ '^${SNOWFLAKE_SOURCE}$')`;
+const DISCORD_ID_LIKE = `${likeEscape(discordExternalId(""))}%`;
+
+function internalRows(members: DirectoryMember[]): DirectoryMember[] {
+  const byId = new Map<string, DirectoryMember>();
+  for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
+  return [...byId.values()];
+}
+
 function hashRoster(rows: string[]): string {
   return createHash("sha256").update(rows.slice().sort().join("\n")).digest("hex");
 }
@@ -186,33 +204,50 @@ export const DIRECTORY_MIGRATIONS = [
     id: "directory/store/0005",
     statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
   },
+  {
+    id: "directory/store/0006",
+    statements: [
+      "ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS discord_channels_hash TEXT",
+      "ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS discord_channels_synced_at BIGINT",
+    ],
+  },
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
-  async function pick<T>(
-    query: string,
-    table: string,
+  async function insertMembers(client: PoolClient, internal: DirectoryMember[]): Promise<void> {
+    if (!internal.length) return;
+    await client.query(
+      `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
+       SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
+      [
+        orgId,
+        internal.map((m) => m.principalId),
+        internal.map((m) => m.displayName),
+        internal.map((m) => normDirectoryQuery(m.displayName)),
+        internal.map((m) => m.type),
+        internal.map((m) => m.slackId ?? null),
+        internal.map((m) => m.avatarUrl ?? null),
+      ],
+    );
+  }
+
+  async function pickLabel<T>(
+    qn: string,
+    from: string,
     idCol: string,
     labelLcCol: string,
     cols: string,
     map: (r: Record<string, unknown>) => T,
-  ): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
-    const qn = normDirectoryQuery(query);
-    if (!qn) return { kind: "none" };
-    const from = `FROM ${table} WHERE org_id = $1`;
-
-    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn]);
-    if (byId.length) return { kind: "one", item: map(byId[0]!) };
-
+  ): Promise<SlicePick<T>> {
     const exact = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
       [orgId, qn],
     );
-    if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
-    if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
+    if (exact.length === 1) return { kind: "one", item: map(exact[0]!), exact: true };
+    if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map), exact: true };
 
     const esc = likeEscape(qn);
     let pool2 = await q(
@@ -230,8 +265,29 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     return { kind: "ambiguous", items: pool2.slice(0, MAX_CANDIDATES).map(map) };
   }
 
+  async function pick<T>(
+    query: string,
+    table: string,
+    idCol: string,
+    labelLcCol: string,
+    cols: string,
+    map: (r: Record<string, unknown>) => T,
+    discordSql?: string,
+  ): Promise<SlicePick<T>> {
+    const qn = normDirectoryQuery(query);
+    if (!qn) return { kind: "none" };
+    const from = `FROM ${table} WHERE org_id = $1`;
+
+    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn]);
+    if (byId.length) return { kind: "one", item: map(byId[0]!) };
+
+    if (!discordSql) return pickLabel(qn, from, idCol, labelLcCol, cols, map);
+    const slices = [`${from} AND NOT ${discordSql}`, `${from} AND ${discordSql}`];
+    return mergeSlicePicks(await Promise.all(slices.map((s) => pickLabel(qn, s, idCol, labelLcCol, cols, map))));
+  }
+
   async function swapIfChanged(
-    hashCol: string,
+    hashCol: SyncHashColumn,
     hash: string,
     syncedAt: number | undefined,
     write: (client: PoolClient) => Promise<boolean | void>,
@@ -276,94 +332,76 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     });
   }
 
-  return {
-    async replace(members, syncedAt) {
-      const byId = new Map<string, DirectoryMember>();
-      for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
-      const internal = [...byId.values()];
+  async function writeChannels(
+    surface: ChannelSurface,
+    channels: DirectoryChannel[],
+    channelMembers: ChannelMembership[] | undefined,
+    syncedAt: number | undefined,
+    channelRosterIds: string[] | undefined,
+    revocations: ChannelMembership[],
+    partial: boolean,
+  ): Promise<boolean> {
+    const discordBatch = surface === "discord";
+    if (partial && (syncedAt === undefined || !Number.isFinite(syncedAt) || channelMembers === undefined)) return false;
+    const byId = new Map<string, DirectoryChannel>();
+    for (const c of channels)
+      if (c.channelId && c.name && isSurfaceChannel(surface, c.channelId)) byId.set(c.channelId, c);
+    let list = [...byId.values()];
+    const listedIds = new Set(list.map((channel) => channel.channelId));
 
-      const hash = hashRoster(
-        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
-      );
+    let rosterIds =
+      channelMembers === undefined
+        ? undefined
+        : new Set((channelRosterIds ?? [...listedIds]).filter((channelId) => listedIds.has(channelId)));
+    let membershipRows =
+      channelMembers === undefined
+        ? undefined
+        : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
+    let revokedRows = dedupMemberships(revocations).filter((member) => listedIds.has(member.channelId));
+    const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}`);
+    const membersPart =
+      membershipRows === undefined
+        ? []
+        : [
+            ...[...rosterIds!].map((channelId) => `r:${channelId}`),
+            ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`),
+            ...revokedRows.map((m) => `x:${m.channelId}|${m.principalId}`),
+          ];
+    const hash = hashRoster([...channelsPart, ...membersPart]);
 
-      return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
-        if (internal.length) {
+    return swapIfChanged(
+      discordBatch ? "discord_channels_hash" : "channels_hash",
+      hash,
+      syncedAt,
+      async (client) => {
+        const protectedRows = await client.query(
+          `SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))
+               AND ${DISCORD_CHANNEL_ID_SQL} = $4`,
+          [orgId, syncedAt ?? null, partial, discordBatch],
+        );
+        const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
+        if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
+        list = list.filter((channel) => !protectedIds.has(channel.channelId));
+        rosterIds = rosterIds && new Set([...rosterIds].filter((id) => !protectedIds.has(id)));
+        membershipRows = membershipRows?.filter((member) => !protectedIds.has(member.channelId));
+        revokedRows = revokedRows.filter((member) => !protectedIds.has(member.channelId));
+        const retainedIds = [...listedIds, ...protectedIds];
+        const channelIds = list.map((channel) => channel.channelId);
+        if (!partial) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
-            [
-              orgId,
-              internal.map((m) => m.principalId),
-              internal.map((m) => m.displayName),
-              internal.map((m) => normDirectoryQuery(m.displayName)),
-              internal.map((m) => m.type),
-              internal.map((m) => m.slackId ?? null),
-              internal.map((m) => m.avatarUrl ?? null),
-            ],
+            `DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))
+                 AND ${DISCORD_CHANNEL_ID_SQL} = $3`,
+            [orgId, retainedIds, discordBatch],
+          );
+          await client.query(
+            `DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))
+                 AND ${DISCORD_CHANNEL_ID_SQL} = $3`,
+            [orgId, retainedIds, discordBatch],
           );
         }
-      });
-    },
-
-    async replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations = [], partial = false) {
-      if (partial && (syncedAt === undefined || !Number.isFinite(syncedAt) || channelMembers === undefined))
-        return false;
-      const byId = new Map<string, DirectoryChannel>();
-      for (const c of channels) if (c.channelId && c.name) byId.set(c.channelId, c);
-      let list = [...byId.values()];
-      const listedIds = new Set(list.map((channel) => channel.channelId));
-
-      let rosterIds =
-        channelMembers === undefined
-          ? undefined
-          : new Set((channelRosterIds ?? [...listedIds]).filter((channelId) => listedIds.has(channelId)));
-      let membershipRows =
-        channelMembers === undefined
-          ? undefined
-          : dedupMemberships(channelMembers).filter((member) => rosterIds!.has(member.channelId));
-      let revokedRows = dedupMemberships(revocations).filter((member) => listedIds.has(member.channelId));
-      const channelsPart = list.map((c) => `${c.channelId}|${c.name}|${c.isPrivate ? 1 : 0}|${c.isExternal ? 1 : 0}`);
-      const membersPart =
-        membershipRows === undefined
-          ? []
-          : [
-              ...[...rosterIds!].map((channelId) => `r:${channelId}`),
-              ...membershipRows.map((m) => `m:${m.channelId}|${m.principalId}`),
-              ...revokedRows.map((m) => `x:${m.channelId}|${m.principalId}`),
-            ];
-      const hash = hashRoster([...channelsPart, ...membersPart]);
-
-      return swapIfChanged(
-        "channels_hash",
-        hash,
-        syncedAt,
-        async (client) => {
-          const protectedRows = await client.query(
-            "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
-            [orgId, syncedAt ?? null, partial],
-          );
-          const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
-          if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
-          list = list.filter((channel) => !protectedIds.has(channel.channelId));
-          rosterIds = rosterIds && new Set([...rosterIds].filter((id) => !protectedIds.has(id)));
-          membershipRows = membershipRows?.filter((member) => !protectedIds.has(member.channelId));
-          revokedRows = revokedRows.filter((member) => !protectedIds.has(member.channelId));
-          const retainedIds = [...listedIds, ...protectedIds];
-          const channelIds = list.map((channel) => channel.channelId);
-          if (!partial) {
-            await client.query(
-              "DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
-            );
-            await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
-            );
-          }
-          if (list.length) {
-            await client.query(
-              `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
+        if (list.length) {
+          await client.query(
+            `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
              SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
              ON CONFLICT (org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
@@ -372,44 +410,80 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                is_external = EXCLUDED.is_external,
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
                observed_at = EXCLUDED.observed_at`,
-              [
-                orgId,
-                channelIds,
-                list.map((c) => c.name),
-                list.map((c) => normDirectoryQuery(c.name)),
-                list.map((c) => !!c.isPrivate),
-                list.map((c) => !!c.isExternal),
-                list.map((c) => rosterIds?.has(c.channelId) ?? false),
-                partial ? syncedAt : null,
-              ],
-            );
-          }
-          if (membershipRows !== undefined) {
+            [
+              orgId,
+              channelIds,
+              list.map((c) => c.name),
+              list.map((c) => normDirectoryQuery(c.name)),
+              list.map((c) => !!c.isPrivate),
+              list.map((c) => !!c.isExternal),
+              list.map((c) => rosterIds?.has(c.channelId) ?? false),
+              partial ? syncedAt : null,
+            ],
+          );
+        }
+        if (membershipRows !== undefined) {
+          await client.query(
+            "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
+            [orgId, [...rosterIds!]],
+          );
+          if (membershipRows.length) {
             await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
-              [orgId, [...rosterIds!]],
-            );
-            if (membershipRows.length) {
-              await client.query(
-                `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
+              `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
                SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-                [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
-              );
-            }
+              [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
+            );
           }
-          if (revokedRows.length) {
-            await client.query(
-              `DELETE FROM directory_channel_members member
+        }
+        if (revokedRows.length) {
+          await client.query(
+            `DELETE FROM directory_channel_members member
              USING unnest($2::text[], $3::text[]) AS revoked(channel_id, principal_id)
              WHERE member.org_id = $1 AND member.channel_id = revoked.channel_id
                AND member.principal_id = revoked.principal_id`,
-              [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
-            );
-          }
-          return partial || protectedIds.size === 0;
-        },
-        partial,
+            [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
+          );
+        }
+        return partial || protectedIds.size === 0;
+      },
+      partial,
+    );
+  }
+
+  return {
+    async replace(members, syncedAt) {
+      const internal = internalRows(members.filter((m) => !isDiscordMember(m)));
+      const hash = hashRoster(
+        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
       );
+
+      return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
+        await client.query("DELETE FROM directory_members WHERE org_id = $1 AND principal_id NOT LIKE $2", [
+          orgId,
+          DISCORD_ID_LIKE,
+        ]);
+        await insertMembers(client, internal);
+      });
+    },
+
+    async replaceDiscord(members) {
+      const internal = internalRows(members.filter(isDiscordMember));
+      await withPgTransaction(await pool(), async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        await client.query("DELETE FROM directory_members WHERE org_id = $1 AND principal_id LIKE $2", [
+          orgId,
+          DISCORD_ID_LIKE,
+        ]);
+        await insertMembers(client, internal);
+      });
+    },
+
+    replaceChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations = [], partial = false) {
+      return writeChannels("slack", channels, channelMembers, syncedAt, channelRosterIds, revocations, partial);
+    },
+
+    replaceDiscordChannels(channels, channelMembers, syncedAt) {
+      return writeChannels("discord", channels, channelMembers, syncedAt, undefined, [], false);
     },
 
     async setWorkspaceUrl(url) {
@@ -606,32 +680,34 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows =
         kind === "channel"
           ? await q(
-              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
+              `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id
                FROM directory_channels channel
                LEFT JOIN directory_channel_members roster
                  ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
                WHERE channel.org_id = $1 AND channel.channel_id = $2
                ORDER BY roster.principal_id`,
               [orgId, id],
             )
           : await q(
-              `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id,
-                      member.principal_id, member.display_name, member.type, member.slack_id
+              `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id
                FROM directory_groups group_row
                LEFT JOIN directory_group_members roster
                  ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
-               LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
                WHERE group_row.org_id = $1 AND group_row.group_id = $2
                ORDER BY roster.principal_id`,
               [orgId, id],
             );
       if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
-      if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
-      return rows.map(memberRow);
+      if (rows.some((row) => !row.roster_principal_id)) return undefined;
+      const ids = rows.map((row) => row.roster_principal_id as string);
+      const candidates = (
+        await q(
+          `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND lower(principal_id) = ANY($2::text[])`,
+          [orgId, [...new Set(ids.flatMap(rosterIds).map((x) => x.toLowerCase()))]],
+        )
+      ).map(memberRow);
+      const roster = ids.map((principalId) => candidates.find((m) => samePerson(m.principalId, principalId)));
+      return roster.every((m) => m !== undefined) ? (roster as DirectoryMember[]) : undefined;
     },
 
     async listChannelsFor(principalId) {
@@ -685,7 +761,15 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         [orgId, query.trim()],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
-      const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);
+      const m = await pick(
+        query,
+        "directory_members",
+        "principal_id",
+        "display_name_lc",
+        MEMBER_COLS,
+        memberRow,
+        `principal_id LIKE '${DISCORD_ID_LIKE}'`,
+      );
       if (m.kind === "one") return { kind: "one", member: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
       return { kind: "none" };
@@ -699,6 +783,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         "name_lc",
         "channel_id, name, is_private, is_external",
         channelRow,
+        DISCORD_CHANNEL_ID_SQL,
       );
       if (m.kind === "one") return { kind: "one", channel: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };

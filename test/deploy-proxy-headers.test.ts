@@ -5,9 +5,9 @@ import { constants as http2Constants, createServer as createHttp2Server, type Se
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
-import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdmin } from "./support/principal-links.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
@@ -415,7 +415,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const SECRET = "admin-deploy-proxy-secret".repeat(3);
   const server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: createAdminService(testAdminGrantStore()),
+    admin: testAdmin(),
     signingSecret: SECRET,
     auditLog: {
       record: (e) => auditEvents.push(e),

@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
-import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
+import {
+  DELIVERY_MAX_AGE_MS,
+  logDeliveryExpiry,
+  PERSON_ADDRESSED_TYPES,
+  type DeliveryStore,
+} from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
@@ -234,18 +239,18 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
             SET recipient_thread_ref = $2,
                 expired_at = CASE WHEN delivered_at IS NULL THEN NULL ELSE expired_at END,
                 delivered_at = COALESCE(delivered_at, $3)
-          WHERE id = $1 AND destination->>'type' = 'principal'`,
-        [id, recipientThreadRef, at],
+          WHERE id = $1 AND destination->>'type' = ANY($4)`,
+        [id, recipientThreadRef, at, [...PERSON_ADDRESSED_TYPES]],
       );
     },
     async listByRecipientThread(recipientThreadRef, opts) {
       const limit = Math.max(1, opts?.limit ?? 20);
       const rows = await q(
         `SELECT * FROM deliveries
-          WHERE recipient_thread_ref = $1 AND destination->>'type' = 'principal'
+          WHERE recipient_thread_ref = $1 AND destination->>'type' = ANY($3)
           ORDER BY created_at DESC
           LIMIT $2`,
-        [recipientThreadRef, limit],
+        [recipientThreadRef, limit, [...PERSON_ADDRESSED_TYPES]],
       );
       return rows.map(rowToDelivery).reverse();
     },
@@ -253,7 +258,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const limit = Math.max(1, opts?.limit ?? 20);
       const rows = await q(
         `SELECT * FROM deliveries
-          WHERE provenance->>'sourceSessionId' = $1 OR provenance->>'sourceThreadRef' = $2
+          WHERE (provenance->>'sourceSessionId' = $1 OR provenance->>'sourceThreadRef' = $2)
           ORDER BY created_at DESC
           LIMIT $3`,
         [sourceSessionId, sourceThreadRef, limit],

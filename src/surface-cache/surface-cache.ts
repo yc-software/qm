@@ -1,11 +1,21 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
+import { SLACK_CONTAINER } from "../surfaces/message-ids.ts";
+import { SNOWFLAKE } from "../util/snowflake.ts";
+import type {
+  CachedMessage,
+  ContainerState,
+  ContainerSurface,
+  LiveFallback,
+  IngestEvent,
+  SurfaceCache,
+} from "./types.ts";
 
 export type {
   ActiveThread,
   CachedMessage,
   ContainerSummary,
+  ContainerSurface,
   IngestEvent,
   LiveFallback,
   ReadMessagesOpts,
@@ -13,6 +23,7 @@ export type {
   SurfaceCache,
 } from "./types.ts";
 
+const CONTAINER_ID: Record<ContainerSurface, RegExp> = { slack: SLACK_CONTAINER, discord: SNOWFLAKE };
 const DEFAULT_READ_LIMIT = 100;
 const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -324,6 +335,10 @@ export function createPostgresSurfaceCache(
         args.push(opts.container);
         conds.push(`container = $${args.length}`);
       }
+      if (opts.surface) {
+        args.push(CONTAINER_ID[opts.surface].source);
+        conds.push(`container ~ $${args.length}`);
+      }
       args.push(limit);
       const rows = await q(
         `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
@@ -397,12 +412,12 @@ export function createPostgresSurfaceCache(
       const rows = await q(
         `SELECT s.*, COALESCE(m.n, 0) AS message_count
            FROM channel_state s
-           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE org_id = $1 AND deleted = FALSE GROUP BY container) m
+           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE org_id = $1 AND deleted = FALSE AND ($3::text IS NULL OR container ~ $3) GROUP BY container) m
              ON m.container = s.container
-          WHERE s.org_id = $1
+          WHERE s.org_id = $1 AND ($3::text IS NULL OR s.container ~ $3)
           ORDER BY s.updated_at DESC
           LIMIT $2`,
-        [orgId, limit],
+        [orgId, limit, opts.surface ? CONTAINER_ID[opts.surface].source : null],
       );
       return rows.map((r) => {
         let members: string[] = [];

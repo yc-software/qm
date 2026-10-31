@@ -1,0 +1,1 @@
+export const MAX_ATTACHMENTS_PER_TURN = 10;

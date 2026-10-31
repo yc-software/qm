@@ -3,6 +3,7 @@ import type { PendingApprovalRecord } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
+import { surfaceCapabilities } from "../surfaces/surface-capabilities.ts";
 
 export function approvalDeliveryKey(id: string, record: Pick<PendingApprovalRecord, "createdAt">): string {
   return `command-approval:${id}:${record.createdAt ?? 0}`;
@@ -18,17 +19,20 @@ export function createApprovalStore(
   deliveries: Pick<DeliveryStore, "enqueue">,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    if (record.request?.surface !== "slack") return;
-    const actorId = approvalDeliveryRecipient(record.request.actor);
+    const request = record.request;
+    const type = request ? surfaceCapabilities(request.surface)?.approvalCardType : null;
+    if (!request || !type) return;
+    const actorId = approvalDeliveryRecipient(request.actor);
     if (!actorId) return;
-    const threadTs = record.request.conversation?.kind === "dm" ? record.request.slackSource?.replyThreadTs : undefined;
+    const threadTs = request.conversation?.kind === "dm" ? request.slackSource?.replyThreadTs : undefined;
     await deliveries.enqueue({
       destination: {
         ...principalDestination(actorId, actorId),
+        type,
         commandApprovalId: id,
         ...(threadTs ? { threadTs } : {}),
-        ...(record.request.slackSource
-          ? { slackAccountId: record.request.slackSource.accountId, slackTeamId: record.request.slackSource.teamId }
+        ...(request.slackSource
+          ? { slackAccountId: request.slackSource.accountId, slackTeamId: request.slackSource.teamId }
           : {}),
       },
       text: `Approval needed: ${record.summary ?? record.command}`,

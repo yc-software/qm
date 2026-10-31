@@ -1299,7 +1299,8 @@ export function createSessionMethods(
       });
     },
 
-    getSoul(scopeIdValue) {
+    async getSoul(scopeIdValue) {
+      await deps.config.refreshScope(scopeIdValue);
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
       const soul = deps.config.getSoul(scopeIdValue);

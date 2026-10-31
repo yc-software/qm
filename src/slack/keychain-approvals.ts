@@ -1,5 +1,7 @@
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { KeychainApprovalView } from "../credentials/keychain-approval.ts";
+import { isHttpUrl } from "../surfaces/approval-limits.ts";
+import { conversationWebUrl } from "../util/conversation-links.ts";
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
@@ -16,10 +18,7 @@ export function keychainApprovalMessage(
 ): { text: string; blocks: Array<Record<string, unknown>> } {
   const { ask } = view;
   const place = `in ${escapeSlackText(view.conversation).replaceAll("|", "&#124;")}`;
-  const origin =
-    originUrl && /^https?:\/\//.test(originUrl)
-      ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
-      : place;
+  const origin = isHttpUrl(originUrl) ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>` : place;
   const pending = ask.status === "pending";
   const { kind } = parseScopeId(ask.requesterScopeId);
   let audience = "this group";
@@ -79,8 +78,9 @@ export async function keychainApprovalOrigin(
       .catch(swallowAs("slack: approval origin link", null));
     if (typeof result?.permalink === "string") return result.permalink;
   }
-  if (!webUrl || !view.sessionId) return undefined;
-  const url = new URL(`${webUrl.replace(/\/+$/, "")}/s/${encodeURIComponent(view.sessionId)}`);
+  const conversationUrl = view.sessionId ? conversationWebUrl(webUrl, view.sessionId) : undefined;
+  if (!conversationUrl) return undefined;
+  const url = new URL(conversationUrl);
   if (view.seq !== undefined) url.searchParams.set("seq", String(view.seq));
   return url.toString();
 }

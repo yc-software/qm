@@ -48,7 +48,10 @@ async function fixture() {
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
-  const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
+  const enqueued: Array<{
+    destination: { target: string; keychainAskId?: string; keychainResolution?: true };
+    idempotencyKey?: string;
+  }> = [];
   const approvals = createKeychainApprovals({
     deliveries: {
       enqueue: async (d: any) => {
@@ -310,6 +313,30 @@ test("the card goes where the request came from, never to someone else's DM", ()
   assert.equal(approvalCardDestination(ask)!.target, "alice");
 });
 
+test("a Discord-originated ask routes its card to the owner by principal routing, never the channel", () => {
+  const ask = { id: "a1", ownerId: "alice", requesterId: "bob", requesterScopeId: "channel:C1" } as KeychainAsk;
+  const fromDiscord = { type: "discord", target: "123456", audienceScopeId: "channel:C1" };
+  assert.deepEqual(approvalCardDestination({ ...ask, requesterDestination: fromDiscord }), {
+    type: "principal",
+    target: "alice",
+    audienceScopeId: "personal:alice",
+    onBehalfOf: "bob",
+    keychainAskId: "a1",
+  });
+});
+
+test("a discord-dm-origin ask routes its card to the owner by principal routing", () => {
+  const ask = { id: "a1", ownerId: "alice", requesterId: "bob", requesterScopeId: "channel:C1" } as KeychainAsk;
+  const fromDm = { type: "discord-dm", target: "bob", audienceScopeId: "channel:C1" };
+  assert.deepEqual(approvalCardDestination({ ...ask, requesterDestination: fromDm }), {
+    type: "principal",
+    target: "alice",
+    audienceScopeId: "personal:alice",
+    onBehalfOf: "bob",
+    keychainAskId: "a1",
+  });
+});
+
 test("a sub-agent request shows in both sessions, and deciding anywhere syncs the posted card", async () => {
   const f = await fixture();
   const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", "personal:alice@example.com");
@@ -329,6 +356,7 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   await f.approvals.decide(ask.id, { externalId: "alice@example.com" }, "standing");
   const sync = f.enqueued.find((d) => d.idempotencyKey === `ask:${ask.id}:resolved`);
   assert.equal(sync?.destination.keychainAskId, ask.id);
+  assert.equal(sync?.destination.keychainResolution, true);
 
   const calls: Array<{ method: string; ts?: string }> = [];
   const client = {

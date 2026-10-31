@@ -1,5 +1,6 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
+import { surfaceCapabilities } from "../surfaces/surface-capabilities.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -47,7 +48,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision> {
-    if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
+    if (!surfaceCapabilities(surface)?.coreAmbient || !deps.surfaceCache || !deps.ambientJudge) return { act: false };
     const scheduled = opts?.reason === "scheduled";
     const policy = await deps.channelPolicy?.get(container);
     const cursorKey = `${orgIdOf()}:${surface}:${container}`;

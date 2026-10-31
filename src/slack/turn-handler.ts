@@ -11,19 +11,13 @@ import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/e
 import {
   type ActorAssertion,
   type ChannelMeta,
-  type ConversationTurn,
-  type OverheardMessage,
-  type ReactionTally,
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
   type SlackFile,
-  DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
   botIdentityArgs,
-  buildReactionTurnText,
-  createAckPresenter,
   createDeduper,
   createThreadTracker,
   decodeSlackEntities,
@@ -50,34 +44,41 @@ import {
   SLACK_POST_SPLIT_LIMIT,
   refusalDelivery,
   refusalNote,
-  renderConversationView,
-  resolveMentions,
   resolveReactionTargets,
-  shouldSurfaceReaction,
   slackReplyArgs,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
+import {
+  type ConversationTurn,
+  type OverheardMessage,
+  renderConversationView,
+  resolveMentions,
+} from "../surfaces/conversation.ts";
+import { type ReactionTally } from "../surfaces/reaction-tally.ts";
+import { DEFAULT_ACK_REACTIONS, createAckPresenter, type AckPresenter } from "../surfaces/ack-presenter.ts";
+import { buildReactionTurnText, shouldSurfaceReaction } from "../surfaces/reactions.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
 import type { AckGate } from "./deferred-ack.ts";
-import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
+import type { CoreTurnBody } from "../api/surface-core-client.ts";
+import type { TurnFlow } from "./turn-flow.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
 import type { SlackReactionEvent } from "./payloads.ts";
+import { HANDOFF_INSTRUCTION } from "../surfaces/instructions.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
-  HANDOFF_INSTRUCTION,
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
 } from "./messaging.ts";
+import { runDeliveryKey } from "../delivery/run-result-delivery.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -660,7 +661,7 @@ export function createTurnHandler(deps: {
       if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
       const postText = reply;
-      const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
+      const runKey = queuedRunId ? runDeliveryKey(queuedRunId) : undefined;
       const deliverReply = async (): Promise<void> => {
         let uploadError: unknown;
         if (result.attachments?.length) {
@@ -695,7 +696,7 @@ export function createTurnHandler(deps: {
         await settleAck();
         if (queuedRunId) {
           console.error(
-            `[slack-plugin] reply post failed after run ${queuedRunId} finished (ch=${inc.channel} ts=${inc.ts}): ${(err as Error).message} — leaving delivery run:${queuedRunId} for the recovery poller`,
+            `[slack-plugin] reply post failed after run ${queuedRunId} finished (ch=${inc.channel} ts=${inc.ts}): ${(err as Error).message} — leaving delivery ${runDeliveryKey(queuedRunId)} for the recovery poller`,
           );
           return;
         }
@@ -727,7 +728,7 @@ export function createTurnHandler(deps: {
           const text = refusalNote(result, inc.kind);
           await postThenAckRunDelivery({
             post: async () => {
-              await postReply(text, undefined, `run:${runId}`);
+              await postReply(text, undefined, runDeliveryKey(runId));
               await finishTaskAck();
             },
             ack: () => ackRunDelivery(runId),
@@ -748,7 +749,11 @@ export function createTurnHandler(deps: {
       }
       const postFailure = async () => {
         if (inc.kind === "dm" || ack?.postedAck())
-          await postReply(refusalNote(result, inc.kind), undefined, queuedRunId ? `run:${queuedRunId}` : undefined);
+          await postReply(
+            refusalNote(result, inc.kind),
+            undefined,
+            queuedRunId ? runDeliveryKey(queuedRunId) : undefined,
+          );
         else await ephemeralOrSay(refusalNote(result, inc.kind));
         await finishTaskAck();
       };
@@ -885,7 +890,7 @@ export function createTurnHandler(deps: {
             kind: isDM ? "dm" : "channel",
             channel,
             userId: reactorId,
-            rawText: buildReactionTurnText({
+            rawText: buildReactionTurnText("slack", {
               reactorName,
               emoji,
               added,

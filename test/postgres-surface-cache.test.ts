@@ -99,6 +99,14 @@ test("pg surface-cache: tsvector search + active threads + membership", { skip }
     assert.equal(st?.kind, "channel", "the container kind round-trips through the store");
     assert.equal(st?.lastTs, "4.0");
     assert.equal((await cache.listContainers()).find((c) => c.container === "CS1")?.kind, "channel");
+    const numeric = await cache.listContainers({ surface: "discord" });
+    assert.ok(
+      numeric.every((c) => /^\d{17,20}$/.test(c.container)),
+      "the pattern filters in the query",
+    );
+    assert.ok(!numeric.some((c) => c.container === "CS1"));
+    assert.deepEqual(await cache.search("launch", { surface: "discord" }), []);
+    assert.ok((await cache.search("launch", { surface: "slack" })).length >= 2);
   } finally {
     await cache.close();
   }

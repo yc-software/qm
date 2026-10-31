@@ -1,7 +1,8 @@
 import { swallow } from "../util/errors.ts";
-import { sleep, createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
+import { createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
+import { ackRunDeliveryWithRetry, type CoreTurnBody } from "../api/surface-core-client.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { TurnRequest, TurnResult } from "../types.ts";
+import type { TurnResult } from "../types.ts";
 import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 
 class SlackTurnFailure extends Error {
@@ -13,8 +14,6 @@ class SlackTurnFailure extends Error {
 export function slackFailureText(err: unknown): string {
   return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_TEXT;
 }
-
-export type CoreTurnBody = Omit<TurnRequest, "surface">;
 
 interface TurnHooks {
   deferDeliveryAck?: boolean;
@@ -33,8 +32,6 @@ export interface TurnFlow {
   ackRunDelivery(runId: string): void;
 }
 
-const ACK_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
-
 export function createTurnFlow(core: SlackCoreClient): TurnFlow {
   const inFlightRunPins = new Map<string, number>();
   const inFlightRuns = {
@@ -50,23 +47,14 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
   const inFlightRunByThread = createInFlightThreadMap();
 
   function ackRunDelivery(runId: string): void {
-    void (async () => {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await core.ackRunDelivery(runId);
-          return;
-        } catch (err) {
-          if (attempt >= ACK_RETRY_DELAYS_MS.length) {
-            console.error(
-              `[slack-plugin] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
-              (err as Error).message,
-            );
-            return;
-          }
-          await sleep(ACK_RETRY_DELAYS_MS[attempt]!);
-        }
-      }
-    })().finally(() => inFlightRuns.delete(runId));
+    void ackRunDeliveryWithRetry(core, runId)
+      .catch((err: unknown) =>
+        console.error(
+          `[slack-plugin] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
+          (err as Error).message,
+        ),
+      )
+      .finally(() => inFlightRuns.delete(runId));
   }
 
   function coreFailure(err: unknown): Error {

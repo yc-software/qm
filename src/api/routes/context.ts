@@ -4,6 +4,7 @@ import { CAPABILITY_HEADER } from "../contract.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { isSlackChannelId } from "../../directory/directory-store.ts";
 import { sleep } from "../../util/async.ts";
 import { awaitContextOutcome } from "../surface-context-puller.ts";
 
@@ -25,7 +26,7 @@ async function resolveSurfaceTarget(
   const cap = capability!;
   if (typeof b.channel === "string" && b.channel.trim()) {
     const ref = b.channel.trim().replace(/^#/, "");
-    if (/^[CG][A-Z0-9]{6,}$/.test(ref)) {
+    if (isSlackChannelId(ref)) {
       if (!(await app.channelVisibleTo(cap.actorId, ref))) {
         await notVisible(ctx, cap.actorId, b.channel);
         return null;

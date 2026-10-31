@@ -4,9 +4,7 @@ import type { SlackHistoryReader } from "./history.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { WebClient } from "@slack/web-api";
 import {
-  type RecentMessage,
   type SlackFile,
-  buildContextWindow,
   downloadSlackFile,
   isExternallyShared,
   isOversize,
@@ -14,6 +12,8 @@ import {
   oversizeMsg,
   parseDeliveryTarget,
 } from "./lib.ts";
+import { type RecentMessage, buildContextWindow, formatSlackTs } from "../surfaces/conversation.ts";
+import { SLACK_MESSAGE_IDS } from "../surfaces/message-ids.ts";
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
@@ -65,7 +65,7 @@ export function createSurfaceContextFulfiller(deps: {
           ...(m?.user ? { authorId: String(m.user) } : {}),
         }))
         .filter((m) => m.ts);
-      await post(buildContextWindow(shaped, { count }));
+      await post(buildContextWindow(shaped, { count, formatTs: formatSlackTs, messageIds: SLACK_MESSAGE_IDS }));
     } catch (err) {
       if (viewerToken && SLACK_AUTH_ERRORS.has(slackErrorCode(err) ?? "")) {
         await post({ messages: [], liveSearch: "unconnected" });
@@ -233,6 +233,7 @@ export function createSurfaceContextFulfiller(deps: {
         ({ channel, threadTs } = parseDeliveryTarget(q.conversationTarget));
       } else if (typeof q.channelId === "string" && q.channelId) {
         channel = q.channelId;
+        if (typeof q.threadTs === "string" && q.threadTs) threadTs = q.threadTs;
         const info = await directory.getChannelInfo(client, channel);
         if (!info) return post({ error: "I can't see that channel" });
         if (isExternallyShared(info)) return post({ error: "that channel is externally shared, so I won't read it" });
@@ -258,6 +259,9 @@ export function createSurfaceContextFulfiller(deps: {
           ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
+      const threadOutcome = outcomes[1];
+      if (typeof q.threadTs === "string" && q.threadTs && threadOutcome.status === "rejected")
+        throw threadOutcome.reason;
       const byTs = new Map<string, SlackHistoryMessage>();
       const notes = new Set<string>();
       let hasMore = false;
@@ -289,6 +293,8 @@ export function createSurfaceContextFulfiller(deps: {
       await post({
         ...buildContextWindow(shaped, {
           count,
+          formatTs: formatSlackTs,
+          messageIds: SLACK_MESSAGE_IDS,
           ...(typeof q.match === "string" && q.match ? { match: q.match } : {}),
           scanHasMore: hasMore,
           nameById,

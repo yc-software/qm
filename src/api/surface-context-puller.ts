@@ -4,6 +4,7 @@ import { sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
 
 const FULFILL_WAIT_MS = 25_000;
+const TRIGGER_PULL_WAIT_MS = 3_000;
 const FULFILL_POLL_MS = 100;
 
 interface SurfaceContextApp {
@@ -62,4 +63,8 @@ export function createSurfaceContextPuller(
       return parkAndWait(source, token ? { ...query, viewerToken: token } : query);
     },
   };
+}
+
+export function createTriggerContextPuller(app: SurfaceContextApp): SurfaceContextPuller {
+  return createSurfaceContextPuller(app, { waitMs: TRIGGER_PULL_WAIT_MS });
 }

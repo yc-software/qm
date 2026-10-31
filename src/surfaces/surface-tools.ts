@@ -1,4 +1,6 @@
 import { isSessionTurn } from "../core/turn-origin.ts";
+import { DISCORD_MESSAGE_IDS, SLACK_MESSAGE_IDS } from "./message-ids.ts";
+import { DISCORD_SURFACE } from "../discord/config.ts";
 import type {
   Conversation,
   DeliveryProvenance,
@@ -41,6 +43,9 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
+import { isDiscordChannelId, isSlackChannelId } from "../directory/directory-store.ts";
+import type { SurfaceContextQuery } from "../reach/reach.ts";
+import { surfaceCapabilities, surfaceForDeliveryType } from "./surface-capabilities.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
@@ -107,13 +112,19 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
   let editRefConsumed = false;
+  const isCurrentChannel = (channel: string): boolean =>
+    Boolean(conversation.channelRef) &&
+    (channel === conversation.channelRef ||
+      (!isDiscordChannelId(channel.replace(/^#/, "")) &&
+        !isSlackChannelId(channel.replace(/^#/, "")) &&
+        channel.replace(/^#/, "").toLowerCase() === conversation.channelName?.toLowerCase()));
   const resolveDestination = async (
     target?: {
       channel?: string;
       recipient?: string;
       participants?: readonly string[];
     },
-    opts?: { mayOpenGroup?: boolean },
+    opts?: { mayOpenGroup?: boolean; mayReachDiscord?: boolean; forRead?: boolean },
   ): Promise<{ ok: true; destination: Destination } | { ok: false; message: string }> => {
     if (
       !target ||
@@ -121,12 +132,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     ) {
       return { ok: true, destination: currentDestination };
     }
-    if (
-      target.channel !== undefined &&
-      conversation.channelRef &&
-      (target.channel === conversation.channelRef ||
-        target.channel.replace(/^#/, "").toLowerCase() === conversation.channelName?.toLowerCase())
-    ) {
+    if (target.channel !== undefined && conversation.channelRef && isCurrentChannel(target.channel)) {
       return { ok: true, destination: { ...currentDestination, target: conversation.channelRef } };
     }
     if (!deps.directory)
@@ -139,6 +145,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         resolveGroup: (parts) => deps.directory!.resolveGroupByParticipants(parts),
         groupMember: (g, p) => deps.directory!.groupMember(g, p),
         directoryMember: (p) => deps.directory!.get(p),
+        ...(opts?.mayReachDiscord && deps.discordLookup ? { discordLookup: deps.discordLookup } : {}),
         ...(deps.surfaceContext
           ? {
               openGroup: (parts: readonly string[]) =>
@@ -153,10 +160,62 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(target.participants !== undefined ? { participants: target.participants } : {}),
       },
       actor.id,
-      { mayOpenGroup: opts?.mayOpenGroup === true },
+      { mayOpenGroup: opts?.mayOpenGroup === true, forRead: opts?.forRead === true },
     );
     if (!r.ok) return { ok: false, message: r.message };
     return { ok: true, destination: r.destination };
+  };
+  const resolveReadTarget = async (
+    channel?: string,
+    ts?: string,
+  ): Promise<
+    | {
+        ok: true;
+        destination: Destination;
+        surface: string;
+        query: Pick<SurfaceContextQuery, "conversationTarget" | "channelId" | "threadTs">;
+      }
+    | { ok: false; message: string }
+  > => {
+    let destination = currentDestination;
+    if (channel !== undefined) {
+      const d = await resolveDestination({ channel }, { mayReachDiscord: true, forRead: true });
+      if (!d.ok) return d;
+      destination = d.destination;
+    }
+    const surface =
+      (channel !== undefined ? surfaceForDeliveryType(destination.type) : undefined) ?? input.surface ?? "unknown";
+    if (ts !== undefined && surface === DISCORD_SURFACE)
+      return { ok: false, message: "Discord threads are channels of their own — pass the thread's id as `channel`." };
+    if (channel !== undefined) {
+      if (!destination.target) return { ok: false, message: "that channel has no readable target" };
+      return {
+        ok: true,
+        destination,
+        surface,
+        query: { channelId: destination.target, ...(ts !== undefined ? { threadTs: ts } : {}) },
+      };
+    }
+    if (ts !== undefined) {
+      if (!destination.target) return { ok: false, message: "this conversation has no thread to read" };
+      destination = { ...destination, target: replaceThreadSegment(destination.target, ts) };
+    }
+    return {
+      ok: true,
+      destination,
+      surface,
+      query: destination.target
+        ? { conversationTarget: destination.target, ...(ts !== undefined ? { threadTs: ts } : {}) }
+        : {},
+    };
+  };
+  const messageRef = (
+    destination: Destination,
+    ref: string,
+  ): { ok: true; ref: string } | { ok: false; message: string } => {
+    if (surfaceForDeliveryType(destination.type) !== DISCORD_SURFACE) return { ok: true, ref };
+    const id = DISCORD_MESSAGE_IDS.decode(ref) ?? (DISCORD_MESSAGE_IDS.isRaw(ref) ? ref : null);
+    return id ? { ok: true, ref: id } : { ok: false, message: `"${ref}" is not a message id from this conversation` };
   };
   const enqueue = async (
     destination: Destination,
@@ -231,7 +290,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const seq = postKeys.take();
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {
-        destination = { ...destination, target: replaceThreadSegment(destination.target, opts.ts) };
+        const replyTo = messageRef(destination, opts.ts);
+        if (!replyTo.ok) return replyTo;
+        destination = { ...destination, target: replaceThreadSegment(destination.target, replyTo.ref) };
       } else if (opts?.broadcast && destination.type !== "principal" && conversation.channelRef) {
         destination = { ...destination, target: conversation.channelRef };
       }
@@ -263,7 +324,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
-      const d = await resolveDestination(target, { mayOpenGroup: sending });
+      const d = await resolveDestination(target, { mayOpenGroup: sending, mayReachDiscord: true });
       if (!d.ok) return { ok: false, message: d.message };
       const r0 = await enqueue(d.destination, postText, seq, f.attachments);
       if (!r0.ok) return r0;
@@ -283,7 +344,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!d.ok) return { ok: false, message: d.message };
       if (d.destination.type === "principal")
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
-      return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "", seq);
+      const ref = messageRef(d.destination, input.ts);
+      if (!ref.ok) return ref;
+      return enqueue(withReact(d.destination, { messageTs: ref.ref, emoji: input.emoji }), "", seq);
     },
     edit: async (input: SurfaceEditInput) => {
       const seq = postKeys.take();
@@ -292,7 +355,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      return enqueue(withEdit(d.destination, input.ref), input.text, seq);
+      const ref = messageRef(d.destination, input.ref);
+      if (!ref.ok) return ref;
+      return enqueue(withEdit(d.destination, ref.ref), input.text, seq);
     },
     delete: async (input: SurfaceDeleteInput) => {
       const seq = postKeys.take();
@@ -301,13 +366,17 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
+      const ref = messageRef(d.destination, input.ref);
+      if (!ref.ok) return ref;
+      return enqueue(withDelete(d.destination, { messageTs: ref.ref }), "", seq);
     },
-    readThread: async (opts?: { limit?: number }) => {
+    readThread: async (opts?: { limit?: number; channel?: string; ts?: string }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
-      if (!currentDestination.target) return { ok: false, message: "this conversation has no thread to read" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: currentDestination.target,
+      const read = await resolveReadTarget(opts?.channel, opts?.ts);
+      if (!read.ok) return read;
+      if (!read.destination.target) return { ok: false, message: "this conversation has no thread to read" };
+      const result = await deps.surfaceContext.pull(read.surface, {
+        ...read.query,
         viewer: actor.id,
         ...rateLimitRecipient,
         ...(opts?.limit !== undefined ? { count: Math.max(1, Math.min(SURFACE_READ_MAX, opts.limit)) } : {}),
@@ -329,10 +398,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
       const msgs = (result.messages ?? []) as Array<{ ts?: string; threadTs?: string }>;
-      const since = opts?.since;
+      const codec = input.surface === DISCORD_SURFACE ? DISCORD_MESSAGE_IDS : SLACK_MESSAGE_IDS;
+      const since =
+        opts?.since === undefined
+          ? undefined
+          : (codec.decode(opts.since) ?? (codec.isRaw(opts.since) ? opts.since : null));
+      if (since === null)
+        return { ok: false, message: `"since" must be a message id returned by whats_new or read_thread` };
       const self = new Set(result.selfTs);
       const newer = msgs.filter(
-        (m) => typeof m?.ts === "string" && (since === undefined || m.ts > since) && !self.has(m.ts),
+        (m) => typeof m?.ts === "string" && (since === undefined || codec.compare(m.ts, since) > 0) && !self.has(m.ts),
       );
       const isDm = conversation.kind === "dm";
       const hereRoot = dest.target.slice(dest.target.lastIndexOf(":") + 1);
@@ -343,7 +418,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         else if (m.threadTs) otherRoots.add(m.threadTs);
       }
       const latest = msgs.reduce<string | undefined>(
-        (acc, m) => (typeof m?.ts === "string" && (!acc || m.ts > acc) ? m.ts : acc),
+        (acc, m) => (typeof m?.ts === "string" && (!acc || codec.compare(m.ts, acc) > 0) ? m.ts : acc),
         undefined,
       );
       const coverage = await coverageForTurn();
@@ -352,18 +427,25 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         hereNew,
         activeSubConversations: otherRoots.size,
         ...(result.note ? { message: result.note } : {}),
-        ...(latest ? { latest } : {}),
+        ...(latest ? { latest: codec.encode(latest) } : {}),
         ...(coverage ? { coverageSince: coverage } : {}),
       };
     },
-    search: async (query: string, opts?: { limit?: number; source?: "mirror" | "slack" }) => {
+    search: async (query: string, opts?: { limit?: number; source?: "mirror" | "slack"; channel?: string }) => {
       const q = query.trim();
-      const coverage = await coverageForTurn();
+      if (opts?.source === "slack" && opts.channel !== undefined)
+        return {
+          ok: false,
+          message: "live Slack search covers everything the asker can see; it can't be scoped to a channel.",
+        };
+      const read = await resolveReadTarget(opts?.channel);
+      if (!read.ok) return read;
+      const { destination: dest, surface } = read;
+      const coverage = read.query.channelId !== undefined ? undefined : await coverageForTurn();
       const withCoverage = (r: SurfaceSearchResult): SurfaceSearchResult =>
         coverage ? { ...r, coverageSince: coverage } : r;
       if (!q) return withCoverage({ ok: true, hits: [], source: "cache" });
       const limit = Math.max(1, Math.min(SURFACE_SEARCH_MAX, opts?.limit ?? SURFACE_SEARCH_DEFAULT));
-      const dest = currentDestination;
       const shapeHits = (messages: unknown[], prefiltered = false) =>
         (messages as Array<{ ts?: string; time?: string; author?: string; text?: string }>)
           .filter((m) => typeof m?.text === "string" && (prefiltered || m.text.toLowerCase().includes(q.toLowerCase())))
@@ -378,7 +460,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         if (!deps.surfaceContext?.searchLive)
           return { ok: false, message: "live search isn't available from this turn" };
         if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };
-        const result = await deps.surfaceContext.searchLive(input.surface ?? "unknown", {
+        const result = await deps.surfaceContext.searchLive(surface, {
           conversationTarget: dest.target,
           viewer: actor.id,
           ...rateLimitRecipient,
@@ -410,7 +492,13 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         });
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
+      const storedOnlyCurrent = {
+        ok: false as const,
+        message: "stored search covers only this conversation's own channel; read the other channel with read_thread.",
+      };
+      const otherChannel = read.query.channelId !== undefined && read.query.channelId !== conversation.channelRef;
       if (deps.surfaceCache && dest.type === "slack" && container) {
+        if (otherChannel) return storedOnlyCurrent;
         const channel = container.split(":")[0]!;
         const hits = await deps.surfaceCache.search(q, { container: channel, limit });
         return withCoverage({
@@ -430,8 +518,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       if (!deps.surfaceContext) return { ok: false, message: "search isn't available from this turn" };
       if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };
-      const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
-        conversationTarget: dest.target,
+      const result = await deps.surfaceContext.pull(surface, {
+        ...read.query,
         viewer: actor.id,
         ...rateLimitRecipient,
         count: SURFACE_READ_MAX,
@@ -446,7 +534,17 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(result.note ? { message: result.note } : {}),
       });
     },
-    readMembers: async () => {
+    readMembers: async (opts?: { channel?: string }) => {
+      const read = await resolveReadTarget(opts?.channel);
+      if (!read.ok) return read;
+      if (read.query.channelId !== undefined && read.query.channelId !== conversation.channelRef) {
+        const members = await deps.directory?.conversationMembers("channel", read.query.channelId);
+        if (!members) return { ok: false, message: "I don't have the member list for that channel." };
+        return {
+          ok: true,
+          members: members.filter((m) => m.type === "internal").map((m) => ({ displayName: m.displayName })),
+        };
+      }
       const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");
       if (!roster.length) return { ok: true, members: [] };
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
@@ -472,6 +570,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)
         return { ok: false, message: "standing orders are per-channel — you can only set one from inside a channel." };
+      if (
+        ambientEnabled !== undefined &&
+        ambientEnabled !== null &&
+        surfaceCapabilities(input.surface)?.coreAmbient === false
+      )
+        return {
+          ok: false,
+          message:
+            "ambient on/off is not a setting on this surface — here I answer in threads I'm part of. Set the orders without ambient_enabled.",
+        };
       let parsedBots: Record<string, BotPolicy> | undefined;
       if (bots !== undefined) {
         const parsed = parseBotLedger(bots);

@@ -158,3 +158,29 @@ export function mountTemplate(selector: string, template: () => unknown) {
   placeholder.replaceWith(root);
   return draw;
 }
+
+export async function copyText(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    void 0;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok: boolean;
+  try {
+    ok = Boolean(document.execCommand("copy"));
+  } catch {
+    ok = false;
+  } finally {
+    document.body.removeChild(ta);
+  }
+  return ok;
+}

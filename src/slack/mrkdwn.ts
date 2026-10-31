@@ -1,4 +1,5 @@
 import { xmlEscape } from "../util/message-tag.ts";
+import { SLACK_MENTION } from "../surfaces/mentions.ts";
 import { safeChunks, safeCutIndex } from "./safe-cut.ts";
 export function escapeSlackText(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -7,8 +8,6 @@ export function escapeSlackText(text: string): string {
 export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
-
-const SLACK_MENTION = /(?<!<)<+@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
 
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
   return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
@@ -19,14 +18,6 @@ export function resolveMentionsInText(text: string, lookup: (id: string) => stri
 
 export function mentionedUserIds(text: string): string[] {
   return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
-}
-
-export function resolveMentions(text: string, nameById: ReadonlyMap<string, string> | undefined): string {
-  if (!nameById || !text.includes("<@")) return text;
-  return text.replace(SLACK_MENTION, (m, id) => {
-    const name = nameById.get(id);
-    return name ? `@${name}` : m;
-  });
 }
 
 const BOLD_SENTINEL = String.fromCharCode(1);

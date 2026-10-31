@@ -84,8 +84,11 @@ interface RevisedSinceOpts {
   thread?: string;
 }
 
+export type ContainerSurface = "slack" | "discord";
+
 export interface SearchOpts {
   container?: string;
+  surface?: ContainerSurface;
   limit?: number;
 }
 
@@ -101,6 +104,6 @@ export interface SurfaceCache {
   members(container: string): Promise<string[]>;
   isMember(container: string, principalId: string): Promise<boolean>;
   containerState(container: string): Promise<ContainerState | null>;
-  listContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
+  listContainers(opts?: { limit?: number; surface?: ContainerSurface }): Promise<ContainerSummary[]>;
   close(): Promise<void>;
 }

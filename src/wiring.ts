@@ -152,6 +152,9 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { DISCORD_SURFACE } from "./discord/config.ts";
+import type { SurfacePull } from "./reach/reach.ts";
+import { createDiscordPrincipalRoute, slackAccountOf, withPrincipalRouting } from "./delivery/principal-routing.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -305,7 +308,12 @@ import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
-import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
+import {
+  createOrchestrator,
+  egressClaimAllowingControlPlane,
+  type OrchestratorDeps,
+  type SurfaceContextPuller,
+} from "./core/orchestrator.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -345,7 +353,8 @@ import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
-import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
+import { createDiscordCoreClient, type DiscordCoreClient, linkedDiscordUserIds } from "./api/discord-core-client.ts";
+import { createSurfaceContextPuller, createTriggerContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
 import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
@@ -389,6 +398,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createDiscordInstallationStore, type DiscordInstallationStore } from "./surfaces/discord-installation.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -456,6 +466,7 @@ export interface BuiltApp {
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
+  discordInstallation: DiscordInstallationStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
@@ -526,6 +537,7 @@ export interface BuiltApp {
   sessionShareBytes: DurableByteStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
+  discordCore: DiscordCoreClient;
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -620,7 +632,14 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
+    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+  });
+  const principalLinks = createPrincipalLinkService(
+    artifactMap<PrincipalLink>("principal_links"),
+    advisoryLock,
+    adminGrantStore,
+  );
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
@@ -649,6 +668,11 @@ export function buildApp(
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
+    config.connectorSecretKey ?? randomBytes(32),
+  );
+  const discordInstallation = createDiscordInstallationStore(
+    config.orgId,
+    artifactMap("discord_installation"),
     config.connectorSecretKey ?? randomBytes(32),
   );
   const deploymentLayer = config.deploymentLayerDir
@@ -1748,10 +1772,10 @@ export function buildApp(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
     );
   }
-  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
-    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+  const admin = createAdminService(adminGrantStore, {
+    trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    principalLinks,
   });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,
@@ -1782,7 +1806,14 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const deliveries = withPrincipalRouting(
+    withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions),
+    createDiscordPrincipalRoute({
+      installation: discordInstallation,
+      linkedDiscordUserIds,
+      hasSlackAccount: slackAccountOf(directory),
+    }),
+  );
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2047,7 +2078,16 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const discordPull = async (
+    puller: SurfaceContextPuller | undefined,
+    query: Parameters<SurfacePull>[0],
+  ): ReturnType<SurfacePull> => {
+    if (!(await discordInstallation.status()).configured) return null;
+    return (await puller?.pull(DISCORD_SURFACE, query)) ?? { messages: [], retry: true };
+  };
+  const discordLookup: SurfacePull = (query) => discordPull(orchestratorDeps.surfaceContext, query);
   const orchestratorDeps: OrchestratorDeps = {
+    discordLookup,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
@@ -2243,6 +2283,7 @@ export function buildApp(
         })
     : undefined;
   const app = createApp({
+    discordLookup,
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2362,6 +2403,20 @@ export function buildApp(
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(agent.pickAckEmoji ? { pickAckEmoji: (t, c) => agent.pickAckEmoji!(t, c) } : {}),
+  });
+  const discordCore = createDiscordCoreClient({
+    config: configStore,
+    memory,
+    surfaceCache,
+    app,
+    runs,
+    turnStream,
+    blobTransfer,
+    identity,
+    deliveries,
+    leaderLease,
+    errors,
+    ...(keychainApprovals ? { keychainApprovals } : {}),
   });
   runs.onTerminal((run) => {
     void runs
@@ -2487,6 +2542,10 @@ export function buildApp(
     },
     { intervalMs: config.reaperIntervalMs, leaderLease },
   );
+  const triggerPuller = createTriggerContextPuller(app);
+  const triggerDirectory = { ...directory, discordLookup: (query) => discordPull(triggerPuller, query) } satisfies {
+    discordLookup: SurfacePull;
+  };
   orchestratorDeps.surfaceContext = createSurfaceContextPuller(
     app,
     keychain
@@ -2518,7 +2577,7 @@ export function buildApp(
             idempotency,
             identity,
             run: runTriggered,
-            directory,
+            directory: triggerDirectory,
             currentScopeMembers,
             sessions,
             resolveRecipient,
@@ -2532,7 +2591,10 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
+        fireDropResolution(
+          { deliveries, idempotency, identity, run: runTriggered, directory: triggerDirectory, resolveRecipient },
+          drop,
+        )
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
@@ -2549,7 +2611,7 @@ export function buildApp(
       idempotency,
       identity,
       run: runTriggered,
-      directory,
+      directory: triggerDirectory,
       currentScopeMembers,
       sessions,
       resolveRecipient,
@@ -2602,7 +2664,7 @@ export function buildApp(
     identity,
     run: runTriggered,
     leaderLease,
-    directory,
+    directory: triggerDirectory,
     currentScopeMembers,
     sessions,
     resolveRecipient,
@@ -2645,7 +2707,7 @@ export function buildApp(
           idempotency,
           identity,
           run: runTriggered,
-          directory,
+          directory: triggerDirectory,
           currentScopeMembers,
           sessions,
           resolveRecipient,
@@ -2666,7 +2728,7 @@ export function buildApp(
     idempotency,
     identity,
     run: runTriggered,
-    directory,
+    directory: triggerDirectory,
     currentScopeMembers,
     resolveRecipient,
   });
@@ -2969,6 +3031,7 @@ export function buildApp(
     config: configStore,
     connectorTokens,
     slackInstallation,
+    discordInstallation,
     resolveClient,
     consentLinks,
     oauthFlows,
@@ -3051,6 +3114,7 @@ export function buildApp(
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
     skillSyncEngine,
     slackCore,
+    discordCore,
   };
 }
 
@@ -3103,6 +3167,7 @@ export function serverDeps(
     connectorTokens: built.connectorTokens,
     slackInstallation: built.slackInstallation,
     slackEnvironmentState,
+    discordInstallation: built.discordInstallation,
     ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
     ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
     resolveClient: built.resolveClient,

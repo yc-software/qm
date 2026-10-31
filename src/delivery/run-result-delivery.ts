@@ -10,6 +10,16 @@ import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
+const RUN_DELIVERY_KEY_PREFIX = "run:";
+
+export function runDeliveryKey(runId: string): string {
+  return `${RUN_DELIVERY_KEY_PREFIX}${runId}`;
+}
+
+export function runIdOfDeliveryKey(key: string | undefined): string | undefined {
+  return key?.startsWith(RUN_DELIVERY_KEY_PREFIX) ? key.slice(RUN_DELIVERY_KEY_PREFIX.length) : undefined;
+}
+
 export interface RunResultDelivery {
   destination: Destination;
   text: string;
@@ -49,7 +59,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };
-  const idempotencyKey = `run:${run.id}`;
+  const idempotencyKey = runDeliveryKey(run.id);
   const provenance = turnDeliveryProvenance({
     origin,
     surface,
@@ -162,9 +172,9 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
+        const existing = await deliveries.existingKeys(batch.map((run) => runDeliveryKey(run.id)));
         for (const run of batch) {
-          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+          if (existing.has(runDeliveryKey(run.id)) || !(await recover(run))) continue;
           console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
           recovered += 1;
         }

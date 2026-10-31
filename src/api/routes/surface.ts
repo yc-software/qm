@@ -21,6 +21,7 @@ import {
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { ConfigInheritedError } from "../../resolution/config-store.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
@@ -1393,14 +1394,14 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  if (capability) return sendJson(res, 200, await app.getSoul(capability.scopeId));
   const scopeIdVal = url.searchParams.get("scopeId");
   const principalId = url.searchParams.get("principalId");
   if (!scopeIdVal || !principalId)
     return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
   if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
     return sendJson(res, 403, { error: "forbidden" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
+  return sendJson(res, 200, await app.getSoul(scopeIdVal as ScopeId));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1438,6 +1439,7 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)
       return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    if (e instanceof ConfigInheritedError) return sendJson(res, 409, { error: "config_inherited", message: e.message });
     return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }

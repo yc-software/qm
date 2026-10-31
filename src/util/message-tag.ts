@@ -1,3 +1,5 @@
+import { SNOWFLAKE, snowflakeMs } from "./snowflake.ts";
+
 export function xmlEscape(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -6,10 +8,16 @@ export function xmlAttrEscape(s: string): string {
   return xmlEscape(s).replace(/"/g, "&quot;");
 }
 
-export function isoFromTs(ts: string | undefined): string {
-  if (!ts) return "";
+export function messageTsMs(ts: string | undefined): number | undefined {
+  if (!ts) return undefined;
+  if (SNOWFLAKE.test(ts)) return snowflakeMs(ts);
   const n = Number.parseFloat(ts);
-  return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : "";
+  return Number.isFinite(n) && n > 0 ? Math.floor(n * 1000) : undefined;
+}
+
+export function isoFromTs(ts: string | undefined): string {
+  const ms = messageTsMs(ts);
+  return ms === undefined ? "" : new Date(ms).toISOString();
 }
 
 export interface MessageTagAttrs {

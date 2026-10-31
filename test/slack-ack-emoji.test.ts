@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import { parseAckEmoji } from "../src/slack/config.ts";
 import { createAckEmojiPicker } from "../src/slack/ack-emoji.ts";
-import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS, createAckPresenter } from "../src/slack/presenters.ts";
+import { CURATED_ACK_EMOJI } from "../src/slack/presenters.ts";
+import { DEFAULT_ACK_REACTIONS, createAckPresenter } from "../src/surfaces/ack-presenter.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { testConfigStore } from "./support/test-database.ts";
 

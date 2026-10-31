@@ -1,6 +1,8 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { discordUserIdOf } from "../discord/config.ts";
+import type { AdminGrantStore } from "../admin/admin-grant-store.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -31,8 +33,10 @@ export interface PrincipalLinkService extends PrincipalLinkResolver {
   link(input: PrincipalLinkInput): Promise<PrincipalLink>;
   unlink(principalId: string): Promise<PrincipalLink | null>;
   refresh(force?: boolean): Promise<void>;
+  exclusive<T>(fn: () => Promise<T>): Promise<T>;
 }
 
+const LINKS_LOCK_KEY = "principal-links";
 const MAX_ID_LENGTH = 255;
 const MAX_EVIDENCE_LENGTH = 500;
 const REFRESH_TTL_MS = 10_000;
@@ -41,7 +45,11 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
+export function createPrincipalLinkService(
+  store: DurableMap<PrincipalLink>,
+  lock: AdvisoryLock,
+  adminGrants: Pick<AdminGrantStore, "list">,
+): PrincipalLinkService {
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
 
@@ -67,6 +75,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
       return (byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
+    exclusive: (fn) => lock.withLock(LINKS_LOCK_KEY, fn),
     async list() {
       await refresh(true);
       return [...byAlias.values()].sort(
@@ -74,7 +83,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
       );
     },
     async link(input) {
-      return lock.withLock("principal-links", async () => {
+      return lock.withLock(LINKS_LOCK_KEY, async () => {
         if (!validId(input.principalId) || !validId(input.canonicalId))
           throw new PrincipalLinkError(
             400,
@@ -105,6 +114,16 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
+        if (discordUserIdOf(principalId) !== null) {
+          const sibling =
+            discordUserIdOf(canonicalId) !== null
+              ? canonicalId
+              : (byCanonical.get(canonicalKey) ?? []).find((row) => discordUserIdOf(row.principalId) !== null)
+                  ?.principalId;
+          if (sibling) throw new PrincipalLinkError(409, `${canonicalId} is already linked to ${sibling}`);
+        }
+        if ((await adminGrants.list()).some((g) => foldPrincipalId(g.principalId) === aliasKey))
+          throw new PrincipalLinkError(409, `${principalId} holds its own admin grant; revoke it first, then link it`);
         const stored = await store.putIfAbsent(aliasKey, {
           principalId,
           canonicalId,
@@ -119,7 +138,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
       });
     },
     async unlink(principalId) {
-      return lock.withLock("principal-links", async () => {
+      return lock.withLock(LINKS_LOCK_KEY, async () => {
         const row = await store.take(foldPrincipalId(principalId));
         await refresh(true);
         return row;

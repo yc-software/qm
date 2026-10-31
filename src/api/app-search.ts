@@ -110,7 +110,10 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
   return {
     name: "slack",
     async search(request) {
-      const messages = await app.searchSurface(request.query, { limit: Math.min(100, request.limit * 4) });
+      const messages = await app.searchSurface(request.query, {
+        surface: "slack",
+        limit: Math.min(100, request.limit * 4),
+      });
       const hits: BackendSearchHit[] = [];
       for (const message of messages) {
         const visible = await Promise.all(request.principals.map((p) => canSee(p, message.container)));

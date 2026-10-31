@@ -173,6 +173,39 @@ describe("fireDropResolution", () => {
     assert.match(fb[0]!.text, /saved to the keychain/);
   });
 
+  it("falls back to the owner's DM when the Discord home's readers are unknown", async () => {
+    const CHAN = "1300000000000000010";
+    const deliveries = createDeliveryStore();
+    let ran = false;
+    await fireDropResolution(
+      {
+        deliveries,
+        idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+        identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+        run: async () => ((ran = true), { status: "ok" }) as TurnResult,
+        directory: {
+          channelMember: async () => false,
+          groupMember: async () => false,
+          get: async () => null,
+          discordLookup: async () => ({ messages: [], retry: true }),
+        },
+      } as never,
+      {
+        id: "dropD",
+        ownerId: "U_A",
+        service: "stripe",
+        purpose: "p",
+        audienceScopeId: scopeId("channel", CHAN),
+        destination: { type: "discord", target: CHAN, audienceScopeId: scopeId("channel", CHAN) },
+        granted: true,
+      },
+    );
+    assert.equal(ran, false);
+    const fb = (await deliveries.pending("principal")).filter((d) => d.idempotencyKey === "drop:dropD:fallback");
+    assert.equal(fb.length, 1);
+    assert.equal(fb[0]!.destination.target, "U_A");
+  });
+
   it("with sibling drops still pending: the wake fires (with its grant) but says what's outstanding instead of ordering a resume", async () => {
     const seen: TurnRequest[] = [];
     const deps = depsWith(async (req) => {

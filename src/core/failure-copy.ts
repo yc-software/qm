@@ -8,6 +8,8 @@ export const SESSION_BUSY_USER_TEXT =
 export const SESSION_BUSY_FIRE_TEXT =
   "I couldn't get to this one — the conversation was busy with another task, so this run was skipped.";
 
+export const INTERNAL_ONLY_REFUSAL_REASON = "internal-only: shared audience includes a non-internal participant";
+
 const SESSION_BUSY_CLAUSE = "the conversation was busy with another task";
 
 interface FailureShape {

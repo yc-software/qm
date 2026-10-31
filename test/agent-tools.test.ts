@@ -294,7 +294,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async webhookDisable() {
       return { ok: true };
     },
-    soulRead() {
+    async soulRead() {
       return { effectiveSoul: "Org policy.\n\nBe terse.", soul: "Be terse.", soulVersion: 3 };
     },
     async soulWrite() {
@@ -1502,7 +1502,47 @@ test("each action dispatches to exactly its matching tool-context method", async
   assert.deepEqual(calls[4]![1], [{ limit: 5 }]);
   assert.deepEqual(calls[5]![1], [{ since: "1.0" }]);
   assert.deepEqual(calls[6]![1], ["q", { source: "slack" }]);
-  assert.deepEqual(calls[7]![1], []);
+  assert.deepEqual(calls[7]![1], [{}]);
+});
+
+test("read_thread, search and read_members forward channel and ts to the tool context", async () => {
+  const calls: Array<[string, unknown[]]> = [];
+  const spy =
+    (name: string, ret: unknown) =>
+    (...args: unknown[]) => {
+      calls.push([name, args]);
+      return Promise.resolve(ret);
+    };
+  const tc = {
+    ...fakeToolContext(),
+    readThread: spy("readThread", { ok: true, messages: [] }),
+    search: spy("search", { ok: true, hits: [], source: "live" }),
+    readMembers: spy("readMembers", { ok: true, members: [] }),
+  } as unknown as ToolContext;
+  const emitted: Emitted[] = [];
+  const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1", emit: (e) => void emitted.push(e as Emitted) });
+  await call(slack, { action: "read_thread", channel: "eng", ts: "1.1", limit: 3 });
+  await call(slack, { action: "search", query: "q", channel: "eng" });
+  await call(slack, { action: "read_members", channel: "eng" });
+  assert.deepEqual(calls, [
+    ["readThread", [{ limit: 3, channel: "eng", ts: "1.1" }]],
+    ["search", ["q", { channel: "eng" }]],
+    ["readMembers", [{ channel: "eng" }]],
+  ]);
+  const recorded = emitted.find((e) => e.type === "tool_call" && e.payload.action === "read_thread")!.payload;
+  assert.equal(recorded.ts, "1.1");
+  assert.equal(recorded.channel, "eng");
+});
+
+test("only Slack advertises the live search source", () => {
+  const sourceOf = (name: string) =>
+    (
+      surfaceTool({ current: fakeToolContext(), scopeLabel: "channel:C1" }, name).parameters as {
+        properties: Record<string, unknown>;
+      }
+    ).properties.source;
+  assert.ok(sourceOf("slack"));
+  assert.equal(sourceOf("discord"), undefined);
 });
 
 test("the surface tool is NAMED after its surface — a telegram surface produces a `telegram` tool", async () => {
@@ -2262,7 +2302,7 @@ test("guidance conversation scope with no own instructions does not return inher
   for (const soul of [null, ""]) {
     const tc: ToolContext = {
       ...fakeToolContext(),
-      soulRead: () => ({ effectiveSoul: "Org policy.", soul, soulVersion: 0 }),
+      soulRead: async () => ({ effectiveSoul: "Org policy.", soul, soulVersion: 0 }),
     };
     assert.equal(
       textOut(await call(tool("guidance", tc), { action: "read", scope: "conversation" })),
@@ -2275,7 +2315,7 @@ test("guidance read then replace keeps inherited policy out of saved instruction
   let soul = "Be terse.";
   const tc: ToolContext = {
     ...fakeToolContext(),
-    soulRead: () => ({ effectiveSoul: `Org policy.\n\n${soul}`, soul, soulVersion: 3 }),
+    soulRead: async () => ({ effectiveSoul: `Org policy.\n\n${soul}`, soul, soulVersion: 3 }),
     async soulWrite(content) {
       soul = content;
       return { ok: true, version: 4 };
@@ -2340,7 +2380,7 @@ test("guidance edit swaps one exact passage in either scope and refuses ambiguou
       setCalls.push({ bots, ambientEnabled });
       return { ok: true, orders };
     },
-    soulRead() {
+    async soulRead() {
       return {
         effectiveSoul: "Org policy.\n\nBe terse. Use $1 sparingly.",
         soul: "Be terse. Use $1 sparingly.",
@@ -2389,7 +2429,7 @@ test("guidance surfaces the channel bot ledger and cross-scope note on read", as
     async getStandingOrder() {
       return { ok: true, orders: "watch the Q3 launch", bots: { newsbot: { mode: "rollup", rollupHours: 6 } } };
     },
-    soulRead() {
+    async soulRead() {
       return { effectiveSoul: "Org policy.\n\nBe terse.", soul: "Be terse.", soulVersion: 3 };
     },
   };
@@ -2425,7 +2465,7 @@ test("control tools degrade to a crisp [error] when the turn has no self-API (CO
     async getStandingOrder() {
       return { ok: false, message: "standing orders aren't available on this turn" };
     },
-    soulRead() {
+    async soulRead() {
       return CONTROL_UNAVAILABLE;
     },
   };

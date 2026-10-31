@@ -1,13 +1,13 @@
 import { extractPrivateContinuation } from "./external-access.ts";
 import {
   type ReactionDirective,
-  MAX_REACTIONS_PER_TURN,
   SLACK_TEXT_LIMIT,
   applyReactions,
   botIdentityArgs,
   extractReactions,
   stripReactionDirectives,
 } from "./lib.ts";
+import { MAX_REACTIONS_PER_TURN } from "../surfaces/reactions.ts";
 
 import type { SlackConversationKind } from "./message-gating.ts";
 export type { SlackConversationKind } from "./message-gating.ts";
@@ -31,9 +31,6 @@ export async function updateSlackMessage(
   });
   return true;
 }
-
-export const HANDOFF_INSTRUCTION =
-  "When work needs another person's own logins, files or memory, follow the `hand-off` skill.";
 
 export function cleanAgentReplyForSlack(text: string): { text: string; reactions: ReactionDirective[] } {
   const extracted = extractReactions(text);

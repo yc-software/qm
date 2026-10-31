@@ -7,6 +7,8 @@ import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
+import { isPersonAddressed } from "../delivery/delivery-store.ts";
+import { surfaceForDeliveryType } from "../surfaces/surface-capabilities.ts";
 import {
   reachEnqueue,
   withSlackUnfurlOption,
@@ -16,7 +18,7 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
+import { isDiscordMember, pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
@@ -29,6 +31,7 @@ import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { runDeliveryKey } from "../delivery/run-result-delivery.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -101,7 +104,9 @@ export function createMessagingMethods(
   | "ackDeliveryByKey"
   | "setRunDeliveryState"
   | "upsertDirectory"
+  | "upsertDiscordDirectory"
   | "upsertChannels"
+  | "upsertDiscordChannels"
   | "upsertGroups"
   | "setDirectoryWorkspaceUrl"
   | "directoryMeta"
@@ -317,8 +322,8 @@ export function createMessagingMethods(
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
       if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
-      if (surface === "slack" && hasRevisionEvents(events)) {
-        void recordMessageRevisions(deps.sessions, events).catch(
+      if (hasRevisionEvents(events)) {
+        void recordMessageRevisions(deps.sessions, events, surface).catch(
           reportFailureAs("revisions: surface revision record", undefined),
         );
       }
@@ -425,12 +430,12 @@ export function createMessagingMethods(
     },
     async setRunDeliveryState(runId, state) {
       const found = await deps.runs.setDeliveryState(runId, null, state);
-      if (found && state.editRef) await deps.deliveries.setEditRefByKey(`run:${runId}`, state.editRef);
+      if (found && state.editRef) await deps.deliveries.setEditRefByKey(runDeliveryKey(runId), state.editRef);
       return found;
     },
 
     async upsertDirectory(members, syncedAt) {
-      const previous = await deps.directory.list();
+      const previous = (await deps.directory.list()).filter((m) => !isDiscordMember(m));
       if (!(await deps.directory.replace(members, syncedAt))) return false;
       const present = members.filter((m) => m.type === "internal").map((m) => m.principalId);
       const presentSet = new Set(present);
@@ -457,6 +462,12 @@ export function createMessagingMethods(
       }
       return true;
     },
+    async upsertDiscordDirectory(members) {
+      const owned = new Set(
+        (await deps.directory.list()).filter((m) => !isDiscordMember(m)).map((m) => personKey(m.principalId)),
+      );
+      await deps.directory.replaceDiscord(members.filter((m) => !owned.has(personKey(m.principalId))));
+    },
     async upsertChannels(channels, channelMembers, syncedAt, channelRosterIds, revocations, partial) {
       const applied = await deps.directory.replaceChannels(
         channels,
@@ -468,6 +479,24 @@ export function createMessagingMethods(
       );
       await h.syncLinkedProjectRosters();
       return applied;
+    },
+    async upsertDiscordChannels(channels, channelMembers, syncedAt, keep) {
+      const kept = (await deps.directory.listChannels()).filter((c) => keep.includes(c.channelId));
+      const keptMembers = (
+        await Promise.all(
+          kept.map(async (c) =>
+            ((await deps.directory.channelMemberIds(c.channelId)) ?? []).map((principalId) => ({
+              channelId: c.channelId,
+              principalId,
+            })),
+          ),
+        )
+      ).flat();
+      return deps.directory.replaceDiscordChannels(
+        [...channels, ...kept],
+        [...channelMembers, ...keptMembers],
+        syncedAt,
+      );
     },
     async upsertGroups(groupMembers, syncedAt, groupIds, groupRosterIds) {
       return deps.directory.replaceGroups(groupMembers, syncedAt, groupIds, groupRosterIds);
@@ -533,7 +562,7 @@ export function createMessagingMethods(
     ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
     async recordPrincipalDelivery(deliveryId, recipientThreadRef) {
       const delivery = await deps.deliveries.get(deliveryId);
-      if (!delivery || delivery.destination.type !== "principal") return;
+      if (!delivery || !isPersonAddressed(delivery.destination)) return;
       const recipientId = delivery.destination.target;
       const recipientScope = scopeId("personal", recipientId);
       const session = await deps.sessions.getOrCreateByThread(
@@ -541,7 +570,7 @@ export function createMessagingMethods(
         "dm",
         recipientScope,
         undefined,
-        "slack",
+        surfaceForDeliveryType(delivery.destination.type),
       );
       await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
       await deps.sessions.addParticipant(session.id, recipientId);

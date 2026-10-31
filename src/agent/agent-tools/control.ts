@@ -229,7 +229,7 @@ export function controlPlaneTools(kit: ToolKit) {
           );
         }
         if (params.action === "read") {
-          const soul = tc.soulRead();
+          const soul = await tc.soulRead();
           const convoExists = !isUnavailable(soul) && !!soul.soul && soul.soul.trim().length > 0;
           const ledger =
             channel!.bots && Object.keys(channel!.bots).length
@@ -284,7 +284,7 @@ export function controlPlaneTools(kit: ToolKit) {
       }
 
       if (params.action === "read") {
-        const r = tc.soulRead();
+        const r = await tc.soulRead();
         if (isUnavailable(r)) return unavailable(callId, "guidance");
         return recordResult(
           callId,
@@ -295,7 +295,7 @@ export function controlPlaneTools(kit: ToolKit) {
       let content = params.content;
       let expectedVersion: number | undefined;
       if (params.action === "edit") {
-        const current = tc.soulRead();
+        const current = await tc.soulRead();
         if (isUnavailable(current)) return unavailable(callId, "guidance");
         const edited = applyEdit(current.soul ?? "");
         if (!edited.ok) return editError(edited.message);

@@ -1,5 +1,6 @@
 import "./onboarding-welcome";
 import "./slack-account";
+import "./discord-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
 import {
   alwaysSteer,
@@ -565,6 +566,9 @@ function settingsPane(): TemplateResult {
       ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+      </div>
+      <div class="settings-row settings-discord-account">
+        <qm-discord-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-discord-account>
       </div>
       <div class="settings-row">
         <qm-onboarding-welcome

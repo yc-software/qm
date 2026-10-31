@@ -15,6 +15,10 @@ export let context: Context;
 export function configure(value: Context) {
   context = value;
 }
+const splitIds = (raw: string) =>
+  String(raw || "")
+    .split(/[\s,]+/)
+    .filter(Boolean);
 export class SlackSetting extends SettingState {
   scope = "";
   collect() {
@@ -182,24 +186,41 @@ export class ConnectorsState {
   }
 }
 export const connectors = new ConnectorsState();
-export class SlackInstallationState {
+abstract class InstallationState {
   data: Record<string, any> = {};
-  editor = false;
-  guide = false;
-  botToken = "";
-  appToken = "";
-  revision = 0;
   busy = "";
   message = "";
   tone = "";
-  request = 0;
-  linkStarted = false;
   render = () => {};
   setStatus(message: string, tone: string) {
     this.message = message;
     this.tone = tone;
     this.render();
   }
+  abstract load(): Promise<void>;
+  protected async disconnect(prompt: string, path: string, failed: string, done: string) {
+    if (this.busy || !confirm(prompt)) return;
+    this.busy = "remove";
+    this.render();
+    try {
+      const result = await context.api("DELETE", path);
+      if (!result.ok) return this.setStatus(result.data?.message || failed, "err");
+      await this.load();
+      this.setStatus(done, "ok");
+    } finally {
+      this.busy = "";
+      this.render();
+    }
+  }
+}
+export class SlackInstallationState extends InstallationState {
+  editor = false;
+  guide = false;
+  botToken = "";
+  appToken = "";
+  revision = 0;
+  request = 0;
+  linkStarted = false;
   async load() {
     const request = ++this.request;
     const result = await context.api("GET", "/api/slack-installation");
@@ -269,25 +290,13 @@ export class SlackInstallationState {
       this.render();
     }
   }
-  async remove() {
-    if (
-      this.busy ||
-      !confirm(
-        "Disconnect this Slack app? QM will stop replying in Slack until you reconnect. The app will remain installed in your workspace.",
-      )
-    )
-      return;
-    this.busy = "remove";
-    this.render();
-    try {
-      const result = await context.api("DELETE", "/api/slack-installation");
-      if (!result.ok) return this.setStatus(result.data?.message || "Remove failed.", "err");
-      await this.load();
-      this.setStatus("Slack disconnected.", "ok");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+  remove() {
+    return this.disconnect(
+      "Disconnect this Slack app? QM will stop replying in Slack until you reconnect. The app will remain installed in your workspace.",
+      "/api/slack-installation",
+      "Remove failed.",
+      "Slack disconnected.",
+    );
   }
 }
 export const installation = new SlackInstallationState();
@@ -319,3 +328,52 @@ export const emoji = {
     states.get("ack-emoji")!.render();
   },
 };
+
+class DiscordInstallationState extends InstallationState {
+  botToken = "";
+  oauthClientSecret = "";
+  guildIds = "";
+  internalRoleIds = "";
+  async load() {
+    const result = await context.api("GET", "/api/discord-installation");
+    if (!result.ok) return this.setStatus(result.data?.message || "Failed to load Discord status.", "err");
+    this.data = result.data;
+    this.botToken = "";
+    this.oauthClientSecret = "";
+    this.guildIds = (this.data.guildIds ?? []).join(", ");
+    this.internalRoleIds = (this.data.internalRoleIds ?? []).join(", ");
+    this.render();
+  }
+  async save() {
+    if (this.busy) return;
+    this.busy = "save";
+    this.setStatus("Saving…", "saving");
+    try {
+      const token = this.botToken.trim();
+      const clientSecret = this.oauthClientSecret.trim();
+      const result = await context.api("PUT", "/api/discord-installation", {
+        ...(token ? { botToken: token } : {}),
+        ...(clientSecret ? { oauthClientSecret: clientSecret } : {}),
+        guildIds: splitIds(this.guildIds),
+        internalRoleIds: splitIds(this.internalRoleIds),
+      });
+      if (!result.ok) return this.setStatus(result.data?.message || "Save failed.", "err");
+      await this.load();
+      this.setStatus("Saved. The bot reconnects within a few seconds.", "ok");
+    } finally {
+      this.botToken = "";
+      this.oauthClientSecret = "";
+      this.busy = "";
+      this.render();
+    }
+  }
+  remove() {
+    return this.disconnect(
+      "Disconnect the Discord bot? QM stops answering on Discord until you reconnect.",
+      "/api/discord-installation",
+      "Disconnect failed.",
+      "Discord disconnected.",
+    );
+  }
+}
+export const discordInstallation = new DiscordInstallationState();

@@ -72,6 +72,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     directoryMember: (p) => deps.directory.get(p),
     openGroup: (parts) => openGroupViaSurface((query) => surfaceContext.pull("slack", query), parts),
     registerGroup: (g, parts) => deps.directory.upsertGroup(g, parts),
+    ...(deps.discordLookup ? { discordLookup: deps.discordLookup } : {}),
   };
   const resolveReachTargetFor = (
     target: ReachTarget,

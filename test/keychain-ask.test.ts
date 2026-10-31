@@ -3,6 +3,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { BUSY_DEFER_MAX_LATE_MS } from "../src/triggers/run-trigger.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -508,6 +509,70 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   const ok = mkDeps(async () => ({ status: "ok", reply: "done" }) as TurnResult);
   await fireAskResolution(ok, ask);
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
+});
+
+test("fireAskResolution waits for unknown Discord readers only within the lateness bound", async () => {
+  const CHAN = "1300000000000000010";
+  const fire = (resolvedAt: number) => {
+    const ask: KeychainAsk = {
+      id: `d15c0${resolvedAt}`,
+      credentialId: "c1",
+      ownerId: "U_ALICE",
+      requesterId: "U_BOB",
+      requesterScopeId: `channel:${CHAN}`,
+      requesterDestination: { type: "discord", target: CHAN, audienceScopeId: `channel:${CHAN}` },
+      purpose: "p",
+      status: "approved",
+      createdAt: 1,
+      expiresAt: resolvedAt + 1,
+      resolvedAt,
+      grantId: "g1",
+    };
+    return fireAskResolution(
+      {
+        deliveries: createDeliveryStore(),
+        idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+        identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+        run: async () => ({ status: "ok" }) as TurnResult,
+        directory: {
+          channelMember: async () => false,
+          groupMember: async () => false,
+          get: async () => null,
+          discordLookup: async () => ({ messages: [], retry: true }),
+        },
+        getAsk: async () => ask,
+      } as never,
+      ask,
+    );
+  };
+  await assert.rejects(fire(Date.now()), /waiting for the original conversation/);
+  const late = await fire(Date.now() - BUSY_DEFER_MAX_LATE_MS - 60_000);
+  assert.equal(late.readersUnknown, true);
+});
+
+test("a Slack keychain resume whose session stays busy past the lateness bound still defers", async () => {
+  const resolvedAt = Date.now() - BUSY_DEFER_MAX_LATE_MS - 60_000;
+  const ask: KeychainAsk = {
+    id: "b05e1a7e0001",
+    credentialId: "c1",
+    ownerId: "U_ALICE",
+    requesterId: "U_BOB",
+    requesterScopeId: "personal:U_BOB",
+    purpose: "p",
+    status: "approved",
+    createdAt: 1,
+    expiresAt: resolvedAt + 1,
+    resolvedAt,
+    grantId: "g1",
+  };
+  const deps = {
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    run: async () => ({ status: "refused", refusalKind: "session_busy" }) as TurnResult,
+    getAsk: async () => ask,
+  } as never;
+  await assert.rejects(fireAskResolution(deps, ask), /waiting for the original conversation/);
 });
 
 test("an ask's resolution is one event line, shown only to the first turn after it resolved", async () => {

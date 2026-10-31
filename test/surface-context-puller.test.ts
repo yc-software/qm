@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSurfaceContextPuller } from "../src/api/surface-context-puller.ts";
+import { createSurfaceContextPuller, createTriggerContextPuller } from "../src/api/surface-context-puller.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 
 function fakeApp(behavior: (id: string) => { status: string; result?: SurfaceContextResult }) {
@@ -70,4 +70,22 @@ test("surface-context puller times out (returns null) when the surface never ans
   const out = await puller.pull("slack", { conversationTarget: "slack:C1:1.1", count: 50 });
   assert.equal(out, null);
   assert.equal(app.deleted.length, 1, "a timed-out request is still cleaned up");
+});
+
+test("the trigger-path puller gives up within a few seconds when the surface never answers", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const app = fakeApp(() => ({ status: "pending" }));
+  let out: SurfaceContextResult | null | undefined;
+  void createTriggerContextPuller(app)
+    .pull("discord", { lookupChannel: "1300000000000000001" })
+    .then((r) => (out = r));
+  let elapsed = 0;
+  while (out === undefined && elapsed < 10_000) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(100);
+    elapsed += 100;
+  }
+  assert.equal(out, null);
+  assert.ok(elapsed <= 5_000, `gave up after ${elapsed} ms`);
+  assert.equal(app.deleted.length, 1);
 });

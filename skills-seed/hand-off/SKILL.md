@@ -18,7 +18,7 @@ description: Get work done that needs another person's own logins, files or memo
 ```sh
 curl -fsS -X POST "$AGENT_API_URL/v1/reach" \
   -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
-  -d '{"recipient":"<their name or Slack id>","text":"<the full request>"}'
+  -d '{"recipient":"<their name or id>","text":"<the full request>"}'
 ```
 
 - They haven't seen this conversation. Write out the whole request: what's needed and why.

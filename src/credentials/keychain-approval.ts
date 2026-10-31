@@ -7,6 +7,7 @@ import type { ActorAssertion, Destination } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
+import { surfaceCapabilities, surfaceForDeliveryType } from "../surfaces/surface-capabilities.ts";
 import { swallow } from "../util/errors.ts";
 
 export interface KeychainApprovalView {
@@ -34,10 +35,12 @@ export function approvalCardDestination(ask: KeychainAsk): Destination | null {
   const d = ask.requesterDestination;
   const own = samePerson(ask.ownerId, ask.requesterId);
   if (d?.type === "web" && own) return null;
+  const caps = d ? surfaceCapabilities(surfaceForDeliveryType(d.type)) : undefined;
   if (
-    d?.type === "principal"
+    caps?.keychainCardInConversation !== false &&
+    (d?.type === "principal"
       ? samePerson(d.target, ask.ownerId)
-      : d && d.type !== "web" && d.audienceScopeId === ask.requesterScopeId
+      : d && d.type !== "web" && d.audienceScopeId === ask.requesterScopeId)
   )
     return { ...d!, keychainAskId: ask.id };
   return { ...principalDestination(ask.ownerId, ask.requesterId), keychainAskId: ask.id };
@@ -139,7 +142,11 @@ export function createKeychainApprovals(deps: {
       const destination = approvalCardDestination(resolved);
       if (destination)
         await deps.deliveries
-          ?.enqueue({ destination, text: "Credential request resolved.", idempotencyKey: `ask:${id}:resolved` })
+          ?.enqueue({
+            destination: { ...destination, keychainResolution: true },
+            text: "Credential request resolved.",
+            idempotencyKey: `ask:${id}:resolved`,
+          })
           .catch((error) => swallow("keychain: sync approval card", error));
       void deps
         .resume(resolved, grant)

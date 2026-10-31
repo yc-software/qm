@@ -7,6 +7,7 @@ import type { ExternalSlackAccess } from "./external-access.ts";
 import { companySlackActor, externalSlackNamespace } from "./external-access.ts";
 import { dmThreadRef } from "./message-gating.ts";
 import { encodeDeliveryTarget, parseDeliveryTarget, postWithVerify, slackReplyArgs } from "./delivery.ts";
+import { runDeliveryKey } from "../delivery/run-result-delivery.ts";
 
 export const PRIVATE_CONTINUATION_ACK = "I'll continue this in your DM, where I can use your private context.";
 
@@ -95,7 +96,7 @@ export async function continueInPrivate(
         await postWithVerify(
           client,
           { ...slackReplyArgs(dm, text, undefined, { unfurlLinks: false }) },
-          `run:${dmRunId}`,
+          runDeliveryKey(dmRunId),
           { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" },
         );
     } else if (outcome.status === "failed" || outcome.status === "refused") {
@@ -108,7 +109,7 @@ export async function continueInPrivate(
             undefined,
           ),
         },
-        `run:${dmRunId}`,
+        runDeliveryKey(dmRunId),
         { verifyFirst: true, verifyOldest: source.triggerTs ?? "0" },
       );
     }

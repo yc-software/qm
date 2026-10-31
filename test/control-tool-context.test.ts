@@ -159,7 +159,7 @@ test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () 
   const ctx = ctxFor({ control, controlClaims: claims("U1") });
   const w = await ctx.soulWrite("Be brief.");
   assert.ok("ok" in w && w.ok);
-  const r = ctx.soulRead();
+  const r = await ctx.soulRead();
   assert.ok(!("code" in r) || r.code !== "control_unavailable");
   assert.equal((r as { soul: string | null }).soul, "Be brief.");
 });
@@ -219,14 +219,14 @@ for (const scope of ["conversation", "channel"] as const) {
       /changed/,
     );
     const current =
-      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+      scope === "conversation" ? (await control.readSoul(claims("U1"))).soul : (await channelPolicy.get("C1"))!.orders;
     assert.ok(current === "First updated. Second rule." || current === "First rule. Second updated.");
     const retry = current.includes("First updated.")
       ? await edit("Second rule.", "Second updated.")
       : await edit("First rule.", "First updated.");
     assert.doesNotMatch(retry, /\[error\]/);
     const final =
-      scope === "conversation" ? control.readSoul(claims("U1")).soul : (await channelPolicy.get("C1"))!.orders;
+      scope === "conversation" ? (await control.readSoul(claims("U1"))).soul : (await channelPolicy.get("C1"))!.orders;
     assert.equal(final, "First updated. Second updated.");
   });
 }
@@ -273,5 +273,5 @@ test("without control/controlClaims wired, every control method returns CONTROL_
   assert.deepEqual(await ctx.cronList(), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.cronRuns("cron-1"), CONTROL_UNAVAILABLE);
   assert.deepEqual(await ctx.webhookList(), CONTROL_UNAVAILABLE);
-  assert.deepEqual(ctx.soulRead(), CONTROL_UNAVAILABLE);
+  assert.deepEqual(await ctx.soulRead(), CONTROL_UNAVAILABLE);
 });

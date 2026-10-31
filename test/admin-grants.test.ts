@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testAdminGrantStore } from "./support/test-database.ts";
+import { testAdmin } from "./support/principal-links.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-grants-")) }));
@@ -171,8 +171,7 @@ test("the last-admin guard counts one person's case-variant grants as ONE admin"
 });
 
 test("canAdminister agrees with adminStatusOf: a cased grant admits the canonical actor", async () => {
-  const { createAdminService } = await import("../src/admin/admin-service.ts");
-  const svc = createAdminService(testAdminGrantStore());
+  const svc = testAdmin();
   await svc.createGrant(
     { id: "admin-alice", type: "internal" },
     { principalId: "Jordan@Acme.test", role: "org_admin", scopeId: "org:default-org" },

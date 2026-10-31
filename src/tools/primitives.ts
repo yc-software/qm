@@ -331,7 +331,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
-  soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
+  soulRead(): Promise<{ effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable>;
   soulWrite(
     content: string,
     expectedVersion?: number,
@@ -346,6 +346,7 @@ export interface ToolContext extends SurfaceToolDeps {
 interface SurfaceSearchToolOpts {
   limit?: number;
   source?: "mirror" | "slack";
+  channel?: string;
 }
 
 interface SurfacePostOpts {
@@ -449,10 +450,10 @@ export interface SurfaceToolDeps {
   react(input: SurfaceReactInput): Promise<SurfacePostResult>;
   edit(input: SurfaceEditInput): Promise<SurfacePostResult>;
   delete(input: SurfaceDeleteInput): Promise<SurfacePostResult>;
-  readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
+  readThread(opts?: { limit?: number; channel?: string; ts?: string }): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
-  readMembers(): Promise<SurfaceMembersResult>;
+  readMembers(opts?: { channel?: string }): Promise<SurfaceMembersResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -1320,7 +1321,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
     webhookUpdate: (id, action) => controlOp((c, cl) => c.updateWebhook(id, { action }, cl)),
-    soulRead() {
+    async soulRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);
     },
@@ -1335,7 +1336,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readThread: (opts) => surfaceOp((s) => s.readThread(opts)),
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
-    readMembers: () => surfaceOp((s) => s.readMembers()),
+    readMembers: (opts) => surfaceOp((s) => s.readMembers(opts)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

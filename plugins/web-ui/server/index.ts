@@ -6,6 +6,7 @@ import { swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
+import { discordLinkRoutes } from "./discord-link-routes.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1372,6 +1373,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(c.res, "POST", "/v1/composio/slack/complete", JSON.stringify({ ticket: body.ticket }));
     },
   },
+  ...discordLinkRoutes({ relayCore, readJson }),
   {
     method: "GET",
     path: "/api/composio/toolkits",

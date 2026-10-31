@@ -2,6 +2,8 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, outboundFilesSchema, outboundSandboxSchema, type ToolKit } from "./kit.ts";
 import { MAX_TOOL_RESULT_CHARS } from "./record.ts";
+import { surfaceCapabilities, surfaceLabel } from "../../surfaces/surface-capabilities.ts";
+import { DISCORD_SURFACE } from "../../discord/config.ts";
 
 function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
@@ -10,12 +12,12 @@ function capText(t: string): string {
 export function surfaceTool(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordExternalResult } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
-  const surfaceLabel = surfaceName === "slack" ? "Slack" : surfaceName;
+  const surfaceLabelText = surfaceLabel(surfaceName);
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
     description:
-      `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
+      `Everything you do on ${surfaceLabelText} goes through this tool — posting (the ONLY way your words ` +
       "reach people; end the turn without a post and you stay silent), reacting, editing/deleting your " +
       "own messages, reading threads, checking what's new, searching, listing members, fetching files. " +
       "Pick an `action`.",
@@ -45,15 +47,13 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
-              : ""),
+            (surfaceCapabilities(surfaceName)?.mentionHint ?? ""),
         }),
       ),
       channel: Type.Optional(
         Type.String({
           description:
-            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). NOT valid on post — post only ever replies in the current conversation.",
+            "reach: send to THIS named channel (a channel you and the recipient can both see). EXTREMELY IMPORTANT: a channel post is a broadcast to everyone there — pick the narrowest audience that can act. A question or errand for one person (or a few) goes to their DM via `recipient`, NEVER to a public channel; use a channel only when the person you're helping explicitly named it as the destination, or the message genuinely concerns that whole room. react/edit/delete: which channel the target message is in (omit for the current one). read_thread/search/read_members: read THIS channel instead of the current conversation (a name or id; you must be able to see it, otherwise the read fails). NOT valid on post — post only ever replies in the current conversation.",
         }),
       ),
       recipient: Type.Optional(Type.String({ description: "reach: DM this teammate (by name). NOT valid on post." })),
@@ -66,7 +66,7 @@ export function surfaceTool(kit: ToolKit) {
       ts: Type.Optional(
         Type.String({
           description:
-            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to.",
+            "post: reply under THIS message id (from read_thread/whats_new) — threads off it. You DON'T need it to answer where you were addressed; a plain post already lands in the current thread/DM. Only set it to reply under a DIFFERENT message here. react: the message id to react to. read_thread: read the thread under THIS message id instead of the current thread (not on Discord — pass the thread's id as `channel`).",
         }),
       ),
       broadcast: Type.Optional(
@@ -91,18 +91,22 @@ export function surfaceTool(kit: ToolKit) {
         }),
       ),
       query: Type.Optional(Type.String({ description: "search: words to look for in this place's messages." })),
-      source: Type.Optional(
-        Type.Union([Type.Literal("mirror"), Type.Literal("slack")], {
-          description:
-            "search: where to search — `mirror` (default) searches the local copy of recent messages: only channels I'm in, " +
-            "and only back to each channel's coverage date, so it can miss both very recent and older messages. " +
-            "`slack` runs Slack's own full-history search AS THE ASKING PERSON, via their connected Slack login — it sees " +
-            "exactly what they can see, including their own DMs and private channels (never anyone else's). Retry with " +
-            "`slack` when the mirror and this conversation's own history both come up empty; reading the conversation needs no personal login. " +
-            "A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
-            "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
-        }),
-      ),
+      ...(surfaceName === DISCORD_SURFACE
+        ? {}
+        : {
+            source: Type.Optional(
+              Type.Union([Type.Literal("mirror"), Type.Literal("slack")], {
+                description:
+                  "search: where to search — `mirror` (default) searches the local copy of recent messages: only channels I'm in, " +
+                  "and only back to each channel's coverage date, so it can miss both very recent and older messages. " +
+                  "`slack` runs Slack's own full-history search AS THE ASKING PERSON, via their connected Slack login — it sees " +
+                  "exactly what they can see, including their own DMs and private channels (never anyone else's). Retry with " +
+                  "`slack` when the mirror and this conversation's own history both come up empty; reading the conversation needs no personal login. " +
+                  "A message neither lens can see may still exist — say what you couldn't search, don't declare it nonexistent. " +
+                  "In a channel or group, hits from the asker's DMs or private channels are for their eyes: don't quote that content to the room — acknowledge you found it and take it to their DM.",
+              }),
+            ),
+          }),
       since: Type.Optional(
         Type.String({
           description:
@@ -120,6 +124,7 @@ export function surfaceTool(kit: ToolKit) {
           text(`[error] the "${params.action}" action requires \`${field}\`.`),
           true,
         );
+      const readScope = params.channel !== undefined ? { channel: params.channel } : {};
       const routing = {
         ...(params.channel !== undefined ? { channel: params.channel } : {}),
         ...(params.participants !== undefined ? { participants: params.participants } : {}),
@@ -261,8 +266,14 @@ export function surfaceTool(kit: ToolKit) {
             tool: surfaceName,
             action: "read_thread",
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...readScope,
+            ...(params.ts !== undefined ? { ts: params.ts } : {}),
           });
-          const r = await tc.readThread(params.limit !== undefined ? { limit: params.limit } : undefined);
+          const r = await tc.readThread({
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...readScope,
+            ...(params.ts !== undefined ? { ts: params.ts } : {}),
+          });
           if (!r.ok)
             return recordResult(
               callId,
@@ -326,16 +337,19 @@ export function surfaceTool(kit: ToolKit) {
         }
         case "search": {
           if (params.query === undefined) return missing("query");
+          const searchSource = (params as { source?: "mirror" | "slack" }).source;
           await recordCall(callId, {
             tool: surfaceName,
             action: "search",
             query: params.query,
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
-            ...(params.source !== undefined ? { source: params.source } : {}),
+            ...(searchSource !== undefined ? { source: searchSource } : {}),
+            ...readScope,
           });
           const r = await tc.search(params.query, {
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
-            ...(params.source !== undefined ? { source: params.source } : {}),
+            ...(searchSource !== undefined ? { source: searchSource } : {}),
+            ...readScope,
           });
           if (!r.ok)
             return recordResult(
@@ -375,8 +389,8 @@ export function surfaceTool(kit: ToolKit) {
           );
         }
         case "read_members": {
-          await recordCall(callId, { tool: surfaceName, action: "read_members" });
-          const r = await tc.readMembers();
+          await recordCall(callId, { tool: surfaceName, action: "read_members", ...readScope });
+          const r = await tc.readMembers(readScope);
           if (!r.ok)
             return recordResult(
               callId,

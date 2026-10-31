@@ -1467,6 +1467,79 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
   assert.equal((await crons.listFires(cron.id)).runs[0]!.status, "refused");
 });
 
+function discordHomedCron(crons: ReturnType<typeof createCronStore>) {
+  const channel = "1300000000000000010";
+  return crons.create({
+    schedule: { firstFireAt: 1000 },
+    action: "check",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", channel),
+    destination: { type: "discord", target: "1300000000000000077", audienceScopeId: scopeId("channel", channel) },
+  });
+}
+
+const readersUnknown = {
+  channelMember: async () => false,
+  groupMember: async () => false,
+  get: async () => null,
+  channelPrivacy: async () => undefined,
+  discordLookup: async () => ({ messages: [], retry: true }),
+};
+
+test("a Discord-homed fire waiting for channel readers is deferred with its own note, then skipped past the bound", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const calls: TurnRequest[] = [];
+  let clock = 1000;
+  const scheduler = createScheduler({
+    ...singleProcessDeps(),
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    directory: readersUnknown,
+    run: async (req: TurnRequest) => (calls.push(req), { status: "ok", reply: "OUT" }),
+    now: () => clock,
+  } as never);
+  const cron = await discordHomedCron(crons);
+  await scheduler.tick(clock);
+  let fires = (await crons.listFires(cron.id)).runs;
+  assert.equal(fires[0]!.status, "deferred");
+  assert.match(fires[0]!.note ?? "", /readers are still loading — retrying at/);
+  assert.doesNotMatch(fires[0]!.note ?? "", /session busy/);
+
+  clock = 1000 + 10 * 60_000 + 1;
+  await scheduler.tick(clock);
+  fires = (await crons.listFires(cron.id)).runs;
+  assert.equal(fires.length, 1);
+  assert.notEqual(fires[0]!.status, "deferred");
+  assert.match(fires[0]!.note ?? "", /did not load in time/);
+  assert.equal((await crons.get(cron.id))!.deferUntil, undefined);
+  assert.equal(calls.length, 0);
+});
+
+test("a manual run of a Discord-homed one-shot while readers are unknown is logged as refused and keeps the one-shot", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const scheduler = createScheduler({
+    ...singleProcessDeps(),
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    directory: readersUnknown,
+    run: async () => ({ status: "ok", reply: "OUT" }),
+    now: () => 500,
+  } as never);
+  const cron = await discordHomedCron(crons);
+  const manual = await scheduler.runNow(cron.id);
+  assert.ok(manual.started);
+  await manual.settled;
+  const [fire] = (await crons.listFires(cron.id)).runs;
+  assert.equal(fire!.status, "refused");
+  assert.match(fire!.note ?? "", /did not load in time/);
+  assert.equal((await crons.get(cron.id))!.enabled, true);
+});
+
 test("queue mode: a busy fire releases its slot and is re-queued to run after the deferral", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const calls: TurnRequest[] = [];

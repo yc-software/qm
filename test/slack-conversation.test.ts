@@ -11,8 +11,8 @@ import {
   type ConversationView,
   type ConversationTurn,
   type RecentMessage,
-  encodeTs,
-} from "../src/slack/lib.ts";
+} from "../src/surfaces/conversation.ts";
+import { encodeTs, SLACK_MESSAGE_IDS } from "../src/surfaces/message-ids.ts";
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -27,7 +27,7 @@ const ctxMsg = (ts: string, name: string, text: string, extra: Partial<RecentMes
 
 test("buildContextWindow keeps the most-recent `count` messages and maps them to wire shape", () => {
   const scanned = Array.from({ length: 8 }, (_, i) => ctxMsg(`170000000${i}.000100`, `User${i}`, `message ${i}`));
-  const w = buildContextWindow(scanned, { count: 3 });
+  const w = buildContextWindow(scanned, { formatTs: formatSlackTs, messageIds: SLACK_MESSAGE_IDS, count: 3 });
   assert.equal(w.messages.length, 3);
   assert.deepEqual(
     w.messages.map((m) => m.text),
@@ -38,7 +38,7 @@ test("buildContextWindow keeps the most-recent `count` messages and maps them to
   assert.equal(w.hasMore, true, "older scanned messages are pageable");
   assert.equal(w.nextBefore, w.messages[0]!.ts, "cursor continues from the oldest returned message");
 
-  const all = buildContextWindow(scanned, { count: 50 });
+  const all = buildContextWindow(scanned, { formatTs: formatSlackTs, messageIds: SLACK_MESSAGE_IDS, count: 50 });
   assert.equal(all.messages.length, 8);
   assert.equal(all.hasMore, false, "everything scanned fit");
   assert.equal(all.nextBefore, undefined);
@@ -52,7 +52,12 @@ test("buildContextWindow filters by case-insensitive match and pages dropped mat
     ctxMsg("1700000004.000100", "Dave", "ship it"),
     ctxMsg("1700000005.000100", "Erin", "deploy went out"),
   ];
-  const w = buildContextWindow(scanned, { count: 2, match: "deploy" });
+  const w = buildContextWindow(scanned, {
+    formatTs: formatSlackTs,
+    messageIds: SLACK_MESSAGE_IDS,
+    count: 2,
+    match: "deploy",
+  });
   assert.deepEqual(
     w.messages.map((m) => m.author),
     ["Carol", "Erin"],
@@ -70,7 +75,13 @@ test("buildContextWindow pages the scan onward when the surface had more, even w
     ctxMsg("1700000001.000100", "Alice", "nothing relevant"),
     ctxMsg("1700000002.000100", "Bob", "still nothing"),
   ];
-  const w = buildContextWindow(scanned, { count: 50, match: "deploy", scanHasMore: true });
+  const w = buildContextWindow(scanned, {
+    formatTs: formatSlackTs,
+    messageIds: SLACK_MESSAGE_IDS,
+    count: 50,
+    match: "deploy",
+    scanHasMore: true,
+  });
   assert.deepEqual(w.messages, []);
   assert.equal(w.hasMore, true);
   assert.equal(w.nextBefore, "1700000001.000100", "cursor walks past the scanned region");
@@ -87,7 +98,7 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
         files: ["plan.pdf"],
       }),
     ],
-    { count: 10, nameById },
+    { formatTs: formatSlackTs, messageIds: SLACK_MESSAGE_IDS, count: 10, nameById },
   );
   const self = w.messages[1]!;
   assert.equal(self.author, "you");
@@ -108,7 +119,7 @@ test("buildContextWindow preserves reaction counts without inventing missing rea
       ctxMsg("1700000002.000100", "Alice", "waiting", { reactions: [] }),
       ctxMsg("1700000003.000100", "Bob", "search result"),
     ],
-    { count: 10 },
+    { formatTs: formatSlackTs, messageIds: SLACK_MESSAGE_IDS, count: 10 },
   );
   assert.deepEqual(w.messages[0]!.reactions, [{ name: "white_check_mark", count: 2 }]);
   assert.deepEqual(w.messages[1]!.reactions, []);
@@ -121,7 +132,7 @@ test("recentWindow keeps the contiguous recent window — a NON-latest message i
     { ts: "1700000000.000002", name: "Mira", text: "agreed", authorId: "U_MIRA" },
     { ts: "1700000000.000003", name: "Carol", text: "@agent thoughts?", authorId: "U_CAROL", isTrigger: true },
   ];
-  const picked = recentWindow(candidates);
+  const picked = recentWindow(candidates, SLACK_MESSAGE_IDS);
   assert.ok(
     picked.some((m) => m.text === "Yeah it's pretty nice"),
     "Carol's earlier line is kept, not evicted for his latest",
@@ -137,7 +148,7 @@ test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop 
     text: `m${i}`,
     authorId: `U_${i}`,
   }));
-  const picked = recentWindow(candidates);
+  const picked = recentWindow(candidates, SLACK_MESSAGE_IDS);
   assert.equal(picked.length, MAX_RECENT_MESSAGES);
   assert.ok(
     picked.some((m) => m.text === `m${MAX_RECENT_MESSAGES + 7}`),
@@ -153,12 +164,16 @@ test("recentWindow honors an explicit limit override (env-tunable window depth)"
     text: `m${i}`,
     authorId: `U_${i}`,
   }));
-  assert.equal(recentWindow(candidates, 5).length, 5, "caps at the override");
+  assert.equal(recentWindow(candidates, SLACK_MESSAGE_IDS, 5).length, 5, "caps at the override");
   assert.ok(
-    recentWindow(candidates, 5).some((m) => m.text === "m29"),
+    recentWindow(candidates, SLACK_MESSAGE_IDS, 5).some((m) => m.text === "m29"),
     "keeps the newest under the override",
   );
-  assert.equal(recentWindow(candidates, 100).length, 30, "a window larger than the thread keeps every message");
+  assert.equal(
+    recentWindow(candidates, SLACK_MESSAGE_IDS, 100).length,
+    30,
+    "a window larger than the thread keeps every message",
+  );
 });
 
 test("recentWindow pulls in a kept reply's thread root (parent-closure adds context, never drops a recent message)", () => {
@@ -170,7 +185,7 @@ test("recentWindow pulls in a kept reply's thread root (parent-closure adds cont
     authorId: `U_${i}`,
   }));
   const reply = { ts: "1700000099.000000", name: "Carol", text: "the answer", authorId: "U_CAROL", parentTs: root.ts };
-  const picked = recentWindow([root, ...fillers, reply]);
+  const picked = recentWindow([root, ...fillers, reply], SLACK_MESSAGE_IDS);
   assert.ok(
     picked.some((m) => m.ts === reply.ts),
     "the recent reply is in the window",
@@ -233,6 +248,7 @@ test("resolveMentions rewrites <@U…> to @Name from the map; unknown ids stay r
 });
 
 const baseView = (over: Partial<ConversationView> = {}): ConversationView => ({
+  messageIds: SLACK_MESSAGE_IDS,
   channel: { name: "eng", kind: "channel", isPrivate: true },
   messages: [],
   here: { kind: "top-level" },
@@ -459,6 +475,7 @@ test("renderConversationView: a message's files render inline, too-big files are
   assert.ok(withFiles.header.indexOf("Files too big to view this turn") < withFiles.header.indexOf("You are in #eng"));
 
   const empty = renderConversationView({
+    messageIds: SLACK_MESSAGE_IDS,
     channel: { kind: "channel" },
     messages: [],
     here: { kind: "top-level" },

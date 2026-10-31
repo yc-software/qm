@@ -39,6 +39,7 @@ test("settings navigation never starts the all-scopes history scan", () => {
       loadConnectors: () => {
         settings++;
       },
+      loadDiscordInstallation() {},
       loadOnboarding: () => {
         settings++;
       },

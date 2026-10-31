@@ -788,14 +788,14 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
 
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", async () => {
   const { control } = setup();
-  const before = control.readSoul(claims("U1"));
+  const before = await control.readSoul(claims("U1"));
   assert.equal(before.soul, null);
 
   const w = await control.writeSoul("Always greet in Spanish.", claims("U1"));
   assert.ok(w.ok, JSON.stringify(w));
   assert.equal(w.version, 1);
 
-  const after = control.readSoul(claims("U1"));
+  const after = await control.readSoul(claims("U1"));
   assert.equal(after.soul, "Always greet in Spanish.");
   assert.match(after.effectiveSoul, /Always greet in Spanish\./);
 });
@@ -804,7 +804,7 @@ test("soul write in a shared (channel) scope is allowed (allowSharedScope, like 
   const { control } = setup();
   const w = await control.writeSoul("Channel standing note.", claims("U1", scopeId("channel", "C9")));
   assert.ok(w.ok, JSON.stringify(w));
-  const after = control.readSoul(claims("U1", scopeId("channel", "C9")));
+  const after = await control.readSoul(claims("U1", scopeId("channel", "C9")));
   assert.equal(after.soul, "Channel standing note.");
 });
 

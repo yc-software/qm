@@ -96,6 +96,7 @@ function withCallIds(emit: AgentTurnInput["emit"]): AgentTurnInput["emit"] {
 
 export function createMockAgent(): Agent {
   const shedSessions = new Set<string>();
+  const nudgePostSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
   const resumePostSessions = new Map<string, string>();
   const shutdownResumeSessions = new Set<string>();
@@ -280,8 +281,21 @@ export function createMockAgent(): Agent {
         );
       } else if (command0 === "!silent") {
         reply = "";
-      } else if (command0.startsWith("[system] You were addressed")) {
-        if (shedSessions.has(turn.session.id)) {
+      } else if (
+        command0.startsWith("[system] You were addressed") ||
+        command0.startsWith("[system] Nothing you write reaches")
+      ) {
+        if (command0.startsWith("[system] Nothing") && !nudgePostSessions.has(turn.session.id)) {
+          await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "finish_silently", silent: true },
+            scopeLabel: turn.scopeLabel,
+          });
+          usedTool = true;
+          silent = true;
+          reply = "";
+        } else if (shedSessions.has(turn.session.id)) {
           reply = "worklog: did the thing but never posted";
         } else {
           await turn.emit({
@@ -294,6 +308,9 @@ export function createMockAgent(): Agent {
           usedTool = true;
           reply = r.ok ? "(posted after nudge)" : `[not sent] ${r.message ?? "failed"}`;
         }
+      } else if (command0 === "!plain-reply") {
+        nudgePostSessions.add(turn.session.id);
+        reply = "worklog: did the thing but never posted";
       } else if (command0.startsWith("!shedmute")) {
         shedSessions.add(turn.session.id);
         reply = "worklog: did the thing but never posted";

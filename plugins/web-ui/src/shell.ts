@@ -2,6 +2,7 @@ import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
+import { captureDiscordReturn } from "./discord-account";
 import { clearTranscriptCache } from "./transcript-cache";
 import { captureConnectionReturn } from "./connection-return";
 import { renderModelConnectGate } from "./model-connect";
@@ -1117,6 +1118,7 @@ export async function boot(): Promise<void> {
   if (new URLSearchParams(location.search).get("themeOnly") === "1") return;
   captureConnectionReturn(location.href);
   captureSlackReturn(location.href);
+  captureDiscordReturn(location.href);
   const params = new URLSearchParams(location.search);
   const {
     view: wanted,

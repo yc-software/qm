@@ -1,6 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { assertSurfaceScopedFullSyncs } from "./support/channel-surface-scope.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
@@ -517,5 +519,108 @@ test("pg directory: room membership follows a person's linked identities", { ski
     assert.equal(await store.channelMembership("C-linked", "someone-else"), false);
   } finally {
     installPrincipalLinks(null);
+  }
+});
+
+test("pg directory: the Slack swap and the Discord swap each leave the other's rows alone", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await seed(store);
+  await store.replaceDiscord([
+    { principalId: "discord:9", displayName: "Disc Dee", type: "internal", avatarUrl: "https://cdn.example/9.png" },
+  ]);
+  assert.equal((await store.list()).length, 5);
+  assert.equal((await store.get("discord:9"))?.avatarUrl, "https://cdn.example/9.png");
+  assert.equal((await store.resolve("Disc")).kind, "one");
+
+  await store.replace([{ principalId: "U-alice", displayName: "Alice Renamed", type: "internal" }]);
+  assert.deepEqual((await store.list()).map((m) => m.principalId).sort(), ["U-alice", "discord:9"]);
+
+  await store.replaceDiscord([]);
+  assert.deepEqual(
+    (await store.list()).map((m) => m.principalId),
+    ["U-alice"],
+  );
+});
+
+test("pg directory: an exact Slack name beats a Discord name that only starts with it", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replace([{ principalId: "U-bea", displayName: "Bea", type: "internal" }]);
+  await store.replaceDiscord([{ principalId: "discord:6", displayName: "Bea Arthur", type: "internal" }]);
+  const r = await store.resolve("bea");
+  assert.equal(r.kind === "one" && r.member.principalId, "U-bea");
+  await store.replaceDiscord([{ principalId: "discord:6", displayName: "bea", type: "internal" }]);
+  assert.equal((await store.resolve("bea")).kind, "ambiguous");
+  await store.replaceDiscord([]);
+});
+
+test("pg directory: a Discord nickname never wins a name that a Slack member also matches", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await seed(store);
+  await store.replaceDiscord([{ principalId: "discord:5", displayName: "Alice", type: "internal" }]);
+  const r = await store.resolve("alice");
+  assert.equal(r.kind, "ambiguous");
+  if (r.kind === "ambiguous") assert.deepEqual(r.candidates.map((c) => c.principalId).sort(), ["U-alice", "discord:5"]);
+  assert.equal((await store.resolve("discord:5")).kind, "one");
+  await store.replaceDiscord([]);
+  assert.equal((await store.resolve("alice")).kind, "one");
+});
+
+test("pg directory: a Slack+Discord person linked by email keeps the Slack route", { skip }, async () => {
+  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const { createDiscordPrincipalRoute, slackAccountOf } = await import("../src/delivery/principal-routing.ts");
+  const { DISCORD_DM_DELIVERY_TYPE } = await import("../src/discord/config.ts");
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replace([
+    { principalId: "amy.work@example.com", displayName: "Amy Slack", type: "internal", slackId: "U0SLACKAMY" },
+  ]);
+  const route = createDiscordPrincipalRoute({
+    installation: { status: async () => ({ configured: true }) } as never,
+    linkedDiscordUserIds: () => ["111"],
+    hasSlackAccount: slackAccountOf(store),
+  });
+  assert.equal(await store.get("amy@example.com"), null);
+  assert.equal(await route("amy@example.com"), DISCORD_DM_DELIVERY_TYPE);
+  installPrincipalLinks({
+    canonical: (key) => (key === "amy@example.com" ? "amy.work@example.com" : undefined),
+    aliases: (key) => (key === "amy.work@example.com" ? ["amy@example.com"] : []),
+  });
+  try {
+    assert.equal(await route("amy@example.com"), null);
+  } finally {
+    installPrincipalLinks(null);
+  }
+});
+
+test(
+  "pg directory: a Discord full channel sync and a Slack full channel sync never delete each other's rows",
+  { skip },
+  async () => {
+    await assertSurfaceScopedFullSyncs(createPostgresDirectoryStore(URL!));
+  },
+);
+
+test("pg directory: a Slack partial write does not leave a Discord full sync marked incomplete", { skip }, async () => {
+  const org = `org-surface-${randomUUID()}`;
+  const previous = process.env.ORG_ID;
+  process.env.ORG_ID = org;
+  const store = createPostgresDirectoryStore(URL!);
+  const t = Date.now() + 100_000;
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  try {
+    await store.replaceChannels([{ channelId: "C-eng", name: "eng" }], [], t + 10, undefined, [], true);
+    assert.equal(
+      await store.replaceDiscordChannels([{ channelId: "100000000000000301", name: "dev" }], [], t + 5),
+      true,
+    );
+    const { rows } = await pool.query("SELECT discord_channels_hash FROM directory_sync WHERE org_id = $1", [org]);
+    assert.notEqual(rows[0]?.discord_channels_hash, null);
+  } finally {
+    await pool.query("DELETE FROM directory_sync WHERE org_id = $1", [org]);
+    await pool.query("DELETE FROM directory_channels WHERE org_id = $1", [org]);
+    await pool.query("DELETE FROM directory_channel_members WHERE org_id = $1", [org]);
+    await pool.end();
+    if (previous === undefined) delete process.env.ORG_ID;
+    else process.env.ORG_ID = previous;
   }
 });

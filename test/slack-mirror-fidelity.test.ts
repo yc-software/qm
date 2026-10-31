@@ -4,7 +4,8 @@ import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.t
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { buildContextWindow } from "../src/slack/conversation.ts";
+import { buildContextWindow, formatSlackTs } from "../src/surfaces/conversation.ts";
+import { SLACK_MESSAGE_IDS } from "../src/surfaces/message-ids.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
@@ -185,7 +186,12 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
   assert.deepEqual(shaped[1], shaped[0]);
   assert.equal(shaped[1]![0]!.text, "Hi <@U1> and <@U2> & welcome");
   assert.equal(shaped[1]![0]!.name, "New name");
-  const context = buildContextWindow(shaped[1]!, { count: 20, nameById: new Map([["U1", "New name"]]) });
+  const context = buildContextWindow(shaped[1]!, {
+    formatTs: formatSlackTs,
+    messageIds: SLACK_MESSAGE_IDS,
+    count: 20,
+    nameById: new Map([["U1", "New name"]]),
+  });
   assert.equal(context.messages[0]!.text, "Hi @New name and <@U2> & welcome");
 });
 

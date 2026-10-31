@@ -13,6 +13,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "./sources/adapter.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
+import { SLACK_CONTAINER } from "../surfaces/message-ids.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
 
 export interface LoopIngress {
@@ -280,7 +281,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         (!input.secret?.trim() ||
           !/^T[A-Z0-9]+$/.test(input.teamId ?? "") ||
           !input.channels?.length ||
-          input.channels.some((channel) => !/^[CDG][A-Z0-9]+$/.test(channel)))
+          input.channels.some((channel) => !SLACK_CONTAINER.test(channel)))
       )
         throw new Error("Slack requires a signing secret, workspace ID, and selected channel IDs");
       if (input.kind === "gmail" && loop.ownerScopeId !== `personal:${loop.owner}`)

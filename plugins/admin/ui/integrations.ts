@@ -1,9 +1,19 @@
 import { choiceGroup, settingStatus, saveFooter } from "./setting-controls.ts";
 import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
+import { live } from "lit/directives/live.js";
+import { discordMark } from "../../web-ui/src/discord-mark.ts";
 import { slackMark } from "../../web-ui/src/slack-mark.ts";
 import { repeat } from "lit/directives/repeat.js";
-import { states, connectors, installation, emoji, context, type SlackSetting } from "./integrations-state.ts";
+import {
+  states,
+  connectors,
+  installation,
+  discordInstallation,
+  emoji,
+  context,
+  type SlackSetting,
+} from "./integrations-state.ts";
 export {
   configure,
   owns,
@@ -15,14 +25,17 @@ export {
   states,
   connectors,
   installation,
+  discordInstallation,
 } from "./integrations-state.ts";
 import { loadScope as loadSettings } from "./integrations-state.ts";
+import { copyText } from "./shared.ts";
 export function loadScope(data: any, scope: string) {
   loadSettings(data, scope);
   if (states.get("ack-emoji")!.available) void emoji.load();
 }
 export const loadConnectors = () => connectors.load();
 export const loadSlackInstallation = () => installation.load();
+export const loadDiscordInstallation = () => discordInstallation.load();
 const cards: Record<string, () => ReturnType<typeof html>> = {};
 cards["card-external-slack"] = () => {
   const s = states.get("external-slack-participants")!;
@@ -286,6 +299,7 @@ cards["card-slack-installation"] = () => {
         </div>
       </div>
       <details
+        class="app-guide"
         id="slack-own-app-guide"
         .open=${s.guide}
         @toggle=${(e: Event) => {
@@ -347,7 +361,7 @@ cards["card-slack-installation"] = () => {
         >
           I have both tokens
         </button>
-        <div class=${s.editor ? "" : "hidden"} id="slack-token-editor">
+        <div class=${classMap({ "token-editor": true, hidden: !s.editor })} id="slack-token-editor">
           <label style="display: block; margin-bottom: 8px"
             >Bot User OAuth Token
             <input
@@ -391,6 +405,103 @@ cards["card-slack-installation"] = () => {
         </div>
       </details>
       <span class=${"status " + s.tone} role="status" id="st-slack-installation">${s.message}</span>
+    </div>
+  </section>`;
+};
+function discordTitle(d: Record<string, any>): string {
+  if (d.configured) return `Connected as ${d.botTag}`;
+  return "Not configured";
+}
+function discordDescription(d: Record<string, any>): string {
+  return d.configured
+    ? "People reach QM in the configured servers and by DM, and link their account in user settings."
+    : "Connect a Discord bot so people can reach QM from Discord.";
+}
+cards["card-discord-installation"] = () => {
+  const s = discordInstallation,
+    d = s.data;
+  const LABEL = "display: block; margin-bottom: 8px";
+  const field = (id: string, label: string, key: "guildIds" | "internalRoleIds") =>
+    html`<label style=${LABEL}
+      >${label}
+      <input id=${id} .value=${s[key]} @input=${(e: Event) => (s[key] = (e.target as HTMLInputElement).value)}
+    /></label>`;
+  return html`<section class="card" id="card-discord-installation">
+    <div class="head"><h2>${discordMark(20)} Discord</h2></div>
+    <div class="body">
+      <div class="slack-connection">
+        <div class="slack-connection-info">
+          <h3 id="discord-installation-state">${discordTitle(d)}</h3>
+          <p class="hint" id="discord-installation-description">${discordDescription(d)}</p>
+        </div>
+        <div class="slack-connection-actions">
+          <button
+            class=${classMap({ danger: true, hidden: !d.configured })}
+            id="discord-remove"
+            ?disabled=${!d.configured || !!s.busy}
+            @click=${() => s.remove()}
+          >
+            Disconnect
+          </button>
+        </div>
+      </div>
+      <details class="app-guide" id="discord-app-guide" .open=${!d.configured}>
+        <summary>
+          <span>${d.configured ? "Edit Discord app" : "Set up Discord"}</span>
+          <span class="slack-guide-arrow" aria-hidden="true">›</span>
+        </summary>
+        <p>
+          In the Developer Portal, turn on the <strong>Server Members</strong> and
+          <strong>Message Content</strong> privileged intents, invite the bot with the <code>bot</code> scope only, and
+          add the redirect URI below under OAuth2 → Redirects.
+        </p>
+        <div class="token-editor">
+          <label style=${LABEL}
+            >Application ID <input id="discord-application-id" readonly .value=${d.applicationId ?? ""}
+          /></label>
+          <label style=${LABEL}
+            >Bot token ${d.configured ? "(leave empty to keep the current one)" : ""}
+            <input
+              id="discord-bot-token"
+              type="password"
+              autocomplete="new-password"
+              .value=${live(s.botToken)}
+              @input=${(e: Event) => (s.botToken = (e.target as HTMLInputElement).value)}
+          /></label>
+          <label style=${LABEL}
+            >OAuth2 client secret (for "Connect Discord" in user settings)
+            ${d.oauthConfigured ? "(set; leave empty to keep)" : ""}
+            <input
+              id="discord-oauth-client-secret"
+              type="password"
+              autocomplete="new-password"
+              .value=${live(s.oauthClientSecret)}
+              @input=${(e: Event) => (s.oauthClientSecret = (e.target as HTMLInputElement).value)}
+          /></label>
+          <label style=${LABEL}
+            >OAuth2 redirect URI (add it under OAuth2 → Redirects in the Developer Portal)
+            <input id="discord-redirect-uri" readonly .value=${d.redirectUri ?? ""}
+          /></label>
+          <button
+            type="button"
+            id="discord-copy-redirect-uri"
+            @click=${async (e: MouseEvent) => {
+              const btn = e.currentTarget as HTMLButtonElement | null;
+              const ok = await copyText(d.redirectUri ?? "");
+              if (btn) {
+                btn.textContent = ok ? "Copied" : "Copy failed";
+                if (ok) setTimeout(() => (btn.textContent = "Copy redirect URI"), 1200);
+              }
+            }}
+          >
+            Copy redirect URI
+          </button>
+          ${field("discord-guild-ids", "Server (guild) ids", "guildIds")}
+          ${field("discord-internal-role-ids", "Internal role ids", "internalRoleIds")}
+          <button class="primary" id="discord-save" ?disabled=${!!s.busy} @click=${() => s.save()}>Save</button>
+        </div>
+      </details>
+      <span class=${"status " + s.tone} role="status" id="st-discord-installation">${s.message}</span>
     </div>
   </section>`;
 };
@@ -558,6 +669,7 @@ export function mountCards() {
     const draw = () => render(template(), fragment);
     if (id === "card-connectors") connectors.render = draw;
     else if (id === "card-slack-installation") installation.render = draw;
+    else if (id === "card-discord-installation") discordInstallation.render = draw;
     else {
       const key = (
         {

@@ -56,6 +56,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     const parsed = supplied === undefined ? null : parseCommandPolicy(supplied);
     if (parsed && "error" in parsed) return sendJson(res, 400, { error: "bad_request", message: parsed.error });
     const targetKind = parseScopeId(targetScope).kind;
+    await deps.config.refreshScope(targetScope);
     const target =
       parsed?.policy ??
       deps.config.getCommandPolicy(targetScope) ??

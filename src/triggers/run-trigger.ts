@@ -5,7 +5,8 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { reachEnqueue } from "../reach/reach.ts";
+import { reachEnqueue, type SurfacePull } from "../reach/reach.ts";
+import { DISCORD_SURFACE } from "../discord/config.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
@@ -13,6 +14,7 @@ import { grantsHomedWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
+import { SNOWFLAKE } from "../util/snowflake.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -29,6 +31,7 @@ export interface TriggerDeps {
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
+    discordLookup?: SurfacePull;
   };
   sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
@@ -53,7 +56,8 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
   onClaimed?: () => Promise<void>;
-  deferWhenBusy?: boolean;
+  mayDefer?: boolean;
+  mayDeferReaders?: boolean;
 }
 
 export interface TriggerOutcome {
@@ -67,7 +71,19 @@ export interface TriggerOutcome {
   userNote?: string;
   reply?: string;
   sessionId?: string;
+  readersUnknown?: boolean;
 }
+
+const DISCORD_READERS_PENDING: TriggerOutcome = {
+  authzFailed: false,
+  ran: false,
+  deferred: true,
+  note: "Discord channel readers are still loading — retrying",
+};
+const DISCORD_READERS_TIMEOUT_NOTE = "Discord channel readers did not load in time — run skipped";
+
+export const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
+const BUSY_DEFER_NOTE = "session busy — retrying";
 
 class FireDeferred extends Error {
   constructor() {
@@ -139,13 +155,40 @@ async function actorMayReadScope(
   return { ok: false, note: MEMBERSHIP_SKIP_NOTE };
 }
 
+async function discordAccess(
+  deps: TriggerDeps,
+  actorId: string,
+  channelId: string,
+  audienceScopeId: ScopeId | undefined,
+): Promise<{ visible: boolean; retry?: boolean }> {
+  const audience = audienceScopeId ? parseScopeId(audienceScopeId) : undefined;
+  const personal = audience?.kind === "personal";
+  if (personal && !samePerson(actorId, audience.ref)) return { visible: false };
+  const found = await deps.directory?.discordLookup?.({ lookupChannel: channelId, viewer: actorId });
+  return {
+    visible: found?.channel?.channelId === channelId && (!personal || found.channel.dm === true),
+    ...(found?.retry ? { retry: true } : {}),
+  };
+}
+
+async function destinationAccess(
+  deps: TriggerDeps,
+  actorId: string,
+  destination: Destination,
+): Promise<{ visible: boolean; retry?: boolean }> {
+  if (destination.type !== DISCORD_SURFACE) return { visible: await destinationVisible(deps, actorId, destination) };
+  return discordAccess(deps, actorId, destination.target.split(":")[0]!, destination.audienceScopeId);
+}
+
 export async function destinationVisible(
   deps: TriggerDeps,
   actorId: string,
   destination: Destination,
 ): Promise<boolean> {
-  if (!deps.directory) return true;
   const id = destination.target.split(":")[0]!;
+  if (destination.type === DISCORD_SURFACE)
+    return (await discordAccess(deps, actorId, id, destination.audienceScopeId)).visible;
+  if (!deps.directory) return true;
   if (destination.type === "slack") {
     const audience = destination.audienceScopeId ? parseScopeId(destination.audienceScopeId) : undefined;
     if (audience?.kind === "personal") return isVisible(deps.directory, actorId, { kind: "dm", ownerId: audience.ref });
@@ -218,11 +261,24 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
   if (scheduled && ownerIsMember === false)
     return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
-  let homeAccess: { ok: boolean; note?: string };
+  const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
+  const discordHome = destinationIsHome && spec.destination?.type === DISCORD_SURFACE ? spec.destination : undefined;
+  const personalDiscordHome =
+    discordHome?.audienceScopeId !== undefined && parseScopeId(discordHome.audienceScopeId).kind === "personal";
+  let homeAccess: { ok: boolean; note?: string; readersUnknown?: boolean };
   if (runsAsScope || ownerIsMember) {
     homeAccess = { ok: true };
   } else if (ownerIsMember === false) {
     homeAccess = { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  } else if (ownerKind === "channel" && SNOWFLAKE.test(ownerRef)) {
+    const targetId = discordHome?.target.split(":")[0];
+    let access = await discordAccess(deps, actorId, ownerRef, spec.ownerScopeId);
+    if (access.visible && discordHome && targetId !== ownerRef)
+      access = await discordAccess(deps, actorId, targetId!, discordHome.audienceScopeId);
+    if (access.retry && spec.mayDeferReaders) return DISCORD_READERS_PENDING;
+    if (access.visible) homeAccess = { ok: true };
+    else if (access.retry) homeAccess = { ok: false, note: DISCORD_READERS_TIMEOUT_NOTE, readersUnknown: true };
+    else homeAccess = { ok: false, note: MEMBERSHIP_SKIP_NOTE };
   } else if (currentMembers !== undefined) {
     homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
       ? { ok: true }
@@ -239,10 +295,21 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       deps.currentScopeMembers !== undefined,
     );
   }
-  const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
-  const deliverable = spec.destination
-    ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
-    : true;
+  let deliverable = true;
+  let definitelyInvisible = false;
+  if (spec.destination) {
+    if (destinationIsHome && homeAccess.ok && !personalDiscordHome) deliverable = true;
+    else if (discordHome && !homeAccess.ok) deliverable = false;
+    else {
+      const access = await destinationAccess(deps, actorId, spec.destination);
+      if (personalDiscordHome && !access.visible && access.retry) {
+        if (spec.mayDeferReaders) return DISCORD_READERS_PENDING;
+        homeAccess = { ...homeAccess, readersUnknown: true };
+      }
+      deliverable = access.visible;
+      definitelyInvisible = !access.visible && !access.retry;
+    }
+  }
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
   const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
@@ -278,6 +345,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       }
       if (!homeAccess.ok) {
         note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
+        if (homeAccess.readersUnknown) status = "refused";
         return;
       }
       const res = await deps.run({
@@ -304,7 +372,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
       });
-      if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
+      if (spec.mayDefer && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       errorCode = res.errorCode;
       reply = res.reply;
@@ -343,6 +411,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     .catch((e: unknown) => {
       if (!(e instanceof FireDeferred)) throw e;
       deferred = true;
+      note = BUSY_DEFER_NOTE;
       return false;
     });
 
@@ -356,6 +425,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(status === "refused" && homeAccess.readersUnknown && !definitelyInvisible ? { readersUnknown: true } : {}),
   };
 
   if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {

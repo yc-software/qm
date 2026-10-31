@@ -229,6 +229,7 @@ class FakeCore implements SlackCoreClient {
     throw new Error("not used");
   }
   async inboxSlackMessage(): Promise<void> {}
+  async noteSurfaceHistoryGap(): Promise<void> {}
   readonly turns: any[] = [];
   readonly ingests: any[][] = [];
   readonly directories: any[] = [];

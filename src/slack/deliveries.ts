@@ -34,6 +34,9 @@ import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
+import { relaySenderAttribution } from "../reach/reach.ts";
+import { conversationWebUrl } from "../util/conversation-links.ts";
+import { runIdOfDeliveryKey } from "../delivery/run-result-delivery.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 const SLOW_DRAIN_ALARM_MS = 120_000;
@@ -161,8 +164,8 @@ export function createDeliveryPoller(deps: {
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
     const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
-    const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
-    const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
+    const senderText = relaySenderAttribution(d.destination.relaySender);
+    const attribution = senderText ? [{ type: "plain_text", text: senderText, emoji: false }] : [];
     if (!base || !id) return attribution;
     const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [
@@ -213,7 +216,7 @@ export function createDeliveryPoller(deps: {
         const destinationClient = deliveryClient(defaultClient, d.destination);
         if (!destinationClient) return;
         const client = destinationClient;
-        const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
+        const runId = runIdOfDeliveryKey(d.idempotencyKey);
         const namespace = deps.externalNamespace?.(d.destination.slackAccountId ?? "default");
         if (
           namespace &&
@@ -428,18 +431,18 @@ export function createDeliveryPoller(deps: {
                 return undefined;
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
               if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
-              if (commandApproval)
+              if (commandApproval) {
+                const originUrl = commandApproval.sessionId
+                  ? conversationWebUrl(deps.webUiPublicUrl, commandApproval.sessionId)
+                  : undefined;
                 card = approvalMessage([
                   {
                     ...commandApproval,
                     reason: commandApproval.reason ?? "Approval required",
-                    ...(deps.webUiPublicUrl && commandApproval.sessionId
-                      ? {
-                          originUrl: `${deps.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
-                        }
-                      : {}),
+                    ...(originUrl ? { originUrl } : {}),
                   },
                 ]);
+              }
               let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);

@@ -316,6 +316,22 @@ test("session search guidance follows the callable surface and feature gate", as
   }
 });
 
+test("an automation turn with surface tools names the destination's surface, not the trigger", async () => {
+  const destination = {
+    type: "discord" as const,
+    target: "1300000000000000010",
+    audienceScopeId: scopeId("channel", "1300000000000000010"),
+  };
+  const prompt = await sysprompt(
+    await buildOrchestrator(),
+    spineChannelTurn("", {
+      surface: "monitor",
+      origin: { kind: "automation", source: "monitor", destination } as OrchestratorInput["origin"],
+    }),
+  );
+  assert.match(prompt, /channel conversation via Discord\./);
+});
+
 test("identity defaults to QM and 'this organization' when no branding is configured", async () => {
   const prompt = await sysprompt(await buildOrchestrator(), slackDm(""));
   assert.match(prompt, /# QM\n/);

@@ -5,20 +5,23 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import "./slack-account.css";
 import { withBase } from "./core-bridge";
+import {
+  clearAttempt,
+  createReturnCapture,
+  loadAttempt,
+  saveAttempt,
+  watchVisible,
+  type OAuthAttempt,
+} from "./oauth-attempt";
 
-interface SlackAttempt {
-  user: string;
-  state: string;
+interface SlackAttempt extends OAuthAttempt {
   ticket: string;
-  expiresAt: number;
 }
 
-let returnUrl: URL | null = null;
+const ATTEMPT_KEY = "qm-slack-account";
+const slackReturn = createReturnCapture((params) => params.has("slackReturn"));
 
-export function captureSlackReturn(url: string): void {
-  const parsed = new URL(url);
-  returnUrl = parsed.searchParams.has("slackReturn") ? parsed : null;
-}
+export const captureSlackReturn = slackReturn.capture;
 
 export class SlackAccount extends LitElement {
   static properties = {
@@ -37,6 +40,7 @@ export class SlackAccount extends LitElement {
   private label = "";
   private nativeOAuth = false;
   private attempt: SlackAttempt | null = null;
+  private unwatch = (): void => {};
 
   protected createRenderRoot(): HTMLElement {
     return this;
@@ -44,30 +48,18 @@ export class SlackAccount extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener("focus", this.refreshStatus);
-    document.addEventListener("visibilitychange", this.refreshStatus);
+    this.unwatch = watchVisible(() => void this.status());
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener("focus", this.refreshStatus);
-    document.removeEventListener("visibilitychange", this.refreshStatus);
+    this.unwatch();
   }
 
-  private refreshStatus = (): void => {
-    if (!document.hidden) void this.status();
-  };
-
   protected firstUpdated(): void {
-    const url = returnUrl ?? new URL(location.href);
-    returnUrl = null;
+    const url = slackReturn.take();
     const state = url.searchParams.get("slackReturn");
-    try {
-      const saved = JSON.parse(sessionStorage.getItem("qm-slack-account") ?? "null") as SlackAttempt | null;
-      if (saved?.user === this.user && saved.expiresAt > Date.now()) this.attempt = saved;
-    } catch {
-      this.attempt = null;
-    }
+    this.attempt = loadAttempt<SlackAttempt>(ATTEMPT_KEY, this.user);
     if (state) {
       const cancelled = url.searchParams.has("error");
       for (const key of ["slackReturn", "status", "error", "connectedAccountId"]) url.searchParams.delete(key);
@@ -78,7 +70,7 @@ export class SlackAccount extends LitElement {
         return;
       }
       if (cancelled) {
-        this.clearAttempt();
+        this.dropAttempt();
         this.error = "Slack authorization was cancelled. Your QM account has not been linked.";
         return;
       }
@@ -86,9 +78,9 @@ export class SlackAccount extends LitElement {
     } else void this.status();
   }
 
-  private clearAttempt(): void {
+  private dropAttempt(): void {
     this.attempt = null;
-    sessionStorage.removeItem("qm-slack-account");
+    clearAttempt(ATTEMPT_KEY);
   }
 
   private async status(): Promise<void> {
@@ -153,7 +145,7 @@ export class SlackAccount extends LitElement {
       )
         throw Error("Could not verify the Slack authorization link.");
       this.attempt = { user: this.user, state, ticket: result.ticket, expiresAt: Date.now() + 20 * 60_000 };
-      sessionStorage.setItem("qm-slack-account", JSON.stringify(this.attempt));
+      saveAttempt(ATTEMPT_KEY, this.attempt);
       location.assign(url.href);
     } catch (error) {
       this.error = error instanceof Error ? error.message : "Could not connect Slack.";
@@ -177,7 +169,7 @@ export class SlackAccount extends LitElement {
       if (!response.ok) throw Error(result.message ?? "Could not verify your Slack account. Try again.");
       this.connected = true;
       this.label = [result.user, result.workspace].filter(Boolean).join(" · ");
-      this.clearAttempt();
+      this.dropAttempt();
       this.dispatchEvent(new CustomEvent("slack-linked", { bubbles: true }));
     } catch (error) {
       this.error = error instanceof Error ? error.message : "Could not verify your Slack account.";

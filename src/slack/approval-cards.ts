@@ -2,6 +2,8 @@ import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
+import { approvalContinuation } from "../core/approval-continuation.ts";
+import { APPROVAL_SUMMARY_MAX, INLINE_COMMAND_MAX, isHttpUrl } from "../surfaces/approval-limits.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
 export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
@@ -23,7 +25,6 @@ export interface SlackApprovalMessage {
 }
 
 const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
-const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 
 function button(
@@ -106,7 +107,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
   const describe = (p: (typeof items)[number]): string => {
     if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
-    if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
+    if (p.purpose) return `Approval needed: ${clip(p.purpose, APPROVAL_SUMMARY_MAX)}`;
     const view = toolCallView(p);
     if (view) return `Approval needed: ${toolTitle(view)}`;
     return `Approval needed before I can run ${inlineCode(p.command)}.`;
@@ -119,8 +120,8 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     let heading = view ? `:lock: *Approval needed:* ${toolTitle(view)}` : ":lock: *Approval needed.*";
     if (p.kind === "input") heading = ":lock: *My security screen flagged part of this message. Allow it?*";
     const lines = [heading];
-    if (p.summary && !view) lines.push(clip(p.summary, 400));
-    if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
+    if (p.summary && !view) lines.push(clip(p.summary, APPROVAL_SUMMARY_MAX));
+    if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, APPROVAL_SUMMARY_MAX)}`);
     const shownArgs = view !== null && viewArgs.join("\n").length <= INLINE_COMMAND_MAX;
     const longText = view ? JSON.stringify(view.args, null, 2) : p.command;
     const longCommand = p.kind !== "input" && !shownArgs && p.command.length > INLINE_COMMAND_MAX;
@@ -132,7 +133,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
       lines.push(
         shown
           ? commandHeading
-          : `${commandHeading} too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
+          : `${commandHeading} too long to show in Slack. Open ${isHttpUrl(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
       );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
@@ -256,25 +257,14 @@ export function recoveredApprovalContext(
   stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "request">,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
-  const req = stored.request as
-    | (Record<string, unknown> & {
-        actor?: { externalId?: unknown };
-        conversation?: { kind?: unknown };
-        deliveryTarget?: unknown;
-      })
-    | undefined;
-  if (!req || typeof req.actor?.externalId !== "string" || typeof req.text !== "string") return null;
-  const kind = req.conversation?.kind;
-  if (kind !== "dm" && kind !== "channel" && kind !== "group") return null;
-  const {
-    surface: _surface,
-    async: _async,
-    idempotencyKey: _idempotencyKey,
-    redeliveryKey: _redeliveryKey,
-    approval: _approval,
-    relayInput: _relayInput,
-    ...turn
-  } = req;
+  const turn = approvalContinuation(stored.request);
+  if (!turn) return null;
+  const req = stored.request as Record<string, unknown> & {
+    actor: { externalId: string };
+    conversation: { kind: string };
+    deliveryTarget?: unknown;
+  };
+  const kind = req.conversation.kind;
   const origin =
     typeof req.deliveryTarget === "string" && req.deliveryTarget
       ? parseDeliveryTarget(req.deliveryTarget)

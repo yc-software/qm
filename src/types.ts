@@ -201,6 +201,7 @@ export interface Destination {
   slackTeamId?: string;
   slackPolicyNamespace?: string;
   keychainAskId?: string;
+  keychainResolution?: true;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
   type: string;

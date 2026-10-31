@@ -1,4 +1,4 @@
-import { resolveMentions } from "../slack/mrkdwn.ts";
+import { resolveMentions } from "../surfaces/mentions.ts";
 import { outermostJsonObject } from "../util/text.ts";
 import type { CachedMessage } from "./surface-cache.ts";
 

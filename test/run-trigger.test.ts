@@ -313,7 +313,7 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     threadRef: "cron:c7:1000",
     destination: toChannel,
     errorNotice: (s: string) => `⚠️ could not run: ${s}`,
-    deferWhenBusy: true,
+    mayDefer: true,
   };
 
   it("reports deferred, leaves the fire key unspent, and tells nobody", async () => {
@@ -335,9 +335,9 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     assert.equal(attempts, 2);
   });
 
-  it("without deferWhenBusy a busy refusal is consumed and noticed as before", async () => {
+  it("without mayDefer a busy refusal is consumed and noticed as before", async () => {
     const d = deps(busy);
-    const { deferWhenBusy: _omitted, ...consuming } = spec;
+    const { mayDefer: _omitted, ...consuming } = spec;
     const out = await runTrigger(d, consuming);
     assert.equal(out.deferred, undefined);
     assert.equal(out.ran, true);

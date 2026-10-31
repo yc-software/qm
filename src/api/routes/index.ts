@@ -3,6 +3,7 @@ import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
+import { discordLinkRoutes } from "./discord-link.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
@@ -98,6 +99,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...secretDropRoutes,
   ...connectorRoutes,
   ...composioRoutes,
+  ...discordLinkRoutes,
   ...composioTwitterMediaRoutes,
   ...adminRoutes,
   ...skillPackRoutes,

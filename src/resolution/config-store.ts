@@ -1,5 +1,5 @@
 import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -19,6 +19,7 @@ import {
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
+import { SNOWFLAKE } from "../util/snowflake.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -93,11 +94,28 @@ export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
 
+export class ConfigInheritedError extends Error {
+  constructor(id: ScopeId, parent: ScopeId) {
+    super(`${id} is a private thread and takes its configuration from ${parent}; change it there`);
+    this.name = "ConfigInheritedError";
+  }
+}
+
+export class ConfigConflictError extends Error {
+  constructor(id: ScopeId) {
+    super(
+      `${id} is a private thread with configuration of its own, so it cannot inherit its parent's; an admin must clear this thread's configuration before it can be linked`,
+    );
+    this.name = "ConfigConflictError";
+  }
+}
+
 export interface PersistedDeploymentIdentity {
   orgId: string;
 }
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
+  linkConfigParent(id: ScopeId, parent: ScopeId): Promise<void>;
   getSoul(id: ScopeId): string | null;
   setSoul(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
   setSoulIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
@@ -204,6 +222,7 @@ export interface ConfigStoreMaps {
   browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
+  configParents?: DurableMap<ScopedRow<"parent", ScopeId>>;
 }
 
 const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
@@ -230,6 +249,7 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   browseModels: "browse_model_configs",
   autoFlaggerConfigs: "auto_flagger_configs",
   deploymentIdentity: "deployment_identity",
+  configParents: "config_parents",
 };
 
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
@@ -321,6 +341,7 @@ export function createConfigStore(
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     browseModels: field("browseModels", "modelId"),
+    configParents: field("configParents", "parent"),
     autoFlaggerConfigs: setting(
       "autoFlaggerConfigs",
       ({ modelId, rubric }): AutoFlaggerConfig => ({ modelId, rubric }),
@@ -329,6 +350,26 @@ export function createConfigStore(
     ),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
+  const configScope = (id: ScopeId): ScopeId => settings.configParents.get(id) ?? id;
+  const linkReads = new Map<ScopeId, Promise<void>>();
+  const refreshLink = (id: ScopeId): Promise<void> => {
+    const { kind, ref } = parseScopeId(id);
+    if (kind !== "channel" || !SNOWFLAKE.test(ref)) return Promise.resolve();
+    let read = linkReads.get(id);
+    if (!read) {
+      read = settings.configParents.refresh(id).finally(() => linkReads.delete(id));
+      linkReads.set(id, read);
+    }
+    return read;
+  };
+  const freshConfigScope = async (id: ScopeId): Promise<ScopeId> => {
+    await refreshLink(id);
+    return configScope(id);
+  };
+  const ownConfig = async (id: ScopeId): Promise<void> => {
+    const parent = await freshConfigScope(id);
+    if (parent !== id) throw new ConfigInheritedError(id, parent);
+  };
   const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
   const noteChannelHeaderPinChanged = (id: ScopeId): void => {
     for (const listener of channelHeaderPinListeners) {
@@ -462,19 +503,35 @@ export function createConfigStore(
     return history;
   };
 
+  const inheritedStores = {
+    soul: soulStore,
+    commandPolicy: settings.commandPolicies.store,
+    securityPosture: settings.securityPostures.store,
+    sharingPosture: settings.sharingPostures.store,
+    approvalGrantModes: settings.approvalGrantModes.store,
+    egress: settings.egressPolicies.store,
+  };
+  const reloadLayers = (id: ScopeId): Promise<void>[] => [
+    writeQueue(`soul:${id}`, async () => {
+      const soul = await soulStore.get(id);
+      if (soul) souls.set(id, { content: soul.content, version: soul.version });
+      else if (id !== org) souls.delete(id);
+      if (soul?.history) soulHistory.set(id, soul.history);
+    }),
+    settings.commandPolicies.reload(id),
+    settings.egressPolicies.reload(id),
+  ];
+
   return {
     async refreshSecurity(ids) {
-      await Promise.all(
-        ids.flatMap((id) => [
-          writeQueue(`soul:${id}`, async () => {
-            const soul = await soulStore.get(id);
-            if (soul) souls.set(id, { content: soul.content, version: soul.version });
-            else if (id !== org) souls.delete(id);
-          }),
-          settings.commandPolicies.reload(id),
-          settings.egressPolicies.reload(id),
-        ]),
-      );
+      const scopes = new Set(await Promise.all(ids.map(freshConfigScope)));
+      await Promise.all([...scopes].flatMap(reloadLayers));
+    },
+    async linkConfigParent(id, parent) {
+      if (settings.configParents.get(id) === parent) return;
+      if ((await Promise.all(Object.values(inheritedStores).map((store) => store.get(id)))).some(Boolean))
+        throw new ConfigConflictError(id);
+      await settings.configParents.set(id, parent);
     },
     hydrate() {
       if (!hydrated) {
@@ -501,8 +558,9 @@ export function createConfigStore(
       }
       return hydrated;
     },
-    getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
+    getSoul: (id) => souls.get(configScope(id))?.content ?? null,
+    async setSoul(id, content, updatedBy) {
+      await ownConfig(id);
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
@@ -541,6 +599,7 @@ export function createConfigStore(
       });
     },
     async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+      await ownConfig(id);
       return writeQueue(`soul:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedSoulRevision = {
@@ -582,22 +641,29 @@ export function createConfigStore(
         return saved.version;
       });
     },
-    soulVersion: (id) => souls.get(id)?.version ?? 0,
-    soulHistory: (id) => (soulHistory.get(id) ?? []).slice(0, 25),
+    soulVersion: (id) => souls.get(configScope(id))?.version ?? 0,
+    soulHistory: (id) => (soulHistory.get(configScope(id)) ?? []).slice(0, 25),
     captureSoulSnapshot(id) {
       return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
     },
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
-    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
-    setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
+    getCommandPolicy: (id) => settings.commandPolicies.get(configScope(id)) ?? (id === org ? orgDefaultPolicy : null),
+    async setCommandPolicy(id, policy) {
+      await ownConfig(id);
+      await settings.commandPolicies.set(id, policy);
+    },
     async getSecurityPostureDurable(id) {
-      const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
-      if (id === org) return orgPosture;
-      return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
+      const [orgPosture, scope] = await Promise.all([
+        settings.securityPostures.durable(org),
+        id === org ? null : freshConfigScope(id),
+      ]);
+      const base = orgPosture ?? defaultSecurityPosture;
+      return scope ? composeSecurityPosture(base, await settings.securityPostures.durable(scope)) : base;
     },
     async setSecurityPosture(id, posture) {
+      await ownConfig(id);
       const effective =
         id === org
           ? posture
@@ -606,29 +672,46 @@ export function createConfigStore(
     },
     async getSharingPostureDurable(id) {
       const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
+      return id === org
+        ? orgPosture
+        : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(await freshConfigScope(id))]);
     },
-    getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
+    getSharingPostureOwnDurable: async (id) =>
+      (await settings.sharingPostures.durable(await freshConfigScope(id))) ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
       const [orgPosture, personalPosture, targetPosture] = await Promise.all(
-        [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
+        [org, personalId, await freshConfigScope(targetId)].map((id) => settings.sharingPostures.durable(id)),
       );
       return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
         personalId === org ? undefined : personalPosture,
         targetId === org || targetId === personalId ? undefined : targetPosture,
       ]);
     },
-    setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
-    clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
-    async getApprovalGrantModesDurable(id) {
-      const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, await settings.approvalGrantModes.durable(id));
+    async setSharingPosture(id, posture) {
+      await ownConfig(id);
+      await settings.sharingPostures.set(id, posture);
     },
-    setApprovalGrantModes: (id, modes) =>
-      settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org ? orgDefaultEgress : null),
-    setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
+    async clearSharingPosture(id) {
+      await ownConfig(id);
+      await settings.sharingPostures.set(id, null);
+    },
+    async getApprovalGrantModesDurable(id) {
+      const [orgModes, scope] = await Promise.all([
+        settings.approvalGrantModes.durable(org),
+        id === org ? null : freshConfigScope(id),
+      ]);
+      const base = orgModes ?? DEFAULT_APPROVAL_GRANT_MODES;
+      return scope ? composeApprovalGrantModes(base, await settings.approvalGrantModes.durable(scope)) : { ...base };
+    },
+    async setApprovalGrantModes(id, modes) {
+      await ownConfig(id);
+      await settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always });
+    },
+    getEgress: (id) => settings.egressPolicies.get(configScope(id)) ?? (id === org ? orgDefaultEgress : null),
+    async setEgress(id, policy) {
+      await ownConfig(id);
+      await settings.egressPolicies.set(id, policy);
+    },
     getUnfulfilledInsights: (id) =>
       (settings.unfulfilledInsights.get(org) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
     setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
@@ -820,6 +903,7 @@ export function createConfigStore(
       loadSoulCache(id, refreshedSoul);
       if (baseModel) baseModels.set(id, baseModel);
       else baseModels.delete(id);
+      if (configScope(id) !== id) await Promise.all(reloadLayers(configScope(id)));
     },
   };
 }

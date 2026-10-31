@@ -66,6 +66,7 @@ import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { SurfacePull } from "../../reach/reach.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
@@ -202,6 +203,7 @@ export interface OrchestratorDeps {
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
+  discordLookup?: SurfacePull;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   surfaceDebugFooter?: boolean;

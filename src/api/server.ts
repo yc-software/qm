@@ -26,6 +26,7 @@ import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
+import { ConfigInheritedError } from "../resolution/config-store.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -327,6 +328,11 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
+  if (err instanceof ConfigInheritedError) {
+    if (!res.headersSent) sendJson(res, 409, { error: "config_inherited", message: err.message });
     else res.destroy();
     return;
   }

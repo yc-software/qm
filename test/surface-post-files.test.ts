@@ -378,3 +378,82 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   assert.equal(staging.staged().length, 2);
   assert.ok(await store.open(id), "the staged file ID remains readable");
 });
+
+function discordReachTools(defaultDestination: unknown = { type: "web", target: "web:thread" }) {
+  const enqueued: Array<{ destination: unknown; text: string }> = [];
+  const asked: unknown[] = [];
+  const tools = createSurfaceToolDeps({
+    deps: {
+      deliveries: {
+        async enqueue(input: { destination: unknown; text: string }) {
+          enqueued.push(input);
+          return { id: "d1" };
+        },
+      },
+      directory: {
+        resolve: async () => ({ kind: "none" }),
+        resolveChannel: async () => ({ kind: "none" }),
+        channelMember: async () => false,
+        resolveGroupByParticipants: async () => ({ kind: "none" }),
+        groupMember: async () => false,
+        get: async () => ({ displayName: "Ana" }),
+      },
+      discordLookup: async (query: unknown) => {
+        asked.push(query);
+        return { messages: [], channel: { channelId: "1300000000000000010", name: "ops" } };
+      },
+    },
+    input: { surfaceTools: true },
+    actor: { id: "U1" },
+    conversation: { kind: "group" },
+    session: { id: "S1" },
+    scopeId: scopeId("personal", "U1"),
+    defaultDestination,
+    strictReadOnly: false,
+    provision: async () => handle,
+    blobTransfer: createMemoryBlobTransferStore(),
+    fileRegistration: {},
+    postProvenance() {
+      return {};
+    },
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  return { tools, enqueued, asked };
+}
+
+test("surface reach into a Discord channel enqueues a discord delivery from the lookup", async () => {
+  const { tools, enqueued, asked } = discordReachTools();
+  const r = await tools.reach("deploy done", { channel: "#ops" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(asked, [{ lookupChannel: "#ops", postable: true, viewer: "U1" }]);
+  assert.deepEqual(enqueued[0]?.destination, {
+    type: "discord",
+    target: "1300000000000000010",
+    audienceScopeId: "channel:1300000000000000010",
+  });
+});
+
+test("delete, edit and react never resolve a Discord channel outside the current conversation", async () => {
+  const { tools, enqueued, asked } = discordReachTools();
+  for (const r of [
+    await tools.delete({ channel: "#ops", ref: "5" }),
+    await tools.edit({ channel: "#ops", ref: "5", text: "x" }),
+    await tools.react({ channel: "#ops", ts: "5", emoji: "eyes" }),
+  ]) {
+    assert.equal(r.ok, false);
+  }
+  assert.deepEqual(asked, []);
+  assert.deepEqual(enqueued, []);
+});
+
+test("a Discord react queues the raw snowflake whether given a ~token or the raw id", async () => {
+  const { tools, enqueued } = discordReachTools({ type: "discord", target: "1300000000000000010" });
+  for (const ts of ["~9vkbjfeanyf5", "1300000000000000001"]) {
+    assert.equal((await tools.react({ ts, emoji: "eyes" })).ok, true, ts);
+  }
+  assert.deepEqual(
+    enqueued.map((e) => (e.destination as { react: { messageTs: string } }).react.messageTs),
+    ["1300000000000000001", "1300000000000000001"],
+  );
+});

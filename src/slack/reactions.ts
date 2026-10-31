@@ -1,4 +1,7 @@
-import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
+import { emojiNameOf } from "../surfaces/emoji-map.ts";
+import { MAX_REACTIONS_PER_TURN } from "../surfaces/reactions.ts";
+import { decodeTs, MESSAGE_ID_TOKEN } from "../surfaces/message-ids.ts";
+import { reactionDetectGuidance } from "../surfaces/instructions.ts";
 import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
 import { slackErrorCode } from "./payloads.ts";
@@ -6,28 +9,6 @@ import { slackErrorCode } from "./payloads.ts";
 const REACTION_DIRECTIVE = /\[\[react:([^[\]]*)\]\]/gi;
 const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^[\]]*$/i;
 const REACTION_TS = /^\d{6,}\.\d{1,}$/;
-const REACTION_ID = /^~([0-9a-z]+)$/;
-
-export function encodeTs(ts: string): string {
-  const m = /^(\d{6,})\.(\d{1,6})$/.exec(String(ts).trim());
-  if (!m) return "";
-  const seconds = Number(m[1]);
-  const micros = Number(m[2]!.padEnd(6, "0"));
-  if (!Number.isSafeInteger(seconds) || !Number.isSafeInteger(micros)) return "";
-  const packed = seconds * 1_000_000 + micros;
-  if (!Number.isSafeInteger(packed)) return "";
-  return `~${packed.toString(36)}`;
-}
-
-export function decodeTs(id: string): string | null {
-  const m = REACTION_ID.exec(String(id).trim());
-  if (!m) return null;
-  const packed = parseInt(m[1]!, 36);
-  if (!Number.isSafeInteger(packed) || packed <= 0) return null;
-  const seconds = Math.floor(packed / 1_000_000);
-  const micros = packed % 1_000_000;
-  return `${seconds}.${String(micros).padStart(6, "0")}`;
-}
 
 export const REACTION_INSTRUCTION =
   "When a Slack user explicitly asks you to add an emoji reaction, you MUST actually react by writing " +
@@ -49,41 +30,13 @@ export const REACTION_INSTRUCTION =
   "Use this directive when the user's request is specifically to react, or when the best complete Slack response is only " +
   "an acknowledgement reaction. Do not use it instead of answering a request that needs words.";
 
-export const REACTION_DETECT_GUIDANCE =
-  "Express the reaction as one Slack emoji short-name written WITH colons (e.g. `:pray:`), the one " +
-  "THIS persona would naturally reach for — common picks: `:pray:` (thanks), `:+1:` (got it), " +
-  "`:rocket:`/`:tada:` (a win), `:eyes:` (on it) — but choose whatever genuinely fits, not a fixed menu.";
-
-export const MAX_REACTIONS_PER_TURN = 5;
-
-const SKIN_TONE_BY_MODIFIER: Record<string, string> = {
-  "🏻": "2",
-  "🏼": "3",
-  "🏽": "4",
-  "🏾": "5",
-  "🏿": "6",
-};
-const SKIN_TONE_MODIFIER = /[\u{1F3FB}-\u{1F3FF}]/gu;
-const VARIATION_SELECTOR_16 = /️/g;
-
-function emojiCharToName(s: string): string | null {
-  let tone: string | undefined;
-  const base = s
-    .replace(SKIN_TONE_MODIFIER, (m) => {
-      tone = SKIN_TONE_BY_MODIFIER[m];
-      return "";
-    })
-    .replace(VARIATION_SELECTOR_16, "");
-  const name = EMOJI_NAME_BY_CHAR[base];
-  if (!name) return null;
-  return tone ? `${name}::skin-tone-${tone}` : name;
-}
+export const REACTION_DETECT_GUIDANCE = reactionDetectGuidance("slack");
 
 export function normalizeReaction(raw: string): string | null {
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
-  const fromChar = emojiCharToName(trimmed);
+  const fromChar = emojiNameOf(trimmed);
   if (fromChar) return fromChar;
   const name = trimmed.replace(/^:+/, "").replace(/:+$/, "").trim().toLowerCase();
   if (!/^[a-z0-9_+'-]+(::skin-tone-[2-6])?$/.test(name)) return null;
@@ -144,59 +97,6 @@ export async function applyReactions(
   return { added, failed };
 }
 
-export interface ReactionTally {
-  name: string;
-  count: number;
-}
-
-export function summarizeReactions(reactions: readonly ReactionTally[] | undefined): string {
-  if (!reactions?.length) return "";
-  return reactions
-    .filter((r) => r.name && r.count > 0)
-    .map((r) => (r.count > 1 ? `:${r.name}:×${r.count}` : `:${r.name}:`))
-    .join(" ");
-}
-
-export function shouldSurfaceReaction(opts: {
-  itemType: string | undefined;
-  reactorId: string | undefined;
-  botUserId: string;
-  isDM: boolean;
-  onBotMessage: boolean;
-  onFollowedRoot: boolean;
-}): boolean {
-  if (opts.itemType !== "message") return false;
-  if (!opts.reactorId) return false;
-  if (opts.botUserId && opts.reactorId === opts.botUserId) return false;
-  return opts.isDM || opts.onBotMessage || opts.onFollowedRoot;
-}
-
-export interface InboundReaction {
-  reactorName: string;
-  emoji: string;
-  added: boolean;
-  onBotMessage: boolean;
-  authorName?: string;
-  messageText?: string;
-  reactions?: ReactionTally[];
-}
-
-const MAX_REACTION_QUOTE_CHARS = 280;
-
-export function buildReactionTurnText(evt: InboundReaction): string {
-  let whose = "a";
-  if (evt.onBotMessage) whose = "your";
-  else if (evt.authorName) whose = `${evt.authorName}'s`;
-  const t = evt.messageText?.trim() ?? "";
-  const quote = t ? `: "${t.length > MAX_REACTION_QUOTE_CHARS ? `${t.slice(0, MAX_REACTION_QUOTE_CHARS)}…` : t}"` : "";
-  if (!evt.added) {
-    return `[Slack reaction] ${evt.reactorName} removed their :${evt.emoji}: reaction from ${whose} message${quote}.`;
-  }
-  const summary = summarizeReactions(evt.reactions);
-  const now = summary ? ` (it now has ${summary})` : "";
-  return `[Slack reaction] ${evt.reactorName} reacted with :${evt.emoji}: on ${whose} message${quote}${now}.`;
-}
-
 export interface ReactionDirective {
   names: string[];
   target?: string;
@@ -210,7 +110,7 @@ export function parseReactionGroup(inner: string): ReactionDirective {
   const at = namesPart.lastIndexOf("@");
   if (at >= 0) {
     const candidate = namesPart.slice(at + 1).trim();
-    if (REACTION_ID.test(candidate)) {
+    if (MESSAGE_ID_TOKEN.test(candidate)) {
       targetId = candidate;
       namesPart = namesPart.slice(0, at);
     } else if (REACTION_TS.test(candidate)) {

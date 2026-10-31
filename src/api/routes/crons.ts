@@ -159,6 +159,7 @@ const CRON_ERROR_STATUS: Record<string, number> = {
   group_not_found: 404,
   not_a_member: 403,
   identity_unverified: 403,
+  discord_channel_unavailable: 403,
   unknown_destination: 400,
   cron_create_failed: 400,
   not_found: 404,

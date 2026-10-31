@@ -24,7 +24,8 @@ import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
+import type { CoreTurnBody } from "../api/surface-core-client.ts";
+import type { TurnFlow } from "./turn-flow.ts";
 import type { Directory } from "./directory.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 

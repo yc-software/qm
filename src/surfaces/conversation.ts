@@ -1,6 +1,7 @@
-import { resolveMentions } from "./mrkdwn.ts";
-export { resolveMentions } from "./mrkdwn.ts";
-import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
+import { resolveMentions } from "./mentions.ts";
+export { resolveMentions } from "./mentions.ts";
+import type { MessageIdCodec } from "./message-ids.ts";
+import { summarizeReactions, type ReactionTally } from "./reaction-tally.ts";
 import { utcMinute } from "../util/time.ts";
 
 export interface ContextWireMessage {
@@ -13,29 +14,32 @@ export interface ContextWireMessage {
   reactions?: ReactionTally[];
 }
 
-const MAX_CONTEXT_MESSAGE_CHARS = 600;
+export const SELF_AUTHOR = "you";
 
-function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
-  if (a.ts < b.ts) return -1;
-  if (a.ts > b.ts) return 1;
-  return 0;
-}
+const MAX_CONTEXT_MESSAGE_CHARS = 600;
 
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
-  opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
+  opts: {
+    count: number;
+    formatTs: (ts: string) => string;
+    messageIds: MessageIdCodec;
+    match?: string;
+    scanHasMore?: boolean;
+    nameById?: ReadonlyMap<string, string>;
+  },
 ): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
-  const asc = [...scanned].sort(compareSlackTimestamps);
+  const asc = [...scanned].sort((a, b) => opts.messageIds.compare(a.ts, b.ts));
   const needle = opts.match?.trim().toLowerCase();
   const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
   const count = Math.max(1, Math.floor(opts.count));
   const kept = matched.slice(-count);
   const messages = kept.map((m) => {
-    const time = formatSlackTs(m.ts);
+    const time = opts.formatTs(m.ts);
     return {
       ts: m.ts,
       ...(time ? { time } : {}),
-      author: m.isSelf ? "you" : m.name || "someone",
+      author: m.isSelf ? SELF_AUTHOR : m.name || "someone",
       text: clipMessage(resolveMentions(m.text ?? "", opts.nameById), MAX_CONTEXT_MESSAGE_CHARS),
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
       ...(m.files?.length ? { files: m.files } : {}),
@@ -73,21 +77,25 @@ const MAX_TURN_MESSAGE_CHARS = 4000;
 
 export function recentWindow(
   candidates: readonly RecentMessage[],
+  messageIds: MessageIdCodec,
   limit: number = MAX_RECENT_MESSAGES,
 ): RecentMessage[] {
   const usable = candidates.filter((m) => m.ts && (m.name || m.text?.trim() || m.files?.length));
   if (!usable.length) return [];
   const window = Math.max(1, Math.floor(limit));
-  const sorted = [...usable].sort(compareSlackTimestamps);
+  const sorted = [...usable].sort((a, b) => messageIds.compare(a.ts, b.ts));
   const byTs = new Map(sorted.map((m) => [m.ts, m] as const));
   const chosen = new Map<string, RecentMessage>(sorted.slice(-window).map((m) => [m.ts, m] as const));
   for (const m of Array.from(chosen.values())) {
     if (m.parentTs && !chosen.has(m.parentTs) && byTs.has(m.parentTs)) chosen.set(m.parentTs, byTs.get(m.parentTs)!);
   }
-  return [...chosen.values()].sort(compareSlackTimestamps);
+  return [...chosen.values()].sort((a, b) => messageIds.compare(a.ts, b.ts));
 }
 
-function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message: RecentMessage; isReply: boolean }> {
+function arrangeForDisplay(
+  messages: readonly RecentMessage[],
+  messageIds: MessageIdCodec,
+): Array<{ message: RecentMessage; isReply: boolean }> {
   const present = new Set(messages.map((m) => m.ts));
   const childrenByParent = new Map<string, RecentMessage[]>();
   const roots: RecentMessage[] = [];
@@ -101,9 +109,9 @@ function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message:
     }
   }
   const out: Array<{ message: RecentMessage; isReply: boolean }> = [];
-  for (const root of roots.sort(compareSlackTimestamps)) {
+  for (const root of roots.sort((a, b) => messageIds.compare(a.ts, b.ts))) {
     out.push({ message: root, isReply: false });
-    for (const child of (childrenByParent.get(root.ts) ?? []).sort(compareSlackTimestamps)) {
+    for (const child of (childrenByParent.get(root.ts) ?? []).sort((a, b) => messageIds.compare(a.ts, b.ts))) {
       out.push({ message: child, isReply: true });
     }
   }
@@ -111,6 +119,7 @@ function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message:
 }
 
 export interface ConversationView {
+  messageIds: MessageIdCodec;
   contextNote?: string;
   channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
   messages: readonly RecentMessage[];
@@ -142,7 +151,7 @@ export interface RenderedConversation {
   detectOpener?: string;
 }
 
-const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => {
+export const clipMessage = (t: string, max: number = MAX_RECENT_MESSAGE_CHARS): string => {
   const s = (t ?? "").replace(/\s+/g, " ").trim();
   return s.length > max ? `${s.slice(0, max)}…` : s;
 };
@@ -155,10 +164,11 @@ export function formatSlackTs(ts: string): string {
 
 function messageTurnText(
   m: RecentMessage,
+  messageIds: MessageIdCodec,
   isReply: boolean,
   nameById: ReadonlyMap<string, string> | undefined,
 ): string {
-  const id = encodeTs(m.ts);
+  const id = messageIds.encode(m.ts);
   const idTag = id ? `[${id}] ` : "";
   const replyTag = isReply ? "(reply) " : "";
   const body = clipMessage(resolveMentions(m.text ?? "", nameById), MAX_TURN_MESSAGE_CHARS);
@@ -172,9 +182,9 @@ export function renderConversationView(view: ConversationView): RenderedConversa
   const msgs = view.messages.filter((m) => m.ts && (m.name || m.text?.trim() || m.files?.length));
   const allowedTs = new Set<string>(msgs.map((m) => m.ts));
 
-  const display = arrangeForDisplay(msgs).filter(({ message: m }) => !m.isTrigger);
+  const display = arrangeForDisplay(msgs, view.messageIds).filter(({ message: m }) => !m.isTrigger);
   const rawTurns: ConversationTurn[] = display.map(({ message: m, isReply }) => {
-    const text = messageTurnText(m, isReply, view.nameById);
+    const text = messageTurnText(m, view.messageIds, isReply, view.nameById);
     if (m.isSelf) return { role: "assistant", text };
     return { role: "user", name: m.name || "someone", text };
   });

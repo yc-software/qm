@@ -1,22 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EMOJI_NAME_BY_CHAR } from "../src/slack/emoji-map.ts";
+import { EMOJI_NAME_BY_CHAR } from "../src/surfaces/emoji-map.ts";
 import {
   normalizeReaction,
   normalizeReactions,
   applyReactions,
-  summarizeReactions,
-  shouldSurfaceReaction,
-  buildReactionTurnText,
   extractReactions,
   stripReactionDirectives,
   parseReactionGroup,
   resolveReactionTargets,
-  encodeTs,
-  decodeTs,
-  MAX_REACTIONS_PER_TURN,
   CURATED_ACK_EMOJI,
 } from "../src/slack/lib.ts";
+import { summarizeReactions } from "../src/surfaces/reaction-tally.ts";
+import { shouldSurfaceReaction, buildReactionTurnText, MAX_REACTIONS_PER_TURN } from "../src/surfaces/reactions.ts";
+import { encodeTs, decodeTs } from "../src/surfaces/message-ids.ts";
 
 test("normalizeReaction accepts a bare name, strips colons, and lowercases", () => {
   assert.equal(normalizeReaction("eyes"), "eyes");
@@ -294,7 +291,7 @@ test("shouldSurfaceReaction drops the bot's OWN reactions (no loop) and non-mess
 });
 
 test("buildReactionTurnText: a reaction on the bot's message quotes it and lists the current emoji", () => {
-  const text = buildReactionTurnText({
+  const text = buildReactionTurnText("slack", {
     reactorName: "Alice",
     emoji: "white_check_mark",
     added: true,
@@ -311,7 +308,7 @@ test("buildReactionTurnText: a reaction on the bot's message quotes it and lists
 });
 
 test("buildReactionTurnText: another author's message uses their name; no text → no quote", () => {
-  const text = buildReactionTurnText({
+  const text = buildReactionTurnText("slack", {
     reactorName: "Carol",
     emoji: "tada",
     added: true,
@@ -321,13 +318,13 @@ test("buildReactionTurnText: another author's message uses their name; no text �
   assert.match(text, /Carol reacted with :tada: on project-alpha's message\.$/);
   assert.ok(!text.includes('"'));
   assert.match(
-    buildReactionTurnText({ reactorName: "Carol", emoji: "tada", added: true, onBotMessage: false }),
+    buildReactionTurnText("slack", { reactorName: "Carol", emoji: "tada", added: true, onBotMessage: false }),
     /on a message\.$/,
   );
 });
 
 test("buildReactionTurnText: a removal reads as 'removed their … reaction from' (and never lists current emoji)", () => {
-  const text = buildReactionTurnText({
+  const text = buildReactionTurnText("slack", {
     reactorName: "Alice",
     emoji: "white_check_mark",
     added: false,
@@ -341,7 +338,7 @@ test("buildReactionTurnText: a removal reads as 'removed their … reaction from
 
 test("buildReactionTurnText clips a long quoted message", () => {
   const long = "x".repeat(500);
-  const text = buildReactionTurnText({
+  const text = buildReactionTurnText("slack", {
     reactorName: "U",
     emoji: "eyes",
     added: true,
@@ -500,4 +497,13 @@ test("extractReactions stays linear-time on a flood of unterminated directives",
   assert.deepEqual(r.reactions, []);
   assert.equal(r.text, flood.slice(0, -opener.length), "only the trailing unterminated directive is stripped");
   assert.deepEqual(extractReactions("[[react: eyes [[react: tada]]").reactions, [{ names: ["tada"] }]);
+});
+
+test("the Slack detect guidance text is unchanged by the shared builder", async () => {
+  const { REACTION_DETECT_GUIDANCE } = await import("../src/slack/reactions.ts");
+  assert.ok(
+    REACTION_DETECT_GUIDANCE.startsWith(
+      "Express the reaction as one Slack emoji short-name written WITH colons (e.g. `:pray:`), the one THIS persona would naturally reach for",
+    ),
+  );
 });

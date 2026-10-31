@@ -1,4 +1,13 @@
 import type { PrincipalType } from "../types.ts";
+import { discordUserIdOf } from "../discord/config.ts";
+import { SNOWFLAKE } from "../util/snowflake.ts";
+
+export const isDiscordMember = (m: { principalId: string }): boolean => discordUserIdOf(m.principalId) !== null;
+export const isDiscordChannelId = (channelId: string): boolean => SNOWFLAKE.test(channelId);
+export const isSlackChannelId = (channelId: string): boolean => /^[CG][A-Z0-9]{6,}$/.test(channelId);
+export type ChannelSurface = "slack" | "discord";
+export const isSurfaceChannel = (surface: ChannelSurface, channelId: string): boolean =>
+  isDiscordChannelId(channelId) === (surface === "discord");
 
 export interface DirectoryMember {
   principalId: string;
@@ -6,6 +15,12 @@ export interface DirectoryMember {
   type: PrincipalType;
   slackId?: string;
   avatarUrl?: string;
+}
+
+const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+
+export function slackIdOf(member: Pick<DirectoryMember, "principalId" | "slackId">): string | undefined {
+  return member.slackId ?? (SLACK_ID_RE.test(member.principalId) ? member.principalId : undefined);
 }
 
 export interface DirectoryChannel {
@@ -43,6 +58,7 @@ export type ChannelResolution =
 
 export interface DirectoryStore {
   replace(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
+  replaceDiscord(members: DirectoryMember[]): Promise<void>;
   replaceChannels(
     channels: DirectoryChannel[],
     channelMembers?: ChannelMembership[],
@@ -50,6 +66,11 @@ export interface DirectoryStore {
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
     partial?: boolean,
+  ): Promise<boolean>;
+  replaceDiscordChannels(
+    channels: DirectoryChannel[],
+    channelMembers: ChannelMembership[],
+    syncedAt: number,
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
@@ -81,22 +102,50 @@ export interface DirectoryStore {
 export const MAX_CANDIDATES = 10;
 export const normDirectoryQuery = (s: string): string => s.trim().toLowerCase().replace(/^[@#]/, "");
 
-export function pickMatch<T>(
-  items: T[],
-  query: string,
-  id: (t: T) => string,
-  label: (t: T) => string,
-): { kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" } {
-  const q = normDirectoryQuery(query);
-  if (!q) return { kind: "none" };
-  const byId = items.find((t) => id(t).toLowerCase() === q);
-  if (byId) return { kind: "one", item: byId };
+export type SlicePick<T> =
+  { kind: "one"; item: T; exact?: true } | { kind: "ambiguous"; items: T[]; exact?: true } | { kind: "none" };
+
+export function mergeSlicePicks<T>(picks: SlicePick<T>[]): SlicePick<T> {
+  const found = picks.filter((p) => p.kind !== "none");
+  if (found.length < 2) return found[0] ?? { kind: "none" };
+  const [first, ...rest] = found;
+  if (first!.kind === "one" && first!.exact && rest.every((p) => !p.exact)) return first!;
+  const items = found.flatMap((p) => {
+    if (p.kind === "one") return [p.item];
+    return p.kind === "ambiguous" ? p.items : [];
+  });
+  return { kind: "ambiguous", items: items.slice(0, MAX_CANDIDATES) };
+}
+
+function pickByLabel<T>(items: T[], q: string, label: (t: T) => string): SlicePick<T> {
   const exact = items.filter((t) => normDirectoryQuery(label(t)) === q);
-  if (exact.length === 1) return { kind: "one", item: exact[0]! };
-  if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES) };
+  if (exact.length === 1) return { kind: "one", item: exact[0]!, exact: true };
+  if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES), exact: true };
   const prefix = items.filter((t) => normDirectoryQuery(label(t)).startsWith(q));
   const pool = prefix.length ? prefix : items.filter((t) => normDirectoryQuery(label(t)).includes(q));
   if (pool.length === 0) return { kind: "none" };
   if (pool.length === 1) return { kind: "one", item: pool[0]! };
   return { kind: "ambiguous", items: pool.slice(0, MAX_CANDIDATES) };
+}
+
+export function pickMatch<T>(
+  items: T[],
+  query: string,
+  id: (t: T) => string,
+  label: (t: T) => string,
+  isDiscord?: (t: T) => boolean,
+): SlicePick<T> {
+  const q = normDirectoryQuery(query);
+  if (!q) return { kind: "none" };
+  const byId = items.find((t) => id(t).toLowerCase() === q);
+  if (byId) return { kind: "one", item: byId };
+  if (!isDiscord) return pickByLabel(items, q, label);
+  return mergeSlicePicks([
+    pickByLabel(
+      items.filter((t) => !isDiscord(t)),
+      q,
+      label,
+    ),
+    pickByLabel(items.filter(isDiscord), q, label),
+  ]);
 }

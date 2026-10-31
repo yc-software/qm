@@ -10,12 +10,8 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import {
-  decideDeploymentAccess,
-  deployAccessMessage,
-  parseDeployAccess,
-  registerDeployAccessActions,
-} from "../src/slack/deploy-access.ts";
+import { decideDeploymentAccess, parseDeployAccess } from "../src/deploy/access-decision.ts";
+import { deployAccessMessage, registerDeployAccessActions } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

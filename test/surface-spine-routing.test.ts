@@ -458,6 +458,72 @@ test("addressed + finish_silently → no nudge (explicit decline is accepted)", 
   }
 });
 
+test("ambient (unprompted thread-follow) + plain-text reply and no post → one nudge → the agent posts", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const channel = "C-amb-plain";
+    const root = "700.4";
+    const res = await built.app.turn({
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+      deliveryTarget: `slack:${channel}:${root}`,
+      text: "!plain-reply",
+      unprompted: true,
+      liveActor: true,
+      async: true,
+    });
+    assert.equal(res.status, "queued");
+    const posted = await pollFor(
+      built.deliveries,
+      (d) => d.destination.target === `slack:${channel}:${root}` && d.text === "nudged reply",
+    );
+    assert.ok(posted, "the unprompted turn's plain-text reply was nudged into a post instead of vanishing");
+    await sleep(300);
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.equal(
+      all.filter((d) => d.text === "worklog: did the thing but never posted").length,
+      0,
+      "the unvetted plain text itself is never delivered on an unaddressed turn",
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("non-live ambient wake and automation turns with plain text and no post are NOT nudged", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const base: TurnRequest = {
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef: "ch:C-quiet:700.5", channelRef: "C-quiet", audience: [actor] },
+      deliveryTarget: "slack:C-quiet:700.5",
+      text: "!plain-reply",
+      surfaceTools: true,
+      async: false,
+    };
+    await built.app.turn({ ...base, unprompted: true });
+    await built.app.turn({
+      ...base,
+      conversation: { ...base.conversation, threadRef: "ch:C-quiet:700.6" },
+      triggered: true,
+      triggerDestination: {
+        type: "slack",
+        target: "slack:C-quiet:700.6",
+        audienceScopeId: scopeId("channel", "C-quiet"),
+      },
+    });
+    await sleep(300);
+    const all = (await built.deliveries.pending("slack")) as any[];
+    assert.deepEqual(all, [], "no nudge and no delivery for non-live ambient or automation turns");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("ambient (unaddressed) silence → no nudge (silence stays free)", async () => {
   const built = freshApp();
   built.runtime.start();

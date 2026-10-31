@@ -6130,19 +6130,23 @@
         font-weight: 400;
       }
 
-      #card-slack-installation > .head {
+      #card-slack-installation > .head,
+      #card-discord-installation > .head {
         border: 0;
         padding-bottom: 6px;
       }
-      #card-slack-installation > .head h2 {
+      #card-slack-installation > .head h2,
+      #card-discord-installation > .head h2 {
         font-size: 13px;
         font-weight: 500;
         color: var(--muted);
       }
-      #card-slack-installation > .body {
+      #card-slack-installation > .body,
+      #card-discord-installation > .body {
         padding-top: 0;
       }
-      #card-slack-installation .slack-connection {
+      #card-slack-installation .slack-connection,
+      #card-discord-installation .slack-connection {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -6150,13 +6154,15 @@
         padding: 10px 8px;
         border-radius: 8px;
       }
-      #card-slack-installation h3 {
+      #card-slack-installation h3,
+      #card-discord-installation h3 {
         font-size: 14px;
         font-weight: 500;
         margin: 0;
         line-height: 20px;
       }
-      #card-slack-installation .hint {
+      #card-slack-installation .hint,
+      #card-discord-installation .hint {
         margin: 2px 0 0;
         font-size: 12px;
         line-height: 18px;
@@ -6166,7 +6172,8 @@
         gap: 4px;
         flex-wrap: wrap;
       }
-      #card-slack-installation .slack-connection-actions button {
+      #card-slack-installation .slack-connection-actions button,
+      #card-discord-installation .slack-connection-actions button {
         min-height: 32px;
         padding: 6px 10px;
         border: 0;
@@ -6177,7 +6184,8 @@
         font-size: 13px;
         font-weight: 400;
       }
-      #card-slack-installation .slack-connection-actions button:hover {
+      #card-slack-installation .slack-connection-actions button:hover,
+      #card-discord-installation .slack-connection-actions button:hover {
         background: var(--subtle);
         color: var(--text);
       }
@@ -6200,10 +6208,10 @@
         background: #f8f8f8;
         border-color: #868686;
       }
-      #slack-own-app-guide {
+      .app-guide {
         margin-top: 4px;
       }
-      #slack-own-app-guide summary {
+      .app-guide summary {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -6215,10 +6223,10 @@
         font-weight: 400;
         color: var(--muted);
       }
-      #slack-own-app-guide summary::-webkit-details-marker {
+      .app-guide summary::-webkit-details-marker {
         display: none;
       }
-      #slack-own-app-guide summary:hover {
+      .app-guide summary:hover {
         background: var(--subtle);
         color: var(--text);
       }
@@ -6226,24 +6234,24 @@
         font-size: 18px;
         line-height: 16px;
       }
-      #slack-own-app-guide[open] .slack-guide-arrow {
+      .app-guide[open] .slack-guide-arrow {
         transform: rotate(90deg);
       }
-      #slack-own-app-guide > p,
-      #slack-own-app-guide > ol,
-      #slack-own-app-guide > button {
+      .app-guide > p,
+      .app-guide > ol,
+      .app-guide > button {
         margin-left: 8px;
       }
-      #slack-own-app-guide p,
-      #slack-own-app-guide ol {
+      .app-guide p,
+      .app-guide ol {
         color: var(--muted);
         max-width: 760px;
         line-height: 1.65;
       }
-      #slack-own-app-guide li {
+      .app-guide li {
         padding: 4px 0 8px 4px;
       }
-      #slack-token-editor {
+      .token-editor {
         max-width: 560px;
         margin-top: 20px;
       }
@@ -6255,7 +6263,8 @@
         margin-top: 16px;
       }
       @media (max-width: 640px) {
-        #card-slack-installation .slack-connection {
+        #card-slack-installation .slack-connection,
+        #card-discord-installation .slack-connection {
           align-items: flex-start;
           flex-direction: column;
           gap: 16px;
@@ -6517,6 +6526,7 @@
           <div id="view-connectors" class="hidden">
             <template data-integrations-card="card-connectors"></template>
             <template data-integrations-card="card-slack-installation"></template>
+            <template data-integrations-card="card-discord-installation"></template>
           </div>
 
           <div id="view-design" class="hidden"></div>
@@ -7372,7 +7382,10 @@
           if (view === "slack-settings") void loadSlackInstallation();
           return void loadScope();
         }
-        if (view === "connectors") return void loadConnectors();
+        if (view === "connectors") {
+          void loadDiscordInstallation();
+          return void loadConnectors();
+        }
         if (view === "design-system") return void renderDesignLibrary();
         if (view === "user") return void showUserDetail(st.principal);
         if (view === "slack") return void renderSlackMirror(st);
@@ -8406,6 +8419,9 @@
       }
       async function loadSlackInstallation() {
         return governanceUI.integrations.loadSlackInstallation();
+      }
+      async function loadDiscordInstallation() {
+        return governanceUI.integrations.loadDiscordInstallation();
       }
       function collectPolicy() {
         return governanceUI.collect("command-policy");
@@ -10054,27 +10070,8 @@
         return parts.join("\n\n");
       }
 
-      async function copyText(text) {
-        try {
-          if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(text);
-            return true;
-          }
-        } catch {}
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        let ok = false;
-        try {
-          ok = document.execCommand("copy");
-        } catch {
-          ok = false;
-        }
-        document.body.removeChild(ta);
-        return ok;
+      function copyText(text) {
+        return governanceUI.shared.copyText(text);
       }
       function copyButton(label, getText) {
         const btn = document.createElement("button");

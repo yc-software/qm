@@ -1,3 +1,4 @@
+import { approvalDeniedReason } from "./approval-continuation.ts";
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
@@ -54,6 +55,11 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
+import {
+  surfaceCapabilities,
+  surfaceLabel as labelForSurface,
+  surfaceToolName,
+} from "../surfaces/surface-capabilities.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -64,7 +70,7 @@ import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
-import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
+import { INTERNAL_ONLY_REFUSAL_REASON, SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
@@ -697,14 +703,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!(await managedRosterIsCurrent())) return rosterChanged();
       if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
         const externalAllowed =
-          external ||
-          (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+          external || (await surfaceCapabilities(input.surface)?.externalParticipantsAllowed(deps.config)) === true;
         if (!externalAllowed) {
           return {
             status: "refused",
             refusalKind: "internal_only",
-            reason: "internal-only: shared audience includes a non-internal participant",
+            reason: INTERNAL_ONLY_REFUSAL_REASON,
           };
         }
       }
@@ -1052,7 +1056,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
-      const surfaceTool = input.surface ?? "slack";
+      const surfaceTool = surfaceToolName(
+        input.surface,
+        input.origin.kind === "automation" ? input.origin.destination?.type : undefined,
+      );
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
@@ -1068,7 +1075,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const frameVars: PromptVars = {
         botName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
+        surfaceLabel: isWeb ? `the ${botName} web app` : labelForSurface(surfaceTool),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -1079,8 +1086,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
-      const surfaceName =
-        input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
+      const surfaceName = surfaceTool;
       const sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
@@ -1955,18 +1961,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
       if (!ambientTurn) assignSessionTitle();
-      const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
-      const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
+      const revisionTracking =
+        deps.surfaceCache && input.surface && surfaceCapabilities(input.surface)
+          ? { surface: input.surface, surfaceCache: deps.surfaceCache }
+          : undefined;
+      const revisionAnchor = revisionTracking ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
       const catchUpMessageRevisions = async (): Promise<void> => {
-        if (!trackRevisions || !deps.surfaceCache) return;
+        if (!revisionTracking) return;
         await reconcileMessageRevisions({
+          ...revisionTracking,
           sessions: deps.sessions,
-          surfaceCache: deps.surfaceCache,
           lease,
           session,
           anchorAt: revisionAnchor,
           fallbackSince: leaseStart,
           ...(messageTs ? { triggerTs: messageTs } : {}),
+          ...(input.conversation.channelRef ? { channelRef: input.conversation.channelRef } : {}),
         }).catch(swallowAs("orchestrator: message revision catch-up", undefined));
       };
       let tailOwnsCleanup = false;
@@ -2070,7 +2080,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return {
               status: "refused",
               sessionId: session.id,
-              reason: `approval denied for ${p.command}`,
+              reason: approvalDeniedReason(p.command),
               refusalKind: "approval_denied",
             };
           } else {
@@ -2376,7 +2386,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
+          if ((surfaceCapabilities(input.surface) || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -3633,8 +3643,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        const liveAmbient = input.origin.kind === "ambient" && input.origin.live === true;
         if (
-          input.addressed &&
+          (input.addressed || liveAmbient) &&
           !strictReadOnly &&
           input.surfaceTools &&
           surfaceToolDeps &&
@@ -3644,7 +3655,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.stopped
         ) {
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          if (primaryReply && defaultDestination && deps.deliveries) {
+          if (input.addressed && primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
               await reachEnqueue({
@@ -3660,14 +3671,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
-          if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
+          if (spine.surfaceOutboundCount === 0 && (input.addressed ? !isPollFire || primaryReply : primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).entries));
             result = await runAgentTurn(
-              "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
+              input.addressed
+                ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
+                : `[system] Nothing you write reaches anyone unless you post. If this answers someone here, post it with the \`${surfaceName}\` tool's \`post\` action; otherwise finish_silently.`,
               inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory },
             );
-            if (spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
+            if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
               const fallback = stripAckPrefix(result.reply ?? "", spineAckText).trim();
               if (fallback && defaultDestination && deps.deliveries) {
                 try {

@@ -89,6 +89,7 @@
     "@superserve/sdk": "^0.8.3",
     "croner": "^10.0.1",
     "cronstrue": "3.29.0",
+    "discord.js": "^14.27.0",
     "e2b": "^2.51.0",
     "emoji-datasource": "^16.0.0",
     "fastify": "^5.12.5",

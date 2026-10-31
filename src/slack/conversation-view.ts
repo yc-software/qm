@@ -1,17 +1,15 @@
+import { SLACK_MESSAGE_IDS } from "../surfaces/message-ids.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import type { SlackHistoryReader } from "./history.ts";
 import { swallow } from "../util/errors.ts";
+import { type ActorAssertion, type SlackFile, decodeSlackEntities, isOversize } from "./lib.ts";
 import {
-  type ActorAssertion,
   type ConversationView,
-  type ReactionTally,
   type RecentMessage,
-  type SlackFile,
   MAX_RECENT_MESSAGES,
-  decodeSlackEntities,
-  isOversize,
   recentWindow,
-} from "./lib.ts";
+} from "../surfaces/conversation.ts";
+import { countedReactions, type ReactionTally } from "../surfaces/reaction-tally.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
@@ -26,9 +24,7 @@ export const slackFileName = (f: SlackFile): string => f.name || f.title || f.id
 
 export function reactionTallies(raw: unknown): ReactionTally[] {
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map((r: any) => ({ name: String(r?.name ?? ""), count: Number(r?.count) || 0 }))
-    .filter((r) => r.name && r.count > 0);
+  return countedReactions(raw.map((r: any) => ({ name: String(r?.name ?? ""), count: Number(r?.count) || 0 })));
 }
 
 export interface ConversationSerializer {
@@ -172,6 +168,7 @@ export function createConversationSerializer(deps: {
     },
   ): Promise<{ view: ConversationView }> {
     const empty: ConversationView = {
+      messageIds: SLACK_MESSAGE_IDS,
       channel: { kind: ctx.kind ?? inc.kind },
       messages: [],
       here: inc.threadTs ? { kind: "thread", youOpenedIt: false } : { kind: "top-level" },
@@ -199,7 +196,11 @@ export function createConversationSerializer(deps: {
     const raw = page.raw;
     if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
       raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
+    const messages = recentWindow(
+      await shapeRecentMessages(client, raw, inc.ts, nameById),
+      SLACK_MESSAGE_IDS,
+      RECENT_MESSAGE_WINDOW,
+    );
 
     let here: ConversationView["here"];
     if (inc.threadTs) {
@@ -223,6 +224,7 @@ export function createConversationSerializer(deps: {
       .map((f) => ({ name: slackFileName(f), reason: "too-big" as const }));
 
     const view: ConversationView = {
+      messageIds: SLACK_MESSAGE_IDS,
       channel: {
         ...(ctx.channelName ? { name: ctx.channelName } : {}),
         kind: ctx.kind ?? inc.kind,

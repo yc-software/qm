@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { LRUCache } from "lru-cache";
 import { swallow } from "../util/errors.ts";
+import { SLACK_CONTAINER } from "../surfaces/message-ids.ts";
 import { slackHistoryRateLimitMessage } from "./history-rate-limit.ts";
 import { parseDeliveryTarget } from "./lib.ts";
 
@@ -25,7 +26,7 @@ export function createSlackRateLimitNotice(opts: { managed?: boolean; setupUrl?:
       try {
         const client = opts.client ?? request.client;
         const { channel, threadTs } = parseDeliveryTarget(request.recipient.target);
-        if (!/^[CDG][A-Z0-9]+$/.test(channel)) return;
+        if (!SLACK_CONTAINER.test(channel)) return;
         const user = /^[UW][A-Z0-9]+$/.test(request.recipient.user)
           ? request.recipient.user
           : (await client.users.lookupByEmail({ email: request.recipient.user })).user?.id;

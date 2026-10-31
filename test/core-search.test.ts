@@ -63,16 +63,16 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
   await built.directory.replaceChannels(
     [
       { channelId: "C1", name: "private", isPrivate: true },
-      { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
+      { channelId: "CALICE", name: "alice-only", isPrivate: true },
     ],
     [
       ...principals.map((p) => ({ channelId: "C1", principalId: p.id })),
-      { channelId: "C-ALICE", principalId: principals[0]!.id },
+      { channelId: "CALICE", principalId: principals[0]!.id },
     ],
   );
   await built.app.ingestSurfaceEvents([
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
-    { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
+    { container: "CALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -152,24 +152,24 @@ test("slack backend intersects private-channel visibility across all principals"
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-slack-")) }));
   await built.directory.replaceChannels(
     [
-      { channelId: "C-SHARED", name: "shared", isPrivate: true },
-      { channelId: "C-ALICE", name: "alice-only", isPrivate: true },
+      { channelId: "CSHARED", name: "shared", isPrivate: true },
+      { channelId: "CALICE", name: "alice-only", isPrivate: true },
     ],
     [
-      { channelId: "C-SHARED", principalId: principals[0]!.id },
-      { channelId: "C-SHARED", principalId: principals[1]!.id },
-      { channelId: "C-ALICE", principalId: principals[0]!.id },
+      { channelId: "CSHARED", principalId: principals[0]!.id },
+      { channelId: "CSHARED", principalId: principals[1]!.id },
+      { channelId: "CALICE", principalId: principals[0]!.id },
     ],
   );
   await built.app.ingestSurfaceEvents([
-    { container: "C-SHARED", ts: "1", text: "pelican launch shared", kind: "channel" },
-    { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
+    { container: "CSHARED", ts: "1", text: "pelican launch shared", kind: "channel" },
+    { container: "CALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
 
   const hits = await built.app.search("pelican", principals);
   assert.deepEqual(
     hits.hits.filter((hit) => hit.backend === "slack").map((hit) => hit.id),
-    ["C-SHARED:1"],
+    ["CSHARED:1"],
   );
 });
 

@@ -11,7 +11,7 @@ import {
   setMentionIndex,
   inlineCode,
 } from "../src/slack/lib.ts";
-import { resolveMentions } from "../src/slack/mrkdwn.ts";
+import { resolveMentions } from "../src/surfaces/mentions.ts";
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
   const clamped = inlineCode("`echo hi`" + "y".repeat(60000));

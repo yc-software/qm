@@ -55,7 +55,12 @@ export function createResolutionService(
         liveConfigScopes.add(scopeId("personal", principal.id));
         for (const team of principal.teamIds ?? []) liveConfigScopes.add(scopeId("team", team));
       }
-      await config.refreshSecurity([...liveConfigScopes]);
+      const [, securityPosture, sharingPosture, approvalGrantModes] = await Promise.all([
+        config.refreshSecurity([...liveConfigScopes]),
+        config.getSecurityPostureDurable(scope),
+        external ? ("isolated" as const) : config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope),
+        config.getApprovalGrantModesDurable(scope),
+      ]);
 
       const layers: WorkspaceLayer[] = [
         ...(!external ? [{ scopeId: orgScope, mountPath: "global", mode: "ro" as const }] : []),
@@ -74,11 +79,7 @@ export function createResolutionService(
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
-      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
-      const sharingPosture = external
-        ? "isolated"
-        : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);
-      const approvalGrantModes = await config.getApprovalGrantModesDurable(scope);
+      const securityPolicy = resolveSecurityPolicy(securityPosture, screening);
 
       const egress = {
         allowedHosts: audienceEgressFloor(conversation.audience, config, orgScope, scope),

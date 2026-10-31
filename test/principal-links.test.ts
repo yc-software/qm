@@ -32,6 +32,8 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testPrincipalLinks } from "./support/principal-links.ts";
+import { testGrants } from "./support/principal-links.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -40,7 +42,7 @@ const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified director
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     assert.equal(row.canonicalId, EMAIL);
     assert.equal(links.canonical(OIDC), EMAIL);
@@ -53,8 +55,29 @@ describe("principal link service: one person, several sign-ins", () => {
     assert.equal(await links.unlink(OIDC), null);
   });
 
+  it("a person holds at most one discord alias, even under a race", async () => {
+    const links = testPrincipalLinks();
+    const link = (principalId: string) =>
+      links.link({ principalId, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" });
+    const settled = await Promise.allSettled([link("discord:1"), link("discord:2")]);
+    assert.deepEqual(settled.map((r) => r.status).sort(), ["fulfilled", "rejected"]);
+    assert.equal((await links.list()).length, 1);
+    await link(OIDC);
+    assert.equal((await links.list()).length, 2);
+  });
+
+  it("a person whose canonical id is a discord id cannot take a second discord alias", async () => {
+    const links = testPrincipalLinks();
+    await links.link({ principalId: OIDC, canonicalId: "discord:1", evidence: EVIDENCE, linkedBy: "a" });
+    await assert.rejects(
+      links.link({ principalId: "discord:2", canonicalId: "discord:1", evidence: EVIDENCE, linkedBy: "a" }),
+      (e: unknown) => e instanceof PrincipalLinkError && e.status === 409,
+    );
+    assert.equal((await links.list()).length, 1);
+  });
+
   it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {
       await assert.rejects(links.link(input), (e: unknown) => {
         assert.ok(e instanceof PrincipalLinkError);
@@ -97,7 +120,7 @@ describe("principal link service: one person, several sign-ins", () => {
 
   it("reads links written by another process on refresh", async () => {
     const backing = testMap<PrincipalLink>();
-    const links = createPrincipalLinkService(backing, testAdvisoryLock());
+    const links = testPrincipalLinks(backing);
     await links.refresh(true);
     assert.equal(links.canonical(OIDC), undefined);
     await backing.put(OIDC, {
@@ -116,7 +139,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   afterEach(() => installPrincipalLinks(null));
 
   async function installed() {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     return links;
@@ -145,7 +168,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
   });
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     installPrincipalLinks(links);
     const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
@@ -161,7 +184,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
     await identity.deactivate(OIDC);
     await identity.putExternalMember({
@@ -313,7 +336,7 @@ describe("linked sign-ins across the HTTP surface", () => {
       JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
       admin,
     );
-    assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
+    assert.equal(escalation.status, 409, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
     assert.equal(adminStatusFromGrants(await built.admin.listGrants(), "casey@acme.test").isAdmin, false);
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
@@ -325,6 +348,70 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(listed.links[0]!.linkedBy, "admin-alice");
     const audit = await built.auditLog.tail({ limit: 50, action: "principal_link.create" });
     assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
+  });
+
+  it("a sign-in holding its own admin grant cannot be linked even to an admin canonical", async () => {
+    const grantsBefore = JSON.stringify(await built.admin.listGrants());
+    const linksBefore = JSON.stringify(await built.principalLinks.list());
+    const both = await signed(
+      "POST",
+      "/v1/admin/principal-links",
+      JSON.stringify({ principalId: "admin-alice", canonicalId: "admin-bob", evidence: EVIDENCE }),
+      admin,
+    );
+    assert.equal(both.status, 409);
+    assert.match(((await both.json()) as { message: string }).message, /revoke it first/);
+    assert.equal(JSON.stringify(await built.principalLinks.list()), linksBefore);
+    assert.equal(JSON.stringify(await built.admin.listGrants()), grantsBefore);
+  });
+
+  it("a grant cannot be written onto an existing alias", async () => {
+    const alias = "alias-grant@acme.test";
+    await built.principalLinks.link({
+      principalId: alias,
+      canonicalId: "casey@acme.test",
+      evidence: EVIDENCE,
+      linkedBy: "t",
+    });
+    try {
+      const refused = await signed(
+        "POST",
+        "/v1/admin/grants",
+        JSON.stringify({ principalId: alias, role: "org_admin", scopeId: scopeId("org", "default-org") }),
+        admin,
+      );
+      assert.equal(refused.status, 409);
+      assert.equal(
+        (await built.admin.listGrants()).some((g) => g.principalId === alias),
+        false,
+      );
+    } finally {
+      await built.principalLinks.unlink(alias);
+    }
+  });
+
+  it("an admin can link a synced Discord directory member to its canonical principal", async () => {
+    await built.app.upsertDiscordDirectory([{ principalId: "discord:77", displayName: "Dee", type: "internal" }]);
+    const linked = await signed(
+      "POST",
+      "/v1/admin/principal-links",
+      JSON.stringify({ principalId: "discord:77", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
+      admin,
+    );
+    assert.equal(linked.status, 200);
+    const second = await signed(
+      "POST",
+      "/v1/admin/principal-links",
+      JSON.stringify({ principalId: "discord:78", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
+      admin,
+    );
+    assert.equal(second.status, 409, "one person never holds two Discord accounts");
+    assert.deepEqual(
+      (await built.principalLinks.list()).filter((l) => l.principalId.startsWith("discord:")).map((l) => l.principalId),
+      ["discord:77"],
+    );
+    await built.principalLinks.unlink("discord:77");
+    await built.app.upsertDiscordDirectory([]);
   });
 
   it("surfaces resolve a sign-in to its canonical principal", async () => {
@@ -424,7 +511,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
 describe("link mutation serialization", () => {
   it("rejects concurrent chains", async () => {
-    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    const links = testPrincipalLinks();
     const results = await Promise.allSettled([
       links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
       links.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" }),
@@ -452,8 +539,9 @@ describe("link mutation serialization", () => {
         },
       },
       lock,
+      testGrants(),
     );
-    const b = createPrincipalLinkService(backing, lock);
+    const b = createPrincipalLinkService(backing, lock, testGrants());
     const pending = a.refresh(true);
     await started.promise;
     await b.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" });
@@ -464,7 +552,7 @@ describe("link mutation serialization", () => {
   });
   it("manual blocks win over directory records during hydration and refresh in either order", async () => {
     for (const reverse of [false, true]) {
-      const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+      const links = testPrincipalLinks();
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {

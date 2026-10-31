@@ -1,5 +1,5 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
-import type { DirectoryMember } from "../../directory/directory-store.ts";
+import { slackIdOf, type DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -157,7 +157,6 @@ async function directoryMeta(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, await app.directoryMeta());
 }
 
-const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/;
 async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const q = (url.searchParams.get("q") ?? "").trim();
@@ -167,7 +166,7 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   if (r.kind === "one") found = [r.member];
   else if (r.kind === "ambiguous") found = r.candidates;
   const matches = found.map((m) => {
-    const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
+    const slackId = slackIdOf(m);
     return slackId ? { ...m, slackId } : m;
   });
   return sendJson(res, 200, { matches });
