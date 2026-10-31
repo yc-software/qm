@@ -1,4 +1,5 @@
 import { signedHeaders, withSourceAuthNonce } from "./core-client.ts";
+import { boundTenant } from "./tenant.ts";
 
 const PLUGIN_SETTINGS_PATH = "/v1/plugin-settings";
 
@@ -10,7 +11,7 @@ export function corePluginSettings(
   ttlMs = 30_000,
   now: () => number = Date.now,
 ): () => Promise<PluginSettings> {
-  let cached: { at: number; settings: Promise<PluginSettings> } | undefined;
+  const cache = new Map<string, { at: number; settings: Promise<PluginSettings> }>();
   const load = async (): Promise<PluginSettings> => {
     const path = withSourceAuthNonce(PLUGIN_SETTINGS_PATH, signingSecret);
     const response = await fetch(`${coreApiUrl}${path}`, {
@@ -24,11 +25,13 @@ export function corePluginSettings(
     );
   };
   return () => {
+    const tenant = boundTenant() ?? "";
+    const cached = cache.get(tenant);
     if (cached && now() - cached.at < ttlMs) return cached.settings;
     const entry = { at: now(), settings: load() };
-    cached = entry;
+    cache.set(tenant, entry);
     entry.settings.catch(() => {
-      if (cached === entry) cached = undefined;
+      if (cache.get(tenant) === entry) cache.delete(tenant);
     });
     return entry.settings;
   };
