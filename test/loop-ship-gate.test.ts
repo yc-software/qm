@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { buildShipGrant, decideShip, graduationAllowed, undeclaredShipActions } from "../src/loops/ship-gate.ts";
 import { scopeId, type Loop } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = {
   owner: "U1",

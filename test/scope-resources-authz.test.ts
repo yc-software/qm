@@ -9,6 +9,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const U1 = "U1";

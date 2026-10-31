@@ -1,5 +1,9 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { perTenant } from "../tenants/context.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export interface SessionMessage {
   id: string;
@@ -13,22 +17,122 @@ export interface SessionMessage {
   consumed?: boolean;
 }
 
-export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
+export interface SessionMailbox {
+  send(message: SessionMessage): Promise<void>;
+  pending(recipientId: string): Promise<SessionMessage[]>;
+  acknowledge(recipientId: string, ids: string[]): Promise<void>;
+  close?(): Promise<void>;
+}
+
+export const SESSION_MAILBOX_MIGRATION = typedTableMigration({
+  table: "session_mailbox",
+  columns: [
+    "id TEXT NOT NULL",
+    "recipient_id TEXT NOT NULL",
+    "sender_id TEXT NOT NULL",
+    "actor JSONB NOT NULL",
+    "text TEXT NOT NULL",
+    "source_entry_seq BIGINT",
+    "audience JSONB NOT NULL",
+    "created_at BIGINT NOT NULL",
+    "consumed BOOLEAN NOT NULL DEFAULT false",
+  ],
+  primaryKey: ["id"],
+  backfill: {
+    id: "id",
+    recipient_id: "json->>'recipientId'",
+    sender_id: "json->>'senderId'",
+    actor: "json->'actor'",
+    text: "json->>'text'",
+    source_entry_seq: "(json->>'sourceEntrySeq')::numeric::bigint",
+    audience: "COALESCE(json->'audience', '[]')",
+    created_at: "COALESCE((json->>'createdAt')::numeric::bigint, 0)",
+    consumed: "COALESCE((json->>'consumed')::boolean, false)",
+  },
+  where: "json ? 'recipientId' AND json ? 'senderId' AND json ? 'text' AND jsonb_typeof(json->'actor') = 'object'",
+  indexes: [
+    "CREATE INDEX session_mailbox_unread ON session_mailbox(tenant_id, recipient_id, created_at, id) WHERE NOT consumed",
+  ],
+});
+
+function messageFromRow(row: Record<string, unknown>): SessionMessage {
   return {
-    async send(message: SessionMessage): Promise<void> {
-      await backing.putIfAbsent(message.id, message);
+    id: row.id as string,
+    recipientId: row.recipient_id as string,
+    senderId: row.sender_id as string,
+    actor: row.actor as SessionMessage["actor"],
+    text: row.text as string,
+    ...(row.source_entry_seq === null ? {} : { sourceEntrySeq: Number(row.source_entry_seq) }),
+    audience: row.audience as SessionMessage["audience"],
+    createdAt: Number(row.created_at),
+    ...(row.consumed ? { consumed: true } : {}),
+  };
+}
+
+export function createPostgresSessionMailbox(connectionString: string): SessionMailbox {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, SESSION_MAILBOX_MIGRATION]);
+  return {
+    async send(message) {
+      await q(
+        `INSERT INTO session_mailbox(id, recipient_id, sender_id, actor, text, source_entry_seq, audience, created_at, consumed)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9)
+         ON CONFLICT (tenant_id, id) DO NOTHING`,
+        [
+          message.id,
+          message.recipientId,
+          message.senderId,
+          jsonbStringify(message.actor),
+          pgTextSafe(message.text),
+          message.sourceEntrySeq ?? null,
+          jsonbStringify(message.audience),
+          Math.round(message.createdAt),
+          message.consumed === true,
+        ],
+      );
     },
-    async pending(recipientId: string): Promise<SessionMessage[]> {
-      const rows = await backing.select({ where: { field: "recipientId", anyOfFold: [recipientId] } });
-      return rows.filter((row) => !row.consumed).sort((a, b) => a.createdAt - b.createdAt);
+    async pending(recipientId) {
+      const rows = await q(
+        `SELECT id, recipient_id, sender_id, actor, text, source_entry_seq, audience, created_at, consumed
+           FROM session_mailbox
+          WHERE tenant_id = ${TENANT} AND recipient_id = $1 AND NOT consumed
+          ORDER BY created_at, id`,
+        [recipientId],
+      );
+      return rows.map(messageFromRow);
     },
-    async acknowledge(recipientId: string, ids: string[]): Promise<void> {
+    async acknowledge(recipientId, ids) {
+      if (!ids.length) return;
+      await q(
+        `UPDATE session_mailbox SET consumed = true
+          WHERE tenant_id = ${TENANT} AND recipient_id = $1 AND id = ANY($2::text[]) AND NOT consumed`,
+        [recipientId, ids],
+      );
+    },
+    close,
+  };
+}
+
+export function createSessionMailbox(): SessionMailbox {
+  const mine = perTenant(() => new Map<string, SessionMessage>());
+  return {
+    async send(message) {
+      const messages = mine();
+      if (messages.has(message.id)) return;
+      const stored = Object.fromEntries(Object.entries(message).filter(([, value]) => value != null));
+      messages.set(message.id, structuredClone(stored) as unknown as SessionMessage);
+    },
+    async pending(recipientId) {
+      return [...mine().values()]
+        .filter((message) => message.recipientId === recipientId && !message.consumed)
+        .map((message) => structuredClone(message))
+        .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    },
+    async acknowledge(recipientId, ids) {
+      const messages = mine();
       for (const id of ids) {
-        const row = await backing.get(id);
-        if (row?.recipientId === recipientId) await backing.merge(id, { consumed: true });
+        const message = messages.get(id);
+        if (message?.recipientId === recipientId) message.consumed = true;
       }
     },
   };
 }
-
-export type SessionMailbox = ReturnType<typeof createSessionMailbox>;

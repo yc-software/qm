@@ -1,5 +1,4 @@
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { createSessionMailbox, type SessionMailbox } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -10,6 +9,9 @@ import { scopeId, type Conversation, type Principal, type ScopeId, type Session 
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -28,7 +30,7 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const signals = createMemoryRunSignalStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
+  const mailbox = createSessionMailbox();
   const factory = createSessionSyscalls({
     mailbox,
     sessions,

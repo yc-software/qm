@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("initial persistence includes settings, pool, message and pending work in one write", async () => {
   const f = await swarmFixture();

@@ -39,6 +39,9 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -308,7 +311,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(createMemoryMap()),
+    crons: createCronStore(),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
     identity: createIdentityService(createMemoryMap()),

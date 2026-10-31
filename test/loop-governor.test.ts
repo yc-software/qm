@@ -5,6 +5,9 @@ import { collectVitals, evaluateGovernor, healthWorsened, type LoopVitals } from
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { scopeId, type Loop, type LoopCaps, type LoopGovernorConfig } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = {
   owner: "U1",

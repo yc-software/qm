@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "../src/memory/tidy.ts";
+import { createMemoryTidyService, withMemoryTidy } from "../src/memory/tidy.ts";
+import { createMemoryTidyProfiles } from "../src/memory/tidy-profiles.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -12,10 +13,12 @@ import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
+bindTestTenant();
+
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
-  const store = createMemoryMap<MemoryTidyProfile>();
+  const store = createMemoryTidyProfiles();
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
   const fact = (updatedAt: number): MemoryFact => ({
@@ -90,7 +93,7 @@ test("a claim interrupted before its cron was switched on is finished on the nex
     action: "tidy",
     enabled: false,
   });
-  await f.store.put(alice, { cronId: cron.id, arming: true });
+  await f.store.insertIfAbsent(alice, { cronId: cron.id, arming: true });
   await f.service.ensure(alice);
   assert.equal((await f.crons.get(cron.id))?.enabled, true);
   assert.deepEqual(await f.store.get(alice), { cronId: cron.id });

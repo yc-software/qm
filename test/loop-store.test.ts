@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = {
   owner: "U1",

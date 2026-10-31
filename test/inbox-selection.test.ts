@@ -15,6 +15,9 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops, ensureInboxLoop } from "../src/loops/inbox-loop.ts";
 import { migrateInbox } from "../src/loops/inbox-migration.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {

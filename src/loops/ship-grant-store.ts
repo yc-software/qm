@@ -1,5 +1,5 @@
 import type { ShipGrant } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryShipGrantRows, type ShipGrantRows } from "./ship-grant-table.ts";
 
 export interface ShipGrantStore {
   put(grant: ShipGrant): Promise<ShipGrant>;
@@ -10,14 +10,13 @@ export interface ShipGrantStore {
   deleteByLoop(loopId: string): Promise<void>;
 }
 
-export function createShipGrantStore(backing: DurableMap<ShipGrant> = createMemoryMap<ShipGrant>()): ShipGrantStore {
-  if (!backing.update) throw new Error("ship grants need atomic durable updates");
+export function createShipGrantStore(rows: ShipGrantRows = createMemoryShipGrantRows()): ShipGrantStore {
   return {
     async put(grant) {
-      const existing = await backing.putIfAbsent(grant.id, grant);
+      const existing = await rows.insertIfAbsent(grant);
       if (existing.revokedAt === undefined) return existing;
       return (
-        (await backing.update!(grant.id, (current) => {
+        (await rows.update(grant.id, (current) => {
           if (current.revokedAt === undefined) return current;
           const revocationHistory = [
             ...(current.revocationHistory ?? []),
@@ -28,19 +27,13 @@ export function createShipGrantStore(backing: DurableMap<ShipGrant> = createMemo
         })) ?? grant
       );
     },
-    get: (id) => backing.get(id),
-    async byLoop(loopId) {
-      return (await backing.all()).filter((grant) => grant.loopId === loopId);
-    },
+    get: (id) => rows.get(id),
+    byLoop: (loopId) => rows.byLoop(loopId),
     revoke: (id, actorId) =>
-      backing.update!(id, (grant) =>
+      rows.update(id, (grant) =>
         grant.revokedAt === undefined ? { ...grant, revokedAt: Date.now(), revokedBy: actorId } : grant,
       ),
-    async delete(id) {
-      await backing.delete(id);
-    },
-    async deleteByLoop(loopId) {
-      for (const grant of await this.byLoop(loopId)) await backing.delete(grant.id);
-    },
+    delete: (id) => rows.delete(id),
+    deleteByLoop: (loopId) => rows.deleteByLoop(loopId),
   };
 }

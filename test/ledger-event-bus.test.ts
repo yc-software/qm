@@ -14,6 +14,9 @@ import {
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres ledger-event bus test";

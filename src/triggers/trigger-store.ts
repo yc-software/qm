@@ -1,5 +1,4 @@
 import type { Destination, ScopeId, TriggerBase } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 
@@ -13,14 +12,6 @@ export interface CreateTriggerInput {
 
 export function contentPart(value: unknown): string {
   return canonicalJson(value);
-}
-
-export function createDeduped<T extends { id: string }>(
-  backing: DurableMap<T>,
-  contentId: string,
-  build: (id: string) => T,
-): Promise<T> {
-  return backing.putIfAbsent(contentId, build(contentId));
 }
 
 export function assertNoEscalation(input: { owner: string; createdBy: string; ownerConsentedAt?: number }): void {
@@ -42,24 +33,11 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
   };
 }
 
-export async function setTriggerEnabled<T extends TriggerBase>(
-  backing: DurableMap<T>,
-  id: string,
-  enabled: boolean,
-): Promise<void> {
-  await backing.merge(id, { enabled } as Partial<T>);
+export function withFields<T extends object>(record: T, fields: Partial<T>): T {
+  const next = { ...record } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+  }
+  return next as unknown as T;
 }
-
-export async function ownedBy<T extends TriggerBase>(backing: DurableMap<T>, scopeId: string): Promise<T[]> {
-  const field = "ownerScopeId" as Extract<keyof T, string>;
-  const rows = await backing.select({ where: { field, anyOfFold: [scopeId] } });
-  return rows.filter((row) => row.ownerScopeId === scopeId);
-}
-
-export const DROP_RECIPIENT_CONSENT_MIGRATION = {
-  id: "durable-map/triggers/0001-drop-recipient-consent",
-  statements: ["crons", "webhooks", "loops"].flatMap((table) => [
-    `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-    `UPDATE ${table} SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'`,
-  ]),
-};

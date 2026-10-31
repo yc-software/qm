@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
   const items = createLoopItemLedger();

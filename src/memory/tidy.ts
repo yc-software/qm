@@ -1,6 +1,6 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { CronStore } from "../cron/cron-store.ts";
-import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
+import { claimManagedCron, nightlyAt, type ManagedCronProfiles } from "../cron/managed.ts";
+import type { MemoryTidyProfile } from "./tidy-profiles.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -15,10 +15,8 @@ const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with
 - Add no new information and leave every other notebook alone.
 Batch your edits and deletes into list calls; each call changes everything or nothing. If nothing needs changing, change nothing. Do not message anyone; end with finish_silently.`;
 
-export type MemoryTidyProfile = ManagedCronClaim;
-
 export function createMemoryTidyService(deps: {
-  store: DurableMap<MemoryTidyProfile>;
+  store: ManagedCronProfiles<MemoryTidyProfile>;
   memory: Pick<MemoryService, "facts">;
   timezone: (principalId: string) => Promise<string | undefined>;
   crons: CronStore;

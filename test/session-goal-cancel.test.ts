@@ -11,6 +11,9 @@ import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
