@@ -50,7 +50,14 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),
 };
 
+const SANDBOX_WIDE_SECRET_PREFIX = "FLY_RESIDENT_ENV_";
+
 export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
+  const sandboxWide = Object.keys(env).filter((name) => name.startsWith(SANDBOX_WIDE_SECRET_PREFIX));
+  if (sandboxWide.length)
+    throw new Error(
+      `${sandboxWide.join(", ")}: deployment-wide sandbox secrets would reach every tenant's computers — store each credential in the keychain of the scope that owns it and remove these variables`,
+    );
   const enabled = (spec: RuntimeSecretSpec): boolean => {
     const gates = typeof spec.requiredWhen === "string" ? [spec.requiredWhen] : spec.requiredWhen;
     return gates.some((gate) => GATE_PREDICATES[gate](env));

@@ -10,6 +10,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ORG = TEST_ROOT_SCOPE;
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
 

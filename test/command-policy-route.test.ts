@@ -17,6 +17,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {

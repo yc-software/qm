@@ -172,7 +172,7 @@ test(
         const clock = Date.now();
         const outputs = createPostgresToolOutputStore({
           pool,
-          bytesFor: (prefix) => createLocalDurableByteStore(join(dir, prefix)),
+          bytes: createLocalDurableByteStore(join(dir, "tool-output")),
           now: () => clock,
         });
         assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS);

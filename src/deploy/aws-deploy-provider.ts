@@ -1,5 +1,7 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
+import { currentTenant } from "../tenants/context.ts";
+import { tenantKey } from "../tenants/storage.ts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
@@ -110,6 +112,8 @@ export interface AwsDeployProviderOptions {
   onError?: AppErrorSink;
 }
 
+export const deployDataArea = (prefix: string | undefined): string => (prefix ?? "deploy-data").replace(/\/+$/, "");
+
 export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployProvider {
   const region = opts.region;
   const api =
@@ -155,7 +159,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
-  const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
+  const dataPrefix = deployDataArea(opts.dataPrefix);
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
   const s3: Pick<S3Client, "send"> | undefined = dataBucket
     ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
@@ -165,8 +169,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  const dataKeyFor = (deploymentId: string): string => `${dataPrefix}/${deploymentId}.tar`;
-  const litestreamKeyPrefix = (deploymentId: string): string => `${dataPrefix}/${deploymentId}/litestream`;
+  const dataKeyFor = (deploymentId: string): string => tenantKey(dataPrefix, `${deploymentId}.tar`);
+  const litestreamKeyPrefix = (deploymentId: string): string => tenantKey(dataPrefix, `${deploymentId}/litestream`);
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
@@ -225,7 +229,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     const r = await sts!.send(
       new AssumeRoleCommand({
         RoleArn: dataRoleArn!,
-        RoleSessionName: `deploy-${deploymentId.slice(0, 8)}`,
+        RoleSessionName: `deploy-${currentTenant().slice(0, 8)}-${deploymentId.slice(0, 8)}`,
         Policy: policy,
         DurationSeconds: DATA_CREDS_TTL_SEC,
       }),

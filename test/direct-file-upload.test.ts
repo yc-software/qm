@@ -6,6 +6,9 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "../src/f
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {

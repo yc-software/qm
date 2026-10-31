@@ -55,8 +55,6 @@ export interface SandboxConfig {
   app?: string;
   image?: string;
   baseImage?: string;
-  env?: Record<string, string>;
-  secretEnv?: string[];
 }
 
 type SecurityScreenMode = "off" | "observe" | "enforce";
@@ -231,30 +229,17 @@ export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.
 export const localSandboxActive = (config: QmConfig): boolean =>
   config.target === "docker" && config.sandbox?.backend === "local";
 
-export function sandboxCoreEnv(
-  config: QmConfig,
-  lookup?: (name: string) => string | undefined,
-): { env: Record<string, string>; missingSecrets: string[] } {
+export function sandboxCoreEnv(config: QmConfig): { env: Record<string, string> } {
   const env: Record<string, string> = {};
-  const missingSecrets: string[] = [];
   const sb = config.sandbox;
-  if (!sb) return { env, missingSecrets };
+  if (!sb) return { env };
   if (localSandboxActive(config)) {
     env.SANDBOX_BACKEND = "local";
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
-    return { env, missingSecrets };
+    return { env };
   }
-  if (sb.backend === "e2b") {
-    env.SANDBOX_BACKEND = sb.backend;
-    return { env, missingSecrets };
-  }
-  for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
-  for (const name of sb.secretEnv ?? []) {
-    const v = lookup?.(name);
-    if (v === undefined || v === "") missingSecrets.push(name);
-    else env[`FLY_RESIDENT_ENV_${name}`] = v;
-  }
-  return { env, missingSecrets };
+  if (sb.backend === "e2b") env.SANDBOX_BACKEND = sb.backend;
+  return { env };
 }
 
 function stripJsonComments(text: string): string {
@@ -773,7 +758,6 @@ function validate(raw: unknown, path: string): QmConfig {
   if (o["aws"] !== undefined) {
     const configuredSecretNames = [
       ...plugins.flatMap((plugin) => (plugin.secrets ?? []).map((secret) => secret.name)),
-      ...(sandbox?.secretEnv ?? []),
       ...Object.values(secretEnv).flatMap((entries) => Object.values(entries ?? {})),
     ];
     out.aws = validateAws(o["aws"], path, runnableServices(services), configuredSecretNames);
@@ -1604,11 +1588,6 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     throw new CliError(`${path}: "sandbox" must be an object (e.g. { "app": "acme-sandboxes" })`);
   }
   const o = raw;
-  const assertEnvName = (name: string, field: string): void => {
-    if (!isEnvVarName(name)) {
-      throw new CliError(`${path}: ${field} ${JSON.stringify(name)} is not a valid env var name`);
-    }
-  };
   const out: SandboxConfig = target === "render" ? { backend: "render" } : {};
   if (o["backend"] !== undefined) {
     if (!isSandboxBackendId(o["backend"])) {
@@ -1644,14 +1623,11 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     }
     out.baseImage = o["baseImage"];
   }
-  if (o["env"] !== undefined) {
-    out.env = validateStringMap(o["env"], path, "sandbox.env");
-    for (const k of Object.keys(out.env)) assertEnvName(k, `"sandbox.env" key`);
-  }
-  if (o["secretEnv"] !== undefined) {
-    const se = validateStringArray(o["secretEnv"], path, "sandbox.secretEnv");
-    for (const name of se) assertEnvName(name, `"sandbox.secretEnv" entry`);
-    out.secretEnv = se;
+  const sandboxWide = (["env", "secretEnv"] as const).filter((key) => o[key] !== undefined);
+  if (sandboxWide.length) {
+    throw new CliError(
+      `${path}: ${sandboxWide.map((key) => `"sandbox.${key}"`).join(", ")} would reach every tenant's computers — store each credential in the keychain of the scope that owns it and remove the key`,
+    );
   }
   if (out.backend !== undefined && !SANDBOX_BACKEND_POLICY[target].allowed.includes(out.backend)) {
     const targets = targetsAllowingSandboxBackend(out.backend)
@@ -1660,7 +1636,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires target ${targets}`);
   }
   if (out.backend === "local") {
-    const stray = (["app", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    const stray = (["app", "baseImage"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "local" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them; use "sandbox.image" for the runnable local sandbox image`,
@@ -1668,7 +1644,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     }
   }
   if (out.backend === "e2b" || out.backend === "render") {
-    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    const stray = (["app", "image", "baseImage"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "${out.backend}" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them`,

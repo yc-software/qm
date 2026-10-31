@@ -9,6 +9,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 

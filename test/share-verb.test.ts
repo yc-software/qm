@@ -22,6 +22,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 interface FakeState {
   artifacts: Record<string, ArtifactHome & { type: ArtifactType }>;
   scopesByPrincipal: Record<string, ScopeId[]>;

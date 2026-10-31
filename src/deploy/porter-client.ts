@@ -3,8 +3,9 @@ import { Porter, NotFoundError, SandboxError } from "porter-sandbox";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { shortHash } from "../util/crypto.ts";
+import { shortHash, hashId } from "../util/crypto.ts";
 import type { ExecResult } from "../sandbox/sandbox.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -111,6 +112,16 @@ export function createPorterClient(opts: { token?: string; baseUrl?: string }): 
     }) as PorterClientLike,
   );
 }
+
+export const porterSlug = (prefix: string, id: string): string => {
+  const tenant = currentTenant();
+  const cleaned = id
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const slug = cleaned.slice(0, 20).replace(/-+$/, "") || "scope";
+  return `${prefix}-${tenant.slice(0, 8)}-${slug}-${hashId([prefix, tenant, id], 12)}`;
+};
 
 export const porterDnsLabel = (name: string): string => {
   const cleaned = name

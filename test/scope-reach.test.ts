@@ -349,7 +349,9 @@ test("DM + directory + flag: execute(scope:#room) runs on that channel's own com
   assert.equal(res.status, "ok");
   assert.equal(res.reply, "still here");
   assert.ok(
-    fakeSprites.calls.some((c) => c.method === "WS" && /\/sprites\/qm-sandbox-room-ph-[^/]+\/exec$/.test(c.path)),
+    fakeSprites.calls.some(
+      (c) => c.method === "WS" && /\/sprites\/qm-00000000-sandbox-room-ph-[^/]+\/exec$/.test(c.path),
+    ),
     "the command landed on the channel's computer",
   );
 });
@@ -357,7 +359,7 @@ test("DM + directory + flag: execute(scope:#room) runs on that channel's own com
 test("reach preserves a durable workspace even without a login-probe cache", async () => {
   const built = await roomApp();
   await built.app.turn(dm("!reach #project-alpha printf retained > keep.txt"));
-  assert.ok(fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")));
+  assert.ok(fakeSprites.names().some((n) => n.startsWith("qm-00000000-sandbox-room-ph-")));
   const result = await built.app.turn(dm("!reach #project-alpha cat keep.txt"));
   assert.equal(result.reply, "retained");
 });
@@ -366,7 +368,7 @@ test("reach teardown keeps (does not destroy) a room with its own computer", asy
   const built = await roomApp();
   await built.app.turn(dm("!reach #project-alpha echo hi"));
   assert.ok(
-    fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")),
+    fakeSprites.names().some((n) => n.startsWith("qm-00000000-sandbox-room-ph-")),
     "an operated room's computer is kept, not destroyed",
   );
 });

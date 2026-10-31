@@ -14,6 +14,7 @@ import { migrateRegisteredPgSchemas, createPgPool } from "./persistence/pg-pool.
 import { retiredEnvPresent, tenantEnvPresent } from "./tenants/settings-import.ts";
 import { memoryTenants, pgTenants, singleTenantResolver } from "./tenants/resolver.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
+import { migrateTenantStorageOnce } from "./tenants/storage-migration.ts";
 
 const config = loadConfig();
 
@@ -30,6 +31,7 @@ if (retiredEnv.length)
   console.warn(
     `[qm] ${retiredEnv.join(", ")} ${retiredEnv.length === 1 ? "is" : "are"} no longer read; add broker credentials and connector tokens in admin settings, and save ChatGPT or Claude logins as keychain credentials named by CODEX_AUTH_CREDENTIAL or CLAUDE_AUTH_CREDENTIAL.`,
   );
+await migrateTenantStorageOnce(config);
 await built.boot();
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;

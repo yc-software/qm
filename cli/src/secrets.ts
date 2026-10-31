@@ -668,21 +668,6 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
       }
     }
   }
-  for (const name of config.sandbox?.secretEnv ?? []) {
-    const current = byName.get(name);
-    if (current) {
-      current.required = true;
-      if (!current.services.includes("sandbox")) current.services.push("sandbox");
-    } else {
-      byName.set(name, {
-        name,
-        services: ["sandbox"],
-        description: `Organization-wide secret injected into every sandbox as ${name}.`,
-        required: true,
-        managedBy: "operator",
-      });
-    }
-  }
   const control = byName.get("DEPLOYMENT_CONTROL_SECRET");
   if (control && (control.services.some((service) => service !== "core") || control.aliases?.length))
     throw new Error("DEPLOYMENT_CONTROL_SECRET must be delivered only to core under its original name");
@@ -729,8 +714,7 @@ export function secretDestinations(
     out.set(workload, (out.get(workload) ?? new Set()).add(name));
   };
   for (const service of secret.services) {
-    if (service === "sandbox") add("core", `FLY_RESIDENT_ENV_${secret.name}`);
-    else add(serviceHost(service), secret.name);
+    add(serviceHost(service), secret.name);
   }
   for (const alias of secret.aliases ?? []) {
     add(serviceHost(alias.service), alias.name);

@@ -1,4 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
+import type { PgPool } from "../persistence/pg-pool.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { arch } from "node:os";
 import { join } from "node:path";
@@ -52,7 +53,10 @@ export interface LocalSandboxOptions {
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  tenants: Pick<PgPool, "q"> | undefined;
 }
+
+const SINGLE_TENANT_RECHECK_MS = 60_000;
 
 const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "cli/templates/aws/microvm-agent/agent.mjs"];
 
@@ -91,7 +95,7 @@ function localSlug(id: string): string {
   return `${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
 }
 
-export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions = {}): Sandbox {
+export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): Sandbox {
   const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -104,6 +108,18 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const scopeByContainer = new Map<string, string>();
   const scratchByKey = new Map<string, string>();
   const activeByContainer = new Map<string, number>();
+
+  let singleTenantUntil = 0;
+  async function requireSingleTenant(): Promise<void> {
+    if (Date.now() < singleTenantUntil) return;
+    if (!opts.tenants) throw new Error("The local Docker sandbox requires the QM database");
+    const tenants = Number((await opts.tenants.q("SELECT count(*) AS n FROM tenants"))[0]?.n);
+    if (tenants !== 1)
+      throw new Error(
+        `The local Docker sandbox shares the host Docker daemon and network, so it serves single-tenant installs only; this database has ${tenants} tenants`,
+      );
+    singleTenantUntil = Date.now() + SINGLE_TENANT_RECHECK_MS;
+  }
 
   let preflightDone: Promise<string> | undefined;
   let staleWarned = false;
@@ -382,6 +398,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     ...execFileOps,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+      await requireSingleTenant();
       const scratch = provOpts?.scratch;
       const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
       const scope = writable?.scopeId ?? "default";

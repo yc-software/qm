@@ -13,6 +13,16 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { displacedPruneGlobs } from "../credentials/resident-paths.ts";
 import type { TeardownOptions } from "./sandbox.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { tenantKey } from "../tenants/storage.ts";
+
+export const HOME_SNAPSHOT_AREAS = {
+  sprites: "sprites-home",
+  smolmachines: "smolmachines-home",
+  e2b: "e2b-home",
+  managedAgents: "managed-agents-home",
+  modal: "modal-home",
+} as const;
 
 const SNAPSHOT_PART_BYTES = 64 * 1024 * 1024;
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -76,22 +86,24 @@ async function* singlePart(data: Uint8Array): AsyncGenerator<Uint8Array> {
 
 export function createMemorySnapshotStore(): HomeSnapshotStore {
   const map = new Map<string, Uint8Array>();
+  const slot = (scope: string): string => `${currentTenant()}/${scope}`;
   return {
     open: async (scope) => {
-      const data = map.get(scope);
+      const data = map.get(slot(scope));
       return data ? { size: data.length, parts: singlePart(data) } : null;
     },
     put: async (scope, data) => {
-      map.set(scope, data);
+      map.set(slot(scope), data);
     },
     createUpload: async (scope) => {
       const parts: Uint8Array[] = [];
+      const key = slot(scope);
       return {
         addPart: async (bytes) => {
           parts.push(bytes);
         },
         complete: async () => {
-          map.set(scope, Buffer.concat(parts));
+          map.set(key, Buffer.concat(parts));
         },
         abort: async () => {},
       };
@@ -104,12 +116,17 @@ export interface S3SnapshotStoreOptions {
   prefix: string;
   region?: string;
   s3?: S3Send;
-  keyFor?: (scope: string) => string;
+  scopeKey?: (scope: string) => string;
+}
+
+export function homeSnapshotKey(prefix: string, scope: string, scopeKey: (scope: string) => string): string {
+  return tenantKey(prefix, `${scopeKey(scope)}.tar`);
 }
 
 export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapshotStore {
   const s3 = opts.s3 ?? s3Client(opts.region);
-  const keyFor = opts.keyFor ?? ((scope: string): string => `${opts.prefix}/${encodeURIComponent(scope)}.tar`);
+  const scopeKey = opts.scopeKey ?? encodeURIComponent;
+  const keyFor = (scope: string): string => homeSnapshotKey(opts.prefix, scope, scopeKey);
   const Bucket = opts.bucket;
   return {
     async open(scope): Promise<StoredSnapshot | null> {

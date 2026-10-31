@@ -231,6 +231,7 @@ import {
 import {
   createLocalDurableByteStore,
   createS3DurableByteStore,
+  FILES_AREA,
   type DurableByteStore,
 } from "./files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
@@ -247,7 +248,7 @@ import {
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
 import { s3Client } from "./persistence/s3.ts";
-import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
+import { createS3SnapshotStore, HOME_SNAPSHOT_AREAS } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, MODAL_SANDBOX_BODIES } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
@@ -300,7 +301,11 @@ import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
+import {
+  createMemoryToolOutputStore,
+  createPostgresToolOutputStore,
+  TOOL_OUTPUT_AREA,
+} from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
@@ -790,15 +795,18 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const fileBytes: DurableByteStore =
-    config.snapshotStore === "s3" && config.s3Bucket
+  const s3Bytes = config.snapshotStore === "s3" && config.s3Bucket ? config.s3Bucket : undefined;
+  const durableBytes = (area: string): DurableByteStore =>
+    s3Bytes
       ? createS3DurableByteStore({
           ...s3Override,
-          bucket: config.s3Bucket,
+          bucket: s3Bytes,
+          area,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
-      : createLocalDurableByteStore(join(config.dataDir, "docstore"));
+      : createLocalDurableByteStore(join(config.dataDir, area));
+  const fileBytes = durableBytes(FILES_AREA);
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
@@ -855,6 +863,7 @@ export function buildApp(
     createLocalSandbox(workspace, {
       ...config.localSandbox,
       onError: sandboxOnError,
+      tenants: pgArtifactMap?.pool,
     });
   const tenantClients = tenantSandboxClients(() => tenantSettings.get());
   const buildSprites = (): Sandbox => {
@@ -865,7 +874,7 @@ export function buildApp(
       initializationStore: keyedRows(config.databaseUrl, SPRITES_INITIALIZATION),
       advisoryLock,
       ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.sprites }) }
         : {}),
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
@@ -895,7 +904,7 @@ export function buildApp(
       store: smolmachinesBodies,
       advisoryLock,
       ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.smolmachines }) }
         : {}),
       onError: sandboxOnError,
     });
@@ -939,7 +948,7 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.e2b }) }
         : {}),
       onError: sandboxOnError,
     });
@@ -974,7 +983,10 @@ export function buildApp(
       store: managedAgentsBodies,
       ...(managedAgents.snapshotS3Bucket
         ? {
-            snapshots: createS3SnapshotStore({ bucket: managedAgents.snapshotS3Bucket, prefix: "managed-agents-home" }),
+            snapshots: createS3SnapshotStore({
+              bucket: managedAgents.snapshotS3Bucket,
+              prefix: HOME_SNAPSHOT_AREAS.managedAgents,
+            }),
           }
         : {}),
       onError: sandboxOnError,
@@ -1020,7 +1032,7 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.modal }) }
         : {}),
       onError: sandboxOnError,
     });
@@ -1171,15 +1183,7 @@ export function buildApp(
     config.sessionStore === "postgres" && pgArtifactMap
       ? createPostgresToolOutputStore({
           pool: pgArtifactMap.pool,
-          bytesFor: (prefix) =>
-            config.snapshotStore === "s3" && config.s3Bucket
-              ? createS3DurableByteStore({
-                  ...s3Override,
-                  bucket: config.s3Bucket,
-                  ...(config.s3Region ? { region: config.s3Region } : {}),
-                  prefix: `${config.s3Prefix ?? ""}${prefix}`,
-                })
-              : createLocalDurableByteStore(join(config.dataDir, prefix)),
+          bytes: durableBytes(TOOL_OUTPUT_AREA),
         })
       : createMemoryToolOutputStore({ sessions });
   const runStoreKind = config.runStore;
@@ -1491,16 +1495,7 @@ export function buildApp(
     git: {
       repoRoot: config.deployGitDir,
       ...(config.databaseUrl ? { archiveStore: createPostgresDeployGitArchives(config.databaseUrl) } : {}),
-      ...(config.snapshotStore === "s3" && config.s3Bucket
-        ? {
-            archiveBytes: createS3DurableByteStore({
-              ...s3Override,
-              bucket: config.s3Bucket,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              prefix: `${config.s3Prefix ?? ""}deploy-git/`,
-            }),
-          }
-        : {}),
+      ...(s3Bytes ? { archiveBytes: durableBytes("deploy-git") } : {}),
     },
   });
   const renderDeployBodies = keyedRows(config.databaseUrl, RENDER_DEPLOY_BODIES);
@@ -2947,15 +2942,7 @@ export function buildApp(
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
     sessionShares: databaseUrl ? createPostgresSessionShareStore(databaseUrl) : createSessionShareStore(),
-    sessionShareBytes:
-      config.snapshotStore === "s3" && config.s3Bucket
-        ? createS3DurableByteStore({
-            ...s3Override,
-            bucket: config.s3Bucket,
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            prefix: `${config.s3Prefix ?? ""}session-shares/`,
-          })
-        : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
+    sessionShareBytes: durableBytes("session-shares"),
     skillSyncEngine,
     slackCore,
   };
