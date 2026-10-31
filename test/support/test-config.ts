@@ -20,6 +20,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
     dataDir: overrides.dataDir ?? mkdtempSync(join(tmpdir(), "qm-test-")),
+    ...(overrides.databaseUrl ? { databaseOwnerUrl: overrides.databaseUrl } : {}),
     ...overrides,
   };
 }

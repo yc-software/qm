@@ -81,17 +81,3 @@ test("a tenant first bound after start has its settings loaded before its work r
   }
 });
 
-test("a tenant first bound after start has its settings loaded before its work runs", async () => {
-  const tenant = randomUUID();
-  const store = createTenantSettingsStore({ initial: { [tenant]: { PI_MODEL: "claude-opus-5-5" } } });
-  store.start();
-  try {
-    const model = await withTenant(tenant, async () => {
-      await tenantReady();
-      return store.peek().piModel;
-    });
-    assert.equal(model, "claude-opus-5-5");
-  } finally {
-    await store.stop();
-  }
-});

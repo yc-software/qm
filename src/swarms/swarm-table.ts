@@ -5,6 +5,7 @@ import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { SwarmStorage } from "./swarm-store.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 export type TenantSwarmStorage = SwarmStorage & { tenantId: string };
 
@@ -151,7 +152,8 @@ async function upsert(
 }
 
 export function createPostgresSwarmRows(connectionString: string): SwarmRows {
-  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, SWARMS_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, SWARMS_MIGRATION]);
+  const { q, pool, close } = db;
   return {
     async get(id) {
       const rows = await q(`SELECT ${COLUMNS} FROM swarms WHERE ${MINE} AND id = $1`, [id]);
@@ -166,7 +168,8 @@ export function createPostgresSwarmRows(connectionString: string): SwarmRows {
       });
     },
     async pending(afterId, limit) {
-      const rows = await q(
+      const rows = await claimAcrossTenants(
+        db,
         `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM swarms
           WHERE pending AND ($1::text IS NULL OR id > $1) ORDER BY id LIMIT $2`,
         [afterId ?? null, limit],

@@ -1,4 +1,5 @@
 import { before } from "node:test";
+import { configurePgPooling } from "../../src/persistence/pg-pool.ts";
 import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 import { OTHER_TENANT, seedTenant, seedTestTenants, TEST_TENANT } from "./tenant-seed.ts";

@@ -90,11 +90,23 @@ export function createSlackTenants(deps: {
     });
     contextSubscriptions.set(tenant, unsubscribe);
   };
+  const contextRequests = new Map<string, () => void>();
+  const hearContextRequests = (tenant: string): void => {
+    if (contextRequests.has(tenant)) return;
+    const unsubscribe = withTenant(tenant, () =>
+      deps.core.onContextRequest((request) => {
+        for (const account of accountsOf(tenant) ?? []) account.serviceContextRequest(request);
+      }),
+    );
+    contextRequests.set(tenant, unsubscribe);
+  };
   const discard = async (tenant: string): Promise<void> => {
     const entry = entries.get(tenant);
     entries.delete(tenant);
     contextSubscriptions.get(tenant)?.();
     contextSubscriptions.delete(tenant);
+    contextRequests.get(tenant)?.();
+    contextRequests.delete(tenant);
     await entry?.failure?.cleanup?.();
     if (entry) await stopAccounts(entry.accounts);
   };
@@ -145,6 +157,7 @@ export function createSlackTenants(deps: {
         return undefined;
       }
       keep(tenant, { version: desired.version, configs: desired.accounts, accounts });
+      hearContextRequests(tenant);
       drainDeliveries();
       return accounts;
     } catch (error) {
@@ -163,6 +176,7 @@ export function createSlackTenants(deps: {
           ...(error instanceof SlackPluginStartCleanupError ? { cleanup: error.cleanup } : {}),
         },
       });
+      hearContextRequests(tenant);
       return accountsOf(tenant);
     }
   }
