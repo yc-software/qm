@@ -87,7 +87,6 @@ export interface McpToolService {
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
-  start(): void;
   close(): void;
 }
 
@@ -367,7 +366,9 @@ export function createMcpToolService(opts: {
     if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  let timer: NodeJS.Timeout | undefined;
+  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  timer.unref?.();
+  refreshInBackground();
 
   return {
     toolDefs: () => snapshot,
@@ -420,12 +421,6 @@ export function createMcpToolService(opts: {
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
-    },
-    start() {
-      if (timer || closed) return;
-      timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
-      timer.unref?.();
-      refreshInBackground();
     },
     close() {
       closed = true;

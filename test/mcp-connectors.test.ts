@@ -437,9 +437,6 @@ test("background MCP refresh contains registry failures at startup, on change, a
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
   await tick();
-  assert.equal(list.mock.callCount(), 0);
-  service.start();
-  await tick();
   assert.equal(list.mock.callCount(), 1);
   await store.put(server({ url: mcp.url }));
   await tick();

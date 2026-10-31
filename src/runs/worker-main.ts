@@ -11,7 +11,6 @@ const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
-built.mcpToolService.start();
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.hydrate();
