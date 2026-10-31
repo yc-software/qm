@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -35,8 +31,8 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 
 function testStore() {
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
   });
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
@@ -105,8 +101,8 @@ test("user model credential store round-trips api key and oauth per user+provide
 test("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
   let refreshCalls = 0;
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
     refreshConnector: async (host, token) => {
       refreshCalls += 1;
@@ -142,43 +138,33 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   assert.equal(refreshCalls, 1);
 });
 
-test("routing: anthropic api key -> pi harness with a claude model", () => {
+test("routing: anthropic api key -> a claude model", () => {
   const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
   assert.equal(r?.kind, "apikey");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.provider, "anthropic");
   assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
 });
 
-test("routing: anthropic OAuth login -> claude harness (not pi)", () => {
+test("routing: anthropic OAuth login -> a claude model", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "claude");
   assert.equal(r?.model, "claude-opus-5");
 });
 
-test("routing: openai OAuth login -> pi harness on the Codex subscription provider", () => {
+test("routing: openai OAuth login -> the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
 test("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-sol");
 });
 
 test("routing: a requested openai model is namespaced to the subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-terra");
-});
-
-test("routing: an anthropic OAuth login still uses the claude harness", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
-  assert.equal(r?.harness, "claude");
 });
 
 test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {

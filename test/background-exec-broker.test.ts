@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { redactCommand } from "../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
@@ -117,7 +118,7 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
 
 function build(opts?: { ttlMs?: number; ttlMaxMs?: number; scopeId?: string; seedOutput?: string }) {
   const fake = fakeSandbox(opts?.seedOutput !== undefined ? { seedOutput: opts.seedOutput } : undefined);
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const broker = createBackgroundBroker({
     sandbox: fake.sandbox,
     registry,
@@ -228,7 +229,7 @@ test("stop is idempotent — re-stopping a dead pid is a no-op (still stopped:tr
 
 test("stop reports stopped:false while the process is still winding down", async () => {
   const fake = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const sandbox: ProcessSandbox = { ...fake.sandbox, async signalProcess() {} };
   const broker = createBackgroundBroker({
     sandbox,
@@ -246,7 +247,7 @@ test("stop reports stopped:false while the process is still winding down", async
 
 test("stop actually waits the TERM grace: a process exiting shortly after TERM is never KILLed, even with buffered output", async () => {
   const fake = fakeSandbox({ seedOutput: "lots of buffered output\n" });
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const signals: string[] = [];
   const sandbox: ProcessSandbox = {
     ...fake.sandbox,
@@ -274,7 +275,7 @@ test("stop actually waits the TERM grace: a process exiting shortly after TERM i
 
 test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (invariant 1)", async () => {
   const fake = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:A", pollMs: 20 });
   const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:B", pollMs: 20 });
 
@@ -441,7 +442,7 @@ test("list distinguishes a TTL-reaped row from a clean exit (registry view, not 
 
 test("start stamps the conversation's sessionRef on the registry row", async () => {
   const fake = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const broker = createBackgroundBroker({
     sandbox: fake.sandbox,
     registry,
@@ -459,7 +460,7 @@ test("start stamps the conversation's sessionRef on the registry row", async () 
 
 test("background jobs retain sandbox identity across default changes and reattach only on that sandbox", async () => {
   const { sandbox } = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const a = { ...handle, id: "a", resourceId: "resource-a" };
   const b = { ...handle, id: "b", resourceId: "resource-b" };
   const selected: string[] = [];
@@ -486,7 +487,7 @@ test("background jobs retain sandbox identity across default changes and reattac
 
 test("start requires a purpose before launching, and persists a trimmed, redacted label", async () => {
   const { sandbox, starts } = fakeSandbox();
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const broker = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 0 });
   for (const purpose of [undefined, "", " \n "]) {
     await assert.rejects(broker.start(handle, "node server.js", purpose as string), /requires a short purpose/);

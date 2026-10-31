@@ -7,18 +7,39 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const SECRET = "topsecret";
-const flush = () => new Promise((r) => setImmediate(r));
+let inFlight = 0;
+const tick = () => new Promise((r) => setImmediate(r));
+const flush = async () => {
+  do await tick();
+  while (inFlight > 0);
+};
+
+function tracked<T extends object>(target: T): T {
+  for (const [key, value] of Object.entries(target)) {
+    if (typeof value !== "function") continue;
+    Object.assign(target, {
+      [key]: (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        if (!(result instanceof Promise)) return result;
+        inFlight++;
+        return result.finally(() => inFlight--);
+      },
+    });
+  }
+  return target;
+}
 
 type AssertNo413 = DeliverResult["status"] extends 202 | 200 | 401 | 404 ? true : never;
 const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
-function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
-  const webhooks = createWebhookStore();
-  const deliveries = createDeliveryStore();
-  const identity = createIdentityService();
+function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
+  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const deliveries = tracked(createDeliveryStore());
+  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -27,7 +48,7 @@ function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }
   const receiver = createWebhookReceiver({
     webhooks,
     deliveries,
-    idempotency: createIdempotencyStore(),
+    idempotency: tracked(createIdempotencyStore(testMap())),
     identity,
     run,
   });
@@ -48,7 +69,7 @@ function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
 }
 
 test("a valid delivery fires a turn as the owner, in the owner scope, with the event rendered in", async () => {
-  const { webhooks, deliveries, calls, receiver } = harness();
+  const { webhooks, deliveries, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -81,7 +102,7 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
 });
 
 test("a channel-owned webhook runs as a channel turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("channel", "C9"),
     owner: "U1",
@@ -96,7 +117,7 @@ test("a channel-owned webhook runs as a channel turn", async () => {
 });
 
 test("a bad signature is rejected (401) and fires no turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -113,7 +134,7 @@ test("a bad signature is rejected (401) and fires no turn", async () => {
 });
 
 test("an unknown or disabled webhook returns a generic 404", async () => {
-  const { webhooks, receiver } = harness();
+  const { webhooks, receiver } = agent();
   assert.equal((await receiver.deliver("nope", githubReq("{}"))).status, 404);
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -127,7 +148,7 @@ test("an unknown or disabled webhook returns a generic 404", async () => {
 });
 
 test("a GitHub ping is a handshake (200 pong, no turn)", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -142,7 +163,7 @@ test("a GitHub ping is a handshake (200 pong, no turn)", async () => {
 });
 
 test("a Slack url_verification challenge is echoed (200), no turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -163,7 +184,7 @@ test("a Slack url_verification challenge is echoed (200), no turn", async () => 
 });
 
 test("a pre-filter skips uninteresting events without booting a turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -182,7 +203,7 @@ test("a pre-filter skips uninteresting events without booting a turn", async () 
 });
 
 test("a re-delivered event id is deduped (200 duplicate), running the turn only once", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -200,7 +221,7 @@ test("a re-delivered event id is deduped (200 duplicate), running the turn only 
 });
 
 test("a captured request replayed with a fresh delivery-id header is still deduped", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -218,7 +239,7 @@ test("a captured request replayed with a fresh delivery-id header is still dedup
 });
 
 test("fail-closed: a deactivated owner accepts the delivery but runs no turn and disables the webhook", async () => {
-  const { webhooks, identity, calls, receiver } = harness();
+  const { webhooks, identity, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -236,7 +257,7 @@ test("fail-closed: a deactivated owner accepts the delivery but runs no turn and
 });
 
 test("silent-failure surfacing: a refused turn delivers a notice (the sender already got a 202)", async () => {
-  const { webhooks, deliveries, receiver } = harness({ status: "refused", reason: "internal-only" });
+  const { webhooks, deliveries, receiver } = agent({ status: "refused", reason: "internal-only" });
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -254,7 +275,7 @@ test("silent-failure surfacing: a refused turn delivers a notice (the sender alr
 });
 
 test("a third-party principal destination delivers to the recipient", async () => {
-  const { webhooks, deliveries, receiver } = harness();
+  const { webhooks, deliveries, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -272,7 +293,7 @@ test("a third-party principal destination delivers to the recipient", async () =
 });
 
 test("linear rejects signed untimed deliveries without firing a turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -312,7 +333,7 @@ const historyWebhook = {
 };
 
 test("history records the agent payload once per delivery without request headers", async () => {
-  const { webhooks, receiver } = harness();
+  const { webhooks, receiver } = agent();
   const wh = await webhooks.create(historyWebhook);
   const req = githubReq(JSON.stringify({ message: "<script>alert(1)</script>", long: "x".repeat(20_000) }));
   await Promise.all([receiver.deliver(wh.id, req), receiver.deliver(wh.id, req)]);
@@ -326,7 +347,7 @@ test("history records the agent payload once per delivery without request header
 });
 
 test("history excludes rejected signatures, handshakes and filtered deliveries", async () => {
-  const { webhooks, receiver } = harness();
+  const { webhooks, receiver } = agent();
   const wh = await webhooks.create({
     ...historyWebhook,
     filters: [{ path: "action", in: ["opened"] }],
@@ -341,7 +362,7 @@ test("history excludes rejected signatures, handshakes and filtered deliveries",
 });
 
 test("history capture failure rejects before acknowledging or starting a turn", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create(historyWebhook);
   webhooks.recordEvent = async () => {
     throw new Error("history unavailable");
@@ -352,7 +373,7 @@ test("history capture failure rejects before acknowledging or starting a turn", 
 });
 
 test("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -376,7 +397,7 @@ test("webhook fire accounting failures remain contained when recording the failu
 });
 
 test("an edited task applies to the next delivery at the same URL and secret", async () => {
-  const { webhooks, calls, receiver } = harness();
+  const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",

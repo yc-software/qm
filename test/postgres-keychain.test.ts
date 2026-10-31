@@ -3,11 +3,11 @@ import test from "node:test";
 import { createKeychain, KeychainError, type OAuthToken } from "../src/credentials/keychain.ts";
 import { createPostgresKeychainRows } from "../src/credentials/keychain-pg.ts";
 import { deriveConnectorKey, encryptSecret } from "../src/connectors/connector-client-store.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 
 const skip = skipWithoutPg;
 const KEY = deriveConnectorKey("postgres-keychain-test-key");
@@ -16,7 +16,7 @@ function keychain(rows: ReturnType<typeof createPostgresKeychainRows>, refresh?:
   return createKeychain({
     ...rows,
     key: KEY,
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     ...(refresh ? { refreshConnector: refresh, oauthSkewMs: 0 } : {}),
   });
 }
@@ -77,6 +77,39 @@ test("concurrent keychain instances claim a once grant exactly once", { skip }, 
         const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
         assert.ok(rejected.reason instanceof KeychainError && rejected.reason.status === 410);
         assert.equal((await owner.getGrant(grant.id))?.status, "used");
+      });
+    } finally {
+      await peerRows.close();
+    }
+  });
+});
+
+test("separate processes refresh a rotating connector token once", { skip }, async () => {
+  await withTypedTableDb(createPostgresKeychainRows, async ({ store, url, tenant }) => {
+    const peerRows = createPostgresKeychainRows(url);
+    const lock = testAdvisoryLock();
+    const provider = { valid: "rt-0", calls: 0 };
+    const refreshConnector = async (_host: string, token: OAuthToken) => {
+      provider.calls++;
+      await new Promise((r) => setTimeout(r, 50));
+      if (token.refreshToken !== provider.valid) throw new Error("invalid_grant");
+      provider.valid = `rt-${provider.calls}`;
+      return { accessToken: `at-${provider.calls}`, refreshToken: provider.valid, expiresAt: Date.now() + 3_600_000 };
+    };
+    try {
+      await withTenant(tenant, async () => {
+        const keychains = [store, peerRows].map((rows) =>
+          createKeychain({ ...rows, key: KEY, lock, refreshConnector }),
+        );
+        const host = "gmail.googleapis.com";
+        await keychains[0]!.setConnectorToken(host, "U-refresh", {
+          accessToken: "at-0",
+          refreshToken: "rt-0",
+          expiresAt: Date.now() - 1,
+        });
+        const tokens = await Promise.all(keychains.map((k) => k.connectorAccessToken(host, "U-refresh")));
+        assert.deepEqual(tokens, ["at-1", "at-1"]);
+        assert.equal(provider.calls, 1);
       });
     } finally {
       await peerRows.close();

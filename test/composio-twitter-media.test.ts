@@ -7,14 +7,10 @@ import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-m
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
-
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { orgId } from "../src/config.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -47,8 +43,8 @@ const proxied = (data: unknown, status = 200) => ({ data, status, headers: { "se
 
 async function fixture() {
   const keychain = createKeychain({
-    ...memoryKeychainRows(),
-    lock: createMemoryAdvisoryLock(),
+    ...testKeychainRows(),
+    lock: testAdvisoryLock(),
     key: deriveConnectorKey("composio-test"),
   });
   await keychain.save({ ownerId: "alice", service: "composio", envKey: "COMPOSIO_API_KEY", secret: "private-key" });

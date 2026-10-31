@@ -2,7 +2,6 @@ import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns, type ColumnCast, type TypedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill, upsertStatement } from "../persistence/typed-statements.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { SecretDropRecord } from "../credentials/secret-drop.ts";
 import type { McpServer } from "../mcp/mcp-server-store.ts";
@@ -47,83 +46,6 @@ export interface LinkTables {
   composioReturns: ComposioReturnRows;
   browserSessions: BrowserSessionRows;
   mcpServers: McpServerRows;
-}
-
-function memoryOneTime<T>(rows = perTenant(() => new Map<string, T>())): OneTimeRows<T> {
-  return {
-    async insert(id, rec) {
-      rows().set(id, structuredClone(rec));
-    },
-    async get(id) {
-      return structuredClone(rows().get(id) ?? null);
-    },
-    async take(id) {
-      const rec = rows().get(id) ?? null;
-      rows().delete(id);
-      return rec;
-    },
-  };
-}
-
-function sameDropThread(a: SecretDropRecord, b: SecretDropRecord): boolean {
-  return a.audienceScopeId === b.audienceScopeId && a.threadRef === b.threadRef && a.service !== b.service;
-}
-
-export function memoryLinkTables(): LinkTables {
-  const drops = perTenant(() => new Map<string, SecretDropRecord>());
-  const returns = perTenant(() => new Map<string, ComposioReturn>());
-  const sessions = perTenant(() => new Map<string, StoredBrowserSession>());
-  const servers = perTenant(() => new Map<string, McpServer>());
-  return {
-    oauthFlows: memoryOneTime(),
-    consentLinks: memoryOneTime(),
-    secretDrops: {
-      ...memoryOneTime(drops),
-      async siblings(rec, createdSince) {
-        return structuredClone(
-          [...drops().values()].filter((drop) => drop.createdAt >= createdSince && sameDropThread(drop, rec)),
-        );
-      },
-      async deleteCreatedBefore(cutoff) {
-        for (const [id, drop] of drops()) if (drop.createdAt < cutoff) drops().delete(id);
-      },
-    },
-    composioReturns: {
-      async put(id, rec) {
-        returns().set(id, structuredClone(rec));
-      },
-      async take(id) {
-        const rec = returns().get(id) ?? null;
-        returns().delete(id);
-        return rec;
-      },
-      async deleteExpired(now) {
-        for (const [id, rec] of returns()) if (rec.expiresAt <= now) returns().delete(id);
-      },
-    },
-    browserSessions: {
-      async get(principalId) {
-        return structuredClone(sessions().get(principalId) ?? null);
-      },
-      async put(rec) {
-        sessions().set(rec.principalId, structuredClone(rec));
-      },
-    },
-    mcpServers: {
-      async list() {
-        return structuredClone([...servers().values()]);
-      },
-      async get(id) {
-        return structuredClone(servers().get(id) ?? null);
-      },
-      async put(server) {
-        servers().set(server.id, structuredClone(server));
-      },
-      async delete(id) {
-        servers().delete(id);
-      },
-    },
-  };
 }
 
 type Spec<T> = { readonly [K in keyof T & string]-?: ColumnCast };

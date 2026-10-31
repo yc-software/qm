@@ -64,11 +64,10 @@ test("stopping returns Send immediately and queues every submit path without int
     };
     seedRuntimeConfig("personal:tester", {
       scopeId: "personal:tester",
-      approvedHarnesses: ["pi"],
-      modelsByHarness: { pi: ["alpha"] },
+      models: ["alpha"],
       modelCatalog: { alpha: model },
-      orgDefault: { harnessId: "pi", modelId: "alpha", revision: 1 },
-      effective: { harnessId: "pi", modelId: "alpha" },
+      orgDefault: { modelId: "alpha", revision: 1 },
+      effective: { modelId: "alpha" },
       scopeOverride: null,
       upgradeAvailable: false,
     });

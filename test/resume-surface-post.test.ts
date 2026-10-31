@@ -5,27 +5,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Harness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -53,17 +53,17 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildOrchestrator(
-  harness: Harness,
-  sessions: ReturnType<typeof createMemorySessionStore>,
+  agent: Agent,
+  sessions: ReturnType<typeof createPostgresSessionStore>,
   deliveries: DeliveryStore,
 ) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const config = testConfigStore(ORG);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rsp-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "rsp-deploy"),
     auditLog,
@@ -71,17 +71,16 @@ function buildOrchestrator(
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deliveries,
     memoryStrategy: {},
     deploy,
@@ -90,17 +89,14 @@ function buildOrchestrator(
 }
 
 test("a resumed turn whose dead attempt already posted does not post its closing text again", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const base = createMockHarness();
-  const harness: Harness = {
+  const base = createMockAgent();
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (turn) => {
-        await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
-        return { reply: "Done, it printed ok." };
-      },
+    runTurn: async (turn) => {
+      await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
+      return { reply: "Done, it printed ok." };
     },
   };
   const threadRef = "ch:C1:100.1";
@@ -114,7 +110,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   ] as const)
     await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
   await sessions.releaseLease(lease);
-  const orch = buildOrchestrator(harness, sessions, deliveries);
+  const orch = buildOrchestrator(agent, sessions, deliveries);
   const result = await orch.handleTurn({
     surface: "slack",
     actor,

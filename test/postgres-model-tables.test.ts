@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresModelTables } from "../src/model/model-tables.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
+import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 

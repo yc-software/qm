@@ -1,16 +1,47 @@
-import type {
-  Delivery,
-  DeliveryProvenance,
-  Destination,
-  OutgoingAttachment,
-  SurfaceContextQuery,
-  SurfaceContextResult,
-} from "../types.ts";
+import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { scopeId as makeScopeId } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { ChannelResolution, GroupResolution, RecipientResolution } from "../directory/directory-store.ts";
 import { isVisible } from "../directory/visibility.ts";
 import { swallow } from "../util/errors.ts";
+
+export interface SurfaceContextQuery {
+  rateLimitRecipient?: { target: string; user: string };
+  conversationTarget?: string;
+  channelId?: string;
+  channelName?: string;
+  count?: number;
+  viewer?: string;
+  before?: string;
+  match?: string;
+  live?: boolean;
+  searchAll?: string;
+  viewerToken?: string;
+  file?: { ts: string; threadTs?: string; name?: string };
+  openGroup?: { participants: string[] };
+  syncDirectory?: boolean;
+}
+
+export interface SurfaceContextResult {
+  messages: unknown[];
+  hasMore?: boolean;
+  nextBefore?: string;
+  note?: string;
+  selfTs?: string[];
+  liveSearch?: "unconfigured" | "unconnected";
+  file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
+  group?: { groupId: string };
+}
+
+export interface SurfaceContextRequest {
+  id: string;
+  source: string;
+  createdAt: number;
+  status: "pending" | "done" | "failed";
+  query: SurfaceContextQuery;
+  result?: SurfaceContextResult;
+  error?: string;
+}
 
 export function principalDestination(target: string, onBehalfOf: string): Destination {
   return { type: "principal", target, audienceScopeId: makeScopeId("personal", target), onBehalfOf };

@@ -2,23 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { createKeychain, isValidCredentialSlug } from "../src/credentials/keychain.ts";
-
+import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
 function store(opts: { creds?: KeychainCredentialRows } = {}) {
   return createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: opts.creds ?? memoryKeychainRows().creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
+    ...(opts.creds ? { creds: opts.creds } : {}),
     key: KEY,
   });
 }
@@ -87,7 +83,7 @@ test("an explicit new secret REPLACES the stored one", async () => {
 });
 
 test("conditional credential updates and deletes are atomic across store instances", async () => {
-  const creds = memoryKeychainRows().creds;
+  const creds = testKeychainRows().creds;
   const left = store({ creds });
   const right = store({ creds });
   await left.setServiceCredential(ORG, { slug: "k", name: "K", secret: "old", host: "h.example" });

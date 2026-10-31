@@ -17,9 +17,6 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -140,7 +137,7 @@ test("empty-token guard — an adapter returning no access token fails the conne
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
-  built.connectorTokens.setConnectorToken(
+  await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
     { accessToken: "u1-personal", accountType: "personal" },
@@ -244,7 +241,7 @@ for (const surface of ["cron", "loop"]) {
 
 test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", async () => {
   const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
-  built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
+  await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
 
   fakeSprites.reset();
   const res = await built.app.turn(wake("[wake] glance only", true));

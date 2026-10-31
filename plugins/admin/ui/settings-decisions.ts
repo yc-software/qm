@@ -229,8 +229,8 @@ function template() {
     <div class="head">
       <h2>Decision rules</h2>
       <p>
-        Classifiers that run at harness hooks. A rule asks its decision model a question, picks an option, and applies
-        that option's action. Observe rules only log their verdicts.
+        Classifiers that run at turn hooks. A rule asks its decision model a question, picks an option, and applies that
+        option's action. Observe rules only log their verdicts.
       </p>
     </div>
     ${

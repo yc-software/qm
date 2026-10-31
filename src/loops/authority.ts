@@ -1,4 +1,5 @@
-import type { Cron, Loop } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
+import type { Loop } from "./types.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 
 export async function boundLoopCron(

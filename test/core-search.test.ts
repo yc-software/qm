@@ -13,6 +13,8 @@ import { testConfig } from "./support/test-config.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 const principals = [
   { id: "alice@example.com", type: "internal" as const },
   { id: "bob@example.com", type: "internal" as const },
@@ -72,7 +74,11 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
     { container: "C1", ts: "1", text: "pelican launch shared", kind: "channel" },
     { container: "C-ALICE", ts: "2", text: "pelican launch private", kind: "channel" },
   ]);
-  const server = createServer(built.app, { signingSecret: secret, auditLog: built.auditLog });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: secret,
+    auditLog: built.auditLog,
+  });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const token = async (members?: typeof principals) =>

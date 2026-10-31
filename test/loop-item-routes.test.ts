@@ -8,14 +8,15 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
-import type { Cron, Loop, LoopItem } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
+import type { Loop, LoopItem } from "../src/loops/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
+import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -50,12 +51,12 @@ let cronSeq = 0;
 function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
   const w: World = {
     loops: {
-      store: createLoopStore(),
-      items: createLoopItemLedger(),
-      outputs: createLoopOutputStore(),
-      grants: createShipGrantStore(),
-      crons: createCronStore(),
-      config: createMemoryConfigStore("org"),
+      store: createLoopStore(testMap()),
+      items: createLoopItemLedger(testMap()),
+      outputs: createLoopOutputStore(testMap()),
+      grants: createShipGrantStore(testMap()),
+      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      config: testConfigStore("org"),
     },
     crons: new Map(),
     sent: [],
@@ -761,7 +762,7 @@ test("concurrent source sends share a durable decision claim", async () => {
 
 test("legacy and canonical item URLs serialize a concurrent send", async () => {
   const w = world();
-  w.loops.lock = createMemoryAdvisoryLock();
+  w.loops.lock = testAdvisoryLock();
   const { loop, item } = await seed(w);
   const defaults = await ensureDefaultInboxLoops(w.loops.store, "josh");
   const target = defaults.find((value) => value.sources?.includes("slack"))!;
@@ -935,7 +936,7 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
 test("followup accepts only typed runtime and staged attachment fields", async () => {
   const w = world();
   const { loop, item } = await seed(w);
-  const path = `/v1/loops/${loop.id}/items/${item.id}/followup`;
+  const path = `/v1/loops/${loop.id}/items/${item.id}/followup?principalId=josh`;
   let received: unknown;
   w.loops.fire!.followUp = async (_loop, held, _message, _actor, options) => {
     received = options;
@@ -943,7 +944,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
   };
   const options = {
     model: "gpt-5.6-terra",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 20, blobId: "opaque-upload" }],
@@ -955,18 +955,21 @@ test("followup accepts only typed runtime and staged attachment fields", async (
       message: "",
       ...options,
       model: ` ${options.model} `,
-      harness: " pi ",
       thinkingLevel: " high ",
       attachments: [{ ...options.attachments[0], path: "/ignored" }],
       scopeId: "personal:other",
     },
+    capability: PORTAL,
   });
   assert.equal(out.status, 200);
   assert.deepEqual(received, options);
+  received = undefined;
+  const agent = await call(w, { method: "POST", path, body: { message: "hi", attachments: options.attachments } });
+  assert.equal(agent.status, 403);
+  assert.equal(received, undefined);
   for (const invalid of [
     { model: 5 },
     { model: " " },
-    { harness: " " },
     { thinkingLevel: " " },
     { fastMode: null },
     { attachments: null },
@@ -975,7 +978,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     { attachments: [{ ...options.attachments[0], blobId: "" }] },
     { attachments: [{ ...options.attachments[0], sizeBytes: 1.5 }] },
     { attachments: [{ ...options.attachments[0], sizeBytes: 1_000_000_001 }] },
-    { harness: "unknown" },
     { thinkingLevel: "unsupported" },
     { fastMode: "true" },
     { attachments: [{ path: "/etc/passwd" }] },
@@ -983,7 +985,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     { attachments: Array(11).fill(options.attachments[0]) },
   ]) {
     received = undefined;
-    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid } });
+    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid }, capability: PORTAL });
     assert.equal(bad.status, 400, JSON.stringify(invalid));
     assert.equal(received, undefined);
   }

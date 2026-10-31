@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJobComputerSweep } from "../src/processes/job-computers.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import type { ProcessSandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function fixture() {
   const exited = new Set<string>();
@@ -23,7 +24,7 @@ function fixture() {
     state: "ready",
     jobOnly: true,
   }));
-  const processes = createMemoryProcessRegistry();
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const sandbox = {
     async provision(_layers: unknown, opts?: { sandboxId?: string }) {
       return { id: opts!.sandboxId!, rootDir: "/workspace", resourceId: opts!.sandboxId! };

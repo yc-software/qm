@@ -1,7 +1,3 @@
-import { memoryModelTables } from "../src/model/model-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 // QA: end-to-end custom-provider lifecycle against a REAL fake upstream.
 // Boots the app, registers a provider pointing at a local OpenAI-compatible
 // server, and proves: validation, catalog surfacing, key hygiene, a real
@@ -17,13 +13,13 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { oneShot } from "../src/harness/pi-harness.ts";
-import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
+import { oneShot } from "../src/agent/agent-run.ts";
+import { resolveModel, modelSupported, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-
+import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -71,7 +67,6 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -153,7 +148,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(model!.provider, "qa");
     assert.equal(model!.reasoning, true);
     assert.equal((model as { baseUrl?: string }).baseUrl, upstreamUrl);
-    assert.equal(modelSupportedByHarness("custom/qa/qa-chat", "pi"), true);
+    assert.equal(modelSupported("custom/qa/qa-chat"), true);
     assert.equal(modelServiceable("custom/qa/qa-chat", { anthropic: false, openai: false, openrouter: false }), true);
 
     // 6. REAL model call through QM's pi path → fake upstream answers
@@ -211,7 +206,6 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -324,7 +318,6 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -360,7 +353,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
   // In production the backing map is the Postgres artifact store (same as
   // model credentials); a restart is a new store instance over the same
   // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
-  const backing = memoryModelTables().customProviders;
+  const backing = testModelTables().customProviders;
   const secret = "restart-secret-restart-secret-restart-secret";
   const first = createCustomProviderStore({ backing, keyMaterial: secret });
   await first.upsert(
@@ -386,7 +379,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
 });
 
 test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
-  const backing = memoryModelTables().customProviders;
+  const backing = testModelTables().customProviders;
   const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
   await writer.upsert(
     {
@@ -439,7 +432,6 @@ test("QA: a custom model named like a built-in registers and sends its own model
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

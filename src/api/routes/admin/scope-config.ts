@@ -4,11 +4,9 @@ import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
   modelCatalogFor,
-  HARNESS_IDS,
   selectableBaseModels,
   embeddingModelCatalog,
-  defaultModelForHarness,
-  modelProviderAvailabilityFor,
+  defaultModel,
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
@@ -16,7 +14,7 @@ import {
 import {
   builtInModelCatalog,
   cachedModelCatalog,
-  selectableCatalogForHarness,
+  selectableCatalog,
   selectableModelCatalog,
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
@@ -259,7 +257,6 @@ const SETTINGS_RESOURCES = {
     "cronRuntime",
     "subagentRuntime",
     "fallbackRuntime",
-    "approvedHarnesses",
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
@@ -336,7 +333,6 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
 async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
   const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
   const cached =
     deps.modelCredentials && managedKeys.openrouter && nonblocking
       ? cachedModelCatalog(deps.modelCredentialFetch)
@@ -346,12 +342,10 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     (deps.modelCredentials && managedKeys.openrouter
       ? await selectableModelCatalog(deps.modelCredentialFetch)
       : builtInModelCatalog());
-  const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
-  const approvedHarnesses = (await deps.config!.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
-  let currentId = defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault);
+  const runtime = values.runtime as { modelId?: unknown } | null | undefined;
+  let currentId = defaultModel(deps.baseModelDefault);
   if (typeof values.baseModel === "string") currentId = values.baseModel;
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
-  const currentHarness = typeof runtime?.harnessId === "string" ? runtime.harnessId : (deps.harnessId ?? "pi");
   const resolvedCurrent = resolveModel(currentId);
   const preserveCurrent = typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent);
   const currentModel: ModelCatalogEntry = {
@@ -360,55 +354,33 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     provider: resolvedCurrent?.provider ?? "",
   };
   const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
-    (value): value is { harnessId: string; modelId: string } =>
-      !!value &&
-      typeof (value as { harnessId?: unknown }).harnessId === "string" &&
-      typeof (value as { modelId?: unknown }).modelId === "string",
+    (value): value is { modelId: string } => !!value && typeof (value as { modelId?: unknown }).modelId === "string",
   );
-  const modelsFor = (harnessId: string) => {
-    const models = selectableCatalogForHarness(catalog, harnessId);
-    if (preserveCurrent && currentHarness === harnessId && !models.some((model) => model.id === currentModel.id))
-      models.push(currentModel);
-    const configured = purposeRuntimes.filter((runtime) => runtime.harnessId === harnessId);
-    for (const runtime of configured) {
-      if (!models.some((model) => model.id === runtime.modelId))
-        models.push({
-          id: runtime.modelId,
-          name: resolveModel(runtime.modelId)?.name ?? `${runtime.modelId} (configured)`,
-          provider: resolveModel(runtime.modelId)?.provider ?? "",
-        });
-    }
-    return models.filter(
-      (model) =>
-        modelServiceable(model.id, providersFor(harnessId)) ||
-        (preserveCurrent && currentHarness === harnessId && currentModel.id === model.id) ||
-        configured.some((runtime) => runtime.modelId === model.id),
-    );
-  };
-  const modelsByHarness = Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)]));
+  const models = selectableCatalog(catalog);
+  if (preserveCurrent && !models.some((model) => model.id === currentModel.id)) models.push(currentModel);
+  for (const runtime of purposeRuntimes) {
+    if (!models.some((model) => model.id === runtime.modelId))
+      models.push({
+        id: runtime.modelId,
+        name: resolveModel(runtime.modelId)?.name ?? `${runtime.modelId} (configured)`,
+        provider: resolveModel(runtime.modelId)?.provider ?? "",
+      });
+  }
+  const baseModelOptions = models.filter(
+    (model) =>
+      modelServiceable(model.id, managedKeys) ||
+      (preserveCurrent && currentModel.id === model.id) ||
+      purposeRuntimes.some((runtime) => runtime.modelId === model.id),
+  );
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
-    baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
-    harnessDefault: deps.harnessId ?? "pi",
-    harnessOptions: HARNESS_IDS.filter(
-      (id) =>
-        approvedHarnesses.includes(id) ||
-        runtime?.harnessId === id ||
-        purposeRuntimes.some((runtime) => runtime.harnessId === id),
-    ),
-    modelsByHarness,
-    modelCatalog: modelCatalogFor(
-      Object.values(modelsByHarness)
-        .flat()
-        .map((model) => model.id),
-    ),
+    baseModelDefault: defaultModel(deps.baseModelDefault),
+    baseModelOptions,
+    modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     memoryEmbeddingOptions: embeddingModelCatalog(),
-    browseModelOptions: selectableBaseModels().filter((m) =>
-      modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
-    ),
+    browseModelOptions: selectableBaseModels().filter((m) => modelServiceable(m.id, managedKeys)),
   };
 }
 

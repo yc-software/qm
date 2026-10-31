@@ -7,25 +7,22 @@ import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
-import { memoryLinkTables } from "../src/connectors/link-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testKeychainRows, testLinkTables } from "./support/typed-stores.ts";
 
 function fixture() {
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: deriveConnectorKey("composio-test"),
   });
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const app = { getSessionForViewer: async (_id: string, _viewer: string): Promise<unknown> => null };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
@@ -35,7 +32,7 @@ function fixture() {
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
-    composioReturns: memoryLinkTables().composioReturns,
+    composioReturns: testLinkTables().composioReturns,
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -421,13 +418,12 @@ test("Slack connection links verified workspace identity to the web owner and pe
   const f = fixture();
   await f.own();
   const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
   const { installPrincipalLinks, canonicalPerson } = await import("../src/directory/person.ts");
-  f.deps.principalLinks = createPrincipalLinkService();
+  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(f.deps.principalLinks);
-  f.deps.slackAccounts = createMemoryMap();
+  f.deps.slackAccounts = testMap();
   f.deps.signingSecret = "qa-slack-link-secret";
-  f.deps.directory = createDirectoryStore();
+  f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([
     { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
   ]);
@@ -465,7 +461,6 @@ test("Slack connection links verified workspace identity to the web owner and pe
 
 test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
   const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-  const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
   const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
   for (const scenario of [
     "expired",
@@ -482,9 +477,9 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     await f.own();
     await f.own("bob");
     f.deps.signingSecret = "slack-test";
-    f.deps.principalLinks = createPrincipalLinkService();
-    f.deps.slackAccounts = createMemoryMap();
-    f.deps.directory = createDirectoryStore();
+    f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    f.deps.slackAccounts = testMap();
+    f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
     await f.deps.directory.replace([
       { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
     ]);
@@ -820,7 +815,7 @@ test("linked aliases can execute their existing accounts until the identity link
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
+  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const aliasUserId = composioUserId(orgId(), aliasId);
@@ -856,9 +851,9 @@ test("linked account discovery and Slack status preserve historical aliases with
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
+  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   f.deps.principalLinks = links;
-  f.deps.slackAccounts = createMemoryMap();
+  f.deps.slackAccounts = testMap();
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const canonicalUserId = composioUserId(orgId(), "alice");
@@ -912,7 +907,7 @@ test("unlinking an account owner during tool lookup prevents provider execution"
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
+  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   try {
@@ -939,7 +934,7 @@ test("consent and browser verification use the canonical identity when signed in
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  const links = createPrincipalLinkService();
+  const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   const userId = composioUserId(orgId(), "alice");
@@ -968,8 +963,8 @@ test("linked identities retain provider accounts and Slack status until unlinked
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const f = fixture();
   await f.shared();
-  f.deps.principalLinks = createPrincipalLinkService();
-  f.deps.slackAccounts = createMemoryMap();
+  f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+  f.deps.slackAccounts = testMap();
   installPrincipalLinks(f.deps.principalLinks);
   const canonical = composioUserId(orgId(), "alice");
   const alias = composioUserId(orgId(), "oidc:alice");
@@ -1067,7 +1062,7 @@ async function slackReplyFixture() {
   await f.own();
   f.app.getSessionForViewer = async (id, viewer) =>
     id === "session" && viewer === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
-  f.deps.slackAccounts = createMemoryMap();
+  f.deps.slackAccounts = testMap();
   await f.deps.slackAccounts.put("alice", {
     principalId: "alice",
     memberId: "alice",
@@ -1194,11 +1189,10 @@ test("Slack replies preserve unthreaded DMs and report Slack permission failures
 
 async function nativeSlackFixture(linked = true) {
   const f = await slackReplyFixture();
-  const { createDirectoryStore } = await import("../src/directory/directory-store.ts");
-  f.deps.slackAccounts = createMemoryMap();
+  f.deps.slackAccounts = testMap();
   f.deps.connectorTokens = f.deps.keychain;
   f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
-  f.deps.directory = createDirectoryStore();
+  f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
   f.deps.slackEnvBotToken = "workspace-bot";
   if (linked) await f.deps.connectorTokens!.setConnectorToken("slack.com", "alice", { accessToken: "alice-user" });

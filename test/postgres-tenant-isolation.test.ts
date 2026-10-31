@@ -9,9 +9,9 @@ import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-s
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { seedTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, seedTenant, TEST_TENANT } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant isolation test";
@@ -43,7 +43,7 @@ async function withTenancy(fn: (ctx: Tenancy) => Promise<void>): Promise<void> {
   try {
     await migrateRegisteredPgSchemas(url);
     await admin.query(`ALTER ROLE qm_app PASSWORD '${APP_PASSWORD}'`);
-    const [a, b] = [randomUUID(), randomUUID()];
+    const [a, b] = [TEST_TENANT, OTHER_TENANT];
     await seedTenant(url, a);
     await seedTenant(url, b);
     const session = await withTenant(a, () =>
@@ -54,7 +54,7 @@ async function withTenancy(fn: (ctx: Tenancy) => Promise<void>): Promise<void> {
     appUrl.password = APP_PASSWORD;
     const app = createPgPool(appUrl.toString());
     try {
-      await fn({ app, admin, url, schema, a, b, sessionId: session.id });
+      await withoutTenant(() => fn({ app, admin, url, schema, a, b, sessionId: session.id }));
     } finally {
       await app.close();
     }

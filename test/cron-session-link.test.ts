@@ -11,9 +11,6 @@ import { cronIsActive } from "../src/cron/cron-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const THREAD = "web:U1:watching";
 

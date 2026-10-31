@@ -28,10 +28,9 @@ const env = await browserEnv({
     if (url.pathname === "/api/runtime-config")
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "m" },
+        effective: { modelId: "m" },
       });
     const approvalsFor = url.pathname.match(/^\/api\/sessions\/([^/]+)\/approvals$/)?.[1];
     if (approvalsFor) return Response.json({ approvals: approvals.get(decodeURIComponent(approvalsFor)) ?? [] });

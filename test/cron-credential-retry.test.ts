@@ -7,23 +7,20 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-
 import type { TurnRequest, TurnResult } from "../src/types.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
     ownerScopeId: "personal:U_ALICE",
     schedule: { everyMs: 60_000 },
     action: "read a private dummy account",
-    runtime: { harnessId: "pi", modelId: "gpt-6-luna", effortLevel: "low" },
+    runtime: { modelId: "gpt-6-luna", effortLevel: "low" },
     destination: {
       type: "principal",
       target: "U_BOB",
@@ -32,7 +29,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     },
   });
   const deliveries = createDeliveryStore();
-  const idempotency = createIdempotencyStore();
+  const idempotency = createIdempotencyStore(testMap());
   const ask: KeychainAsk = {
     id: "retry-ask",
     credentialId: "dummy-credential",
@@ -51,7 +48,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const deps: AskResolutionDeps = {
     deliveries,
     idempotency,
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     getCron: (id) => crons.get(id),
     run,
   };
@@ -118,12 +115,13 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     entered.resolve();
     return release.promise;
   });
-  const asks = memoryKeychainRows().asks;
+  const rows = testKeychainRows();
+  const asks = rows.asks;
   await asks.put(f.ask);
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: memoryKeychainRows().creds,
-    grants: memoryKeychainRows().grants,
+    lock: testAdvisoryLock(),
+    creds: rows.creds,
+    grants: rows.grants,
     asks,
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });

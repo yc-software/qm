@@ -19,7 +19,7 @@ import {
   KeychainError,
   type Keychain,
 } from "../src/credentials/keychain.ts";
-
+import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -28,18 +28,16 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
 function kc(now?: () => number): Keychain {
   return createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: KEY,
     ...(now ? { now } : {}),
   });
@@ -89,7 +87,8 @@ test("listAllMetadata returns person-facing metadata only", async () => {
 });
 
 test("per-owner reads query by owner and only the admin listing reads every credential", async () => {
-  const backing = memoryKeychainRows().creds;
+  const rows = testKeychainRows();
+  const backing = rows.creds;
   const calls: string[] = [];
   const creds: KeychainCredentialRows = {
     ...backing,
@@ -103,10 +102,9 @@ test("per-owner reads query by owner and only the admin listing reads every cred
     },
   };
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
+    ...rows,
     creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
     key: KEY,
   });
   const org = scopeId("org", "default-org");
@@ -226,12 +224,13 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 });
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
-  const grants = memoryKeychainRows().grants;
+  const rows = testKeychainRows();
+  const grants = rows.grants;
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: memoryKeychainRows().creds,
+    lock: testAdvisoryLock(),
+    creds: rows.creds,
     grants,
-    asks: memoryKeychainRows().asks,
+    asks: rows.asks,
     key: KEY,
   });
   const credential = await k.save(GH);
@@ -293,15 +292,10 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 });
 
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
-  const creds = memoryKeychainRows().creds;
-  const grants = memoryKeychainRows().grants;
-  const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds,
-    grants,
-    asks: memoryKeychainRows().asks,
-    key: KEY,
-  });
+  const rows = testKeychainRows();
+  const creds = rows.creds;
+  const grants = rows.grants;
+  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: rows.asks, key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
@@ -331,8 +325,8 @@ describe("connectors are grantable like any keychain record", () => {
   const G1 = scopeId("group", "G1");
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
-      lock: createMemoryAdvisoryLock(),
-      ...memoryKeychainRows(),
+      lock: testAdvisoryLock(),
+      ...testKeychainRows(),
       key: KEY,
       refreshConnector: async () => ({ accessToken: freshToken, expiresAt: Date.now() + 3_600_000 }),
     });
@@ -690,22 +684,23 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 });
 
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
-  const creds = memoryKeychainRows().creds;
+  const rows = testKeychainRows();
+  const creds = rows.creds;
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
+    grants: rows.grants,
+    asks: rows.asks,
     key: OTHER,
   });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
   const reader = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
+    grants: rows.grants,
+    asks: rows.asks,
     key: KEY,
   });
   await reader.save(GH);
@@ -719,25 +714,20 @@ test("materializeOwn skips a row that doesn't decrypt under the current key inst
 });
 
 test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
-  const creds = memoryKeychainRows().creds;
-  const grants = memoryKeychainRows().grants;
+  const rows = testKeychainRows();
+  const creds = rows.creds;
+  const grants = rows.grants;
   const OTHER = deriveConnectorKey("a-different-master-key");
   const writer = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
     grants,
-    asks: memoryKeychainRows().asks,
+    asks: rows.asks,
     key: OTHER,
   });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds,
-    grants,
-    asks: memoryKeychainRows().asks,
-    key: KEY,
-  });
+  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: rows.asks, key: KEY });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -836,22 +826,23 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
   await assert.rejects(
     k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
     (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-    "a single envKey in the harness namespace is rejected",
+    "a single envKey in the reserved AGENT_* namespace is rejected",
   );
   await assert.rejects(
     k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
     (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-    "a field envKey in the harness namespace is rejected",
+    "a field envKey in the reserved AGENT_* namespace is rejected",
   );
 });
 
 test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", async () => {
-  const creds = memoryKeychainRows().creds;
+  const rows = testKeychainRows();
+  const creds = rows.creds;
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
+    grants: rows.grants,
+    asks: rows.asks,
     key: KEY,
   });
   const meta = await k.save({
@@ -1055,6 +1046,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       keychain: built.keychain,
       workspace: built.workspace,
@@ -1414,8 +1406,8 @@ test("prepared grants reject credential rotation without consuming a single use"
 test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
   let refreshes = 0;
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: KEY,
     refreshConnector: async () => {
       refreshes++;
@@ -1479,8 +1471,8 @@ test("Composio keys remain backend-only across all materialization paths includi
 test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
   let now = Date.parse("2030-01-01T00:00:00Z");
   const k = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: KEY,
     now: () => now,
   });

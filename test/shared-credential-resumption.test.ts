@@ -6,21 +6,18 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 function keychain(now = Date.now) {
   return createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    ...memoryKeychainRows(),
+    lock: testAdvisoryLock(),
+    ...testKeychainRows(),
     key: deriveConnectorKey("shared-credential-resumption-test"),
     now,
   });
@@ -35,7 +32,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,
@@ -54,8 +51,8 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   const deliveries = createDeliveryStore();
   const deps: AskResolutionDeps = {
     deliveries,
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     currentScopeMembers: async () => state.members,
     getCron: (id) => crons.get(id),
     getGrant: (id) => k.getGrant(id),

@@ -10,12 +10,10 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
-
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { memoryLinkTables } from "../src/connectors/link-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testLinkTables } from "./support/typed-stores.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";
@@ -38,19 +36,23 @@ describe("POST /v1/emoji", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     sessions = createBrowserSessionStore({
-      sessions: memoryLinkTables().browserSessions,
+      sessions: testLinkTables().browserSessions,
       key: deriveConnectorKey(Buffer.alloc(32, 1)),
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
-    const directory = createDirectoryStore();
+    const directory = createPostgresDirectoryStore(testDatabaseUrl());
     await directory.setWorkspaceUrl("https://acme.slack.com/");
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       browserSessionStore: sessions,
       directory,
       config: built.config,
     });
-    bare = createServer(built.app, { signingSecret: SECRET });
+    bare = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     await new Promise<void>((r) => server.listen(0, r));
     await new Promise<void>((r) => bare.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

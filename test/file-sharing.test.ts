@@ -19,7 +19,6 @@ import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
   MAX_ATTACHMENT_BYTES,
-  environmentNote,
   inboundIssueList,
   inboundIssuesNote,
   inboundManifest,
@@ -27,13 +26,11 @@ import {
   withoutAlreadyIngested,
   mimeFromName,
   safeAttachmentName,
-  senderNote,
-  sharedFilesSystemSection,
   turnFileId,
 } from "../src/core/attachments.ts";
+import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -504,8 +501,8 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
@@ -529,8 +526,8 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });

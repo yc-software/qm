@@ -4,13 +4,10 @@ import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createKeychain, type OAuthRefresh, type OAuthToken } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-
+import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -22,11 +19,11 @@ function makeKeychain(
     creds?: KeychainCredentialRows;
   } = {},
 ) {
+  const rows = testKeychainRows();
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: opts.creds ?? memoryKeychainRows().creds,
-    grants: memoryKeychainRows().grants,
-    asks: memoryKeychainRows().asks,
+    lock: testAdvisoryLock(),
+    ...rows,
+    ...(opts.creds ? { creds: opts.creds } : {}),
     key: KEY,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.skewMs !== undefined ? { oauthSkewMs: opts.skewMs } : {}),
@@ -202,7 +199,7 @@ test("connector token refresh failures are logged and never poison the stored to
     errors.push(args.map(String).join(" "));
   });
 
-  const creds = memoryKeychainRows().creds;
+  const creds = testKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
@@ -271,45 +268,14 @@ test("connector tokens: expired non-refreshable connector tokens need reconnect"
   });
 });
 
-test("connector token keys are Postgres-safe (no NUL byte) — round-trip through a NUL-rejecting backing", async () => {
-  const seenKeys: string[] = [];
-  const rejectNul = (k: string): void => {
-    if (k.includes("\u0000")) throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
-    seenKeys.push(k);
-  };
-  const base = memoryKeychainRows().creds;
-  const creds: KeychainCredentialRows = {
-    ...base,
-    async get(k) {
-      rejectNul(k);
-      return base.get(k);
-    },
-    async put(rec) {
-      rejectNul(rec.id);
-      return base.put(rec);
-    },
-    async update(k, fn) {
-      rejectNul(k);
-      return base.update(k, fn);
-    },
-    async delete(k) {
-      rejectNul(k);
-      return base.delete(k);
-    },
-  };
-  const keychain = makeKeychain({ creds });
+test("connector token keys are Postgres-safe (no NUL byte) — round-trip through Postgres", async () => {
+  const keychain = makeKeychain({ creds: testKeychainRows().creds });
 
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" }, "personal");
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), "tok");
   assert.equal((await keychain.connectorTokenStatus("gmail.googleapis.com", "U1", "personal")).connected, true);
   await keychain.setConnectorToken("slack.com", "U2", { accessToken: "tok2" });
   assert.equal(await keychain.connectorAccessToken("slack.com", "U2"), "tok2");
-
-  assert.ok(seenKeys.length > 0);
-  assert.ok(
-    seenKeys.every((k) => !k.includes("\u0000")),
-    "connector record keys must contain no NUL byte (Postgres-incompatible)",
-  );
 });
 
 test("connector token account-type sub-key: a principal holds personal AND company tokens for one host", async () => {
@@ -360,7 +326,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
-  const creds = memoryKeychainRows().creds;
+  const creds = testKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
   await keychain.save({ ownerId: "U1", service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });

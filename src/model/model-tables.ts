@@ -2,9 +2,8 @@ import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns, type ColumnCast } from "../persistence/typed-columns.ts";
 import { jsonBackfill, upsertStatement } from "../persistence/typed-statements.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import type { StoredCustomProvider } from "./custom-provider-store.ts";
+import type { StoredCustomProvider } from "./model-credential-store.ts";
 import type { ModelProvider, StoredModelCredential } from "./model-credential-store.ts";
 import type { StoredModelOverlay } from "./model-overlay-store.ts";
 
@@ -30,48 +29,6 @@ export interface ModelTables {
   credentials: ModelCredentialRows;
   customProviders: CustomProviderRows;
   registry: ModelRegistryRows;
-}
-
-export function memoryModelTables(): ModelTables {
-  const credentials = perTenant(() => new Map<string, StoredModelCredential>());
-  const providers = perTenant(() => new Map<string, StoredCustomProvider>());
-  const registry = perTenant(() => new Map<string, StoredModelOverlay>());
-  const sorted = <T>(rows: Map<string, T>) => [...rows].sort(([a], [b]) => a.localeCompare(b));
-  return {
-    credentials: {
-      async get(provider) {
-        return structuredClone(credentials().get(provider) ?? null);
-      },
-      async put(rec) {
-        credentials().set(rec.provider, structuredClone(rec));
-      },
-    },
-    customProviders: {
-      async get(id) {
-        return structuredClone(providers().get(id) ?? null);
-      },
-      async put(rec) {
-        providers().set(rec.id, structuredClone(rec));
-      },
-      async all() {
-        return structuredClone(sorted(providers()).map(([, rec]) => rec));
-      },
-      async enabled() {
-        return structuredClone(sorted(providers()).flatMap(([, rec]) => (rec.disabled ? [] : [rec])));
-      },
-    },
-    registry: {
-      async get(id) {
-        return structuredClone(registry().get(id) ?? null);
-      },
-      async put(id, row) {
-        registry().set(id, structuredClone(row));
-      },
-      async all() {
-        return structuredClone(sorted(registry()).map(([id, row]) => ({ id, row })));
-      },
-    },
-  };
 }
 
 type RegistryRow = StoredModelOverlay & { id: string };
