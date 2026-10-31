@@ -7,9 +7,11 @@ import { testMigratedDatabaseUrl } from "./test-database.ts";
 export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress-auth";
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
+  const databaseUrl = overrides.databaseUrl ?? testMigratedDatabaseUrl();
   return {
     ...loadConfig({}),
-    databaseUrl: overrides.databaseUrl ?? testMigratedDatabaseUrl(),
+    databaseUrl,
+    databaseOwnerUrl: databaseUrl,
     databasePoolMax: 4,
     databaseDirectPoolMax: 8,
     port: 0,
@@ -20,7 +22,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
     dataDir: overrides.dataDir ?? mkdtempSync(join(tmpdir(), "qm-test-")),
-    ...(overrides.databaseUrl ? { databaseOwnerUrl: overrides.databaseUrl } : {}),
     ...overrides,
   };
 }
