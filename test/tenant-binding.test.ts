@@ -61,7 +61,10 @@ describe("tenant resolution", () => {
 
   it("capability tokens carry the minting tenant and tokens without one are refused", async () => {
     const claims = { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 };
-    await assert.rejects(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET), /No tenant is bound/);
+    await assert.rejects(
+      () => withoutTenant(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET)),
+      /No tenant is bound/,
+    );
     const token = await withTenant(OTHER_TENANT, () => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET));
     assert.equal((await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET))?.tenant, OTHER_TENANT);
     const tenantless = await mintSignedPayload(claims, TEST_CAPABILITY_SECRET);
