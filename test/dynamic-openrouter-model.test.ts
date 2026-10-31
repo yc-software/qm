@@ -7,9 +7,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const oxAlphaCatalog: typeof fetch = async () =>
   Response.json({
@@ -35,7 +32,6 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
     { modelCredentialFetch: oxAlphaCatalog },
   );
   await built.config.setRuntimeSelection("org:default-org", {
-    harnessId: "pi",
     modelId: "stealth/ox-alpha",
   });
 

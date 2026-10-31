@@ -14,5 +14,5 @@ test("serverDeps passes the team store to the admin API", () => {
   const built = buildApp(config);
   const teams = { list: async () => [] } as unknown as NonNullable<BuiltApp["teams"]>;
   assert.equal(serverDeps(config, { ...built, teams }).teams, teams);
-  assert.equal(serverDeps(config, built).teams, undefined);
+  assert.equal(serverDeps(config, built).teams, built.teams);
 });

@@ -1,8 +1,57 @@
 import { randomUUID } from "node:crypto";
 import { ModelVerificationError, verificationFailure, type ModelVerifier } from "./model-verification.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { isEmbeddingModel, parseRegisteredModel, type RegisteredModel } from "./model-overlay.ts";
-import { modelUnavailableReason, setModelOverlays, validateModelOverlay } from "./pi-models.ts";
+import { isEmbeddingModel, parseRegisteredModel, publishModelOverlays, type RegisteredModel } from "./model-overlay.ts";
+import { catalogModelIdTaken, modelUnavailableReason, resolveBuiltinModel } from "./pi-models.ts";
+
+export function validateModelOverlay(value: unknown): RegisteredModel {
+  const spec = parseRegisteredModel(value);
+  if (catalogModelIdTaken(spec.id)) throw new Error("model id is already registered");
+  if (isEmbeddingModel(spec)) return spec;
+  const template = resolveBuiltinModel(spec.template);
+  if (!template || template.provider !== spec.provider)
+    throw new Error("template must be a builtin model of the declared provider");
+  return spec;
+}
+
+function overlayUnavailability(spec: RegisteredModel, verificationFailure: string | undefined): string | undefined {
+  if (isEmbeddingModel(spec)) return verificationFailure;
+  const template = resolveBuiltinModel(spec.template);
+  if (!template || template.provider !== spec.provider)
+    return "Builtin template is unavailable or has a different provider; ask an administrator to repair this model";
+  if (catalogModelIdTaken(spec.id))
+    return "Model id conflicts with another provider; ask an administrator to repair this model";
+  return verificationFailure;
+}
+
+export function setModelOverlays(
+  specs: readonly unknown[],
+  deleted: string[] = [],
+  verificationFailures: ReadonlyMap<string, string> = new Map(),
+): void {
+  const next = new Map<string, RegisteredModel>();
+  const unavailable = new Map(deleted.map((id) => [id, "Model has been deleted; select another model"]));
+  for (const value of specs) {
+    const id =
+      value && typeof value === "object" && "id" in value && typeof value.id === "string" ? value.id : undefined;
+    if (!id) continue;
+    try {
+      const spec = parseRegisteredModel(value);
+      const builtin = resolveBuiltinModel(id);
+      if (builtin) {
+        if (builtin.provider !== spec.provider)
+          unavailable.set(id, "Builtin provider differs from the stored model; choose another model");
+        continue;
+      }
+      const reason = overlayUnavailability(spec, verificationFailures.get(id));
+      if (reason) unavailable.set(id, reason);
+      else next.set(id, spec);
+    } catch {
+      unavailable.set(id, "Stored model definition is invalid; ask an administrator to repair this model");
+    }
+  }
+  publishModelOverlays(next, unavailable, deleted);
+}
 
 export interface StoredModelOverlay {
   spec: RegisteredModel;

@@ -41,8 +41,6 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     if not tok:
         sys.exit("no Gmail token: ask the user to connect Google")
-    # curl, not urllib: the sandbox egress proxy is an https:// CONNECT proxy,
-    # which python's urllib cannot tunnel through.
     cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
            "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
            "-w", "\n%{http_code}", url]

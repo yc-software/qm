@@ -736,8 +736,7 @@ function drawStripDrops(): void {
 }
 
 export function endPaneDrag(): void {
-  dropPreview?.dispose();
-  dropPreview = null;
+  dropPreview?.hide();
   if (!paneDrag) return;
   paneDrag = null;
   canvasHost?.classList.remove("session-dragging");

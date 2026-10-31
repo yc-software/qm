@@ -1,10 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { type QmConfig } from "../src/config.ts";
-import { ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
   missingRequiredSecrets,
@@ -82,7 +78,7 @@ test("a sandbox-only secret lands on core ONLY as FLY_RESIDENT_ENV_<NAME>", () =
 
 test("a core + sandbox secret needs both the plain and renamed forms on core", () => {
   const config = makeConfig({
-    env: { core: { HARNESS: "pi" } },
+    env: {},
     sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY"] },
   });
   const names = runtimeSecretNames("core", secretByName(config, "ANTHROPIC_API_KEY"));
@@ -209,10 +205,9 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
-test("the Agent37 key is required for either sandbox route", () => {
+test("the Agent37 key is required for either way of selecting the agent37 sandbox", () => {
   for (const config of [
     makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
-    makeConfig({ env: { core: { SANDBOX_SECONDARY_BACKEND: "agent37" } } }),
     makeConfig({ sandbox: { backend: "agent37" } }),
   ]) {
     assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
@@ -248,10 +243,6 @@ test("omitting modelProvider preserves the pre-existing deferred-to-Admin behavi
 });
 
 test("conditional secret values use the runtime's trimmed enum semantics", () => {
-  const pi = makeConfig({ env: { core: { HARNESS: "  pi  " } } });
-  assert.equal(secretByName(pi, "ANTHROPIC_API_KEY").required, false);
-  assert.ok(secretByName(pi, "PUBLIC_API_URL").required);
-
   const slack = makeConfig({ services: ["core", "slack"], env: { slack: { SLACK_EVENTS_MODE: "  http  " } } });
   assert.ok(secretByName(slack, "SLACK_SIGNING_SECRET").required);
 });
@@ -267,25 +258,12 @@ test("AWS public app domains require and route their gate secret to core", () =>
   assert.ok(renderEnvExample(enabled).includes("AWS_DEPLOY_GATE_SECRET="));
 });
 
-test("the default harness requires and routes the sandbox-reachable PUBLIC_API_URL to core", () => {
+test("core requires and routes the sandbox-reachable PUBLIC_API_URL", () => {
   const real = makeConfig();
   const publicApi = secretByName(real, "PUBLIC_API_URL");
   assert.equal(publicApi.required, true);
   assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
   assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
-});
-
-test("ENV_DEFAULTS stays in sync with the packaged core fly template", () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
-  for (const [name, value] of Object.entries(ENV_DEFAULTS.core ?? {})) {
-    assert.match(
-      toml,
-      new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `cli/templates/fly/core.toml sets ${name}="${value}"`,
-    );
-  }
-  assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
@@ -392,7 +370,7 @@ test("the .env.example catalog names every secret exactly once", () => {
 test("runtime model provider override controls the required billing key", () => {
   const config = makeConfig({
     modelProvider: "anthropic",
-    env: { core: { HARNESS: "pi", MODEL_PROVIDER: " openrouter " } },
+    env: { core: { MODEL_PROVIDER: " openrouter " } },
   });
   assert.equal(secretByName(config, "OPENROUTER_API_KEY").required, true);
   assert.equal(secretByName(config, "ANTHROPIC_API_KEY").required, false);

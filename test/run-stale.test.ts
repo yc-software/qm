@@ -8,9 +8,6 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { STALE_LEASE_GRACE_MS } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const built = buildApp(

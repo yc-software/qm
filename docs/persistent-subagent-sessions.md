@@ -4,13 +4,11 @@ A delegated task runs in a durable session with its own transcript and a mutable
 
 ## Lifecycle
 
-`subagents.open` accepts a task, title, model, harness, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
+`subagents.open` accepts a task, title, model, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
 
-Reusing a request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. The existing internal `readOnly` restriction remains durable: `noComputer: false` cannot lift a caller's restriction or an existing child's restriction. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
+Reusing a request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. The existing internal `readOnly` restriction remains durable: `noComputer: false` cannot lift a caller's restriction or an existing child's restriction. The session tree admits at most fifty pending or running qm runs, including direct turns and turns started by messages. A wake past that cap sends nothing; the result says to retry later or send with `wake: false`.
 
-`subagents.send_message` adds attributed data to a durable recipient inbox without starting a turn. Parents, children, siblings, and other accessible sessions can exchange messages. Targets accept IDs, child/sibling titles, or `parent`. Messages arrive at tool boundaries; `subagents.wait` waits up to 60 seconds for mail. Idle recipients see messages when they next use a tool. Agents should continue independent work and wait for required results before giving one combined answer.
-
-`subagents.followup_task` explicitly queues new work for an attached child, behind any active turn. Like `open`, it takes the instruction in `task`. Stable call IDs deduplicate retries. `send_message` with `interrupt: true` aborts active child work. Messages are external data, not human authorization. Each message is screened independently of its carrier tool and persisted at the receiving session's scope. Quarantined messages remain recoverable for approval; denying the approval consumes the message. Read-only and automated authorization restrictions still apply to assigned work.
+`subagents.send_message` sends attributed text to a parent, child, sibling, or other accessible session. Targets accept IDs, child/sibling titles, or `parent`. By default it wakes the recipient: an idle attached child starts a turn on it, and a busy one gets it as its next turn, behind the active one. `wake: false` instead adds it to the recipient's durable inbox without starting a turn: a running recipient sees it at its next tool boundary, an idle one only when something else wakes it. A wake that may not start a turn (a top-level conversation, or a sender on a private turn) falls back to the inbox and the result says so. The result names which happened. Stable call IDs deduplicate retries. `subagents.wait` waits up to 60 seconds for mail. `send_message` with `interrupt: true` aborts active child work. Messages are external data, not human authorization. Each message is screened independently of its carrier tool and persisted at the receiving session's scope. Quarantined messages remain recoverable for approval; denying the approval consumes the message. Read-only and automated authorization restrictions still apply to assigned work.
 
 Read access checks scope, current participant access, audience visibility, and participant tenure. Sending and adoption require current scope access. A wider target audience cannot receive a narrower source's contents.
 
@@ -26,7 +24,7 @@ Terminal receipts live in the run store. A paginated sweep retries pending retur
 
 The session migration adds parent and spawn metadata. The run migration adds terminal-return acknowledgements and an index restricted to unreturned terminal child runs. Signal replay uses the existing signal acknowledgement columns.
 
-The ten-run limit governs qm session runs. Coordinator turns use durable session delegation and disable provider-native subagent tools; other turns retain their existing native-harness behavior.
+The fifty-run limit governs qm session runs. Coordinator turns use durable session delegation and disable provider-native subagent tools.
 
 ## Swarms
 

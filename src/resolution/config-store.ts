@@ -12,7 +12,6 @@ import type {
 import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import { currentTenant } from "../tenants/context.ts";
 import {
-  createMemoryConfigTables,
   type AutoFlaggerConfig,
   type ConfigTables,
   type ModelAccount,
@@ -59,7 +58,6 @@ export interface ScopedConfigStore {
   resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture>;
   setSharingPosture(id: ScopeId, posture: SharingPosture): Promise<void>;
   clearSharingPosture(id: ScopeId): Promise<void>;
-  getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   getEgress(id: ScopeId): EgressPolicy | null;
@@ -86,9 +84,6 @@ export interface ScopedConfigStore {
   acknowledgeRuntimeSelection(id: ScopeId): Promise<void>;
   getRuntimeSelectionDurable(id: ScopeId): Promise<ScopedRuntimeSelection | null>;
   onRuntimeSelectionChanged(listener: (id: ScopeId) => void): void;
-  getApprovedHarnesses(): string[] | null;
-  setApprovedHarnesses(ids: string[] | null): Promise<void>;
-  getApprovedHarnessesDurable(): Promise<string[] | null>;
   getOrgAmbient(): boolean;
   setOrgAmbient(on: boolean): Promise<void>;
   getOrgAmbientDurable(): Promise<boolean>;
@@ -149,7 +144,7 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
   const loaded = (): TenantConfig | undefined => {
     const tenant = currentTenant();
     const found = tenants.get(tenant);
-    if (found || tables.persistent) return found;
+    if (found || !tables.fresh) return found;
     const created = emptyTenantConfig();
     tenants.set(tenant, created);
     return created;
@@ -218,16 +213,16 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
   };
 }
 
-export function createMemoryConfigStore(
+export function createConfigStore(
   orgId: string,
   opts: {
-    tables?: ConfigTables;
+    tables: ConfigTables;
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
     defaultSharingPosture?: SharingPosture;
-  } = {},
+  },
 ): ScopedConfigStore {
-  const tables = opts.tables ?? createMemoryConfigTables();
+  const { tables } = opts;
   const org = scopeId("org", orgId);
   const cache = tenantCache(tables, org);
   const keyed = createKeyedQueue();

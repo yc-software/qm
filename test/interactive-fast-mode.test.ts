@@ -1,16 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
-import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 test("interactive fast mode defaults off and persists across instances", async () => {
-  const tables = createMemoryConfigTables();
-  const first = createMemoryConfigStore("org", { tables });
+  const tables = testConfigTables();
+  const first = testConfigStore("org", { tables });
   await first.hydrate!();
   assert.equal(first.getInteractiveFastMode(), false);
   assert.equal(await first.getInteractiveFastModeDurable(), false);
@@ -18,7 +14,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setInteractiveFastMode(true);
   assert.equal(first.getInteractiveFastMode(), true);
 
-  const second = createMemoryConfigStore("org", { tables });
+  const second = testConfigStore("org", { tables });
   await second.hydrate!();
   assert.equal(second.getInteractiveFastMode(), true);
   assert.equal(await second.getInteractiveFastModeDurable(), true);
@@ -33,8 +29,8 @@ test("the org default reaches only human turns that expressed no preference", ()
 });
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
-  const tables = createMemoryConfigTables();
-  const store = createMemoryConfigStore("org", { tables });
+  const tables = testConfigTables();
+  const store = testConfigStore("org", { tables });
   await store.hydrate!();
   const org = scopeId("org", "org");
   await tables.updateScopeSetting(org, (row) => ({ ...row, interactiveFastMode: true }));

@@ -1,12 +1,13 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
-import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { bindTestTenant, boundUrl, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -14,6 +15,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: boundUrl(URL!) });
@@ -187,7 +189,7 @@ test(
   "pg-backed AclStore: owner-only grant, dedup, permission-agnostic revoke, handle surfacing",
   { skip },
   async () => {
-    const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     for (const [id, name] of [
       ["owner-only", "owner-only.md"],
       ["poster", "poster.png"],

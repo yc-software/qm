@@ -1,6 +1,6 @@
-import { TURN_STOPPED_KIND } from "../harness/replay.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
-import { unrecordedToolResult } from "../harness/context-compaction.ts";
+import { TURN_STOPPED_KIND } from "../agent/replay.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
+import { unrecordedToolResult } from "../agent/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";

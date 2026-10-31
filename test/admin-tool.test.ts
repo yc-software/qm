@@ -5,7 +5,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { Check } from "typebox/value";
 import { createAdminCall } from "../src/tools/admin.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 
 test("admin sends only fixed routes with encoded identifiers and preserves HTTP failures", async () => {

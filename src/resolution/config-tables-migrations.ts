@@ -2,7 +2,7 @@ import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { tenantPolicies } from "../tenants/migrations.ts";
 
-const TENANT_COLUMN = "tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants";
+const TENANT_COLUMN = "tenant_id UUID NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants";
 
 const texts = (json: string) =>
   `CASE WHEN jsonb_typeof(${json}) = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(${json})) END`;
@@ -56,7 +56,6 @@ const SCOPE_SOURCES: Array<[string, Record<string, string>]> = [
     "base_model_configs",
     {
       model_id: "json->>'modelId'",
-      harness_id: "json->>'harnessId'",
       effort_level: "json->>'effortLevel'",
       fast_mode: flag("json->>'fastMode'"),
       runtime_revision: "(json->>'revision')::integer",
@@ -65,7 +64,7 @@ const SCOPE_SOURCES: Array<[string, Record<string, string>]> = [
   ],
 ];
 
-const OTHER_SOURCES = ["soul_configs", "soul_history", "approved_harness_configs", "auto_flagger_configs"];
+const OTHER_SOURCES = ["soul_configs", "soul_history", "auto_flagger_configs"];
 
 const scopeBackfill = ([table, columns]: [string, Record<string, string>]) => {
   const names = Object.keys(columns);
@@ -110,7 +109,6 @@ const CREATE_TABLES = [
      browse_model TEXT,
      model_account TEXT CHECK (model_account IN ('personal', 'anthropic', 'openai')),
      model_id TEXT,
-     harness_id TEXT,
      effort_level TEXT,
      fast_mode BOOLEAN,
      runtime_revision INTEGER,
@@ -134,7 +132,6 @@ const CREATE_TABLES = [
   `CREATE TABLE purpose_runtimes(
      ${TENANT_COLUMN},
      purpose TEXT NOT NULL CHECK (purpose IN ('cron', 'subagent', 'fallback')),
-     harness_id TEXT NOT NULL,
      model_id TEXT NOT NULL,
      effort_level TEXT,
      fast_mode BOOLEAN,
@@ -144,23 +141,20 @@ const CREATE_TABLES = [
   `CREATE TABLE operator_settings(
      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
      embedding_model_id TEXT,
-     approved_harness_ids TEXT[],
-     auto_flagger_harness_id TEXT,
      auto_flagger_model_id TEXT,
      auto_flagger_rubric TEXT,
-     CHECK ((auto_flagger_harness_id IS NULL) = (auto_flagger_model_id IS NULL)
-       AND (auto_flagger_model_id IS NULL) = (auto_flagger_rubric IS NULL))
+     CHECK ((auto_flagger_model_id IS NULL) = (auto_flagger_rubric IS NULL))
    )`,
 ];
 
 const BACKFILL = [
   ...SCOPE_SOURCES.map(scopeBackfill),
-  `INSERT INTO purpose_runtimes(tenant_id, purpose, harness_id, model_id, effort_level, fast_mode)
-    SELECT b.tenant_id, p.purpose, p.r->>'harnessId', p.r->>'modelId', p.r->>'effortLevel', ${flag("p.r->>'fastMode'")}
+  `INSERT INTO purpose_runtimes(tenant_id, purpose, model_id, effort_level, fast_mode)
+    SELECT b.tenant_id, p.purpose, p.r->>'modelId', p.r->>'effortLevel', ${flag("p.r->>'fastMode'")}
     FROM base_model_configs b
     CROSS JOIN LATERAL (VALUES ('cron', b.json->'cronRuntime'), ('subagent', b.json->'subagentRuntime'),
       ('fallback', b.json->'fallbackRuntime')) AS p(purpose, r)
-    WHERE b.id LIKE 'org:%' AND p.r->>'harnessId' IS NOT NULL AND p.r->>'modelId' IS NOT NULL`,
+    WHERE b.id LIKE 'org:%' AND p.r->>'modelId' IS NOT NULL`,
   soulRevisionsFrom("FROM soul_configs s", "s.id", "s.json", "s.json->>'version' IS NOT NULL"),
   soulRevisionsFrom(
     `FROM soul_configs s CROSS JOIN LATERAL jsonb_array_elements(
@@ -175,13 +169,11 @@ const BACKFILL = [
     "h.json",
     "(h.json->>'version')::integer < (s.json->>'version')::integer",
   ),
-  `INSERT INTO operator_settings(embedding_model_id, approved_harness_ids, auto_flagger_harness_id,
-     auto_flagger_model_id, auto_flagger_rubric)
-    SELECT ${ORG_ROW("base_model_configs")}->>'embeddingModelId', ${texts(`${ORG_ROW("approved_harness_configs")}->'ids'`)},
-      f.json->>'harnessId', f.json->>'modelId', f.json->>'rubric'
+  `INSERT INTO operator_settings(embedding_model_id, auto_flagger_model_id, auto_flagger_rubric)
+    SELECT ${ORG_ROW("base_model_configs")}->>'embeddingModelId', f.json->>'modelId', f.json->>'rubric'
     FROM (SELECT NULL) AS seed
     LEFT JOIN (SELECT json FROM auto_flagger_configs
-      WHERE id LIKE 'org:%' AND json ?& ARRAY['harnessId', 'modelId', 'rubric'] LIMIT 1) AS f ON TRUE`,
+      WHERE id LIKE 'org:%' AND json ?& ARRAY['modelId', 'rubric'] LIMIT 1) AS f ON TRUE`,
 ];
 
 const SOURCES = [...SCOPE_SOURCES.map(([table]) => table), ...OTHER_SOURCES];

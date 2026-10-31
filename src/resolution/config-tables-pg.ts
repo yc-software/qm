@@ -17,7 +17,7 @@ import { TENANCY_BASE } from "../tenants/migrations.ts";
 
 type Row = Rows[number];
 
-const TENANT = "tenant_id = qm_tenant_id()";
+const TENANT = "tenant_id = qm_bound_tenant()";
 
 const SCOPE_COLUMNS = [
   "command_mode",
@@ -44,7 +44,6 @@ const SCOPE_COLUMNS = [
   "browse_model",
   "model_account",
   "model_id",
-  "harness_id",
   "effort_level",
   "fast_mode",
   "runtime_revision",
@@ -94,7 +93,6 @@ function scopeFromRow(r: Row): ScopeSettings {
     browseModel: value(r.browse_model),
     modelAccount: value(r.model_account),
     modelId: value(r.model_id),
-    harnessId: value(r.harness_id),
     effortLevel: value(r.effort_level),
     fastMode: value(r.fast_mode),
     revision: value(r.runtime_revision),
@@ -131,7 +129,6 @@ function scopeToColumns(s: ScopeSettings): unknown[] {
     s.browseModel,
     s.modelAccount,
     s.modelId,
-    s.harnessId,
     s.effortLevel,
     s.fastMode,
     s.revision,
@@ -169,11 +166,9 @@ const connectorFromRow = (r: Row): StoredConnectorClient =>
 const operatorFromRow = (r: Row | undefined): OperatorSettings =>
   definedOnly({
     embeddingModelId: value<string>(r?.embedding_model_id),
-    approvedHarnesses: value<string[]>(r?.approved_harness_ids),
     autoFlagger:
-      r?.auto_flagger_harness_id != null
+      r?.auto_flagger_model_id != null
         ? {
-            harnessId: String(r.auto_flagger_harness_id),
             modelId: String(r.auto_flagger_model_id),
             rubric: String(r.auto_flagger_rubric),
           }
@@ -182,7 +177,6 @@ const operatorFromRow = (r: Row | undefined): OperatorSettings =>
 
 const selectionFromRow = (r: Row): RuntimeSelection =>
   definedOnly({
-    harnessId: String(r.harness_id),
     modelId: String(r.model_id),
     effortLevel: value<string>(r.effort_level),
     fastMode: value<boolean>(r.fast_mode),
@@ -205,7 +199,6 @@ const CONNECTOR_COLUMNS = `scope_id, provider, client_id, secret_enc, scopes, re
 export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
   const db = createPgPool(databaseUrl, [TENANCY_BASE, ...CONFIG_TABLE_MIGRATIONS]);
   return {
-    persistent: true,
     close: () => db.close(),
     scopeSettings: async (ids) =>
       (await (ids ? db.q(`${SCOPE_SELECT} AND scope_id = ANY($1)`, [ids]) : db.q(SCOPE_SELECT))).map(
@@ -232,7 +225,7 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
     },
     async purposeRuntimes() {
       const rows = await db.q(
-        `SELECT purpose, harness_id, model_id, effort_level, fast_mode FROM purpose_runtimes WHERE ${TENANT}`,
+        `SELECT purpose, model_id, effort_level, fast_mode FROM purpose_runtimes WHERE ${TENANT}`,
       );
       return Object.fromEntries(rows.map((r) => [r.purpose as RuntimePurpose, selectionFromRow(r)]));
     },
@@ -242,10 +235,10 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
         return;
       }
       await db.q(
-        `INSERT INTO purpose_runtimes(purpose, harness_id, model_id, effort_level, fast_mode) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (tenant_id, purpose) DO UPDATE SET harness_id = EXCLUDED.harness_id, model_id = EXCLUDED.model_id,
+        `INSERT INTO purpose_runtimes(purpose, model_id, effort_level, fast_mode) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id, purpose) DO UPDATE SET model_id = EXCLUDED.model_id,
            effort_level = EXCLUDED.effort_level, fast_mode = EXCLUDED.fast_mode`,
-        [purpose, s.harnessId, s.modelId, s.effortLevel ?? null, s.fastMode ?? null],
+        [purpose, s.modelId, s.effortLevel ?? null, s.fastMode ?? null],
       );
     },
     connectorClients: async (id) =>
@@ -311,15 +304,8 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
         const { rows } = await client.query(`SELECT * FROM operator_settings FOR UPDATE`);
         const next = definedOnly(fn(operatorFromRow(rows[0])));
         await client.query(
-          `UPDATE operator_settings SET embedding_model_id = $1, approved_harness_ids = $2,
-             auto_flagger_harness_id = $3, auto_flagger_model_id = $4, auto_flagger_rubric = $5`,
-          [
-            next.embeddingModelId ?? null,
-            next.approvedHarnesses ?? null,
-            next.autoFlagger?.harnessId ?? null,
-            next.autoFlagger?.modelId ?? null,
-            next.autoFlagger?.rubric ?? null,
-          ],
+          `UPDATE operator_settings SET embedding_model_id = $1, auto_flagger_model_id = $2, auto_flagger_rubric = $3`,
+          [next.embeddingModelId ?? null, next.autoFlagger?.modelId ?? null, next.autoFlagger?.rubric ?? null],
         );
         return next;
       });

@@ -4,9 +4,6 @@ import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()): TurnRequest {
   return {

@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
@@ -37,18 +38,28 @@ function spyHeartbeats(runs: RunStore): {
     runs: {
       ...runs,
       async heartbeat(runId, token, ttl) {
-        const ok = await runs.heartbeat(runId, token, ttl);
-        beats.push({ runId, token, ttl, ok });
-        return ok;
+        heartbeatsInFlight++;
+        try {
+          const ok = await runs.heartbeat(runId, token, ttl);
+          beats.push({ runId, token, ttl, ok });
+          return ok;
+        } finally {
+          heartbeatsInFlight--;
+        }
       },
     },
   };
 }
 
-const microtasks = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+let heartbeatsInFlight = 0;
+const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+const microtasks = async (): Promise<void> => {
+  await nextTurn();
+  while (heartbeatsInFlight > 0) await nextTurn();
+};
 
 test("processRun refuses a run that holds no lease", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn })).run;
   const orchestrator = fakeOrchestrator(async () => {
     throw new Error("must not be reached");
@@ -58,7 +69,7 @@ test("processRun refuses a run that holds no lease", async () => {
 });
 
 test("processRun threads runId + background into the turn and completes the run with the result", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
     seen.push(input);
@@ -86,7 +97,7 @@ test("processRun threads runId + background into the turn and completes the run 
 });
 
 test("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   let finish = (_: TurnResult) => {};
   const turnResult = new Promise<TurnResult>((resolve) => {
     finish = resolve;
@@ -111,7 +122,7 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
 });
 
 test("processRun upgrades legacy queued provenance before orchestration", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const legacy = { ...turn, origin: undefined, liveActor: true, triggerTs: "1" } as unknown as OrchestratorInput;
   await runs.enqueue({ sessionId: "legacy", request: legacy });
   const claimed = await runs.claim("w1", 5_000);
@@ -132,7 +143,7 @@ test("processRun upgrades legacy queued provenance before orchestration", async 
 
 test("processRun heartbeats the lease while the turn runs, and the beat stops with the turn", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const store = createMemoryRunStore();
+  const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
 
   let release = (_: TurnResult) => {};
@@ -171,7 +182,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
 
 test("a retryable turn failure requeues the run, rethrows, and stops the heartbeat", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
-  const store = createMemoryRunStore();
+  const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
 
   let explode = (_: Error) => {};
@@ -226,7 +237,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
 
 test("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
     seen.push(input);
@@ -249,7 +260,7 @@ test("finalAttempt marks the attempt whose error would park the run, from the cl
 });
 
 test("finalAttempt also marks the claim-cap park — an error on an over-claimed run is terminal", async () => {
-  const { runs } = createMemoryRunStore({ maxClaims: 3 });
+  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
     seen.push(input);
@@ -302,7 +313,7 @@ function cancellableOrchestrator(): { orchestrator: Orchestrator; cancelled: () 
 
 test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const store = createMemoryRunStore();
+  const store = createPostgresRunStore(testDatabaseUrl());
   const runs = scriptedHeartbeat(
     store.runs,
     Array.from({ length: 10 }, () => new Error("pg down")),
@@ -324,7 +335,7 @@ test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
 
 test("a single definitive lease-lost beat does not cancel, but N consecutive do", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const store = createMemoryRunStore();
+  const store = createPostgresRunStore(testDatabaseUrl());
   const script: Array<boolean | Error> = [false, true, ...Array.from({ length: LEASE_LOST_CONSECUTIVE }, () => false)];
   const runs = scriptedHeartbeat(store.runs, script);
   const { orchestrator, cancelled } = cancellableOrchestrator();
@@ -353,7 +364,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
 
 test("the heartbeat stops before complete(), so a late tick cannot spuriously abort", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const store = createMemoryRunStore();
+  const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
 
   let release = (_: TurnResult) => {};
@@ -385,7 +396,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
 });
 
 test("a NonRetryableTurnError parks the run even with attempts remaining", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new NonRetryableTurnError("policy says no");
   });
@@ -401,7 +412,7 @@ test("a NonRetryableTurnError parks the run even with attempts remaining", async
 });
 
 test("a crashed turn's raw exception text never reaches the stored reason", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new Error("connect ECONNREFUSED db-internal.local:5432 password=hunter2");
   });
@@ -418,7 +429,7 @@ test("a crashed turn's raw exception text never reaches the stored reason", asyn
 });
 
 test("a NonRetryableTurnError keeps its human-readable reason on the stored result", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new NonRetryableTurnError("Codex turn exceeded 300s wall clock");
   });
@@ -431,7 +442,7 @@ test("a NonRetryableTurnError keeps its human-readable reason on the stored resu
 
 for (const rejects of [false, true]) {
   test(`shutdown requeues without spending the error budget when cancellation ${rejects ? "throws" : "returns"}`, async () => {
-    const { runs } = createMemoryRunStore();
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
     const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
     const run = await runs.claim("old", 5_000);
     const shutdown = new AbortController();
@@ -458,7 +469,7 @@ for (const rejects of [false, true]) {
 }
 
 test("explicit user Stop still completes instead of retrying", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn })).run;
   const run = await runs.claim("w1", 5_000);
   const shutdown = new AbortController();
@@ -473,7 +484,7 @@ test("explicit user Stop still completes instead of retrying", async () => {
 });
 
 test("failed shutdown handback retains the lease for expiry without charging an error", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
   const run = await runs.claim("w1", 5_000);
   const shutdown = new AbortController();
@@ -494,7 +505,7 @@ test("failed shutdown handback retains the lease for expiry without charging an 
 });
 
 test("a claim that lands after shutdown began is handed back without starting a turn", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 })).run;
   const run = await runs.claim("old", 5_000);
   const shutdown = new AbortController();

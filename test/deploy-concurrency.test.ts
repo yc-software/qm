@@ -3,15 +3,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
-import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const nonLeaderLease: LeaderLease = {
   async hold() {
@@ -20,7 +21,7 @@ const nonLeaderLease: LeaderLease = {
 };
 
 function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean } = {}) {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managed ?? false },
@@ -34,7 +35,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "concurrency-")),
     ...(opts.lease ? { leaderLease: opts.lease } : {}),
     ...(opts.lock ? { advisoryLock: opts.lock } : {}),
@@ -81,6 +82,7 @@ test("reaper: the leader (default no-op lease) reaps as before", async () => {
 function spyLock(): { lock: AdvisoryLock; keys: string[] } {
   const keys: string[] = [];
   const lock: AdvisoryLock = {
+    ...createNoopAdvisoryLock(),
     async withLock(key, fn) {
       keys.push(key);
       return fn();
@@ -109,7 +111,7 @@ test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex 
 });
 
 test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)", async () => {
-  const deployStore = createDeployStore();
+  const deployStore = createDeployStore(testDeployBackings());
   let active = 0;
   let maxActive = 0;
   const provider: DeployProvider = {
@@ -128,7 +130,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "serialize-")),
   });
   const d = await deploy.deploy({
@@ -145,13 +147,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
 });
 
 function copyingDeployStore(): DeployStore {
-  const map = createMemoryMap<Deployment>();
-  return createDeployStore({
-    ...map,
-    get: async (id) => structuredClone(await map.get(id)),
-    all: async () => structuredClone(await map.all()),
-    put: (id, value) => map.put(id, structuredClone(value)),
-  });
+  return createDeployStore(testDeployBackings());
 }
 
 for (const [visit, stop, status] of [
@@ -185,7 +181,7 @@ for (const [visit, stop, status] of [
       deployStore,
       provider,
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: createAclStore(),
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
       deployDir: mkdtempSync(join(tmpdir(), "reach-stop-")),
     });
     const d = await deploy.deploy({

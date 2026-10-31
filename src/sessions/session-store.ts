@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
-import type { GoalRecord } from "../harness/goal.ts";
+import type { GoalRecord } from "../agent/goal.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -42,19 +42,9 @@ export function createContextSummaryPayload(throughSeq: number, text: string): C
   return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
 }
 
-export interface ContextWindow {
+interface ContextWindow {
   entries: SessionEntry[];
   totalEntries: number;
-}
-
-export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
-  let latest: ContextSummaryPayload | null = null;
-  for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;
-  const throughSeq = latest?.throughSeq;
-  return {
-    entries: throughSeq === undefined ? [...entries] : entries.filter((entry) => entry.seq > throughSeq),
-    totalEntries: entries.length,
-  };
 }
 
 export interface Lease {
@@ -145,6 +135,7 @@ export interface SessionPin extends NewSessionPin {
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
 export interface GetEntriesOptions {
+  messagesOnly?: boolean;
   transcript?: boolean;
   turnId?: string;
   sinceSeq?: number;
@@ -221,7 +212,6 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
-/** A past security screening, recovered from its captured request — the replay corpus for flagger tests. */
 export interface ScreenSample {
   id: string;
   sessionId: string;
@@ -274,24 +264,17 @@ export interface AttributedTurn {
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
-export const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
-export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
-export const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
-const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
-const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
-export const threadRefCronIdExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
-
-const STABLE_ORIGIN_RE = new RegExp(stableOriginPattern(ORIGIN_ALTERNATION));
-const LEGACY_ORIGIN_RE = new RegExp(legacyOriginPattern(ORIGIN_ALTERNATION));
-const STABLE_CRON_ID_RE = new RegExp(STABLE_CRON_ID_PATTERN);
-const LEGACY_CRON_ID_RE = new RegExp(LEGACY_CRON_ID_PATTERN);
+const ORIGINS = "(cron|webhook|monitor|loop|swarm)";
+const STABLE_ORIGIN_RE = new RegExp(`^agent:main:${ORIGINS}:[^:]+$`);
+const BARE_ORIGIN_RE = new RegExp(`^${ORIGINS}:[^:]+(:.+)?$`);
+const STABLE_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
+const BARE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
 
 export function sessionOrigin(threadRef: string | null | undefined): SessionOrigin {
   const stable = STABLE_ORIGIN_RE.exec(threadRef ?? "");
   if (stable) return stable[1] as SessionOrigin;
-  const legacy = LEGACY_ORIGIN_RE.exec(threadRef ?? "");
-  if (legacy) return legacy[1] as SessionOrigin;
+  const bare = BARE_ORIGIN_RE.exec(threadRef ?? "");
+  if (bare) return bare[1] as SessionOrigin;
   return "conversation";
 }
 
@@ -300,7 +283,7 @@ export function sessionCategory(origin: SessionOrigin): SessionCategory {
 }
 
 export function cronIdOf(threadRef: string | null | undefined): string | null {
-  const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? LEGACY_CRON_ID_RE.exec(threadRef ?? "");
+  const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? BARE_CRON_ID_RE.exec(threadRef ?? "");
   return m ? m[1]! : null;
 }
 
@@ -355,14 +338,6 @@ export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "cha
   createdAt: number;
 }
 
-export interface NewSearchEntry {
-  seq: number;
-  type: EntryType;
-  author?: string;
-  text: string;
-  createdAt: number;
-}
-
 export interface SessionSummary {
   id: string;
   type: SessionType;
@@ -399,7 +374,7 @@ export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
+  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall"]),
   thinking: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
@@ -560,7 +535,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  /** The most recent security screenings across every scope, newest first. */
   listScreenSamples(limit: number): Promise<ScreenSample[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
@@ -586,7 +560,6 @@ export interface SessionStore {
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 
-  /** Sessions whose (participant or session) title contains the query — newest activity first. */
   searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
   scanAll(): Promise<Session[]>;

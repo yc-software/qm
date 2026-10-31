@@ -3,21 +3,27 @@ import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { postSoul } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
-import { createMemoryConfigTables, type ConfigTables, type SoulRevision } from "../src/resolution/config-tables.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
+import { type ScopedConfigStore } from "../src/resolution/config-store.ts";
+import type { ConfigTables, SoulRevision } from "../src/resolution/config-tables.ts";
+import { type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import {
+  testAdvisoryLock,
+  testConfigStore,
+  testConfigTables,
+  testDatabaseUrl,
+  testMap,
+} from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -38,12 +44,12 @@ const pubMembers = new Set([OWNER, PUB_MEMBER]);
 const groupMembers = new Set([OWNER, GROUP_MEMBER]);
 
 function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: AdvisoryLock } = {}) {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const crons = createCronStore();
-  const webhooks = createWebhookStore();
-  const acl = createAclStore();
-  const config = overrides.config ?? createMemoryConfigStore(ORG);
-  const auditLog = createAuditLog();
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const webhooks = createWebhookStore(testMap(), testMap());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const config = overrides.config ?? testConfigStore(ORG);
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
     isInternal: (p: { type: string }) => p.type === "internal",
@@ -63,7 +69,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     listByParticipant: async () => [] as { scopeId: string }[],
     participantScopes: async () => [] as { scopeId: string }[],
   };
-  const skills = createSkillStore();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return {
@@ -78,7 +84,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
     sessions,
     skills,
     deploy,
-    ...(overrides.advisoryLock ? { advisoryLock: overrides.advisoryLock } : {}),
+    advisoryLock: overrides.advisoryLock ?? testAdvisoryLock(),
   };
 }
 
@@ -87,7 +93,7 @@ function makeApp(): App {
 }
 
 function failingSoulTables(control: { fail: boolean }): ConfigTables {
-  const backing = createMemoryConfigTables();
+  const backing = testConfigTables();
   return {
     ...backing,
     async appendSoul(revision, expected, base) {
@@ -243,10 +249,10 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
-  const tables = createMemoryConfigTables();
-  const lock = createMemoryAdvisoryLock();
-  const leftConfig = createMemoryConfigStore(ORG, { tables });
-  const rightConfig = createMemoryConfigStore(ORG, { tables });
+  const tables = testConfigTables();
+  const lock = testAdvisoryLock();
+  const leftConfig = testConfigStore(ORG, { tables });
+  const rightConfig = testConfigStore(ORG, { tables });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
@@ -260,7 +266,7 @@ test("SOUL: shared-lock writers refresh fleet state before assigning the next ve
 
 test("SOUL: a durable write failure rejects and keeps the live cache", async () => {
   const control = { fail: false };
-  const config = createMemoryConfigStore(ORG, { tables: failingSoulTables(control) });
+  const config = testConfigStore(ORG, { tables: failingSoulTables(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   control.fail = true;
@@ -274,7 +280,7 @@ test("SOUL: a durable write failure rejects and keeps the live cache", async () 
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
-  const config = createMemoryConfigStore(ORG, { tables: failingSoulTables(control) });
+  const config = testConfigStore(ORG, { tables: failingSoulTables(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -318,7 +324,7 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
 });
 
 test("SOUL: failed persistence keeps the pre-write cache even when follow-up reads fail", async () => {
-  const backing = createMemoryConfigTables();
+  const backing = testConfigTables();
   const prior: SoulRevision = {
     scopeId: privScope,
     content: "durable prior",
@@ -327,7 +333,7 @@ test("SOUL: failed persistence keeps the pre-write cache even when follow-up rea
     updatedBy: OWNER,
   };
   await backing.appendSoul(prior, 6, 6);
-  const config = createMemoryConfigStore(ORG, { tables: appendThenFailReadsTables(backing) });
+  const config = testConfigStore(ORG, { tables: appendThenFailReadsTables(backing) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {

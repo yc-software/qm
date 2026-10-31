@@ -7,13 +7,9 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -33,7 +29,7 @@ function freshApp() {
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {
-  const c = createMemoryConfigStore("default-org");
+  const c = testConfigStore("default-org");
   assert.equal(c.getExternalSlackParticipants(org), false);
   await c.setExternalSlackParticipants(org, true);
   assert.equal(c.getExternalSlackParticipants(org), true);
@@ -42,9 +38,9 @@ test("external-slack-participants: default off; the org flip is what turns it on
 });
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
-  const tables = createMemoryConfigTables();
-  const a = createMemoryConfigStore("default-org", { tables });
-  const b = createMemoryConfigStore("default-org", { tables });
+  const tables = testConfigTables();
+  const a = testConfigStore("default-org", { tables });
+  const b = testConfigStore("default-org", { tables });
 
   await a.setExternalSlackParticipants(org, true);
   await Promise.resolve();

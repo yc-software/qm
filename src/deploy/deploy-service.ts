@@ -105,6 +105,7 @@ export interface DeployService {
     grantee: ScopeId,
     permission: Permission | null,
     actor: { createdBy: string },
+    opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
   assertShareAllowed(ownerScopeId: ScopeId, grantee: ScopeId, permission: Permission | null): Promise<void>;
   transferDeploymentOwner(
@@ -851,7 +852,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 
-    async shareDeployment(idOrName, grantee, permission, actor) {
+    async shareDeployment(idOrName, grantee, permission, actor, opts) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
@@ -885,7 +886,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           scopeLabel: grantee,
         });
       }
-      await notifyDeploymentShared(deps, d, grantee, permission, actor.createdBy);
+      if (opts?.notify !== false) await notifyDeploymentShared(deps, d, grantee, permission, actor.createdBy);
       return (await grantsOn(d)).map((g) => ({ scope: g.granteeScopeId, permission: g.permission }));
     },
 

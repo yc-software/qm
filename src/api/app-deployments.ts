@@ -1,5 +1,4 @@
 import { validEmail } from "../identity/external-members.ts";
-import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
@@ -49,7 +48,7 @@ export function createDeploymentMethods(
   | "attachScope"
 > {
   const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
-  const invitationLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  const invitationLock = deps.advisoryLock;
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -63,10 +62,10 @@ export function createDeploymentMethods(
     getDeployment(idOrName) {
       return deps.deploy.getDeployment(idOrName);
     },
-    shareDeployment(idOrName, grantee, permission, actor) {
-      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
+    shareDeployment(idOrName, grantee, permission, actor, opts) {
+      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor, opts);
     },
-    async inviteToDeployment(idOrName, rawEmail, actorId) {
+    async inviteToDeployment(idOrName, rawEmail, actorId, opts) {
       const email = rawEmail.trim().toLowerCase();
       if (!validEmail(email)) throw new Error("a valid email address is required");
       const grantee = await deploymentShareScope(`personal:${email}`, "read");
@@ -82,7 +81,7 @@ export function createDeploymentMethods(
         const alreadyShared = previous.some((g) => g.scope === grantee);
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
-          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId });
+          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
         const appUrl = deps.deployAppsDomain
           ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
           : undefined;
@@ -90,7 +89,8 @@ export function createDeploymentMethods(
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;
         let emailProblem: string | undefined;
-        if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
+        if (opts?.notify === false) emailProblem = "notify was false";
+        else if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
         else if (!appUrl)
           emailProblem = "app URLs are not configured (set DEPLOY_APPS_DOMAIN); share the app link manually";
         else {

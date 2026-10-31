@@ -28,19 +28,14 @@ export function configureRuntimes(actions: { save: (key: string) => Promise<void
 function optionsFor(context: Record<string, any>): ModelOption[] {
   let options = modelOptions.get(context);
   if (!options) {
-    const ids = Object.fromEntries(
-      Object.entries(context.modelsByHarness ?? {}).map(([harness, models]) => [
-        harness,
-        (models as { id: string }[]).map((model) => model.id),
-      ]),
-    );
-    options = runtimeModelOptions(context.harnessOptions ?? [], ids, context.modelCatalog ?? {});
+    const ids = ((context.baseModelOptions ?? []) as { id: string }[]).map((model) => model.id);
+    options = runtimeModelOptions(ids, context.modelCatalog ?? {});
     modelOptions.set(context, options);
   }
   return options;
 }
 
-const value = (s: SettingsState) => `${s.draft.harnessId}:${s.draft.modelId}`;
+const value = (s: SettingsState) => s.draft.modelId;
 const current = (s: SettingsState): LoadoutEntry => ({
   value: value(s),
   effort: s.draft.effortLevel as EffortLevel,
@@ -60,7 +55,6 @@ function picker(s: SettingsState, inheritLabel?: string) {
     (option, entry) => {
       Object.assign(s.draft, {
         ...(s.key === "runtime" ? {} : { inherit: false }),
-        harnessId: option.harnessId,
         modelId: option.model.id,
         effortLevel: entry.effort,
         fastMode: entry.fast,

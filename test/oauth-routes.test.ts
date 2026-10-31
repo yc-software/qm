@@ -249,18 +249,23 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     throw new Error("no token exchange expected");
   });
   try {
+    await srv.built.mcpServers.put({
+      id: "orders",
+      name: "Orders",
+      url: "https://mcp.orders.example/mcp",
+      auth: "oauth-user",
+      credentialHost: "api.orders.example",
+      clientId: "public-client",
+      oauthAuthorizeUrl: "https://id.orders.example/authorize",
+      oauthTokenUrl: "https://id.orders.example/token",
+      oauthScopes: ["orders:write"],
+      tools: [],
+      readOnly: false,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
     await srv.built.mcpToolService.refresh();
-    setPublicOAuthClients([
-      {
-        name: "orders",
-        host: "api.orders.example",
-        authUrl: "https://id.orders.example/authorize",
-        tokenUrl: "https://id.orders.example/token",
-        scopes: ["orders:write"],
-        clientId: "public-client",
-        label: "Orders",
-      },
-    ]);
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const read = async () => {
       const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });

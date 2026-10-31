@@ -2,7 +2,6 @@ import type { ApprovalGrantModes, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { errMessage } from "../util/errors.ts";
-import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import {
@@ -113,7 +112,6 @@ export function policyMethods(
   | "resolveSharingPostureDurable"
   | "setSharingPosture"
   | "clearSharingPosture"
-  | "getApprovalGrantModes"
   | "getApprovalGrantModesDurable"
   | "setApprovalGrantModes"
   | "getEgress"
@@ -149,10 +147,6 @@ export function policyMethods(
     },
     setSharingPosture: (id, posture) => ctx.put(id, "sharingPosture", posture),
     clearSharingPosture: (id) => ctx.put(id, "sharingPosture", null),
-    getApprovalGrantModes(id) {
-      const orgModes = ctx.scope(org)?.approvalGrantModes ?? DEFAULT_APPROVAL_GRANT_MODES;
-      return id === org ? { ...orgModes } : composeApprovalGrantModes(orgModes, ctx.scope(id)?.approvalGrantModes);
-    },
     async getApprovalGrantModesDurable(id) {
       const orgModes = (await ctx.own(org)).approvalGrantModes ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -165,7 +159,7 @@ export function policyMethods(
   };
 }
 
-const RUNTIME_FIELDS = ["modelId", "harnessId", "effortLevel", "fastMode", "revision", "orgRevision"] as const;
+const RUNTIME_FIELDS = ["modelId", "effortLevel", "fastMode", "revision", "orgRevision"] as const;
 
 const withoutRuntime = (row: ScopeSettings): ScopeSettings =>
   Object.fromEntries(
@@ -173,12 +167,11 @@ const withoutRuntime = (row: ScopeSettings): ScopeSettings =>
   ) as ScopeSettings;
 
 const selectionFields = (s: RuntimeSelection): RuntimeSelection =>
-  definedOnly({ harnessId: s.harnessId, modelId: s.modelId, effortLevel: s.effortLevel, fastMode: s.fastMode });
+  definedOnly({ modelId: s.modelId, effortLevel: s.effortLevel, fastMode: s.fastMode });
 
 function runtimeSelection(row: ScopeSettings | undefined | null): ScopedRuntimeSelection | null {
-  if (!row?.harnessId || !row.modelId) return null;
+  if (row?.orgRevision === undefined || !row.modelId) return null;
   return definedOnly({
-    harnessId: row.harnessId,
     modelId: row.modelId,
     orgRevision: row.orgRevision ?? 0,
     revision: row.revision,
@@ -243,7 +236,6 @@ export function runtimeMethods(
     async setBaseModel(id, modelId) {
       await ctx.writeScope(id, (row) => {
         if (modelId === null) return withoutRuntime(row);
-        if (row.harnessId && isHarnessId(row.harnessId) && !modelSupportedByHarness(modelId, row.harnessId)) return row;
         return { ...row, modelId };
       });
       changed.note(id);
@@ -381,32 +373,19 @@ export function preferenceMethods(ctx: ConfigContext): Methods<PreferenceMethods
 
 export function operatorMethods(
   ctx: ConfigContext,
-): Methods<
-  | "getApprovedHarnesses"
-  | "setApprovedHarnesses"
-  | "getApprovedHarnessesDurable"
-  | "getEmbeddingModelDurable"
-  | "setEmbeddingModel"
-  | "getAutoFlaggerConfig"
-  | "setAutoFlaggerConfig"
-> {
+): Methods<"getEmbeddingModelDurable" | "setEmbeddingModel" | "getAutoFlaggerConfig" | "setAutoFlaggerConfig"> {
   const { tables, operator } = ctx;
   const update = (patch: OperatorSettings) =>
     ctx.queue("operator", async () => {
       operator.settings = await tables.updateOperatorSettings((current) => ({ ...current, ...patch }));
     });
   return {
-    getApprovedHarnesses: () => (operator.settings.approvedHarnesses ? [...operator.settings.approvedHarnesses] : null),
-    setApprovedHarnesses: (ids) => update({ approvedHarnesses: ids ? [...ids] : undefined }),
-    getApprovedHarnessesDurable: async () => (await tables.operatorSettings()).approvedHarnesses ?? null,
     getEmbeddingModelDurable: async () => (await tables.operatorSettings()).embeddingModelId ?? null,
     setEmbeddingModel: (modelId) => update({ embeddingModelId: modelId ?? undefined }),
     getAutoFlaggerConfig: () => (operator.settings.autoFlagger ? { ...operator.settings.autoFlagger } : null),
     setAutoFlaggerConfig: (config) =>
       update({
-        autoFlagger: config
-          ? { harnessId: config.harnessId, modelId: config.modelId, rubric: config.rubric }
-          : undefined,
+        autoFlagger: config ? { modelId: config.modelId, rubric: config.rubric } : undefined,
       }),
   };
 }

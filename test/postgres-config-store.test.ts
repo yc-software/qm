@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
+import { createConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
 import { createPostgresConfigTables } from "../src/resolution/config-tables-pg.ts";
 import type { ConfigTables } from "../src/resolution/config-tables.ts";
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
@@ -38,7 +38,7 @@ async function withConfigDb(
       const store = async (tenant: string) => {
         const next = fixture(db.url);
         opened.push(next);
-        const config = createMemoryConfigStore(ORG, { tables: next.tables, connectorSecretKey: "test-key" });
+        const config = createConfigStore(ORG, { tables: next.tables, connectorSecretKey: "test-key" });
         await withTenant(tenant, () => config.hydrate());
         return config;
       };
@@ -64,7 +64,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       await a.setSharingPosture(channel, "open");
       await a.setApprovalGrantModes(channel, { session: false, always: true });
       await a.setEgress(channel, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
-      await a.setRuntimeSelection(channel, { harnessId: "pi", modelId: "claude-opus-4-8", effortLevel: "low" });
+      await a.setRuntimeSelection(channel, { modelId: "claude-opus-4-8", effortLevel: "low" });
       await a.setBrowseMaxSteps(channel, 120);
       await a.setBrowseModel(channel, "claude-sonnet-4-6");
       await a.setWebuiModels(channel, ["claude-opus-4-8"]);
@@ -75,7 +75,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       await a.setOrgAmbient(false);
       await a.setInteractiveFastMode(true);
       await a.setPersonalModelAuth("U1", true, "openai");
-      await a.setPurposeRuntime("cron", { harnessId: "pi", modelId: "gpt-5.5", fastMode: false });
+      await a.setPurposeRuntime("cron", { modelId: "gpt-5.5", fastMode: false });
       await a.setSlackEmojiCatalog(channel, { party: "https://emoji.example/party.png" });
       await a.setConnectorClient(org, "google", { clientId: "cid", clientSecret: "shh", scopes: ["email"] });
     });
@@ -87,10 +87,9 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.deepEqual(b.getCommandPolicy(channel), policy);
       assert.equal(await b.getSecurityPostureDurable(channel), "strict");
       assert.equal(await b.resolveSharingPostureDurable(personal, channel), "open");
-      assert.deepEqual(b.getApprovalGrantModes(channel), { session: false, always: true });
+      assert.deepEqual(await b.getApprovalGrantModesDurable(channel), { session: false, always: true });
       assert.deepEqual(b.getEgress(channel), { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
       assert.deepEqual(b.getRuntimeSelection(channel), {
-        harnessId: "pi",
         modelId: "claude-opus-4-8",
         effortLevel: "low",
         orgRevision: 0,
@@ -106,7 +105,7 @@ test("per-scope settings written on one core survive a restart", { skip }, async
       assert.equal(b.getInteractiveFastMode(), true);
       assert.equal(await b.getModelAccountDurable("U1"), "openai");
       assert.equal(await b.getModelAccountDurable("U2"), "company");
-      assert.deepEqual(b.getPurposeRuntime("cron"), { harnessId: "pi", modelId: "gpt-5.5", fastMode: false });
+      assert.deepEqual(b.getPurposeRuntime("cron"), { modelId: "gpt-5.5", fastMode: false });
       assert.deepEqual((await b.getSlackEmojiCatalogDurable(channel))?.emoji, {
         party: "https://emoji.example/party.png",
       });
@@ -140,15 +139,13 @@ test("refreshScope carries a write from one core to another", { skip }, async ()
     await withTenant(tenant, async () => {
       await a.setSoul(channel, "fresh");
       await a.setEgress(channel, { allowedHosts: ["x.example"] });
-      await a.setApprovedHarnesses(["pi"]);
-      await a.setAutoFlaggerConfig({ harnessId: "pi", modelId: "m", rubric: "r" });
+      await a.setAutoFlaggerConfig({ modelId: "m", rubric: "r" });
       assert.equal(b.getSoul(channel), null);
       await b.refreshScope(channel);
       await b.refreshScope(org);
       assert.equal(b.getSoul(channel), "fresh");
       assert.deepEqual(b.getEgress(channel), { allowedHosts: ["x.example"] });
-      assert.deepEqual(b.getApprovedHarnesses(), ["pi"]);
-      assert.deepEqual(b.getAutoFlaggerConfig(), { harnessId: "pi", modelId: "m", rubric: "r" });
+      assert.deepEqual(b.getAutoFlaggerConfig(), { modelId: "m", rubric: "r" });
     });
   });
 });
@@ -185,16 +182,13 @@ test("concurrent runtime writes on two cores keep distinct revisions and both ch
     const b = await store(tenant);
     await withTenant(tenant, async () => {
       await Promise.all([
-        a.setRuntimeSelection(org, { harnessId: "pi", modelId: "one" }),
-        b.setRuntimeSelection(org, { harnessId: "pi", modelId: "two" }),
-        b.setPurposeRuntime("cron", { harnessId: "pi", modelId: "cron" }),
+        a.setRuntimeSelection(org, { modelId: "one" }),
+        b.setRuntimeSelection(org, { modelId: "two" }),
+        b.setPurposeRuntime("cron", { modelId: "cron" }),
       ]);
       assert.equal((await a.getRuntimeSelectionDurable(org))?.revision, 2);
-      assert.deepEqual(await a.getPurposeRuntimeDurable("cron"), { harnessId: "pi", modelId: "cron" });
-      await Promise.all([
-        a.acknowledgeRuntimeSelection(channel),
-        b.setRuntimeSelection(channel, { harnessId: "pi", modelId: "new" }),
-      ]);
+      assert.deepEqual(await a.getPurposeRuntimeDurable("cron"), { modelId: "cron" });
+      await Promise.all([a.acknowledgeRuntimeSelection(channel), b.setRuntimeSelection(channel, { modelId: "new" })]);
       const chosen = await a.getRuntimeSelectionDurable(channel);
       assert.equal(chosen?.modelId, "new");
       assert.equal(chosen?.orgRevision, 2);
@@ -209,7 +203,7 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
       await mine.setSoul(channel, "tenant soul");
       await mine.setEgress(channel, { allowedHosts: ["mine.example"] });
       await mine.setSharingPosture(org, "open");
-      await mine.setPurposeRuntime("cron", { harnessId: "pi", modelId: "mine" });
+      await mine.setPurposeRuntime("cron", { modelId: "mine" });
       await mine.setConnectorClient(org, "google", { clientId: "mine", clientSecret: "s" });
       await mine.setSlackEmojiCatalog(channel, { a: "b" });
     });
@@ -229,14 +223,17 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
       assert.equal(mine.getSoul(channel), "tenant soul");
       assert.deepEqual(mine.getEgress(channel), { allowedHosts: ["mine.example"] });
     });
-    assert.throws(() => mine.getSoul(channel), /No tenant is bound/);
+    assert.throws(() => withoutTenant(() => mine.getSoul(channel)), /No tenant is bound/);
     const app = createPgPool(url);
     try {
       const scopes = (bound: string) =>
         withTenant(bound, () => app.q(`SELECT scope_id FROM scope_settings ORDER BY scope_id`));
       assert.deepEqual(await scopes(tenant), [{ scope_id: channel }, { scope_id: org }]);
       assert.deepEqual(await scopes(otherTenant), [{ scope_id: channel }]);
-      await assert.rejects(app.q(`SELECT scope_id FROM scope_settings`), /No tenant is bound/);
+      await assert.rejects(
+        withoutTenant(() => app.q(`SELECT scope_id FROM scope_settings`)),
+        /No tenant is bound/,
+      );
       await assert.rejects(
         withTenant(otherTenant, () =>
           app.q(`INSERT INTO soul_revisions(tenant_id, scope_id, version, content) VALUES ($1, 'x', 1, 'x')`, [tenant]),
@@ -311,18 +308,16 @@ const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) 
   await seedKeyValueTable(admin, "base_model_configs", {
     [org]: {
       scopeId: org,
-      harnessId: "pi",
       modelId: "org-model",
       revision: 4,
       orgRevision: 4,
       embeddingModelId: "embed-1",
-      cronRuntime: { harnessId: "pi", modelId: "cron-model", fastMode: true },
+      cronRuntime: { modelId: "cron-model", fastMode: true },
     },
-    [channel]: { scopeId: channel, harnessId: "pi", modelId: "chan-model", orgRevision: 3 },
+    [channel]: { scopeId: channel, modelId: "chan-model", orgRevision: 3 },
   });
-  await seedKeyValueTable(admin, "approved_harness_configs", { [org]: { scopeId: org, ids: ["pi", "claude"] } });
   await seedKeyValueTable(admin, "auto_flagger_configs", {
-    [org]: { scopeId: org, harnessId: "pi", modelId: "flag-model", rubric: "be careful" },
+    [org]: { scopeId: org, modelId: "flag-model", rubric: "be careful" },
   });
   await seedKeyValueTable(admin, "connector_clients", {
     [`${org}|google`]: {
@@ -362,23 +357,20 @@ test(
           mode: "allowlist",
           rules: [{ pattern: "ls", decision: "allow" }],
         });
-        assert.deepEqual(config.getApprovalGrantModes(channel), { session: false, always: true });
+        assert.deepEqual(await config.getApprovalGrantModesDurable(channel), { session: false, always: true });
         assert.equal(config.getOrgAmbient(), false);
         assert.equal(await config.getModelAccountDurable("U1"), "anthropic");
         assert.equal(await config.getModelAccountDurable("U9"), "personal");
         assert.deepEqual(config.getBranding(org), { accent: "#fff" });
         assert.deepEqual(config.getRuntimeSelection(org), {
-          harnessId: "pi",
           modelId: "org-model",
           revision: 4,
           orgRevision: 4,
         });
         assert.equal(config.getRuntimeSelection(channel)?.orgRevision, 3);
-        assert.deepEqual(config.getPurposeRuntime("cron"), { harnessId: "pi", modelId: "cron-model", fastMode: true });
+        assert.deepEqual(config.getPurposeRuntime("cron"), { modelId: "cron-model", fastMode: true });
         assert.equal(await config.getEmbeddingModelDurable(), "embed-1");
-        assert.deepEqual(config.getApprovedHarnesses(), ["pi", "claude"]);
         assert.deepEqual(config.getAutoFlaggerConfig(), {
-          harnessId: "pi",
           modelId: "flag-model",
           rubric: "be careful",
         });

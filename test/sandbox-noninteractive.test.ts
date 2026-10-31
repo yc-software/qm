@@ -8,8 +8,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sandbox-env.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -20,8 +19,8 @@ after(() => ff.cleanup());
 function spritesHandle(env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    initializationStore: createMemoryMap(),
-    advisoryLock: createMemoryAdvisoryLock(),
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });

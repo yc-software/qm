@@ -15,7 +15,7 @@ const MAX_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.replayDedupe?.durable) {
+  if (!deps.replayDedupe) {
     return sendJson(res, 503, {
       error: "not_configured",
       message:
@@ -128,7 +128,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
 async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
   const secret = deps.portalIdentitySecret;
-  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe?.durable)
+  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe)
     return sendJson(res, 503, { error: "not_configured" });
   const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
   const claims = await verifySignedPayload(assertion, secret);
@@ -173,7 +173,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
 
 async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
-  if (!deps.portalIdentitySecret || !deps.replayDedupe?.durable || !deps.identity || !deps.portalUrl)
+  if (!deps.portalIdentitySecret || !deps.replayDedupe || !deps.identity || !deps.portalUrl)
     return sendJson(res, 503, { error: "not_configured" });
   const token = isObj(body) && typeof body.token === "string" ? body.token : "";
   const claims = token.length <= 4096 ? await verifySignedPayload(token, deps.portalIdentitySecret) : null;

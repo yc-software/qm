@@ -1,32 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
-  const tables = createMemoryConfigTables();
-  const store = createMemoryConfigStore("default-org", { tables });
+  const tables = testConfigTables();
+  const store = testConfigStore("default-org", { tables });
   const org = "org:default-org";
-  const cron = { harnessId: "pi", modelId: "gpt-5.5", fastMode: false };
-  const subagent = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low" };
+  const cron = { modelId: "gpt-5.5", fastMode: false };
+  const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
   assert.equal(store.getPurposeRuntime("cron"), undefined);
   await store.setPurposeRuntime("cron", cron);
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getBaseModel(org), null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = createMemoryConfigStore("default-org", { tables });
+  const reader = testConfigStore("default-org", { tables });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   reader.getPurposeRuntime("cron")!.modelId = "not-persisted";
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
-  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gpt-5.5" });
+  await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
   await store.setRuntimeSelection(org, null);
   await store.setRuntimeSelection(org, null);
-  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gpt-5.5" });
+  await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
   assert.equal(store.getRuntimeSelection(org)?.modelId, "gpt-5.5");
   await store.setBaseModel(org, "gpt-5.5");
   await store.setBaseModel(org, null);

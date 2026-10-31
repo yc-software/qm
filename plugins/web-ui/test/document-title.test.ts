@@ -111,10 +111,9 @@ test("document title follows session switches, split-pane focus, and sign-out", 
       const session = String(input).includes("/sessions/new") ? newSession : oldSession;
       return Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        effective: { harnessId: "pi", modelId: "" },
+        effective: { modelId: "" },
         session,
         entries: [],
         sessions: sessionsState.list,
