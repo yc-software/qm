@@ -17,6 +17,10 @@ export async function claimAcrossTenants<T = Rows[number]>(
   return rows as Array<TenantRow<T>>;
 }
 
+export function crossTenantLoop<A extends unknown[], R>(body: (...args: A) => R): (...args: A) => R {
+  return (...args) => withoutTenant(() => body(...args));
+}
+
 export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {
   return tenantId ? withTenant(tenantId, fn) : withoutTenant(fn);
 }

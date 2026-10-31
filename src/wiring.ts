@@ -107,7 +107,7 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
+import { crossTenantLoop, eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
 import { boundTenant, currentTenant, tenantKey, withoutTenant } from "./tenants/context.ts";
 import { pgTenants } from "./tenants/resolver.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
@@ -2478,7 +2478,7 @@ export function buildApp(
     { label: "run-results" },
   );
   const orphanedSignalSweeper = createSweeper(
-    async () => {
+    crossTenantLoop(async () => {
       for (const { runId, tenantId } of await runSignals.pendingRuns()) {
         await inTenantOf(tenantId, async () => {
           const run = await runs.get(runId);
@@ -2490,7 +2490,7 @@ export function buildApp(
         lastSignalPrune = Date.now();
         await runSignals.prune(7 * 24 * 60 * 60_000);
       }
-    },
+    }),
     config.reaperIntervalMs,
     { label: "orphaned-signals" },
   );
