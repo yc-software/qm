@@ -45,7 +45,6 @@ export function createInlineJobs(
       return handler(params);
     },
     async start() {},
-    healthy: () => true,
     async stopClaims() {},
     drained: inlineJobsSettled,
     stop: inlineJobsSettled,

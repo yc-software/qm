@@ -18,7 +18,6 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 function agent(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
-  maxFiresPerTick?: number,
   now?: () => number,
   extra: Partial<Parameters<typeof createScheduler>[0]> = {},
 ) {
@@ -39,7 +38,6 @@ function agent(
     identity,
     run,
     ...(directory ? { directory } : {}),
-    ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
     ...(now ? { now } : {}),
     ...extra,
   });
@@ -376,7 +374,7 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
   assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
-test("the default (no-op) lease ticks exactly as before — memory-mode behavior is unchanged", async () => {
+test("a tick fires due crons", async () => {
   const { crons, calls, scheduler } = agent();
   await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
@@ -387,7 +385,7 @@ test("the default (no-op) lease ticks exactly as before — memory-mode behavior
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
   await scheduler.tick(2000);
-  assert.equal(calls.length, 1, "without a lease, the tick fires due crons as before");
+  assert.equal(calls.length, 1, "the tick fires the due cron");
 });
 
 test("a failing interval cron does not starve later due crons across ticks", async () => {
@@ -977,7 +975,6 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   const { crons, deliveries, scheduler } = agent(
     async () => result,
     undefined,
-    undefined,
     () => (clock += 1000),
   );
   const cron = await crons.create({
@@ -1014,7 +1011,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
 
 test("a cron whose model can't run fires on the default model and is told why", async () => {
   const unavailable = new Set(["claude-sonnet-5"]);
-  const { crons, calls, scheduler } = agent("standup posted", undefined, undefined, undefined, {
+  const { crons, calls, scheduler } = agent("standup posted", undefined, undefined, {
     runtimeError: async (_scope, runtime) =>
       unavailable.has(runtime.modelId) ? `${runtime.modelId} can't run here (runtime is no longer available).` : null,
   });

@@ -33,7 +33,6 @@ export interface JobWorker {
   spawn(name: string, params: unknown, key: string, db?: AbsurdConnection): Promise<void>;
   every(name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }): void;
   start(): Promise<void>;
-  healthy(): boolean;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(): Promise<void>;
@@ -41,9 +40,9 @@ export interface JobWorker {
 
 const JOBS_READY_CHANNEL = "qm_jobs_ready";
 
-const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const UNKNOWN_JOB_RETRY_MS = 60_000;
-const BUSY_RETRY_MS = 1000;
+const BUSY_RETRY_MS = 5000;
+const JOB_SLOTS = 64;
 const POLL_MIN_MS = 250;
 const POLL_MAX_MS = 5000;
 const CLAIM_TIMEOUT_SEC = 120;
@@ -56,8 +55,8 @@ const LIVE_STATES = ["pending", "running", "sleeping"];
 const DONE_RETENTION_SEC = 7 * 24 * 60 * 60;
 const CLEANUP_BATCH = 1000;
 
-const claimBudget = () => Math.max(1, Math.floor(pgPoolMax("query") / 2));
-const clampConcurrency = (n: number) => Math.min(claimBudget(), Math.max(1, Math.trunc(n)));
+const claimBatch = () => Math.max(1, Math.floor(pgPoolMax("query") / 2));
+const clampConcurrency = (n: number) => Math.min(JOB_SLOTS, Math.max(1, Math.trunc(n)));
 
 const releaseRetryAt = (attempt: number, now = Date.now()): number =>
   now + Math.min(RELEASE_RETRY_MAX_MS, RELEASE_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
@@ -85,7 +84,7 @@ async function settleJob(db: Db, task: ClaimedRun, disposition: JobDisposition):
   else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
 }
 
-async function runJob(db: Db, handlers: Handlers, task: ClaimedRun): Promise<void> {
+async function runJob(db: Db, handlers: Handlers, task: ClaimedRun): Promise<boolean> {
   const { taskName: name, runId } = task;
   const keepAlive = setInterval(() => {
     void db
@@ -110,9 +109,10 @@ async function runJob(db: Db, handlers: Handlers, task: ClaimedRun): Promise<voi
   } catch (e) {
     reportFailure("jobs: settle", e, `job=${name}`);
   } finally {
-    if (handler && !busy) handler.running--;
     clearInterval(keepAlive);
+    if (handler && !busy) handler.running--;
   }
+  return Boolean(handler && !busy);
 }
 
 async function runRecurring(job: string, fn: () => unknown): Promise<void> {
@@ -150,22 +150,21 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   const recurring: Array<{ job: string; immediate: boolean }> = [];
   let starts = 0;
   let started = false;
-  let lastErrorAt = 0;
   let loop: Promise<void> | null = null;
   let unlisten: (() => Promise<void>) | null = null;
   let wake = Promise.withResolvers<void>();
-  const active = new Set<Promise<void>>();
-  const noteError = (e: unknown): never => {
-    lastErrorAt = Date.now();
-    throw e;
+  let woken = false;
+  const poke = () => {
+    woken = true;
+    wake.resolve();
   };
+  const active = new Set<Promise<boolean>>();
 
   async function poll(): Promise<void> {
-    const mine = new Set<Promise<void>>();
     let idleMs = POLL_MIN_MS;
     while (started) {
-      const limit = claimBudget();
-      const free = limit - mine.size;
+      woken = false;
+      const free = Math.min(claimBatch(), JOB_SLOTS - active.size);
       let claimed = 0;
       if (free > 0) {
         try {
@@ -173,27 +172,21 @@ export function createJobWorker(databaseUrl: string): JobWorker {
             claimed++;
             const work = runJob(db, handlers, task);
             active.add(work);
-            mine.add(work);
-            void work.finally(() => {
+            void work.then((ran) => {
               active.delete(work);
-              mine.delete(work);
-              wake.resolve();
+              if (ran) poke();
             });
           }
         } catch (e) {
-          lastErrorAt = Date.now();
           reportFailure("jobs: claim", e);
         }
       }
       if (claimed > 0) idleMs = POLL_MIN_MS;
-      if (claimed === 0 || mine.size >= limit) {
-        const woke = await Promise.race([
-          sleep(mine.size >= limit ? POLL_MAX_MS : idleMs, { unref: true }).then(() => false),
-          wake.promise.then(() => true),
-        ]);
-        idleMs = woke ? POLL_MIN_MS : Math.min(POLL_MAX_MS, idleMs * 2);
-        wake = Promise.withResolvers<void>();
+      if ((claimed === 0 || active.size >= JOB_SLOTS) && !woken) {
+        await Promise.race([sleep(active.size >= JOB_SLOTS ? POLL_MAX_MS : idleMs, { unref: true }), wake.promise]);
+        idleMs = woken ? POLL_MIN_MS : Math.min(POLL_MAX_MS, idleMs * 2);
       }
+      if (woken) wake = Promise.withResolvers<void>();
     }
   }
 
@@ -206,12 +199,10 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   ): Promise<void> {
     const ready = await db.pool();
     const pool = conn ?? ready;
-    const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts }).catch(
-      noteError,
-    );
-    if (!spawned.created) await retryTask(pool, JOB_QUEUE, spawned.taskId).catch(noteError);
-    await pool.query("SELECT pg_notify($1, '1')", [JOBS_READY_CHANNEL]).catch(noteError);
-    wake.resolve();
+    const spawned = await spawnTask(pool, JOB_QUEUE, name, params, { idempotencyKey: key, maxAttempts });
+    if (!spawned.created && !(await retryTask(pool, JOB_QUEUE, spawned.taskId))) return;
+    await pool.query("SELECT pg_notify($1, '1')", [JOBS_READY_CHANNEL]);
+    poke();
   }
 
   async function drained(): Promise<void> {
@@ -220,7 +211,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
 
   async function stopClaims(): Promise<void> {
     started = false;
-    wake.resolve();
+    poke();
     await loop;
     loop = null;
     await unlisten?.();
@@ -231,7 +222,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     handle(name, run, opts = {}) {
       handlers.set(name, {
         run,
-        concurrency: clampConcurrency(opts.concurrency ?? claimBudget()),
+        concurrency: clampConcurrency(opts.concurrency ?? JOB_SLOTS),
         maxAttempts: opts.maxAttempts ?? 1,
         running: 0,
       });
@@ -241,6 +232,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
     },
     every(name, everyMs, fn, opts = {}) {
       const job = `${EVERY_PREFIX}${name}`;
+      if (handlers.has(job)) throw new Error(`jobs: ${job} is registered twice`);
       recurring.push({ job, immediate: opts.immediate ?? false });
       handlers.set(job, {
         run: async (params) => {
@@ -257,23 +249,14 @@ export function createJobWorker(databaseUrl: string): JobWorker {
       await armRecurring(
         db,
         recurring.map(({ job }) => job),
-      ).catch(noteError);
+      );
       const start = `${worker}:${++starts}`;
       for (const { job, immediate } of recurring) {
         if (immediate) await spawnKeyed(job, { once: true }, `${job}:start:${start}`, 1);
       }
-      unlisten = subscribePostgresChannel(
-        databaseUrl,
-        JOBS_READY_CHANNEL,
-        () => wake.resolve(),
-        () => wake.resolve(),
-      );
+      unlisten = subscribePostgresChannel(databaseUrl, JOBS_READY_CHANNEL, poke, poke);
       started = true;
-      lastErrorAt = 0;
       loop = poll();
-    },
-    healthy() {
-      return started && Date.now() - lastErrorAt >= UNHEALTHY_AFTER_ERROR_MS;
     },
     stopClaims,
     drained,

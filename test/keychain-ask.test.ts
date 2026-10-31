@@ -288,7 +288,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
 });
 
-test("expiry sweep fires the resolution once and rides the scheduler tick", async () => {
+test("expiry sweep fires the resolution once", async () => {
   let t = 1_000_000;
   const k = kcAt(() => t);
   const cred = await k.save(GH);

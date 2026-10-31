@@ -556,7 +556,6 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
-  const jobs = overrides.jobs ?? createJobWorker(databaseUrl);
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
@@ -569,6 +568,7 @@ export function buildApp(
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
     ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
   });
+  const jobs = overrides.jobs ?? createJobWorker(databaseUrl);
   const reusedConnectorKey = [
     ["CORE_SIGNING_SECRET", config.signingSecret],
     ["CAPABILITY_SECRET", config.capabilitySecret],
@@ -2625,10 +2625,15 @@ export function buildApp(
     fireConcurrency: config.cronFireConcurrency,
   });
   jobs.every("loops:ingress-maintenance", LOOP_MAINTENANCE_INTERVAL_MS, () =>
-    admittedWork.run(() => loopIngress.maintain()),
+    admittedWork.run(() => loopIngress.maintain()).catch(swallowAs("Loop ingress maintenance", undefined)),
   );
-  jobs.every("loops:stale-fires", LOOP_MAINTENANCE_INTERVAL_MS, () => loopFire.sweepStale(Date.now()));
-  if (sweepAsks) jobs.every("keychain:ask-expiry", LOOP_MAINTENANCE_INTERVAL_MS, () => sweepAsks(Date.now()));
+  jobs.every("loops:stale-fires", LOOP_MAINTENANCE_INTERVAL_MS, () =>
+    admittedWork.run(() => loopFire.sweepStale(Date.now())),
+  );
+  if (sweepAsks)
+    jobs.every("keychain:ask-expiry", LOOP_MAINTENANCE_INTERVAL_MS, () =>
+      admittedWork.run(() => sweepAsks(Date.now())),
+    );
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,

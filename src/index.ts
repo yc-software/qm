@@ -8,11 +8,13 @@ import { buildApp, serverDeps, stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
-import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
+const JOB_START_RETRY_MS = 5000;
 const config = loadConfig();
 
 const built = buildApp(config);
@@ -81,8 +83,21 @@ if (config.deployProvider === "docker") {
   });
 }
 
+let shuttingDown = false;
+async function startJobs(): Promise<void> {
+  while (!shuttingDown) {
+    try {
+      await built.jobs.start();
+      return;
+    } catch (e) {
+      reportFailure("job worker start", e);
+      await sleep(JOB_START_RETRY_MS, { unref: true });
+    }
+  }
+}
+
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-  await built.jobs.start();
+  void startJobs();
 } else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -174,7 +189,6 @@ if (built.backgroundOwnership) {
   backgroundController.start();
 }
 
-let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;

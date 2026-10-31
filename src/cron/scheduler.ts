@@ -393,16 +393,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const cron = await deps.crons.get(job.cronId);
     if (!cron || cron.archived || !cron.enabled) return "release";
     const slot = nextSlot(cron);
-    if (slot !== job.scheduledAt) return "done";
+    if (slot !== job.scheduledAt) return "release";
     const t = at ?? now();
     if (t < slot) return slot;
     if (isDeferred(cron, t)) return cron.deferUntil!;
     let disposition: JobDisposition = "release";
     const result = await withCronLifecycle(job.cronId, true, async () => {
-      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) {
-        disposition = "done";
-        return;
-      }
+      if (!(await deps.crons.claimSlot(job.cronId, slot, t))) return;
       try {
         const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
         if (authzFailed || deferred) {
@@ -455,9 +452,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
-  deps.jobs.every("cron:repair", REPAIR_INTERVAL_MS, repair, { immediate: true });
-  deps.jobs.every("cron:stranded-fires", STRANDED_SWEEP_INTERVAL_MS, sweepStranded);
-  deps.jobs.every("cron:fire-gc", FIRE_GC_INTERVAL_MS, gcFires);
+  deps.jobs.every("cron:repair", REPAIR_INTERVAL_MS, () => withWork(repair), { immediate: true });
+  deps.jobs.every("cron:stranded-fires", STRANDED_SWEEP_INTERVAL_MS, () => withWork(sweepStranded));
+  deps.jobs.every("cron:fire-gc", FIRE_GC_INTERVAL_MS, () => withWork(gcFires));
 
   async function runNow(cronId: string): Promise<RunNowResult> {
     try {

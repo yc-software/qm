@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
+import { createJobWorker } from "../src/jobs/job-worker.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -132,3 +133,35 @@ test("dynamic migration waits for its prerequisite schema on a fresh database", 
     await a.close();
   }
 });
+
+test(
+  "the job worker claims and runs jobs through transaction pooling and restarts cleanly",
+  { skip, timeout: 30_000 },
+  async () => {
+    const store = createPgPool(direct!);
+    const jobs = createJobWorker(direct!);
+    const ran: string[] = [];
+    jobs.handle("pool-routing", async (params) => {
+      ran.push((params as { id: string }).id);
+      return "done";
+    });
+    const until = async (n: number) => {
+      const deadline = Date.now() + 10_000;
+      while (ran.length < n && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    };
+    try {
+      await jobs.start();
+      await jobs.spawn("pool-routing", { id: "first" }, `pool-routing:${Date.now()}:first`);
+      await until(1);
+      await jobs.stop();
+      assert.equal((await store.q("SELECT 42 AS answer"))[0]!.answer, 42);
+      await jobs.start();
+      await jobs.spawn("pool-routing", { id: "second" }, `pool-routing:${Date.now()}:second`);
+      await until(2);
+      assert.deepEqual(ran, ["first", "second"]);
+    } finally {
+      await jobs.stop();
+      await store.close();
+    }
+  },
+);
