@@ -13,7 +13,9 @@ block, end the `<environment>` section or pose as a heading. With PostgreSQL and
 model, facts are ranked by exact cosine similarity to the current message and recent
 dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
 Provider rows without fact ids are compared line by line by content hash: only new lines are
-added, and a line that drops out is never announced as removed.
+added, and a line that drops out is never announced as removed. When a provider that showed
+lines earlier refuses the member, is withheld from the conversation or is no longer routed,
+the turn adds one note not to rely on memory from sources that are not currently authorized.
 
 Choose the model with the org setting `memory-embedding-model`
 (`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
@@ -102,15 +104,15 @@ QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the 
 
 Every recall, search and explicit write records one outcome per provider and scope:
 
-| Outcome                | Meaning                                                                                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`                   | The provider returned rows.                                                                                                                                                     |
-| `empty`                | It returned nothing. A `code` in its structured result, such as `actor_unlinked`, is kept, and a refusal code there is reported as a refusal.                                   |
-| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                             |
-| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                          |
-| `denied`               | HTTP 401 or 403, an OAuth credential error, an error result coded `actor_not_attested`, `actor_unlinked` or `argument_mismatch`, or an actor QM can't attest (`invalid_actor`). |
-| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                            |
-| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                   |
+| Outcome                | Meaning                                                                                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`                   | The provider returned rows.                                                                                                                                                                       |
+| `empty`                | It returned nothing. A `code` in its structured result, such as `actor_unlinked`, is kept, and text sent with a refusal code is ignored.                                                          |
+| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                               |
+| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                            |
+| `denied`               | HTTP 401 or 403, an OAuth credential error, an error result or a write result coded `actor_not_attested`, `actor_unlinked` or `argument_mismatch`, or an actor QM can't attest (`invalid_actor`). |
+| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                              |
+| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                     |
 
 QM reads `code` and `status` on a successful result only from `structuredContent`, never from its text, which is memory. An error result's code may sit in `structuredContent` or in a JSON text block, at `code` or `error.code`. A code is kept only when it is 1 to 64 letters, digits, `_`, `.`, `:` or `-`. A provider this conversation may not read is not called and records no outcome.
 

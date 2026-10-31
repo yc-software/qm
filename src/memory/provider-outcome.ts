@@ -30,9 +30,6 @@ export function failedOutcome(error: unknown): Pick<MemoryProviderOutcome, "outc
   return { outcome: denied ? "denied" : "failed", ...(code ? { code } : {}) };
 }
 
-export const refused = ({ outcome, code }: MemoryProviderOutcome) =>
-  outcome === "denied" || DENIED_CODES.has(code ?? "");
-
 export interface MemoryProviderProblem {
   code: "memory_provider_denied" | "memory_provider_timeout" | "memory_provider_failed";
   provider: string;
@@ -50,14 +47,14 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
   const { provider, ms, code } = outcome;
   const reason = code ? ` (${code})` : "";
   const lost = write ? "whether it stored the facts is unknown; QM did not retry" : "its results are missing";
-  if (refused(outcome))
-    return {
-      code: "memory_provider_denied",
-      provider,
-      detail: `Memory provider ${provider} refused the request${reason}${write ? ", so it stored nothing" : ""}.`,
-      fix: deniedFix(provider, code),
-    };
   switch (outcome.outcome) {
+    case "denied":
+      return {
+        code: "memory_provider_denied",
+        provider,
+        detail: `Memory provider ${provider} refused the request${reason}${write ? ", so it stored nothing" : ""}.`,
+        fix: deniedFix(provider, code),
+      };
     case "timed_out":
     case "unknown":
       return {

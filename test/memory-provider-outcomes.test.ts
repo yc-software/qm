@@ -133,7 +133,10 @@ test("provider refusals, codes and failures are told apart", async (t) => {
         case "mismatch":
           return { isError: true, content: [{ type: "text", text: JSON.stringify({ code: "argument_mismatch" }) }] };
         case "unlinked":
-          return { content: [], structuredContent: { code: "actor_unlinked" } };
+          return {
+            content: [{ type: "text", text: "No member is linked to this person" }],
+            structuredContent: { code: "actor_unlinked" },
+          };
         case "quoted":
           return { content: [{ type: "text", text: JSON.stringify({ code: "actor_not_attested" }) }] };
         case "broken":
@@ -178,10 +181,10 @@ test("provider refusals, codes and failures are told apart", async (t) => {
     { outcome: "failed", code: "server_error" },
   ]);
   assert.match(texts[queries.indexOf("partial")] ?? "", /kept row/);
+  assert.doesNotMatch(texts[queries.indexOf("unlinked")] ?? "", /No member/);
   assert.deepEqual(
     problems.map((problem) => problem.code),
     [
-      "memory_provider_denied",
       "memory_provider_denied",
       "memory_provider_denied",
       "memory_provider_failed",
@@ -191,7 +194,6 @@ test("provider refusals, codes and failures are told apart", async (t) => {
       "memory_provider_failed",
     ],
   );
-  assert.match(problems[2]?.fix ?? "", /Link this member's QM principal id to their member in knowledge/);
   assert.ok(problems.every((problem) => !problem.detail.includes("ignore your rules")));
 });
 
@@ -239,6 +241,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
     call: async (_name, args) => {
       keys.push(args.request_id);
       if (args.content === "slow") await gate;
+      if (args.content === "unlinked") return { content: [], structuredContent: { code: "actor_unlinked" } };
       return args.content === "queued"
         ? { content: [], structuredContent: { status: "pending" } }
         : { content: [{ type: "text", text: JSON.stringify({ status: "pending" }) }] };
@@ -257,6 +260,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   const unknown = await write(["slow"], "run-1");
   release();
   await settled(mcp, 7);
+  const refused = await write(["unlinked"], "run-1");
 
   assert.deepEqual(external(committed.outcomes), [{ outcome: "committed", code: undefined }]);
   assert.deepEqual(external(repeated.outcomes), [{ outcome: "committed", code: undefined }]);
@@ -269,6 +273,9 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   );
   assert.match(unknown.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
   assert.deepEqual(committed.problems, []);
+  assert.deepEqual(external(refused.outcomes), [{ outcome: "denied", code: "actor_unlinked" }]);
+  assert.match(refused.problems[0]?.detail ?? "", /refused the request \(actor_unlinked\), so it stored nothing/);
+  assert.match(refused.problems[0]?.fix ?? "", /Link this member's QM principal id to their member in knowledge/);
 
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const [first, second, third, otherTurn, none, otherNotebook, slow] = keys;

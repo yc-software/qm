@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
+import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
@@ -22,8 +22,9 @@ export interface McpMemoryOperation {
 }
 
 function resultText(result: CallToolResult): string {
+  if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return "";
   const text = mcpResultText(result);
-  if (text || DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return text;
+  if (text) return text;
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
 
@@ -67,7 +68,9 @@ export function createMcpMemoryProvider(opts: {
       if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
       if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      await call(op, args, context?.actorId ?? author);
+      const { code } = mcpEnvelope(await call(op, args, context?.actorId ?? author));
+      if (code && DENIED_CODES.has(code))
+        throw new McpCallError(`memory provider refused the write (${code})`, { code });
       return facts.length;
     },
 

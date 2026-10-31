@@ -14,6 +14,7 @@ import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
+import { MemoryRecallWithheld } from "../src/memory/disclosure.ts";
 
 const alice = "personal:alice";
 const memoryFact = (id: string, text: string): MemoryFact => ({
@@ -108,9 +109,11 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   let window = 0;
   let failure: Error | undefined;
   let unlinked = false;
+  let withheld = false;
   const knowledge: MemoryService = {
     async recall() {
       if (failure) throw failure;
+      if (withheld) throw new MemoryRecallWithheld(alice);
       if (unlinked) {
         reportEnvelope({ code: "actor_unlinked" });
         return [];
@@ -174,9 +177,20 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   assert.ok(restored.includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
   assert.doesNotMatch(restored, /NOTEBOOK_FACT|consolidated or removed/);
 
+  const note =
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.";
   unlinked = true;
+  assert.equal(await turn(), note);
+  unlinked = false;
+  assert.ok((await turn()).includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
+  withheld = true;
+  assert.equal(await turn(), note);
+});
+
+test("a provider line recorded before lines were keyed by provider is flagged, not silently kept", () => {
+  const legacy = { shown: [{ scope: alice, hash: "0123456789abcdef" }] };
   assert.equal(
-    await turn(),
+    memoryRecallDelta([], [entry(legacy)], all).text,
     "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
   );
 });

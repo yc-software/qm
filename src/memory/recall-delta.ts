@@ -4,7 +4,7 @@ import { untrustedText } from "../util/text.ts";
 import { renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
-import { refused } from "./provider-outcome.ts";
+import { DENIED_CODES } from "./provider-outcome.ts";
 
 interface Shown {
   scope: string;
@@ -62,8 +62,8 @@ export function memoryRecallDelta(
       else withdrawn.set(shown.scope, (withdrawn.get(shown.scope) ?? 0) + 1);
     } else {
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
-      if (outcome && refused(outcome)) unauthorized = true;
-      else if (outcome && KEPT_WHEN.has(outcome.outcome)) record.shown.push(shown);
+      if (!outcome || outcome.outcome === "denied" || DENIED_CODES.has(outcome.code ?? "")) unauthorized = true;
+      else if (KEPT_WHEN.has(outcome.outcome)) record.shown.push(shown);
     }
   }
   return {
