@@ -4,6 +4,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 type TenantIngress = LoopIngress & { tenantId: string };
 
@@ -216,7 +217,8 @@ function deliveryFromRow(r: Row): IngressDelivery {
 }
 
 export function createPostgresIngressSourceRows(connectionString: string): IngressSourceRows {
-  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_MIGRATION]);
+  const { q, pool, close } = db;
   return {
     async get(id) {
       const rows = await q(`${SELECT_SOURCE} WHERE ${MINE} AND id = $1`, [id]);
@@ -241,10 +243,11 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
       });
     },
     async enabled() {
-      return (await q(`${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).map(tenantSource);
+      return (await claimAcrossTenants(db, `${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).map(tenantSource);
     },
     async gmailWatching(email) {
-      const rows = await q(
+      const rows = await claimAcrossTenants(
+        db,
         `${SELECT_SOURCE} WHERE enabled AND kind = 'gmail' AND gmail->>'email' = $1 ORDER BY tenant_id, id`,
         [email],
       );
@@ -255,7 +258,8 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
 }
 
 export function createPostgresIngressDeliveryRows(connectionString: string): IngressDeliveryRows {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_DELIVERIES_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_DELIVERIES_MIGRATION]);
+  const { q, pool, close } = db;
   return {
     async insertIfAbsent(delivery) {
       await q(
@@ -285,7 +289,13 @@ export function createPostgresIngressDeliveryRows(connectionString: string): Ing
       });
     },
     async pruneCompleted(before) {
-      return (await query(`DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [before])).rowCount;
+      return (
+        await claimAcrossTenants(
+          db,
+          `DELETE FROM loop_ingress_deliveries WHERE completed_at < $1 RETURNING tenant_id::text AS tenant_id`,
+          [before],
+        )
+      ).length;
     },
     close,
   };

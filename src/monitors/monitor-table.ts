@@ -4,6 +4,7 @@ import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 export type TenantMonitor = Monitor & { tenantId: string };
 
@@ -137,7 +138,8 @@ export const MONITORS_MIGRATION = typedTableMigration({
 });
 
 export function createPostgresMonitorRows(connectionString: string): MonitorRows & { close(): Promise<void> } {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, MONITORS_MIGRATION]);
+  const db = createPgPool(connectionString, [TENANCY_BASE, MONITORS_MIGRATION]);
+  const { q, pool, close } = db;
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToMonitor);
   return {
     close,
@@ -172,11 +174,17 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
       await q(`DELETE FROM monitors WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]);
     },
     async enabled() {
-      const rows = await q(`${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`);
+      const rows = await claimAcrossTenants(db, `${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`);
       return rows.map((r) => ({ ...rowToMonitor(r), tenantId: r.tenant_id as string }));
     },
     async deleteDisabledBefore(cutoff) {
-      return (await query(`DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [cutoff])).rowCount;
+      return (
+        await claimAcrossTenants(
+          db,
+          `DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1 RETURNING tenant_id::text AS tenant_id`,
+          [cutoff],
+        )
+      ).length;
     },
   };
 }

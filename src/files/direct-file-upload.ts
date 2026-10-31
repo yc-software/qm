@@ -338,9 +338,10 @@ export function createDirectFileUploads(options: {
     async sweep() {
       for (const row of await store.expired(now())) {
         try {
-          await inTenantOf(row.tenantId, () =>
-            row.state === "completing" ? service.complete(row.id) : service.abort(row.id),
-          );
+          await inTenantOf(row.tenantId, async () => {
+            if (row.state === "completing") await service.complete(row.id);
+            else await service.abort(row.id);
+          });
         } catch (error) {
           if (error instanceof FileUploadError && error.status === 410) continue;
           console.warn("[file uploads] cleanup failed", row.id, error instanceof Error ? error.name : "unknown");

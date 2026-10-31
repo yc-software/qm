@@ -27,7 +27,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, perTenant } from "../tenants/context.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -132,7 +132,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const checkpointRenewMarginMs = opts.checkpointRenewMarginMs ?? 7 * 24 * 3600_000;
   const orphanGraceMs = opts.orphanGraceMs ?? 10 * 60_000;
   const rotationHoldUntil = new Map<string, number>();
-  const orphanFirstSeenMs = new Map<string, number>();
+  const orphansFirstSeen = perTenant(() => new Map<string, number>());
   const tags = (kind: "scope" | "scratch") => ({ "qm-tenant": currentTenant(), "qm-prefix": prefix, "qm-kind": kind });
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store;
@@ -633,6 +633,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   async function sweepOrphans(now: number): Promise<number> {
     if (!client.listRunning) return 0;
+    const orphanFirstSeenMs = orphansFirstSeen();
     const tracked = async (): Promise<Set<string>> => {
       const ids = new Set<string>();
       for (const [, rec] of await store.entries()) ids.add(rec.sandboxId);

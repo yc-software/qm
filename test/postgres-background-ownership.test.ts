@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { configurePgPooling } from "../src/persistence/pg-pool.ts";
 import {
   createBackgroundOwnershipRows,
   createBackgroundOwnershipStore,
@@ -53,6 +54,7 @@ test(
   async () => {
     const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
     const schema = `handover_${randomUUID().replaceAll("-", "")}`;
+    configurePgPooling({ databaseUrl: databaseUrl!, ownerUrl: databaseUrl! });
     const queue = createPgBossCronQueue(databaseUrl!, schema);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();

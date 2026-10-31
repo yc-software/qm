@@ -19,7 +19,7 @@ import {
   stopErrorCode,
   withTraceCarrier,
 } from "./run-store.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface PostgresRuntime {
@@ -225,7 +225,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
+    for (const listener of terminalListeners)
+      void inTenantOf(run.tenantId, () => listener(run)).catch(swallowAs("runs: terminal listener", undefined));
   }
   async function retire(
     run: Run,

@@ -81,9 +81,21 @@ export function createSlackTenants(deps: {
   const stopAccounts = async (accounts: readonly SlackAccountRuntime[]): Promise<void> => {
     for (const account of accounts) await account.stop().catch(report);
   };
+  const contextRequests = new Map<string, () => void>();
+  const hearContextRequests = (tenant: string): void => {
+    if (contextRequests.has(tenant)) return;
+    const unsubscribe = withTenant(tenant, () =>
+      deps.core.onContextRequest((request) => {
+        for (const account of accountsOf(tenant) ?? []) account.serviceContextRequest(request);
+      }),
+    );
+    contextRequests.set(tenant, unsubscribe);
+  };
   const discard = async (tenant: string): Promise<void> => {
     const entry = entries.get(tenant);
     entries.delete(tenant);
+    contextRequests.get(tenant)?.();
+    contextRequests.delete(tenant);
     await entry?.failure?.cleanup?.();
     if (entry) await stopAccounts(entry.accounts);
   };
@@ -134,6 +146,7 @@ export function createSlackTenants(deps: {
         return undefined;
       }
       entries.set(tenant, { version: desired.version, configs: desired.accounts, accounts });
+      hearContextRequests(tenant);
       drainDeliveries();
       return accounts;
     } catch (error) {
@@ -152,6 +165,7 @@ export function createSlackTenants(deps: {
           ...(error instanceof SlackPluginStartCleanupError ? { cleanup: error.cleanup } : {}),
         },
       });
+      hearContextRequests(tenant);
       return accountsOf(tenant);
     }
   }
@@ -236,7 +250,6 @@ export function createSlackTenants(deps: {
     for (const account of (tenant && accountsOf(tenant)) || []) fn(account);
   };
   deps.core.onDeliveryEnqueued(drainDeliveries);
-  deps.core.onContextRequest((request) => forBound((account) => account.serviceContextRequest(request)));
   deps.core.onScopeModelChanged((scope) => forBound((account) => account.scopeModelChanged(scope)));
   deps.core.onChannelHeaderPinChanged((scope) => forBound((account) => account.channelHeaderPinChanged(scope)));
 

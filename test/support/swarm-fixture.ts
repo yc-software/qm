@@ -13,8 +13,7 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
-import { bindTestTenant, TEST_TENANT } from "./tenant.ts";
-import { eachTenant } from "../../src/tenants/claim.ts";
+import { bindTestTenant } from "./tenant.ts";
 
 bindTestTenant();
 
@@ -121,7 +120,6 @@ export async function swarmFixture(
     sandboxes,
     lock,
     authorize: async () => state.allowed,
-    tenants: eachTenant(async () => [TEST_TENANT]),
   };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {

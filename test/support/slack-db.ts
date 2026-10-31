@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { configurePgPooling, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { createSlackTables, type SlackTables } from "../../src/slack/slack-tables.ts";
 
 export const skipWithoutPg = process.env.DATABASE_URL
@@ -29,6 +29,7 @@ export async function withSlackDb(
   appUrl.password = "app";
   const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
+  configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
   const owner = createSlackTables(ownerUrl.toString());
   let store: SlackTables | undefined;
   try {
@@ -48,6 +49,7 @@ export async function withSlackDb(
   } finally {
     await store?.pool.close();
     await owner.pool.close();
+    configurePgPooling({});
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.query(`DROP OWNED BY ${role}`).catch(() => undefined);
     await admin.query(`DROP ROLE IF EXISTS ${role}`);

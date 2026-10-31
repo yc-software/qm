@@ -244,7 +244,7 @@ async function viewers(ctx: ApiCtx): Promise<void> {
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
-  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", unbound: true, handle: viewers },
+  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
 ];

@@ -59,7 +59,10 @@ export function createPostgresNotifyBus<T>(
       (payload) => {
         const split = payload.indexOf("\n");
         const event = JSON.parse(payload.slice(split + 1)) as T;
-        inTenantOf(split > 0 ? payload.slice(0, split) : undefined, () => local.emit(event));
+        void inTenantOf(split > 0 ? payload.slice(0, split) : undefined, () => local.emit(event)).catch((error) => {
+          swallowAs("notify bus: deliver event", undefined)(error);
+          local.resync();
+        });
       },
       () => local.resync(),
     );

@@ -20,7 +20,7 @@ import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "../tenants/claim.ts";
 import { memoryTenants } from "../tenants/resolver.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -82,6 +82,7 @@ export interface SchedulerDeps {
     list(): Promise<DirectoryMember[]>;
   };
   sweepAsks?: (now: number) => Promise<void>;
+  sweepLoops?: (now: number) => Promise<void>;
   tenants?: EachTenant;
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
@@ -372,7 +373,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const cron of ordered) {
         if (batch.length >= maxFiresPerTick) break;
         try {
-          await deps.crons.markAttempted(cron.id, t);
+          await inTenantOf(cron.tenantId, () => deps.crons.markAttempted(cron.id, t));
           batch.push(cron);
         } catch (e) {
           reportFailure("scheduler: attempt mark (holding this cron back)", e);
@@ -383,16 +384,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     for (const cron of batch) {
       if (stopped || observed !== epoch) break;
       try {
-        await withCronLifecycle(cron.id, true, async () => {
-          if (stopped || observed !== epoch) return;
-          const { authzFailed, deferred } = await fire(
-            cron,
-            t,
-            `cron:${cron.id}:${cron.scheduledAt}`,
-            cron.scheduledAt,
-          );
-          if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
-        });
+        await inTenantOf(cron.tenantId, () =>
+          withCronLifecycle(cron.id, true, async () => {
+            if (stopped || observed !== epoch) return;
+            const { authzFailed, deferred } = await fire(
+              cron,
+              t,
+              `cron:${cron.id}:${cron.scheduledAt}`,
+              cron.scheduledAt,
+            );
+            if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+          }),
+        );
       } catch (e) {
         reportFailure("scheduler: fire", e);
       }
@@ -404,7 +407,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const observed = epoch;
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
-        await tenants(() => fireDue(t, observed));
+        await fireDue(t, observed);
         await sweepStranded(t);
         await gcFires(t);
         await sweepAsks(t);
@@ -413,7 +416,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
 
   const sweepAsks = (t: number): Promise<void> =>
-    tenants(async () => deps.sweepAsks?.(t)).catch(reportFailureAs("scheduler: ask sweep", undefined));
+    Promise.all([
+      tenants(async () => deps.sweepAsks?.(t)).catch(reportFailureAs("scheduler: ask sweep", undefined)),
+      deps.sweepLoops?.(t).catch(reportFailureAs("scheduler: loop sweep", undefined)),
+    ]).then(() => undefined);
 
   const makeSweeper = () =>
     createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {
@@ -426,12 +432,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt);
   }
 
-  function nextJob(cron: Cron): CronFireJob | undefined {
+  function nextJob(cron: Cron, tenantId: string): CronFireJob | undefined {
     const slot = nextSlot(cron);
     if (slot === undefined) return undefined;
-    const tenantId = boundTenant();
     return {
-      ...(tenantId ? { tenantId } : {}),
+      tenantId,
       cronId: cron.id,
       scheduledAt: slot,
       ...(cron.deferUntil !== undefined ? { notBefore: cron.deferUntil } : {}),
@@ -441,7 +446,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function enqueueNext(cronId: string): Promise<void> {
     const cron = await deps.crons.get(cronId);
     if (!cron || cron.archived || !cron.enabled) return;
-    const job = nextJob(cron);
+    const job = nextJob(cron, currentTenant());
     if (job) await deps.jobQueue!.enqueueFire(job);
   }
 
@@ -486,13 +491,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function reconcile(): Promise<void> {
-    await tenants(async () => {
+    try {
       for (const cron of await deps.crons.scheduled()) {
         if (stopped) break;
-        const job = nextJob(cron);
+        const job = nextJob(cron, cron.tenantId);
         if (job) await deps.jobQueue!.enqueueFire(job);
       }
-    }).catch(reportFailureAs("scheduler: reconcile", undefined));
+    } catch (e) {
+      reportFailure("scheduler: reconcile", e);
+    }
   }
 
   async function maintain(): Promise<void> {

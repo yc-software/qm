@@ -19,7 +19,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 function fakeCore(rows: Delivery[]) {
   const listeners = {
     delivery: [] as Array<() => void>,
-    context: [] as Array<(r: SurfaceContextRequest) => void>,
+    context: [] as Array<{ tenant: string | undefined; fn: (r: SurfaceContextRequest) => void }>,
     model: [] as Array<(scope: string) => void>,
     pin: [] as Array<(scope: string) => void>,
   };
@@ -39,8 +39,9 @@ function fakeCore(rows: Delivery[]) {
       return () => {};
     },
     onContextRequest: (fn: (r: SurfaceContextRequest) => void) => {
-      listeners.context.push(fn);
-      return () => {};
+      const listener = { tenant: boundTenant(), fn };
+      listeners.context.push(listener);
+      return () => void listeners.context.splice(listeners.context.indexOf(listener), 1);
     },
     onScopeModelChanged: (fn: (scope: string) => void) => void listeners.model.push(fn),
     onChannelHeaderPinChanged: (fn: (scope: string) => void) => void listeners.pin.push(fn),
@@ -155,7 +156,7 @@ test("ingress and core notifications reach only the bound tenant's accounts", as
   await h.tenants.reconcile();
   h.calls.length = 0;
   await withTenant(A, async () => {
-    for (const fn of h.listeners.context) fn({ id: "ctx-a" } as SurfaceContextRequest);
+    for (const { tenant, fn } of h.listeners.context) if (tenant === A) fn({ id: "ctx-a" } as SurfaceContextRequest);
     for (const fn of h.listeners.model) fn("channel:C1");
   });
   await withTenant(B, async () => {

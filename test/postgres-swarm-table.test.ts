@@ -3,7 +3,7 @@ import test from "node:test";
 import { createPostgresSwarmRows } from "../src/swarms/swarm-table.ts";
 import type { SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 
@@ -38,25 +38,8 @@ function swarm(id: string, extra: Partial<SwarmStorage> = {}): SwarmStorage {
 
 const put = (value: SwarmStorage) => () => value;
 
-function ownerUrl(appUrl: string): string {
-  const owner = new URL(appUrl);
-  const base = new URL(PG_URL!);
-  owner.username = base.username;
-  owner.password = base.password;
-  return owner.toString();
-}
-
-async function asOwner<T>(appUrl: string, fn: (rows: ReturnType<typeof createPostgresSwarmRows>) => Promise<T>) {
-  const rows = createPostgresSwarmRows(ownerUrl(appUrl));
-  try {
-    return await fn(rows);
-  } finally {
-    await rows.close?.();
-  }
-}
-
 test("writes round-trip every field and pending claims page across tenants", { skip }, async () => {
-  await withTypedTableDb(createPostgresSwarmRows, async ({ store, url, tenant, otherTenant }) => {
+  await withTypedTableDb(createPostgresSwarmRows, async ({ store, tenant, otherTenant }) => {
     const full = swarm("s1", { expiresAt: 1_800_000_000_000, board: { sandboxId: "box" }, pending: true });
     assert.deepEqual(await withTenant(tenant, () => store.write("s1", put(full))), full);
     assert.deepEqual(await withTenant(tenant, () => store.get("s1")), full);
@@ -65,11 +48,7 @@ test("writes round-trip every field and pending claims page across tenants", { s
     await withTenant(otherTenant, () => store.write("s1", put(swarm("s1", { ownerId: "U9", pending: true }))));
     assert.equal((await withTenant(tenant, () => store.get("s1")))!.ownerId, "U1");
     assert.equal(await withTenant(otherTenant, () => store.get("s2")), null);
-    const claimed = (await asOwner(url, (owner) => owner.pending(undefined, 10))).map((row) => [
-      row.id,
-      row.tenantId,
-      row.ownerId,
-    ]);
+    const claimed = (await store.pending(undefined, 10)).map((row) => [row.id, row.tenantId, row.ownerId]);
     assert.deepEqual(
       claimed.sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
       [
@@ -79,18 +58,17 @@ test("writes round-trip every field and pending claims page across tenants", { s
       ].sort((a, b) => a[1]!.localeCompare(b[1]!)),
     );
     assert.deepEqual(
-      (await asOwner(url, (owner) => owner.pending("s1", 10))).map((row) => row.id),
+      (await store.pending("s1", 10)).map((row) => row.id),
       ["s3"],
     );
-    assert.equal((await asOwner(url, (owner) => owner.pending(undefined, 1))).length, 1);
+    assert.equal((await store.pending(undefined, 1)).length, 1);
     assert.deepEqual(
       (await withTenant(tenant, () => store.pending(undefined, 10))).map((row) => [row.id, row.tenantId]),
       [["s1", tenant]],
     );
-    await assert.rejects(store.pending(undefined, 10), /No tenant is bound/);
     await withTenant(tenant, () => store.write("s1", (current) => ({ ...current!, pending: false })));
     assert.deepEqual(
-      (await asOwner(url, (owner) => owner.pending(undefined, 10))).map((row) => row.tenantId),
+      (await store.pending(undefined, 10)).map((row) => row.tenantId),
       [otherTenant, otherTenant],
     );
     await assert.rejects(store.get("s1"), /No tenant is bound/);
@@ -126,11 +104,11 @@ test("the conversion backfills swarms into the instance tenant and drops the old
   const minimal = swarm("minimal");
   await withTypedTableDb(
     createPostgresSwarmRows,
-    async ({ store, admin, url, tenant }) => {
+    async ({ store, admin, tenant }) => {
       assert.deepEqual(await withTenant(tenant, () => store.get("full")), full);
       assert.deepEqual(await withTenant(tenant, () => store.get("minimal")), minimal);
       assert.deepEqual(
-        (await asOwner(url, (owner) => owner.pending(undefined, 10))).map((row) => [row.id, row.tenantId]),
+        (await store.pending(undefined, 10)).map((row) => [row.id, row.tenantId]),
         [["full", tenant]],
       );
       const { rows } = await admin.query(
