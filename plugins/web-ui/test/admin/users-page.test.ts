@@ -72,7 +72,7 @@ test("user detail: loads profile and keychain, sets onboarding, and links back t
   await page.settle();
   assert.deepEqual(puts, [{ status: "completed" }]);
   assert.match(page.host.textContent!, /Saved\./);
-  assert.equal(page.document.querySelector(".back")!.getAttribute("href"), "/settings/users");
+  assert.equal(page.document.querySelector(".context-back")!.getAttribute("href"), "/settings/users");
   page.close();
 });
 

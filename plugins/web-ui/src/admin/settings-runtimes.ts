@@ -1,9 +1,8 @@
 import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
-import { ChevronDown } from "lucide";
 import { createModelPicker, type ModelCatalog } from "../model-picker.ts";
 import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../model-options.ts";
-import { icon } from "../icons.ts";
+import { fieldSelect } from "../ui.ts";
 import { loadoutActions, type LoadoutEntry } from "../composer-loadout.ts";
 import { states, type SettingsState } from "./settings.ts";
 
@@ -87,7 +86,8 @@ function runtimeRow(key: string, label: string, inheritLabel?: string) {
   state.effortLevel = s.draft.effortLevel;
   const choice = s.draft.inherit ? undefined : optionsFor(s.context).find((option) => option.value === value(s));
   return html`<div class="runtime-row" data-runtime-row=${key}>
-    <span class="runtime-label">${label}</span>${control.render(undefined, choice, s.saving)}
+    <span class="runtime-label">${label}</span
+    ><span class="field-menu">${control.render(undefined, choice, s.saving)}</span>
   </div>`;
 }
 
@@ -100,21 +100,16 @@ function recallRow() {
   const selected: string = s.draft.modelId || "";
   const missing = selected && !models.some((model) => model.id === selected);
   return html`<div class="runtime-row" data-runtime-row=${RECALL}>
-      <span class="runtime-label" id="recall-runtime-label">Recall runtime</span>
-      <div class="menu-control loadout-control">
-        <select
-          aria-labelledby="recall-runtime-label"
-          class="menu-button loadout-button"
-          .value=${selected}
-          ?disabled=${s.saving}
-          @change=${(e: Event) => s.change("modelId", (e.target as HTMLSelectElement).value)}
-        >
-          <option value="" ?selected=${!selected}>Off — newest facts (recency)</option>
+      <span class="runtime-label">Recall runtime</span>
+      ${fieldSelect({
+        ariaLabel: "Recall runtime",
+        value: selected,
+        disabled: s.saving,
+        onChange: (value) => s.change("modelId", value),
+        options: html`<option value="" ?selected=${!selected}>Off — newest facts (recency)</option>
           ${models.map((model) => html`<option value=${model.id} ?selected=${model.id === selected}>${model.name} · ${source(model)}</option>`)}
-          ${missing ? html`<option value=${selected} selected>${selected} (unavailable)</option>` : nothing}
-        </select>
-        ${icon(ChevronDown, 13)}
-      </div>
+          ${missing ? html`<option value=${selected} selected>${selected} (unavailable)</option>` : nothing}`,
+      })}
     </div>
     <p class="hint runtime-hint">
       Recall uses the newest facts when no model is selected, the saved model is unavailable, or an embedding call
@@ -141,7 +136,7 @@ export function runtimesCard() {
       <button
         type="button"
         id="runtimes-save"
-        class=${classMap({ primary: true, dirty: !!dirty.length })}
+        class=${classMap({ btn: true, primary: true, dirty: !!dirty.length })}
         ?disabled=${!dirty.length || shown.some((s) => s.saving)}
         @click=${() => Promise.all(dirty.map((s) => s.save()))}
       >

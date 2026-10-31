@@ -150,8 +150,8 @@ const row = (label: string, onEdit: () => void, onRemove: () => void) =>
   html`<div class="feature-flag-row">
     <code>${label}</code
     ><span
-      ><button ?disabled=${state.saving} @click=${onEdit}>Edit</button
-      ><button class="danger" ?disabled=${state.saving} @click=${onRemove}>Remove</button></span
+      ><button class="btn" ?disabled=${state.saving} @click=${onEdit}>Edit</button
+      ><button class="btn danger" ?disabled=${state.saving} @click=${onRemove}>Remove</button></span
     >
   </div>`;
 function optionFields(d: any, o: any, i: number) {
@@ -173,7 +173,7 @@ function optionFields(d: any, o: any, i: number) {
             >`
         : ""
     }
-    <button class="danger" @click=${() => (d.options.splice(i, 1), redraw())}>Remove option</button>
+    <button class="btn danger" @click=${() => (d.options.splice(i, 1), redraw())}>Remove option</button>
   </fieldset>`;
 }
 function ruleEditor() {
@@ -211,9 +211,9 @@ function ruleEditor() {
     ${select("On error", d.onError, ["", ...d.options.map((o: any) => o.key)], set("onError"))}
     ${d.options.map((o: any, i: number) => optionFields(d, o, i))}
     <div>
-      <button @click=${() => (d.options.push(option("", {}, d.hook)), redraw())}>+ Option</button>
-      <button class="primary" ?disabled=${state.saving} @click=${saveRule}>Save rule</button>
-      <button @click=${() => ((state.rule = null), redraw())}>Cancel</button>
+      <button class="btn" @click=${() => (d.options.push(option("", {}, d.hook)), redraw())}>+ Option</button>
+      <button class="btn primary" ?disabled=${state.saving} @click=${saveRule}>Save rule</button>
+      <button class="btn" @click=${() => ((state.rule = null), redraw())}>Cancel</button>
     </div>
   </div>`;
 }
@@ -244,8 +244,8 @@ export function decisionsCard() {
                 ${select("Protocol", p.protocol, data.protocols, (v) => (p.protocol = v))}
                 ${field("Base URL", p.baseUrl, (v) => (p.baseUrl = v), "blank uses the model gateway")}
                 ${field("Credential", p.credential, (v) => (p.credential = v), "org service credential", false, data.credentials || [])}
-                <button ?disabled=${state.saving || !p.id} @click=${saveProvider}>Save provider</button>
-                ${p.editing ? html`<button @click=${() => ((state.provider = { ...NEW_PROVIDER }), redraw())}>Cancel</button>` : ""}
+                <button class="btn" ?disabled=${state.saving || !p.id} @click=${saveProvider}>Save provider</button>
+                ${p.editing ? html`<button class="btn" @click=${() => ((state.provider = { ...NEW_PROVIDER }), redraw())}>Cancel</button>` : ""}
                 <span class="status">${state.providerStatus ? state.message : ""}</span>
               </div>
               <h3>Rules</h3>
@@ -260,7 +260,7 @@ export function decisionsCard() {
             </div>
             <div class="foot">
               <button
-                class="primary"
+                class="btn primary"
                 ?disabled=${state.saving || !!state.rule || !data.providers.length}
                 @click=${() => openRule(null)}
               >

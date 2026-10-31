@@ -1,54 +1,29 @@
 #app-view {
-  --bg: var(--background);
-  --surface: var(--card);
-  --subtle: var(--secondary);
-  --text: var(--foreground);
-  --muted: var(--muted-foreground);
-  --ink: var(--foreground);
-  --danger: #b42318;
-  --ok: #16723a;
-  --warn: #b54708;
-  --warn-border: #fde68a;
-  --warn-surface: #fffbeb;
-  --trigger: #6b5cf0;
-  --radius: 8px;
-  --header-total-h: 0px;
-  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
-  --readw: 900px;
-  font: 14px/1.5 var(--app-font);
+  font: var(--font-14)/1.5 var(--app-font);
 }
-.dark #app-view {
-  --danger: #f97066;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --warn-border: oklch(0.48 0.09 85);
-  --warn-surface: oklch(0.25 0.035 85);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.02);
+#app-view .admin-inner {
+  max-width: 960px;
+  margin: 0 auto;
 }
-#app-view .admin-main .shellbar .back {
-  gap: 6px;
-  margin-right: auto;
-  min-height: 0;
-  border-radius: 0;
-  text-decoration: none;
-  white-space: nowrap;
+#app-view section.card {
+  margin: 0 0 16px;
 }
-#app-view .admin-main .shellbar .back:hover {
-  color: var(--text);
+#app-view .list-page-head {
+  margin-bottom: 16px;
 }
-#app-view .admin-main .shellbar .back:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: 4px;
-  border-radius: 2px;
+#app-view .resource-tabs {
+  margin: 0;
 }
-
+#app-view .list-page-head + .resource-tabs {
+  margin-bottom: 16px;
+}
 #app-view .who {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .pill {
   max-width: 42vw;
   overflow: hidden;
-  color: var(--text);
+  color: var(--foreground);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -61,7 +36,7 @@
   flex: 0 0 auto;
 }
 #app-view .ack-emoji-glyph {
-  font-size: 18px;
+  font-size: var(--font-18);
   line-height: 1;
   flex: 0 0 auto;
 }
@@ -73,8 +48,8 @@
   max-height: 360px;
   display: flex;
   flex-direction: column;
-  background: var(--card, #fff);
-  border: 1px solid var(--text, #111);
+  background: var(--card);
+  border: 1px solid var(--foreground);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -90,10 +65,10 @@
 #app-view .emoji-picker-section {
   position: sticky;
   top: 0;
-  background: var(--card, #fff);
+  background: var(--card);
   font-size: 11px;
   font-weight: 400;
-  color: var(--muted, #737373);
+  color: var(--muted-foreground);
   padding: 6px 2px 4px;
 }
 #app-view .emoji-picker-grid {
@@ -109,12 +84,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
+  font-size: var(--font-22);
   line-height: 1;
   padding: 0;
 }
 #app-view .emoji-picker-grid button:hover {
-  background: var(--secondary, #f5f5f5);
+  background: var(--secondary);
 }
 #app-view .emoji-picker-grid button img {
   width: 22px;
@@ -123,111 +98,11 @@
 }
 #app-view .emoji-picker-empty {
   padding: 16px;
-  color: var(--muted, #737373);
-}
-#app-view .header-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 32px;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-}
-#app-view .header-button:hover {
-  background: var(--subtle);
-}
-#app-view .header-button:focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: 2px;
-}
-#app-view h1 {
-  font-size: var(--font-22);
-  line-height: 1.2;
-  font-weight: 650;
-  margin: 0 0 4px;
+  color: var(--muted-foreground);
 }
 #app-view .lead {
-  color: var(--muted);
+  color: var(--muted-foreground);
   max-width: 62ch;
-}
-#app-view .shellbar {
-  position: sticky;
-  top: var(--header-total-h);
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 36px;
-  margin: 0 0 14px;
-  padding: 8px 0;
-  background: var(--bg);
-  overflow-x: auto;
-  white-space: nowrap;
-}
-#app-view .shellbar:not(:has(> :not(.shell-spacer))) {
-  display: none;
-}
-#app-view .shellbar .back {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-  flex: none;
-}
-#app-view .shell-title {
-  flex: none;
-  line-height: 1.25;
-}
-#app-view .shell-context {
-  flex: none;
-  color: var(--muted);
-}
-#app-view .shell-spacer {
-  flex: 1 1 auto;
-  min-width: 12px;
-}
-#app-view .shell-search {
-  flex: 0 1 220px;
-}
-#app-view .shell-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-}
-#app-view .shell-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  font-size: var(--font-13);
-  text-decoration: none;
-}
-#app-view .shell-tab:hover {
-  color: var(--text);
-}
-#app-view .shell-tab.active {
-  border-bottom-color: var(--text);
-  color: var(--text);
-}
-#app-view .shell-tab-count {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--subtle);
-  font-size: 10px;
-}
-#app-view section.card {
-  margin: 0 0 22px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
 }
 #app-view .viewlink {
   border: 0;
@@ -238,16 +113,16 @@
 }
 #app-view .viewlink:hover,
 #app-view .viewlink:focus-visible {
-  color: var(--text);
+  color: var(--foreground);
 }
 #app-view .card > .head {
-  margin: 0 0 16px;
+  margin: 0 0 8px;
   padding: 0 0 10px;
   border-bottom: 1px solid var(--border);
 }
 #app-view .card > .head h2 {
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--font-14);
+  font-weight: 600;
 }
 #app-view .card > .foot {
   display: flex;
@@ -255,11 +130,11 @@
   padding: 16px 0 0;
   border: none;
 }
-#app-view label {
+#app-view label:where(:not(.btn, .list-search)) {
   display: block;
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 500;
-  color: var(--muted);
+  color: var(--muted-foreground);
   margin: 0 0 6px;
 }
 #app-view input[type="text"],
@@ -267,46 +142,45 @@
 #app-view input[type="email"],
 #app-view input[type="date"],
 #app-view input:not([type]),
-#app-view input[type="search"],
 #app-view input[type="password"],
 #app-view input[type="number"],
 #app-view textarea,
-#app-view select {
+#app-view :not(.field-select) > select {
   width: 100%;
   font: inherit;
-  background: var(--surface);
+  font-size: var(--font-13);
+  background: var(--background);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   padding: 7px 10px;
 }
-#app-view select:not([multiple]) {
+#app-view :not(.field-select) > select:not([multiple]) {
   appearance: none;
-  padding-right: 32px;
+  padding-right: 36px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 14px;
+  background-position: right 12px center;
+  background-size: 16px;
 }
 #app-view input[aria-invalid="true"] {
-  border-color: var(--danger);
+  border-color: var(--destructive);
 }
 #app-view input:disabled,
 #app-view textarea:disabled,
 #app-view select:disabled {
-  background: var(--subtle);
+  background: var(--secondary);
 }
-#app-view input:focus,
+#app-view input:not([type="search"]):focus,
 #app-view textarea:focus,
-#app-view select:focus,
+#app-view :not(.field-select) > select:focus,
 #app-view button:focus-visible {
-  border-color: var(--text);
-  outline: 1px solid var(--text);
+  border-color: var(--foreground);
+  outline: 1px solid var(--foreground);
   outline-offset: 0;
 }
 #app-view .chip:focus-visible,
-#app-view .link:focus-visible,
-#app-view .icon:focus-visible {
-  outline: 2px solid var(--text);
+#app-view .link:focus-visible {
+  outline: 2px solid var(--foreground);
   outline-offset: 2px;
 }
 #app-view .hint {
@@ -336,15 +210,15 @@
   min-width: 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
 }
 #app-view .setup-step h2 {
   margin: 8px 0 4px;
-  font-size: 15px;
+  font-size: var(--font-15);
 }
 #app-view .setup-step p {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .setup-step .foot {
   display: flex;
@@ -370,62 +244,27 @@
   border: none;
   background: none;
   padding: 0;
-  color: var(--danger);
+  color: var(--destructive);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 #app-view .danger-link:hover {
   background: none;
 }
-#app-view button {
-  font: inherit;
-  cursor: pointer;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  padding: 7px 13px;
-}
-#app-view button:hover {
-  background: var(--subtle);
-}
 #app-view button:disabled {
   opacity: 0.45;
   cursor: default;
 }
-#app-view button:disabled:hover {
-  background: var(--surface);
-}
-#app-view .primary {
-  background: var(--cta);
-  border-color: var(--cta);
-  color: var(--cta-foreground);
-}
-#app-view .primary:hover {
-  background: var(--cta-hover);
-  border-color: var(--cta-hover);
-}
 #app-view .link {
   border: none;
   background: none;
-  color: var(--muted);
+  color: var(--muted-foreground);
   padding: 0;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 #app-view .link:hover {
-  color: var(--text);
-}
-#app-view .icon {
-  border: none;
-  color: var(--muted);
-  padding: 4px 6px;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-#app-view .icon:hover {
-  color: var(--danger);
+  color: var(--foreground);
 }
 #app-view .tablewrap table {
   min-width: 680px;
@@ -462,67 +301,59 @@
   border-left: 3px solid var(--border);
 }
 #app-view .effect-control.effect-allow {
-  border-left-color: var(--ok);
+  border-left-color: var(--success);
 }
 #app-view .effect-control.effect-deny {
-  border-left-color: var(--danger);
+  border-left-color: var(--destructive);
 }
 #app-view .effect-control.effect-require_approval {
-  border-left-color: var(--warn);
+  border-left-color: var(--warning);
 }
 #app-view td.num,
 #app-view .num {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 #app-view .subline {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   margin-top: 2px;
 }
-#app-view .badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-}
 #app-view .badge.admin {
-  color: var(--ink);
-  border-color: var(--ink);
+  color: var(--foreground);
+  border-color: var(--foreground);
 }
 #app-view .badge.ok {
-  color: var(--ok);
+  color: var(--success);
 }
 #app-view .badge.ok {
   display: inline-flex;
   padding: 2px 8px;
-  border-color: color-mix(in srgb, var(--ok) 16%, transparent);
-  background: color-mix(in srgb, var(--ok) 6%, transparent);
-  font-size: 12px;
+  border-color: color-mix(in srgb, var(--success) 16%, transparent);
+  background: color-mix(in srgb, var(--success) 6%, transparent);
+  font-size: var(--font-12-5);
   font-weight: 500;
   line-height: 1.4;
 }
 #app-view .badge.err {
-  color: var(--danger);
-  border-color: rgba(180, 35, 24, 0.35);
-  background: rgba(180, 35, 24, 0.07);
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+  background: color-mix(in srgb, var(--destructive) 7%, transparent);
 }
 #app-view .badge.warn {
-  color: var(--warn);
-  border-color: rgba(181, 71, 8, 0.35);
-  background: rgba(181, 71, 8, 0.07);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
 }
 #app-view .flag-err {
-  color: var(--danger);
-  font-size: 12px;
+  color: var(--destructive);
+  font-size: var(--font-12-5);
 }
 #app-view .flag-warn {
-  color: var(--warn);
-  font-size: 12px;
+  color: var(--warning);
+  font-size: var(--font-12-5);
 }
 #app-view .errors-table table {
   table-layout: fixed;
@@ -567,18 +398,18 @@
   display: inline;
 }
 #app-view .badge.info {
-  color: #175cd3;
-  border-color: rgba(23, 92, 211, 0.28);
-  background: rgba(23, 92, 211, 0.06);
+  color: var(--markdown-link);
+  border-color: color-mix(in srgb, var(--markdown-link) 28%, transparent);
+  background: color-mix(in srgb, var(--markdown-link) 6%, transparent);
 }
 #app-view .badge.muted {
   border-color: var(--border);
-  background: var(--subtle);
+  background: var(--secondary);
 }
 #app-view .badge.accent {
-  color: #6941c6;
-  border-color: rgba(105, 65, 198, 0.3);
-  background: rgba(105, 65, 198, 0.06);
+  color: var(--brand-accent);
+  border-color: color-mix(in srgb, var(--brand-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--brand-accent) 6%, transparent);
 }
 #app-view .badges {
   display: flex;
@@ -587,14 +418,14 @@
   flex-wrap: wrap;
 }
 #app-view .seg {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   padding: 4px 9px;
 }
 #app-view .seg.active {
-  color: var(--text);
+  color: var(--foreground);
   border-color: var(--border);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   font-weight: 500;
 }
 #app-view .list-root {
@@ -606,8 +437,8 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
   margin: 0 0 18px;
 }
 #app-view .grant-form {
@@ -626,13 +457,13 @@
   margin: 20px 0 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
 }
 #app-view .slack-message-example figcaption {
   margin-bottom: 12px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }
 #app-view .slack-example-message {
   display: flex;
@@ -652,7 +483,7 @@
   margin: 4px 0;
 }
 #app-view .slack-example-link {
-  color: var(--text);
+  color: var(--foreground);
   text-decoration: underline;
 }
 #app-view .user-resource-links {
@@ -662,20 +493,11 @@
   margin-bottom: 20px;
 }
 #app-view .user-resource-links a {
-  color: var(--muted);
+  color: var(--muted-foreground);
   white-space: nowrap;
 }
 #app-view .user-resource-links a:hover {
-  color: var(--text);
-}
-#app-view .rowbtn {
-  white-space: nowrap;
-  padding: 3px 10px;
-  font-size: 12px;
-}
-#app-view .rowbtn.danger:hover {
-  color: var(--danger);
-  border-color: var(--danger);
+  color: var(--foreground);
 }
 #app-view .pack-register {
   display: flex;
@@ -700,19 +522,18 @@
   flex: 1 1 150px;
   min-width: 0;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: var(--font-12-5);
   box-sizing: border-box;
 }
 #app-view .pack-adv select {
   flex: 0 0 auto;
   width: auto;
   padding: 5px 28px 5px 8px;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .pack-name .subline {
   margin-left: 4px;
 }
-
 #app-view .file-thumb {
   position: relative;
   display: flex;
@@ -724,8 +545,8 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--subtle);
-  color: var(--muted);
+  background: var(--secondary);
+  color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 600;
 }
@@ -740,28 +561,27 @@
   width: 36px;
   height: 28px;
 }
-
 #app-view .status {
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 #app-view .status.ok {
-  color: var(--ok);
+  color: var(--success);
 }
 #app-view .status.err {
-  color: var(--danger);
+  color: var(--destructive);
 }
 #app-view .status.dirty {
-  color: var(--warn);
+  color: var(--warning);
 }
 #app-view .empty {
   padding: 10px 0;
 }
 #app-view .loadingline {
-  color: var(--muted);
+  color: var(--muted-foreground);
   padding: 18px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
 }
 #app-view .pager {
   display: flex;
@@ -769,19 +589,9 @@
   gap: 14px;
   margin: 16px 0 0;
 }
-#app-view .page {
-  font-size: 12px;
-  padding: 5px 12px;
-}
-#app-view .page:disabled {
-  opacity: 0.4;
-}
-#app-view .page:disabled:hover {
-  background: none;
-}
 #app-view .pageinfo {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   font-variant-numeric: tabular-nums;
 }
 #app-view .hidden {
@@ -791,7 +601,7 @@
   cursor: pointer;
 }
 #app-view tr.openable:hover td {
-  background: var(--subtle);
+  background: var(--secondary);
 }
 #app-view .dense-list {
   display: flex;
@@ -810,7 +620,7 @@
   border-top: 0;
 }
 #app-view .dense-row:hover {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 #app-view .dense-icon {
   flex: none;
@@ -824,7 +634,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: var(--font-13-5);
 }
 #app-view .dense-preview {
   flex: 1 1 auto;
@@ -832,55 +642,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 #app-view .dense-time {
   flex: none;
   margin-left: auto;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 #app-view .dense-tag {
   flex: none;
   margin-right: 8px;
-  background: var(--subtle);
+  background: var(--secondary);
   border-radius: 4px;
   padding: 1px 6px;
   font-variant-numeric: tabular-nums;
-}
-#app-view .shell-sort {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-#app-view .shell-sort-label {
-  color: var(--muted);
-  font-size: 12px;
 }
 #app-view .judg-pane-title {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   font-weight: 500;
 }
 #app-view .judg-extlink {
   display: inline-flex;
   align-items: center;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .judg-extlink:hover {
-  color: var(--accent, #6941c6);
+  color: var(--accent);
 }
 #app-view .judg-prompt {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
   padding: 14px 16px;
   max-height: 520px;
   overflow: auto;
@@ -890,15 +690,14 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--font-12-5);
   line-height: 1.5;
 }
 #app-view .judg-decision {
-  max-width: var(--readw);
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
 }
 #app-view .judg-decision .badges {
   margin-bottom: 8px;
@@ -916,42 +715,28 @@
   margin: 0 0 18px;
 }
 #app-view .factlist .fk {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
 }
 #app-view .factlist .fv {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-13);
   overflow-wrap: anywhere;
 }
 #app-view .prompt-body {
   margin: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-13);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-#app-view .back {
-  border: none;
-  background: none;
-  color: var(--muted);
-  padding: 0;
-  text-underline-offset: 2px;
-}
-#app-view .back:hover {
-  color: var(--text);
-}
-#app-view .detail {
-  max-width: var(--readw);
-}
 #app-view .viewer {
   margin: 14px 0 0;
-  max-width: var(--readw);
   padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--card);
 }
 #app-view .transcript-stream {
   display: flex;
@@ -964,25 +749,25 @@
   border-radius: 6px;
 }
 #app-view .transcript-stream > .entry:hover {
-  background: var(--subtle);
+  background: var(--secondary);
 }
 #app-view .load-earlier {
   min-height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .load-earlier.more {
   padding: 8px;
   margin: 4px auto;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--panel);
+  background: var(--card);
 }
 #app-view .load-earlier.more:hover {
-  border-color: var(--text);
-  color: var(--text);
+  border-color: var(--foreground);
+  color: var(--foreground);
 }
 #app-view .entry .who {
   display: flex;
@@ -992,7 +777,7 @@
   min-width: 0;
 }
 #app-view .entry .who .role {
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 600;
 }
 #app-view .entry:not(.tool-entry) .who .when {
@@ -1003,16 +788,16 @@
   display: none;
 }
 #app-view .message-entry .entry-label {
-  color: var(--text);
-  font-size: 13px;
+  color: var(--foreground);
+  font-size: var(--font-13);
 }
 #app-view .entry.system-entry pre {
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid var(--border);
 }
 #app-view .entry.thinking-entry pre {
   font-style: italic;
-  color: var(--muted);
-  background: var(--subtle);
+  color: var(--muted-foreground);
+  background: var(--secondary);
   border-color: var(--border);
   max-height: 320px;
   overflow: auto;
@@ -1029,7 +814,7 @@
   padding-left: 2px;
 }
 #app-view .tool-label {
-  color: #525252;
+  color: var(--muted-foreground);
   flex: 0 1 auto;
   font-size: 11px;
   font-weight: 600;
@@ -1040,12 +825,11 @@
   margin-left: auto;
   text-align: right;
 }
-
 #app-view .disclosure {
   appearance: none;
   border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--card);
+  color: var(--muted-foreground);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1055,77 +839,59 @@
   height: 28px;
   border-radius: 6px;
   font: inherit;
-  font-size: 16px;
+  font-size: var(--font-16);
   font-weight: 700;
   line-height: 1;
   padding: 0;
 }
 #app-view .disclosure:hover {
-  color: var(--text);
-  background: var(--subtle);
-  border-color: var(--muted);
+  color: var(--foreground);
+  background: var(--secondary);
+  border-color: var(--muted-foreground);
 }
 #app-view .disclosure:focus-visible {
-  outline: 2px solid #93c5fd;
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-#app-view .context-back {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-}
-#app-view .context-back:hover {
-  color: var(--text);
-  border-color: var(--muted);
-  background: var(--subtle);
 }
 #app-view .entry .who .when {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 #app-view .entry-label {
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 600;
 }
-
 #app-view .entry pre {
   padding: 5px 9px;
-  background: var(--subtle);
+  background: var(--secondary);
   border: 1px solid var(--border);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .entry.delivery-event-entry pre {
-  border-color: var(--warn-border);
-  border-left: 3px solid var(--warn);
-  background: var(--warn-surface);
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--background));
 }
-
 #app-view .copy {
   appearance: none;
   border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--card);
+  color: var(--muted-foreground);
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 5px;
   line-height: 1.5;
 }
 #app-view .copy:hover {
-  color: var(--text);
-  background: var(--subtle);
+  color: var(--foreground);
+  background: var(--secondary);
 }
 #app-view .copy.copied {
-  color: var(--ok);
-  border-color: var(--ok);
+  color: var(--success);
+  border-color: var(--success);
 }
 #app-view .entry .who .copy {
   opacity: 0;
@@ -1135,7 +901,7 @@
   opacity: 1;
 }
 #app-view .field-hint {
-  font-size: 12px;
+  font-size: var(--font-12-5);
   margin: -2px 0 8px;
 }
 #app-view .credential-row {
@@ -1146,10 +912,10 @@
   border-bottom: 1px solid var(--border);
 }
 #app-view .credential-row.is-editing {
-  background: var(--subtle);
+  background: var(--secondary);
   margin: 0 -10px;
   padding: 10px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
 }
 #app-view .credential-main {
   min-width: 0;
@@ -1194,11 +960,11 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: var(--subtle);
+  background: var(--secondary);
 }
 #app-view .editor-panel h3 {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 500;
 }
 #app-view .capability-summary {
@@ -1211,14 +977,14 @@
   gap: 8px;
 }
 #app-view .capability-summary dt {
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 650;
 }
 #app-view .capability-summary dd {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .identity-chips {
   display: flex;
@@ -1234,13 +1000,13 @@
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--text);
+  background: var(--card);
+  color: var(--foreground);
   font-size: 11px;
 }
 #app-view .identity-chip small {
   overflow: hidden;
-  color: var(--muted);
+  color: var(--muted-foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1254,7 +1020,7 @@
   padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: var(--surface);
+  background: var(--card);
 }
 #app-view .sc-semantics strong {
   display: block;
@@ -1263,7 +1029,7 @@
 }
 #app-view .sc-semantics span {
   display: block;
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 #app-view .soul-meta {
@@ -1271,7 +1037,7 @@
   flex-wrap: wrap;
   gap: 6px 14px;
   margin-top: 8px;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .soul-diff {
   display: grid;
@@ -1282,7 +1048,7 @@
   max-height: 210px;
   overflow: auto;
   border: 1px solid var(--border);
-  background: var(--subtle);
+  background: var(--secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1299,15 +1065,15 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: var(--surface);
+  background: var(--card);
 }
 #app-view .soul-revision p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .soul-revision small {
   display: block;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view[data-subview="slack-settings"] #view-governance section.card:not(.sv-slack-settings),
 #app-view[data-subview="models"] #view-governance section.card:not(.sv-models),
@@ -1331,8 +1097,8 @@
   top: calc(100% + 4px);
   max-height: 240px;
   overflow-y: auto;
-  background: var(--card, #161616);
-  border: 1px solid var(--border, #333);
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
 }
@@ -1343,10 +1109,10 @@
   padding: 6px 9px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 #app-view .sc-picker-item:hover {
-  background: var(--hover, rgba(255, 255, 255, 0.06));
+  background: var(--secondary);
 }
 #app-view .sc-picker-item input {
   pointer-events: none;
@@ -1356,27 +1122,27 @@
   padding: 6px 9px 2px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--muted, #888);
+  color: var(--muted-foreground);
 }
 #app-view .sc-picker-more {
   padding: 4px 9px 6px;
   font-size: 11.5px;
   font-style: italic;
-  color: var(--muted, #888);
+  color: var(--muted-foreground);
 }
 #app-view #view-governance {
   --gov-rail: 188px;
 }
 #app-view .governance-eyebrow {
   margin: 0 0 3px;
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 #app-view .environment-notice {
   justify-content: space-between;
   margin: 0 0 18px;
-  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
-  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--card));
 }
 #app-view #view-governance section.card {
   position: relative;
@@ -1392,25 +1158,9 @@
 #app-view #view-governance .card > .foot {
   border-top: 1px solid var(--border);
 }
-#app-view #view-governance .card > .foot button:disabled {
-  border-color: transparent;
-  background: transparent;
-  color: #98a2b3;
-  opacity: 1;
-}
-#app-view #view-governance .card > .foot button:disabled:hover {
-  background: transparent;
-}
 #app-view #view-governance .setting-row > .body label:not(.setting-toggle) {
   font-size: 11px;
   font-weight: 500;
-}
-#app-view #view-governance .setting-row > .body select,
-#app-view #view-governance .setting-row > .body input[type="text"],
-#app-view #view-governance .setting-row > .body input[type="number"] {
-  height: 34px;
-  padding: 5px 9px;
-  font-size: 12.5px;
 }
 #app-view #view-governance .setting-row > .foot {
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1419,9 +1169,6 @@
   grid-column: 1 / -1;
   grid-row: 2;
   overflow-wrap: anywhere;
-}
-#app-view #view-governance .setting-row > .foot button {
-  grid-column: 2;
 }
 #app-view .setting-toggle {
   display: inline-flex;
@@ -1441,7 +1188,7 @@
   flex: none;
   width: 32px;
   height: 18px;
-  border: 1px solid #c8ced8;
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--border);
 }
@@ -1453,17 +1200,17 @@
   width: 12px;
   height: 12px;
   border-radius: 999px;
-  background: #fff;
+  background: var(--background);
 }
 #app-view .setting-toggle input:checked + .setting-switch {
-  border-color: var(--ink);
-  background: var(--ink);
+  border-color: var(--foreground);
+  background: var(--foreground);
 }
 #app-view .setting-toggle input:checked + .setting-switch::after {
   transform: translateX(14px);
 }
 #app-view .setting-toggle input:focus-visible + .setting-switch {
-  outline: 2px solid var(--text);
+  outline: 2px solid var(--foreground);
   outline-offset: 2px;
 }
 #app-view .setting-copy {
@@ -1471,47 +1218,47 @@
 }
 #app-view .setting-copy strong {
   display: block;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   font-weight: 600;
 }
 #app-view .setting-copy small {
   display: block;
   margin-top: 1px;
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.35;
 }
 #app-view .policy-result {
   padding: 10px 12px;
-  border-left: 3px solid #98a2b3;
-  background: var(--surface);
-  font-size: 12px;
+  border-left: 3px solid var(--border);
+  background: var(--card);
+  font-size: var(--font-12-5);
 }
 #app-view .policy-result[data-tone="ok"] {
-  border-left-color: var(--ok);
+  border-left-color: var(--success);
 }
 #app-view .policy-result[data-tone="warn"] {
-  border-left-color: var(--warn);
+  border-left-color: var(--warning);
 }
 #app-view .policy-result[data-tone="danger"] {
-  border-left-color: var(--danger);
+  border-left-color: var(--destructive);
 }
 #app-view .policy-warnings {
   display: grid;
   gap: 5px;
   margin-top: 10px;
-  color: var(--warn);
-  font-size: 12px;
+  color: var(--warning);
+  font-size: var(--font-12-5);
 }
 #app-view .governance-capability {
   margin: 0 0 14px;
-  border: 1px solid var(--warn-border);
-  background: var(--warn-surface);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--background));
 }
 #app-view .governance-capability::before {
   align-items: center;
   justify-content: center;
-  background: var(--warn);
+  background: var(--warning);
   font-size: 11px;
   font-weight: 800;
 }
@@ -1522,11 +1269,11 @@
   width: min(520px, calc(100vw - 28px));
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--surface);
-  color: var(--text);
+  background: var(--card);
+  color: var(--foreground);
 }
 #app-view dialog.review-dialog::backdrop {
-  background: rgba(16, 24, 40, 0.48);
+  background: color-mix(in srgb, var(--scrim) 48%, transparent);
   backdrop-filter: blur(2px);
 }
 #app-view dialog.custom-provider-dialog {
@@ -1537,16 +1284,16 @@
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
-  color: var(--text);
-  box-shadow: 0 20px 60px color-mix(in srgb, var(--text) 24%, transparent);
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 20px 60px color-mix(in srgb, var(--foreground) 24%, transparent);
 }
 #app-view dialog.custom-provider-dialog::backdrop {
-  background: color-mix(in srgb, var(--text) 28%, transparent);
+  background: color-mix(in srgb, var(--foreground) 28%, transparent);
 }
 #app-view .project-dialog-head h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--font-18);
   font-weight: 600;
 }
 #app-view .project-dialog-head p {
@@ -1559,21 +1306,21 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-size: 20px;
+  color: var(--muted-foreground);
+  font-size: var(--font-20);
   line-height: 1;
 }
 #app-view .project-icon-button:hover {
-  background: var(--subtle);
-  color: var(--text);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 #app-view .custom-provider-form label:not(.custom-provider-validation) {
   display: grid;
   gap: 7px;
   width: 100%;
   margin-top: 16px;
-  color: var(--text);
-  font-size: 13px;
+  color: var(--foreground);
+  font-size: var(--font-13);
   font-weight: 600;
   text-align: left;
 }
@@ -1581,7 +1328,7 @@
 #app-view .custom-provider-form label > select,
 #app-view .custom-provider-form label > textarea {
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--background);
   font: inherit;
   font-weight: 400;
 }
@@ -1597,7 +1344,7 @@
 #app-view .custom-provider-form label:not(.custom-provider-validation) > input:focus,
 #app-view .custom-provider-form label > select:focus,
 #app-view .custom-provider-form label > textarea:focus {
-  border-color: color-mix(in srgb, var(--text) 32%, var(--border));
+  border-color: color-mix(in srgb, var(--foreground) 32%, var(--border));
   box-shadow: none;
 }
 #app-view .custom-provider-validation {
@@ -1605,8 +1352,8 @@
   align-items: center;
   gap: 8px;
   margin: 16px 0 0;
-  color: var(--text);
-  font-size: 13px;
+  color: var(--foreground);
+  font-size: var(--font-13);
 }
 #app-view .custom-provider-form .status {
   display: block;
@@ -1614,7 +1361,7 @@
   padding-top: 5px;
 }
 #app-view .label-detail {
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-weight: 400;
 }
 #app-view .review-dialog-head {
@@ -1622,15 +1369,15 @@
   border-bottom: 1px solid var(--border);
 }
 #app-view .review-dialog-head .governance-eyebrow {
-  color: var(--danger);
+  color: var(--destructive);
 }
 #app-view .review-dialog-head h2 {
-  font-size: 18px;
+  font-size: var(--font-18);
   letter-spacing: -0.01em;
 }
 #app-view .review-dialog-head p {
   margin: 5px 0 0;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
 }
 #app-view .review-dialog-body {
   padding: 16px 22px;
@@ -1641,19 +1388,19 @@
   gap: 8px 18px;
 }
 #app-view .review-dialog-facts dt {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }
 #app-view .review-dialog-facts dd {
   min-width: 0;
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 #app-view .review-dialog-warning {
   margin: 14px 0 0;
-  border-left: 3px solid var(--warn);
-  background: var(--warn-surface);
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--background));
 }
 #app-view .review-dialog-foot {
   display: flex;
@@ -1662,50 +1409,23 @@
   padding: 13px 22px 18px;
   border-top: 1px solid var(--border);
 }
-#app-view .review-dialog-confirm.danger {
-  border-color: var(--danger);
-  background: var(--danger);
-  color: #fff;
-}
-#app-view .review-dialog-confirm.danger:hover {
-  background: #912018;
-}
 @media (max-width: 900px) {
-  #app-view .shellbar {
-    top: calc(var(--header-total-h) + 61px);
-  }
   #app-view .editor-grid {
     grid-template-columns: 1fr;
   }
 }
 @media (max-width: 560px) {
-  #app-view h1 {
-    font-size: var(--font-22);
-  }
   #app-view .pill {
     max-width: 30vw;
   }
-  #app-view .admin-inner,
-  #app-view section.card,
   #app-view .viewer {
     min-width: 0;
     max-width: 100%;
-  }
-  #app-view .shellbar {
-    position: static;
-    flex-wrap: wrap;
-    row-gap: 6px;
-    white-space: normal;
-  }
-  #app-view section.card {
-    padding: 14px;
-    margin-bottom: 16px;
   }
   #app-view #view-governance .card > .head {
     grid-template-columns: 1fr;
     gap: 4px;
   }
-
   #app-view .credential-row {
     flex-direction: column;
     align-items: stretch;
@@ -1735,50 +1455,12 @@
   #app-view .who .pill {
     display: none;
   }
-  #app-view .header-button {
-    display: inline-flex;
-    align-items: center;
-    min-height: 44px;
-    white-space: nowrap;
-  }
-  #app-view .header-button {
-    padding: 4px 9px;
-  }
 }
-#app-view .admin-main .shellbar {
-  position: static;
-  min-height: 32px;
-  margin-bottom: 8px;
-  padding: 0;
-}
-#app-view .admin-main .shell-title {
-  font-weight: 600;
-}
-#app-view .admin-main input[type="text"],
-#app-view .admin-main input[type="url"],
-#app-view .admin-main textarea,
-#app-view .admin-main select,
-#app-view .admin-main .dd > button {
-  background: transparent;
-  border-color: var(--border);
-  border-radius: 10px;
-}
-#app-view .admin-main label,
 #app-view .admin-main .hint,
-#app-view .admin-main .viewlink,
-#app-view .admin-main input,
-#app-view .admin-main textarea,
-#app-view .admin-main .dd > button {
-  font-size: 13px;
+#app-view .admin-main .viewlink {
+  font-size: var(--font-13);
   line-height: 1.4;
 }
-#app-view .admin-main label {
-  margin-bottom: 4px;
-}
-#app-view .admin-inner {
-  margin: 0;
-}
-
 #app-view #view-governance .governance-content {
   border: 0;
 }
@@ -1819,15 +1501,6 @@
   margin: 0;
   text-align: left;
 }
-#app-view #view-governance .card > .foot button,
-#app-view #view-governance .setting-row > .foot button {
-  min-width: 0;
-  min-height: 0;
-  padding: 5px 12px;
-  border-radius: 7px;
-  font-size: 12.5px;
-  font-weight: 500;
-}
 #app-view .choice-stack {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1838,18 +1511,18 @@
   cursor: pointer;
 }
 #app-view .posture-choice:hover {
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
 }
 #app-view .posture-choice:focus-within {
-  outline: 2px solid var(--muted);
+  outline: 2px solid var(--muted-foreground);
   outline-offset: 1px;
 }
 #app-view .posture-choice:has(input:checked) {
   border-color: transparent;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 #app-view .posture-choice:has(input:checked):hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 #app-view .posture-choice input {
   margin: 3px 0 0;
@@ -1868,13 +1541,13 @@
 #app-view #card-security-posture .posture-choice:has(input:checked),
 #app-view #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #card-external-slack .posture-choice:has(input:checked) {
-  border-color: var(--muted);
+  border-color: var(--muted-foreground);
   background: transparent;
 }
 #app-view #card-security-posture .posture-choice:hover,
 #app-view #card-sharing-posture .posture-choice:hover,
 #app-view #card-external-slack .posture-choice:hover {
-  background: color-mix(in srgb, var(--text) 2%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 @media (max-width: 1100px) {
   #app-view #card-security-posture .choice-stack {
@@ -1901,29 +1574,18 @@
     grid-template-columns: 1fr;
   }
 }
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  .shell-title {
-  font-weight: 500;
-}
 #app-view #view-governance label,
 #app-view #view-governance input,
 #app-view #view-governance textarea,
 #app-view #view-governance select,
 #app-view #view-governance .dd > button,
 #app-view #view-governance .posture-choice {
-  color: var(--text);
+  color: var(--foreground);
   font-weight: 400;
 }
 #app-view #view-governance .card > .head h2,
 #app-view #view-governance .posture-choice strong,
-#app-view #view-governance summary,
-#app-view #view-governance button {
+#app-view #view-governance summary {
   font-weight: 500;
 }
 #app-view #view-governance .card > .head p,
@@ -1932,8 +1594,8 @@
 #app-view #view-governance .posture-choice small,
 #app-view #view-governance .viewlink,
 #app-view #view-governance summary span {
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -1943,32 +1605,11 @@
 }
 #app-view #view-governance :is(.card, .parity-subsection) > .foot [data-save]:disabled,
 #app-view #view-governance :is(.card, .parity-subsection) > .foot #sc-save:disabled {
-  color: color-mix(in srgb, var(--text) 32%, var(--bg));
-  background: color-mix(in srgb, var(--text) 3%, var(--bg));
-  border: 1px solid color-mix(in srgb, var(--text) 8%, var(--bg));
+  color: color-mix(in srgb, var(--foreground) 32%, var(--background));
+  background: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  border: 1px solid color-mix(in srgb, var(--foreground) 8%, var(--background));
+  opacity: 1;
   cursor: not-allowed;
-}
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"],
-    [data-subview="users"]
-  )
-  .admin-inner {
-  max-width: 960px;
-  margin-inline: auto;
-}
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  .shellbar {
-  margin-bottom: 16px;
 }
 #app-view #view-governance section.card,
 #app-view #view-governance section.card.setting-row {
@@ -1984,7 +1625,7 @@
   margin: 0;
 }
 #app-view #view-governance .card > .head h2 {
-  font-size: 14px;
+  font-size: var(--font-14);
   font-weight: 400;
 }
 #app-view #view-governance .card > .head p {
@@ -2011,7 +1652,7 @@
 #app-view #view-governance #sharing-posture-effective {
   margin: 0 0 8px;
   text-align: right;
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view #view-governance #card-command-policy > .body,
 #app-view #view-governance #card-egress > .body,
@@ -2059,19 +1700,19 @@
 #app-view #view-governance #card-sharing-posture .posture-choice,
 #app-view #view-governance #card-external-slack .posture-choice,
 #app-view #view-governance #card-governance-org-ambient .posture-choice {
-  border: 1px solid color-mix(in srgb, var(--text) 9%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--background));
 }
 #app-view #view-governance #card-security-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-sharing-posture .posture-choice:has(input:checked),
 #app-view #view-governance #card-external-slack .posture-choice:has(input:checked),
 #app-view #view-governance #card-governance-org-ambient .posture-choice:has(input:checked) {
-  background: color-mix(in srgb, var(--text) 2%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 #app-view #view-governance #card-security-posture .posture-choice:hover,
 #app-view #view-governance #card-sharing-posture .posture-choice:hover,
 #app-view #view-governance #card-external-slack .posture-choice:hover,
 #app-view #view-governance #card-governance-org-ambient .posture-choice:hover {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 #app-view #view-governance #card-governance-org-ambient > .head {
   display: block;
@@ -2099,27 +1740,6 @@
 }
 #app-view .policy-rule .policy-pattern {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-#app-view #view-governance .policy-rule .rowbtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  justify-self: center;
-  width: 16px;
-  height: 16px;
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-}
-#app-view #view-governance .policy-rule .rowbtn:hover {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--danger);
 }
 #app-view .policy-actions {
   display: flex;
@@ -2159,48 +1779,9 @@
 #app-view .egress-empty-state > .hint {
   margin: 0;
 }
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  #view-governance
-  input:not([type="radio"]):not([type="checkbox"]),
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  #view-governance
-  select,
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  #view-governance
-  textarea,
-#app-view:is(
-    [data-subview="governance"],
-    [data-subview="models"],
-    [data-subview="credentials"],
-    [data-subview="connectors"],
-    [data-subview="customize"]
-  )
-  #view-governance
-  .dd
-  > button {
-  border-radius: 6px;
-}
 #app-view #view-governance input[type="radio"] {
   -webkit-appearance: none;
-  border: 1.5px solid color-mix(in srgb, var(--text) 38%, var(--bg));
+  border: 1.5px solid color-mix(in srgb, var(--foreground) 38%, var(--background));
   cursor: pointer;
 }
 #app-view #view-governance input[type="radio"]::before {
@@ -2258,7 +1839,7 @@
 #app-view[data-subview="credentials"] #view-governance .credential-row {
   padding: 12px 0;
   align-items: center;
-  border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
+  border-color: color-mix(in srgb, var(--foreground) 8%, var(--background));
 }
 #app-view[data-subview="credentials"] #view-governance .credential-title strong,
 #app-view[data-subview="credentials"] #view-governance .keychain-summary strong {
@@ -2271,35 +1852,21 @@
   margin-top: 6px;
 }
 #app-view[data-subview="credentials"] #view-governance .badge {
-  font-size: 12px;
+  font-size: var(--font-12-5);
   font-weight: 400;
   line-height: 1.4;
   padding: 2px 7px;
 }
 #app-view[data-subview="credentials"] #view-governance .badge:is(.info, .ok, .muted) {
-  color: var(--muted);
-  border-color: color-mix(in srgb, var(--text) 9%, var(--bg));
-  background: color-mix(in srgb, var(--text) 2%, transparent);
-}
-#app-view[data-subview="credentials"] #view-governance .credential-actions button {
-  padding: 5px 12px;
-  border-radius: 6px;
-  border-color: var(--border);
-  background: transparent;
-  font-size: 13px;
-  font-weight: 400;
-}
-#app-view[data-subview="credentials"] #view-governance .credential-actions button:hover {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-}
-#app-view[data-subview="credentials"] #view-governance .credential-actions button.danger:hover {
-  color: var(--danger);
+  color: var(--muted-foreground);
+  border-color: color-mix(in srgb, var(--foreground) 9%, var(--background));
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view[data-subview="credentials"] #view-governance .keychain-summary strong {
-  color: var(--text);
+  color: var(--foreground);
 }
 #app-view[data-subview="credentials"] #view-governance .editor-grid {
   grid-template-columns: minmax(0, 1fr);
@@ -2315,24 +1882,12 @@
 #app-view[data-subview="credentials"] #view-governance .sc-semantics span,
 #app-view[data-subview="credentials"] #view-governance .capability-summary dt,
 #app-view[data-subview="credentials"] #view-governance .capability-summary dd {
-  font-size: 13px;
+  font-size: var(--font-13);
   font-weight: 400;
 }
 #app-view[data-subview="credentials"] #view-governance input[type="checkbox"] {
   min-width: 18px;
   height: 18px;
-}
-#app-view #view-governance {
-  --foreground: var(--text);
-  --muted-foreground: var(--muted);
-  --secondary: var(--subtle);
-  --background: var(--surface);
-  --popover: var(--surface);
-  --font-12-5: 12.5px;
-  --font-13: 13px;
-  --font-14: 14px;
-  --radius-sm: 6px;
-  --chat-surface-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
 }
 #app-view #view-governance #card-runtimes > .runtime-rows,
 #app-view #view-governance .runtime-row {
@@ -2345,28 +1900,15 @@
   min-height: 40px;
 }
 #app-view #view-governance .runtime-label {
-  font-size: var(--section-font, 14px);
+  font-size: var(--font-14);
   font-weight: 500;
 }
-#app-view #view-governance .runtime-row .loadout-control {
+#app-view #view-governance .runtime-row > :last-child {
   justify-self: start;
 }
 #app-view #view-governance .runtime-hint {
   grid-column: 2;
   margin: 0;
-}
-#app-view #view-governance .runtime-row select.loadout-button {
-  appearance: none;
-  padding-right: 26px;
-  background-image: none;
-  border-radius: 8px;
-  font-weight: 500;
-}
-#app-view #view-governance .runtime-row select.loadout-button + svg {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
 }
 #app-view #view-governance .setting-toggle input:checked + .setting-switch {
   border-color: var(--cta);
@@ -2392,8 +1934,8 @@
   padding: 5px 7px 5px 10px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--subtle);
-  font-size: 13px;
+  background: var(--secondary);
+  font-size: var(--font-13);
 }
 #app-view #view-governance .model-chip button {
   display: inline-flex;
@@ -2409,13 +1951,13 @@
   border: 0;
   border-radius: 999px;
   background: transparent;
-  color: var(--muted);
-  font-size: 16px;
+  color: var(--muted-foreground);
+  font-size: var(--font-16);
   line-height: 1;
 }
 #app-view #view-governance .model-chip button:hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--text);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
 }
 #app-view .model-add-row {
   display: flex;
@@ -2448,12 +1990,6 @@
   flex-wrap: wrap;
   gap: 6px;
 }
-#app-view .egress-actions button {
-  min-height: 0;
-  padding: 4px 9px;
-  border-radius: 6px;
-  font-size: 12.5px;
-}
 #app-view .egress-editor + .egress-editor {
   margin-top: 12px;
 }
@@ -2463,10 +1999,7 @@
   }
   #app-view .policy-rule {
     padding-bottom: 10px;
-    border-bottom: 1px solid var(--subtle);
-  }
-  #app-view .policy-rule .rowbtn {
-    justify-self: end;
+    border-bottom: 1px solid var(--secondary);
   }
   #app-view #policy-test-open {
     margin-left: 0;
@@ -2474,18 +2007,18 @@
 }
 #app-view #view-connectors {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--card);
 }
 #app-view #view-connectors section.card {
   margin: 0;
   border: 0;
-  border-bottom: 1px solid var(--subtle);
+  border-bottom: 1px solid var(--secondary);
   border-radius: 0;
   background: transparent;
 }
 #app-view #slack-installation-create {
-  color: #2563b8;
+  color: var(--markdown-link);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 0.2em;
@@ -2515,7 +2048,7 @@
   border: 0;
 }
 #app-view #view-connectors .card > .head h2 {
-  font-size: 14px;
+  font-size: var(--font-14);
   font-weight: 500;
 }
 #app-view #view-connectors .card > .head p,
@@ -2527,16 +2060,16 @@
   align-items: flex-start;
   gap: 10px;
   padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, #7095c0 20%, white);
+  border: 1px solid color-mix(in srgb, var(--cta) 20%, var(--background));
   border-radius: 8px;
-  background: color-mix(in srgb, #7095c0 6%, white);
+  background: color-mix(in srgb, var(--cta) 6%, var(--background));
   color: var(--cta);
   overflow-wrap: anywhere;
 }
 #app-view .admin-notice--warning {
-  border-color: #f2dfa2;
-  background: #fffbeb;
-  color: #854d0e;
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--background));
+  color: var(--warning);
 }
 #app-view .admin-notice::before {
   content: "";
@@ -2563,12 +2096,12 @@
   gap: 10px;
 }
 #app-view #view-connectors .credential-title strong {
-  font-size: 13px;
+  font-size: var(--font-13);
   font-weight: 500;
 }
 #app-view #view-connectors .credential-row {
   padding: 12px 0;
-  border-color: color-mix(in srgb, var(--text) 8%, var(--bg));
+  border-color: color-mix(in srgb, var(--foreground) 8%, var(--background));
 }
 #app-view #view-governance .sv-customize > .head {
   row-gap: 0;
@@ -2616,7 +2149,7 @@
   margin-top: 16px;
 }
 #app-view #view-governance .sv-customize .body label:not(.setting-toggle) {
-  font-size: 13px;
+  font-size: var(--font-13);
   font-weight: 400;
 }
 #app-view #view-governance .sv-customize .body input:not([type="checkbox"]):not([type="radio"]) {
@@ -2633,7 +2166,7 @@
 }
 #app-view #view-governance .sv-customize .setting-copy strong,
 #app-view #view-governance .sv-customize .setting-copy small {
-  font-size: 13px;
+  font-size: var(--font-13);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -2641,7 +2174,7 @@
   margin-top: 4px;
 }
 #app-view #view-governance :is(.card, .parity-subsection) > .foot .status {
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view .soul-preview-label {
   margin-bottom: 4px;
@@ -2658,13 +2191,13 @@
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  color: var(--text);
+  color: var(--foreground);
   font: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 #app-view #view-governance .soul-meta {
-  font-size: 12px;
+  font-size: var(--font-12-5);
 }
 #app-view #view-governance .soul-diff {
   grid-template-columns: 1fr;
@@ -2689,9 +2222,8 @@
 #app-view #card-soul .soul-preview {
   text-overflow: ellipsis;
 }
-
 #app-view #card-slack-installation > .head h2 {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view #card-slack-installation .slack-connection {
   display: flex;
@@ -2702,7 +2234,7 @@
   border-radius: 8px;
 }
 #app-view #card-slack-installation h3 {
-  font-size: 14px;
+  font-size: var(--font-14);
   font-weight: 500;
   line-height: 20px;
 }
@@ -2713,36 +2245,6 @@
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
-}
-#app-view #card-slack-installation .slack-connection-actions button {
-  padding: 6px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 400;
-}
-#app-view #card-slack-installation .slack-connection-actions button:hover {
-  background: var(--subtle);
-  color: var(--text);
-}
-#app-view #card-slack-installation #slack-installation-start {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 12px;
-  border: 1px solid #c7c7c7;
-  border-radius: 5px;
-  background: #fff;
-  color: #1d1c1d;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-#app-view #card-slack-installation #slack-installation-start:hover:not(:disabled) {
-  background: #f8f8f8;
-  border-color: #868686;
 }
 #app-view #slack-own-app-guide {
   margin-top: 4px;
@@ -2756,14 +2258,14 @@
   border-radius: 8px;
   cursor: pointer;
   font-weight: 400;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view #slack-own-app-guide summary::-webkit-details-marker {
   display: none;
 }
 #app-view #slack-own-app-guide summary:hover {
-  background: var(--subtle);
-  color: var(--text);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 #app-view #slack-own-app-guide[open] .slack-guide-arrow {
   transform: rotate(90deg);
@@ -2775,7 +2277,7 @@
 }
 #app-view #slack-own-app-guide p,
 #app-view #slack-own-app-guide ol {
-  color: var(--muted);
+  color: var(--muted-foreground);
   max-width: 760px;
   line-height: 1.65;
 }
@@ -2801,95 +2303,36 @@
   }
 }
 :where(#app-view) :is(.admin-main, dialog) {
-  --control-height: 32px;
-  --control-radius: 6px;
-  --control-font: 13px;
-  --section-font: 14px;
-  --section-gap: 24px;
+  --control-height: 34px;
+  --control-radius: var(--radius-sm);
+  --control-font: var(--font-13);
   --control-gap: 8px;
   font-size: var(--control-font);
-  line-height: 1.4;
-}
-:where(#app-view) :is(.admin-main, dialog) .admin-inner {
-  max-width: 960px;
-}
-:where(#app-view) :is(.admin-main, dialog) .shell-title {
-  font-size: var(--font-20);
-  letter-spacing: -0.025em;
-}
-:where(#app-view)
-  :is(.admin-main, dialog)
-  button:not(
-    :where(
-      .viewlink,
-      .link,
-      .danger-link,
-      .icon,
-      .icon-button,
-      .project-icon-button,
-      .policy-rule .rowbtn,
-      .seg,
-      .shell-tab,
-      .dd-item,
-      .model-chip button,
-      .emoji-picker-grid button,
-      .ovmenu button,
-      .dd-btn,
-      .loadout-control button
-    )
-  ) {
-  min-height: var(--control-height);
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-}
-:where(#app-view)
-  :is(.admin-main, dialog)
-  button:not(:where(.viewlink, .link, .danger-link, .icon, .policy-rule .rowbtn, .model-chip button)):hover:not(
-    :disabled
-  ) {
-  background: var(--subtle);
-}
-:where(#app-view) :is(.admin-main, dialog) button.primary {
-  background: var(--cta);
-  border-color: var(--cta);
-}
-:where(#app-view) :is(.admin-main, dialog) button.primary:hover:not(:disabled) {
-  background: var(--cta-hover);
-  border-color: var(--cta-hover);
-  color: var(--cta-foreground);
-}
-:where(#app-view) :is(.admin-main, dialog) button.primary:disabled {
-  background: var(--subtle);
-  border-color: var(--border);
 }
 :where(#app-view)
   :is(.admin-main, dialog)
   input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]):not(
-    :where(.admin-search input)
+    [type="search"]
   ),
-:where(#app-view) :is(.admin-main, dialog) select:not(.loadout-button),
+:where(#app-view) :is(.admin-main, dialog) select,
 :where(#app-view) :is(.admin-main, dialog) textarea {
   min-height: var(--control-height);
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
+  color: var(--foreground);
 }
 :where(#app-view) :is(.admin-main, dialog) textarea {
   min-height: 90px;
 }
 :where(#app-view) :is(.admin-main, dialog) input:disabled,
-:where(#app-view) :is(.admin-main, dialog) select:not(.loadout-button):disabled,
+:where(#app-view) :is(.admin-main, dialog) select:disabled,
 :where(#app-view) :is(.admin-main, dialog) textarea:disabled {
-  background: var(--subtle);
+  background: var(--secondary);
   cursor: not-allowed;
 }
 :where(#app-view) :is(.admin-main, dialog) input[aria-invalid="true"],
 :where(#app-view) :is(.admin-main, dialog) textarea[aria-invalid="true"] {
-  border-color: var(--danger);
+  border-color: var(--destructive);
 }
-:where(#app-view) :is(.admin-main, dialog) input:focus-visible,
+:where(#app-view) :is(.admin-main, dialog) input:not([type="search"]):focus-visible,
 :where(#app-view) :is(.admin-main, dialog) select:focus-visible,
 :where(#app-view) :is(.admin-main, dialog) textarea:focus-visible,
 :where(#app-view) :is(.admin-main, dialog) button:focus-visible {
@@ -2903,15 +2346,11 @@
 :where(#app-view) :is(.admin-main, dialog) .hint,
 :where(#app-view) :is(.admin-main, dialog) .field-hint {
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 :where(#app-view) :is(.admin-main, dialog) .card > .head p {
   margin: 4px 0 0;
   max-width: 70ch;
-}
-:where(#app-view) :is(.admin-main, dialog) .card,
-:where(#app-view) :is(.admin-main, dialog) .card.setting-row {
-  padding-block: var(--section-gap);
 }
 :where(#app-view) :is(.admin-main, dialog) .card > .foot {
   gap: var(--control-gap);
@@ -2923,12 +2362,6 @@
 }
 :where(#app-view) :is(.admin-main, dialog) .foot > .status {
   order: -1;
-}
-:where(#app-view) :is(.admin-main, dialog) .badge {
-  align-items: center;
-  border-radius: 999px;
-  font-size: 12px;
-  line-height: 1.4;
 }
 :where(#app-view) :is(.admin-main, dialog) .credential-row {
   padding: 12px 0;
@@ -2969,10 +2402,10 @@
 }
 :where(#app-view) :is(.admin-main, dialog) .posture-choice:has(input:checked) {
   border-color: var(--border);
-  background: color-mix(in srgb, var(--text) 2%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
 }
 :where(#app-view) :is(.admin-main, dialog) .posture-choice:hover {
-  background: var(--subtle);
+  background: var(--secondary);
 }
 :where(#app-view) :is(.admin-main, dialog) .posture-choice strong {
   display: block;
@@ -2990,7 +2423,7 @@
   height: 16px;
   min-height: 0;
   margin: 1px 0 0;
-  border: 1.5px solid var(--muted);
+  border: 1.5px solid var(--muted-foreground);
   border-radius: 50%;
 }
 :where(#app-view) :is(.admin-main, dialog) input[type="radio"]::before {
@@ -3021,7 +2454,7 @@
   border: 1px solid var(--border);
   border-radius: var(--control-radius);
   padding: 4px 8px;
-  background: var(--subtle);
+  background: var(--secondary);
   font-size: var(--control-font);
 }
 :where(#app-view) :is(.admin-main, dialog) .model-chip button {
@@ -3034,11 +2467,13 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 :where(#app-view)
   :is(.admin-main, dialog)
-  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]):not(
+    [type="search"]
+  ),
 :where(#app-view) :is(.admin-main, dialog) select {
   height: var(--control-height);
 }
@@ -3047,74 +2482,17 @@
   line-height: 1.5;
 }
 :where(#app-view) :is(.review-dialog-head, .project-dialog-head) p {
-  color: var(--muted);
+  color: var(--muted-foreground);
   line-height: 1.5;
 }
-:where(#app-view) dialog .review-dialog-confirm.danger {
-  background: var(--danger);
-  border-color: var(--danger);
-}
-:where(#app-view) dialog .review-dialog-confirm.danger:hover:not(:disabled) {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: var(--cta-foreground);
-  filter: brightness(0.9);
-}
 #app-view .credential-slug {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
   overflow-wrap: anywhere;
 }
-
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main .tablewrap {
-  border: 0;
-  border-radius: 0;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main th,
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main td {
-  padding: 10px 12px;
-  vertical-align: top;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main th:first-child,
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main td:first-child {
-  padding-left: 0;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main th:last-child,
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main td:last-child {
-  padding-right: 0;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main .num {
-  text-align: right;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main th:last-child {
-  text-align: right;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main .subline,
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main .mono {
-  font-size: 13px;
-  line-height: 1.4;
-}
-:where(#app-view:is([data-subview="audit"], [data-subview="egress"], [data-subview="spend"]))
-  #app-view
-  .admin-main
-  .shellbar {
-  flex-wrap: wrap;
-  gap: 12px 20px;
-}
-@media (max-width: 640px) {
-  :where(#app-view:is([data-subview="audit"], [data-subview="egress"])) #app-view .admin-main table {
-    min-width: 660px;
-  }
-}
-
-#app-view .admin-main .shellbar:has(.shell-back-row) {
-  flex-wrap: wrap;
-}
 #app-view .admin-main {
-  --table-body-size: 13px;
-  --table-meta-size: 12px;
+  --table-body-size: var(--font-13);
+  --table-meta-size: var(--font-12-5);
   --table-line-height: 1.4;
 }
 #app-view .admin-main table :is(th, td) {
@@ -3123,7 +2501,7 @@
 #app-view .admin-main table th {
   font-size: var(--table-meta-size);
   font-weight: 400;
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .admin-main table td {
   border-bottom: 1px solid var(--border);
@@ -3147,7 +2525,7 @@
   line-height: var(--table-line-height);
 }
 #app-view .admin-main :is(table .subline, .dense-time, .dense-preview) {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 #app-view .admin-main .dense-preview {
   font-size: var(--table-body-size);
@@ -3167,41 +2545,13 @@
     min-height: 44px;
   }
 }
-#app-view .admin-main .button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: var(--control-height);
-  box-sizing: border-box;
-  padding: 0 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-  white-space: nowrap;
-  cursor: pointer;
-}
-#app-view .admin-main .button:hover {
-  background: var(--subtle);
-}
-#app-view .admin-main .button.primary {
-  border-color: var(--cta);
-  background: var(--cta);
-  color: var(--cta-foreground);
-}
-#app-view .admin-main .button.primary:hover {
-  border-color: var(--cta-hover);
-  background: var(--cta-hover);
-}
 #app-view .spend-chart {
-  --spend-live: var(--text);
-  --spend-cron: var(--trigger);
-  --spend-loop: color-mix(in srgb, var(--trigger) 65%, var(--bg));
-  --spend-swarm: color-mix(in srgb, var(--trigger) 35%, var(--bg));
-  --spend-webhook: var(--muted);
-  --spend-monitor: color-mix(in srgb, var(--muted) 55%, var(--bg));
+  --spend-live: var(--foreground);
+  --spend-cron: var(--brand-accent);
+  --spend-loop: color-mix(in srgb, var(--brand-accent) 65%, var(--background));
+  --spend-swarm: color-mix(in srgb, var(--brand-accent) 35%, var(--background));
+  --spend-webhook: var(--muted-foreground);
+  --spend-monitor: color-mix(in srgb, var(--muted-foreground) 55%, var(--background));
   padding-top: 4px;
 }
 #app-view .spend-chart-summary {
@@ -3216,14 +2566,14 @@
   gap: 4px;
 }
 #app-view .spend-chart-summary strong {
-  font-size: 24px;
+  font-size: var(--font-24);
   font-weight: 500;
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
 }
 #app-view .spend-chart-summary span {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }
 #app-view .spend-chart-legend {
   display: flex;
@@ -3270,7 +2620,7 @@
   flex-direction: column;
   justify-content: space-between;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--muted-foreground);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -3309,7 +2659,7 @@
   cursor: crosshair;
 }
 #app-view .spend-column:focus-visible {
-  outline: 2px solid var(--trigger);
+  outline: 2px solid var(--brand-accent);
 }
 #app-view .spend-segment {
   width: 80%;
@@ -3319,7 +2669,7 @@
 #app-view .spend-chart-dates {
   grid-column: 2;
   display: flex;
-  color: var(--muted);
+  color: var(--muted-foreground);
   font-size: 11px;
   gap: 3px;
 }
@@ -3369,14 +2719,5 @@
   margin: 0;
 }
 #app-view .spend-column:hover {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-:where(#app-view[data-admin-kit="true"])
-  :is(.admin-main, dialog)
-  label:not(:where(.posture-choice, .setting-toggle, .switch)) {
-  font-size: var(--control-font);
-  font-weight: 400;
-  line-height: 1.4;
-  color: var(--text);
-  margin-bottom: 4px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
 }

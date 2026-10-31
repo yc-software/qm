@@ -53,7 +53,7 @@ test("files filter by search and upload with the hash and name in the query", as
   });
   await f.settle();
   Object.defineProperty(f.window, "crypto", { value: globalThis.crypto });
-  type(f, f.host.querySelector<HTMLInputElement>(".shell-search")!, "photo");
+  type(f, f.host.querySelector<HTMLInputElement>(".list-search input")!, "photo");
   assert.deepEqual(
     [...f.host.querySelectorAll(".dense-name")].map((e) => e.textContent),
     ["photo.png"],
@@ -81,7 +81,7 @@ test("cron list opens a detail page whose destination edit sends the API payload
   f.host.querySelector<HTMLAnchorElement>(".dense-row")!.click();
   await f.settle();
   assert.equal(f.location(), "/settings/crons?scope=org%3Aacme&cron=job");
-  assert.equal(f.host.querySelector(".shell-title")!.textContent, "Daily");
+  assert.equal(f.host.querySelector(".pane-title")!.textContent, "Daily");
   assert.equal(
     f.host.querySelector(".dense-row.dim")!.getAttribute("href"),
     "/settings/history?scope=org%3Aacme&session=s1",

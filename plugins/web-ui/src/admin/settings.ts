@@ -323,7 +323,7 @@ function modelsCard(s: SettingsState) {
             ${available.map((m) => html`<option value=${m.id}>${label(s, m.id)}</option>`)}
           </datalist>
         </div>
-        <button type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
+        <button class="btn" type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
           + Add model
         </button>
       </div>
@@ -337,7 +337,7 @@ function modelsCard(s: SettingsState) {
           (id) =>
             html`<span data-chip=${id} class="model-chip"
               ><span>${label(s, id)}</span
-              ><button type="button" aria-label=${"Remove " + id} @click=${() => s.remove(id)}>
+              ><button class="btn" type="button" aria-label=${"Remove " + id} @click=${() => s.remove(id)}>
                 <svg
                   width="12"
                   height="12"
@@ -420,6 +420,7 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
                       >
                     </p>
                     <button
+                      class="btn"
                       type="button"
                       ?disabled=${r.version === s.draft.expectedVersion || s.saving}
                       @click=${() => restoreSoul({ ...r })}
@@ -445,6 +446,7 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
       >
         View history ›</button
       ><button
+        class="btn"
         type="button"
         id="soul-edit"
         @click=${() => {

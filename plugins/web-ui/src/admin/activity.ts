@@ -1,5 +1,5 @@
 import { html, render } from "lit";
-import { relTime } from "../ui.ts";
+import { fieldSelect, relTime } from "../ui.ts";
 import { bareCard, empty, pageHeader, pager, table, type Header } from "./shared.ts";
 import { VIEW_TITLE, type AdminPage } from "./sections.ts";
 
@@ -24,15 +24,15 @@ export const orgWide = (page: AdminPage) => page.scope.startsWith("org:");
 export function scopeSelect(page: AdminPage, rows: Row[]) {
   const choices = rows.filter((s) => !s.scopeId.startsWith("org:"));
   if (!orgWide(page) && !choices.some((s) => s.scopeId === page.scope)) choices.unshift({ scopeId: page.scope });
-  return html`<select
-    aria-label="Filter by scope"
-    @change=${(e: Event) => page.go(page.href(page.view, { scope: (e.target as HTMLSelectElement).value }))}
-  >
-    <option value=${page.orgScope} ?selected=${orgWide(page)}>All scopes</option>
-    ${choices.map(
-      (s) => html`<option value=${s.scopeId} ?selected=${s.scopeId === page.scope}>${scopeName(s.scopeId)}</option>`,
-    )}
-  </select>`;
+  return fieldSelect({
+    ariaLabel: "Filter by scope",
+    value: page.scope,
+    onChange: (value) => page.go(page.href(page.view, { scope: value })),
+    options: html`<option value=${page.orgScope} ?selected=${orgWide(page)}>All scopes</option>
+      ${choices.map(
+        (s) => html`<option value=${s.scopeId} ?selected=${s.scopeId === page.scope}>${scopeName(s.scopeId)}</option>`,
+      )}`,
+  });
 }
 
 export const when = (ts: number) =>

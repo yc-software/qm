@@ -144,8 +144,8 @@ export function providerRows(compact: boolean) {
       html`<tr>
         ${[p.name + " (" + p.id + ")", labels[p.protocol] || p.protocol, p.baseUrl, compact ? String(p.models.length) : p.models.map((m: any) => m.id).join(", "), keyLabel(p, compact)].map((text) => html`<td>${text}</td>`)}
         <td>
-          <button type="button" @click=${() => openProvider(p)}>Edit</button
-          ><button class="danger" @click=${() => removeProvider(p)}>Remove</button>
+          <button class="btn" type="button" @click=${() => openProvider(p)}>Edit</button
+          ><button class="btn danger" @click=${() => removeProvider(p)}>Remove</button>
         </td>
       </tr>`,
   );
@@ -180,7 +180,9 @@ export function providersCard() {
         <div id="custom-provider-summary" class="hint" ?hidden=${!!provider.rows.length}>No custom providers.</div>
       </div>
       <div class="foot">
-        <button type="button" id="add-custom-provider" @click=${() => openProvider()}>+ Add provider</button>
+        <button class="btn" type="button" id="add-custom-provider" @click=${() => openProvider()}>
+          + Add provider
+        </button>
       </div>
     </section>
     ${providerDialog()}`;
@@ -274,8 +276,8 @@ export function providerDialog() {
         >
       </div>
       <div class="project-dialog-actions">
-        <button type="button" id="custom-provider-cancel" @click=${closeProvider}>Cancel</button
-        ><button class="primary" id="custom-provider-save" ?disabled=${provider.saving} @click=${saveProvider}>
+        <button class="btn" type="button" id="custom-provider-cancel" @click=${closeProvider}>Cancel</button
+        ><button class="btn primary" id="custom-provider-save" ?disabled=${provider.saving} @click=${saveProvider}>
           Save provider
         </button>
       </div>

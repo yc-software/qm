@@ -52,11 +52,11 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           No command rules yet.
         </p>
         <div class="policy-actions">
-          <button id="add-rule" type="button" @click=${() => addRule(s)}>+ Add rule</button>
+          <button class="btn" id="add-rule" type="button" @click=${() => addRule(s)}>+ Add rule</button>
           <button
             id="policy-more"
             type="button"
-            class=${classMap({ hidden: s.expanded || s.rules.length <= 3 })}
+            class=${classMap({ btn: true, hidden: s.expanded || s.rules.length <= 3 })}
             @click=${() => {
               s.expanded = true;
               s.render();
@@ -64,7 +64,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           >
             Show ${s.rules.length - 3} more ${s.rules.length === 4 ? "rule" : "rules"}
           </button>
-          <button id="policy-test-open" type="button" @click=${openTester}>Test a command…</button>
+          <button class="btn" id="policy-test-open" type="button" @click=${openTester}>Test a command…</button>
         </div>
         <div class="policy-warnings" id="policy-warnings" aria-live="polite">
           ${s.warnings.map((warning) => html`<div>${warning}</div>`)}
@@ -130,7 +130,9 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <p class=${classMap({ hint: true, "rules-empty": true, hidden: s.bots.length > 0 })} id="ambient-bots-empty">
           No bots in the ledger yet.
         </p>
-        <button id="add-bot" type="button" @click=${() => addBot(s)} style="margin-top: 10px">+ Add bot</button>
+        <button class="btn" id="add-bot" type="button" @click=${() => addBot(s)} style="margin-top: 10px">
+          + Add bot
+        </button>
       </div>
       <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s)}</div>
     </section>`,
@@ -162,6 +164,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       <div class="foot">
         ${saveButton(s, "Apply", s.disabled)}
         <button
+          class="btn"
           type="button"
           id="sharing-posture-inherit"
           @click=${inheritSharing}
@@ -199,7 +202,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
               type="button"
               id="egress-add-deny"
               ?disabled=${s.disabled}
-              class=${classMap({ hidden: s.denyEditor })}
+              class=${classMap({ btn: true, hidden: s.denyEditor })}
               @click=${() => {
                 s.denyEditor = true;
                 s.render();
@@ -211,7 +214,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
               type="button"
               id="egress-add-allow"
               ?disabled=${s.disabled}
-              class=${classMap({ hidden: s.allowEditor })}
+              class=${classMap({ btn: true, hidden: s.allowEditor })}
               @click=${() => {
                 s.allowEditor = true;
                 s.render();
@@ -344,7 +347,7 @@ function ruleTemplate(s: GovernanceState, r: GovernanceState["rules"][number], i
     />
     <button
       type="button"
-      class="rowbtn danger"
+      class="btn compact rowbtn danger"
       title="Remove this command policy rule"
       aria-label="Remove command policy rule"
       @click=${() => {
@@ -406,7 +409,7 @@ function botTemplate(s: GovernanceState, b: GovernanceState["bots"][number]) {
     <td class="rule-action">
       <button
         type="button"
-        class="rowbtn danger"
+        class="btn compact rowbtn danger"
         title="Remove this bot from the ledger"
         aria-label="Remove bot ledger entry"
         @click=${() => {
@@ -475,9 +478,7 @@ function view() {
   const ready = data && loadedScope === page.scope;
   return html`<div id="view-governance">
     ${pageHeader(
-      orgScope()
-        ? {}
-        : { back: { label: "Governance", href: page.href("governance") }, title: scopeName() },
+      orgScope() ? {} : { back: { label: "Governance", href: page.href("governance") }, title: scopeName() },
     )}
     ${
       ready
@@ -501,7 +502,7 @@ function environmentNotice(d: Record<string, any>) {
         here.
       </p>
     </div>
-    <a class="header-button" href=${page.href("governance", { scope: attachment.environmentId })}>Open ${name}</a>
+    <a class="btn" href=${page.href("governance", { scope: attachment.environmentId })}>Open ${name}</a>
   </aside>`;
 }
 
@@ -534,12 +535,19 @@ function testerDialog() {
     </div>
     <div class="review-dialog-foot">
       <button
+        class="btn"
         type="button"
         id="policy-test-close"
         @click=${() => page.host.querySelector<HTMLDialogElement>("#policy-test-dialog")!.close()}
       >
         Close</button
-      ><button id="policy-simulate" class="primary" type="button" ?disabled=${tester.busy} @click=${() => simulate()}>
+      ><button
+        id="policy-simulate"
+        class="btn primary"
+        type="button"
+        ?disabled=${tester.busy}
+        @click=${() => simulate()}
+      >
         Test command
       </button>
     </div>

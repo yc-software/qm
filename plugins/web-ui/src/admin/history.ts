@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { relTime } from "../ui.ts";
+import { fieldSelect, relTime } from "../ui.ts";
 import { bareCard, denseList, pageHeader } from "./shared.ts";
 import type { AdminPage } from "./sections.ts";
 import * as transcript from "./transcript.ts";
@@ -115,24 +115,18 @@ export async function mount(page: AdminPage) {
             active: key === kind,
             href: list({ kind: key === "conversation" ? null : key, cron: null }),
           })),
-          actions: html`<div class="shell-sort">
-            <span class="shell-sort-label">Scope:</span
-            ><select
-              aria-label="Filter by scope"
-              @change=${(e: Event) => {
-                const next = (e.target as HTMLSelectElement).value;
-                page.go(list({ scope: scopeKind(next) === "org" ? null : next, cron: null }));
-              }}
-            >
-              <option value=${page.orgScope} ?selected=${orgWide}>All scopes</option>
+          actions: fieldSelect({
+            ariaLabel: "Filter by scope",
+            value: orgWide ? page.orgScope : page.scope,
+            onChange: (next) => page.go(list({ scope: scopeKind(next) === "org" ? null : next, cron: null })),
+            options: html`<option value=${page.orgScope} ?selected=${orgWide}>All scopes</option>
               ${options.map(
                 (row) =>
                   html`<option value=${row.scopeId} ?selected=${row.scopeId === page.scope}>
                     ${shortName(row.scopeId)}
                   </option>`,
-              )}
-            </select>
-          </div>`,
+              )}`,
+          }),
         });
     const rows = d
       ? html`${bareCard(
@@ -145,10 +139,11 @@ export async function mount(page: AdminPage) {
         )}${
           cursor || d.nextCursor
             ? html`<div class="pager">
-                <button type="button" class="page" ?disabled=${!cursor} @click=${() => page.go(list())}>← Newest</button
+                <button type="button" class="btn compact page" ?disabled=${!cursor} @click=${() => page.go(list())}>
+                  ← Newest</button
                 ><button
                   type="button"
-                  class="page"
+                  class="btn compact page"
                   ?disabled=${!d.nextCursor}
                   @click=${() => page.go(list({ cursor: d.nextCursor }))}
                 >

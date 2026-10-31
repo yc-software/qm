@@ -434,7 +434,7 @@ export class Onboarding {
     return html`<div id="view-onboarding">
       <div class="setup-head">
         <p class="governance-eyebrow">Temporary setup guide</p>
-        <h1>Onboarding</h1>
+        <h1 class="pane-title">Onboarding</h1>
         <p class="lead">
           Get this deployment ready for real conversations. Secrets are validated, encrypted in durable storage, and
           never displayed again.
@@ -453,7 +453,7 @@ export class Onboarding {
             >
             <h2>${["1. Model provider", "2. Slack app", "3. OAuth apps"][i]}</h2>
             <p id=${"onboarding-" + key + "-summary"}>${this.steps[key].summary}</p>
-            ${key === "slack" ? html`<div class="foot"><a class="header-button" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><a class="header-button" href=${this.context.href("slack-settings")}>Enter Slack tokens</a></div>` : nothing}${key === "oauth" ? html`<div class="foot"><a class="header-button" href=${this.context.href("connectors")}>Configure OAuth apps</a></div>` : nothing}
+            ${key === "slack" ? html`<div class="foot"><a class="btn" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><a class="btn" href=${this.context.href("slack-settings")}>Enter Slack tokens</a></div>` : nothing}${key === "oauth" ? html`<div class="foot"><a class="btn" href=${this.context.href("connectors")}>Configure OAuth apps</a></div>` : nothing}
           </section>`,
       )}
     </div>`;
@@ -519,14 +519,14 @@ export class Onboarding {
       </div>
       <div class="foot">
         <button
-          class="primary"
+          class="btn primary"
           id="onboarding-model-save"
           ?disabled=${this.providerBusy}
           @click=${() => this.connect()}
         >
           Validate and connect</button
         ><button
-          class="danger"
+          class="btn danger"
           id="onboarding-model-delete"
           ?disabled=${this.providerBusy || !status || status.source === "absent"}
           @click=${() => this.disableProvider()}
@@ -580,8 +580,8 @@ export class Onboarding {
                 <td>${spec.provider || "Unknown"}</td>
                 <td>${spec.kind === "embedding" ? "Embedding" : spec.template || "Missing"}</td>
                 <td>
-                  <button ?disabled=${this.registryBusy} @click=${() => this.reset(spec)}>Edit</button
-                  ><button class="danger" ?disabled=${this.registryBusy} @click=${() => this.deleteModel(spec)}>
+                  <button class="btn" ?disabled=${this.registryBusy} @click=${() => this.reset(spec)}>Edit</button
+                  ><button class="btn danger" ?disabled=${this.registryBusy} @click=${() => this.deleteModel(spec)}>
                     Delete
                   </button>
                 </td>
@@ -637,7 +637,7 @@ export class Onboarding {
       <div class="foot" ?hidden=${this.embedding}>
         <button
           id="model-registry-lookup"
-          class="primary"
+          class="btn primary"
           ?disabled=${this.registryBusy || this.lookingUp}
           @click=${() => this.lookupModel()}
         >
@@ -727,7 +727,7 @@ export class Onboarding {
       </p>
       <div class="foot">
         <button
-          class="primary"
+          class="btn primary"
           id="model-registry-save"
           ?disabled=${(!lookup && !this.embedding) || this.registryBusy}
           @click=${() => this.verify()}
@@ -736,7 +736,8 @@ export class Onboarding {
             if (this.registryBusy) return "Verifying…";
             return lookup?.kind === "builtin" ? "Verify and enable existing model" : "Verify and enable";
           })()}</button
-        ><button id="model-registry-new" ?disabled=${this.registryBusy} @click=${() => this.reset()}>New model</button
+        ><button class="btn" id="model-registry-new" ?disabled=${this.registryBusy} @click=${() => this.reset()}>
+          New model</button
         ><span class=${"status" + (this.registryTone ? " " + this.registryTone : "")} id="st-model-registry"
           >${this.registryMessage}</span
         >

@@ -177,7 +177,7 @@ async function detail(page: AdminPage, ack: boolean, jid: string, paint: (h: Hea
       header,
       html`<div class="detail judg-detail">
         <div class="judg-decision">
-          <div class="badges">${ackBadge(item)}<span class="shell-context">${meta(item)}</span>${open}</div>
+          <div class="badges">${ackBadge(item)}<span class="subline">${meta(item)}</span>${open}</div>
         </div>
         <div class="judg-pane-title">Message</div>
         <div class="judg-prompt"><pre>${item.message || "(not recorded)"}</pre></div>
@@ -209,7 +209,7 @@ async function detail(page: AdminPage, ack: boolean, jid: string, paint: (h: Hea
       <div class="judg-decision">
         <div class="badges">
           ${judgmentBadge(item.decision)}${item.askedBy ? badge("asked by " + item.askedBy, "accent") : nothing}<span
-            class="shell-context"
+            class="subline"
             >${meta(item)}</span
           >${open}
         </div>

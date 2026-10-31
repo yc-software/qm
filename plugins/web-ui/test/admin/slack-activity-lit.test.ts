@@ -15,13 +15,13 @@ test("judgments filter by tab, escape reasons and load earlier pages", async () 
   });
   await f.settle();
   assert.equal(f.requests[1]!.url.search, "?decision=act%2Cignore");
-  assert.deepEqual([...f.host.querySelectorAll(".shell-tab")].map(tabText), [
+  assert.deepEqual([...f.host.querySelectorAll(".resource-tabs a")].map(tabText), [
     "Judged 4",
     "Woke 3",
     "Silent 1",
     "Fastlane 0",
   ]);
-  assert.equal(f.host.querySelector(".shell-tab")!.getAttribute("href"), "/settings/judgments");
+  assert.equal(f.host.querySelector(".resource-tabs a")!.getAttribute("href"), "/settings/judgments");
   assert.equal(f.host.querySelector("b"), null);
   assert.equal(f.host.querySelector(".dense-name")!.textContent, "#general");
   f.host.querySelector<HTMLButtonElement>(".load-earlier")!.click();

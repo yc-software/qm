@@ -55,7 +55,7 @@ test("scoped errors hide the scope column and audit and egress render their rows
   f.window.history.pushState(null, "", "/settings/egress");
   await f.mount();
   await f.settle();
-  assert.match(f.host.querySelector(".shell-count")!.textContent!, /1 call · 1 denied request/);
+  assert.match(f.host.querySelector(".pane-subtitle")!.textContent!, /1 call · 1 denied request/);
   assert.ok(f.host.textContent!.includes("cred:gh"));
   f.close();
 });

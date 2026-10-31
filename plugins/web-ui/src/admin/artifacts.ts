@@ -80,7 +80,7 @@ function files(page: AdminPage, data: Row, header: Header) {
   };
   const status = { text: "", tone: "muted" };
   const actions = html`${header.actions}<span class=${"status " + status.tone}>${status.text}</span
-    ><label class="button primary"
+    ><label class="btn primary"
       >Upload<input class="hidden" type="file" multiple @change=${(e: Event) => upload(page, e, status, paint)}
     /></label>`;
   const paint = searchPage(page, { ...header, count: all.length ? plural(all.length, "file") : "", actions }, (q) => {
@@ -291,8 +291,10 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
           /></label>
         </div>
         <div class="foot">
-          <button type="button" class="primary" ?disabled=${saving} @click=${() => save()}>Save destination</button
-          ><button type="button" ?disabled=${saving} @click=${() => ((editing = false), draw())}>Cancel</button>
+          <button type="button" class="btn primary" ?disabled=${saving} @click=${() => save()}>Save destination</button
+          ><button class="btn" type="button" ?disabled=${saving} @click=${() => ((editing = false), draw())}>
+            Cancel
+          </button>
         </div>`,
     );
   const prompt = cron.action || cron.message || "";
@@ -323,14 +325,14 @@ function cronDetail(page: AdminPage, all: Row[], id: string) {
         <div class="credential-actions" style="margin:0 0 18px">
           <button
             type="button"
-            class="rowbtn"
+            class="btn compact rowbtn"
             ?disabled=${saving}
             @click=${() => ((editing = true), Object.assign(draft, current()), draw())}
           >
             Edit destination</button
           ><button
             type="button"
-            class="rowbtn danger"
+            class="btn compact rowbtn danger"
             ?disabled=${saving || !cron.destination}
             @click=${() => save(true)}
           >
@@ -407,13 +409,14 @@ async function memory(page: AdminPage) {
             .value=${editing!.text}
             @input=${(e: Event) => (editing = { id: fact.id, text: (e.target as HTMLTextAreaElement).value })}
           ></textarea>
-          <button class="primary" ?disabled=${saving} @click=${() => change("PATCH", { facts: [editing] })}>Save</button
-          ><button @click=${() => ((editing = null), draw())}>Cancel</button>
+          <button class="btn primary" ?disabled=${saving} @click=${() => change("PATCH", { facts: [editing] })}>
+            Save</button
+          ><button class="btn" @click=${() => ((editing = null), draw())}>Cancel</button>
         </li>`
       : html`<li>
           <span>${fact.text}</span>
-          <button @click=${() => ((editing = { ...fact }), draw())}>Edit</button
-          ><button ?disabled=${saving} @click=${() => change("DELETE", { ids: [fact.id] })}>Forget</button>
+          <button class="btn" @click=${() => ((editing = { ...fact }), draw())}>Edit</button
+          ><button class="btn" ?disabled=${saving} @click=${() => change("DELETE", { ids: [fact.id] })}>Forget</button>
         </li>`;
   const draw = () =>
     page.current() &&
@@ -436,7 +439,7 @@ async function memory(page: AdminPage) {
               @input=${(e: Event) => ((draft = (e.target as HTMLTextAreaElement).value), draw())}
             ></textarea>
             <button
-              class="primary"
+              class="btn primary"
               ?disabled=${saving || !draft.trim()}
               @click=${() => change("POST", { facts: [draft] })}
             >
