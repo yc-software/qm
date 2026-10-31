@@ -1,4 +1,5 @@
-import { orgId as configOrgId } from "../config.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache } from "./types.ts";
 
@@ -34,8 +35,8 @@ export function createPostgresSurfaceCache(
   connectionString: string,
   opts: { liveFallback?: LiveFallback } = {},
 ): SurfaceCache {
-  const orgId = configOrgId();
   const { q, pool, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "surface-cache/store/0001",
       statements: [
@@ -112,6 +113,21 @@ export function createPostgresSurfaceCache(
         `ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS size BIGINT`,
       ],
     },
+    tenantTables("surface-cache/store/0007-tenants", [
+      {
+        table: "channel_messages",
+        primaryKey: "container, ts",
+        replacesOrgId: [
+          { name: "channel_messages_by_container", columns: "container, ts" },
+          { name: "channel_messages_live_by_container", columns: "container", where: "deleted = FALSE" },
+          { name: "channel_messages_by_sub", columns: "container, sub, ts" },
+          { name: "channel_messages_edited_by_container", columns: "container, edited_at", where: "edited_at > 0" },
+          { name: "channel_messages_deleted_by_container", columns: "container, deleted_at", where: "deleted_at > 0" },
+        ],
+      },
+      { table: "channel_state", primaryKey: "container", replacesOrgId: [] },
+      { table: "channel_files", primaryKey: "container, ts, file_id", replacesOrgId: [] },
+    ]),
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -151,9 +167,9 @@ export function createPostgresSurfaceCache(
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id)
+            `INSERT INTO channel_messages(tenant_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20)
-             ON CONFLICT (org_id, container, ts) DO UPDATE SET
+             ON CONFLICT (tenant_id, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
                subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
                broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
@@ -174,7 +190,7 @@ export function createPostgresSurfaceCache(
                 OR EXCLUDED.handled
              RETURNING NOT deleted AND COALESCE(edited_at, 0) = COALESCE($12::bigint, 0) AS content_accepted`,
             [
-              orgId,
+              currentTenant(),
               e.container,
               e.ts,
               e.sub ?? null,
@@ -198,19 +214,19 @@ export function createPostgresSurfaceCache(
           );
           upserted += res.rowCount ?? 0;
           if (res.rows[0]?.content_accepted && e.files !== undefined) {
-            await client.query("DELETE FROM channel_files WHERE org_id = $1 AND container = $2 AND ts = $3", [
-              orgId,
+            await client.query("DELETE FROM channel_files WHERE tenant_id = $1 AND container = $2 AND ts = $3", [
+              currentTenant(),
               e.container,
               e.ts,
             ]);
             for (const f of e.files) {
               if (!f.fileId) continue;
               await client.query(
-                `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size)
+                `INSERT INTO channel_files(tenant_id, container, ts, file_id, name, mimetype, created_at, title, size)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT (org_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
+               ON CONFLICT (tenant_id, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
                 [
-                  orgId,
+                  currentTenant(),
                   e.container,
                   e.ts,
                   f.fileId,
@@ -224,9 +240,9 @@ export function createPostgresSurfaceCache(
             }
           }
           await client.query(
-            `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at)
+            `INSERT INTO channel_state(tenant_id, container, last_ts, oldest_ts, name, kind, members, updated_at)
              VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7)
-             ON CONFLICT (org_id, container) DO UPDATE SET
+             ON CONFLICT (tenant_id, container) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
                  WHEN channel_state.oldest_ts IS NULL OR EXCLUDED.oldest_ts::numeric < channel_state.oldest_ts::numeric
@@ -235,7 +251,15 @@ export function createPostgresSurfaceCache(
                kind = COALESCE(EXCLUDED.kind, channel_state.kind),
                members = CASE WHEN EXCLUDED.members = '[]'::jsonb THEN channel_state.members ELSE EXCLUDED.members END,
                updated_at = EXCLUDED.updated_at`,
-            [orgId, e.container, e.ts, e.containerName ?? null, e.kind ?? null, JSON.stringify(e.members ?? []), now],
+            [
+              currentTenant(),
+              e.container,
+              e.ts,
+              e.containerName ?? null,
+              e.kind ?? null,
+              JSON.stringify(e.members ?? []),
+              now,
+            ],
           );
         }
       });
@@ -244,17 +268,17 @@ export function createPostgresSurfaceCache(
 
     async markHandled(container, ts) {
       await q(
-        `INSERT INTO channel_messages(org_id, container, ts, created_at, handled)
+        `INSERT INTO channel_messages(tenant_id, container, ts, created_at, handled)
          VALUES ($1,$2,$3,$4,TRUE)
-         ON CONFLICT (org_id, container, ts) DO UPDATE SET handled = TRUE`,
-        [orgId, container, ts, Date.now()],
+         ON CONFLICT (tenant_id, container, ts) DO UPDATE SET handled = TRUE`,
+        [currentTenant(), container, ts, Date.now()],
       );
     },
 
     async readMessages(container, opts = {}) {
       const limit = clampLimit(opts.limit, DEFAULT_READ_LIMIT);
-      const conds = ["org_id = $1", "container = $2"];
-      const args: unknown[] = [orgId, container];
+      const conds = ["tenant_id = $1", "container = $2"];
+      const args: unknown[] = [currentTenant(), container];
       if (opts.at) {
         args.push(opts.at);
         conds.push(`ts = $${args.length}`);
@@ -282,7 +306,7 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
+        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.tenant_id = channel_messages.tenant_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.tenant_id = channel_messages.tenant_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
         args,
       );
       const hit = rows.map(rowToMessage);
@@ -296,11 +320,11 @@ export function createPostgresSurfaceCache(
 
     async revisedSince(container, since, opts = {}) {
       const conds = [
-        "org_id = $1",
+        "tenant_id = $1",
         "container = $2",
         "((edited_at > 0 AND edited_at >= $3) OR (deleted_at > 0 AND deleted_at >= $3))",
       ];
-      const args: unknown[] = [orgId, container, since];
+      const args: unknown[] = [currentTenant(), container, since];
       if (opts.thread) {
         args.push(opts.thread);
         conds.push(`(sub = $${args.length} OR ts = $${args.length})`);
@@ -318,8 +342,8 @@ export function createPostgresSurfaceCache(
       const term = queryText.trim();
       if (!term) return [];
       const limit = clampLimit(opts.limit, DEFAULT_SEARCH_LIMIT);
-      const conds = ["org_id = $1", "deleted = FALSE", "tsv @@ plainto_tsquery('english', $2)"];
-      const args: unknown[] = [orgId, term];
+      const conds = ["tenant_id = $1", "deleted = FALSE", "tsv @@ plainto_tsquery('english', $2)"];
+      const args: unknown[] = [currentTenant(), term];
       if (opts.container) {
         args.push(opts.container);
         conds.push(`container = $${args.length}`);
@@ -335,8 +359,8 @@ export function createPostgresSurfaceCache(
 
     async activeThreads(o = {}) {
       const limit = clampLimit(o.limit, DEFAULT_THREADS_LIMIT);
-      const conds = ["org_id = $1", "sub IS NOT NULL", "deleted = FALSE"];
-      const args: unknown[] = [orgId];
+      const conds = ["tenant_id = $1", "sub IS NOT NULL", "deleted = FALSE"];
+      const args: unknown[] = [currentTenant()];
       if (o.container) {
         args.push(o.container);
         conds.push(`container = $${args.length}`);
@@ -359,8 +383,8 @@ export function createPostgresSurfaceCache(
     },
 
     async members(container) {
-      const rows = await q("SELECT members FROM channel_state WHERE org_id = $1 AND container = $2", [
-        orgId,
+      const rows = await q("SELECT members FROM channel_state WHERE tenant_id = $1 AND container = $2", [
+        currentTenant(),
         container,
       ]);
       const raw = rows[0]?.members;
@@ -370,8 +394,8 @@ export function createPostgresSurfaceCache(
     },
 
     async isMember(container, principalId) {
-      const rows = await q("SELECT 1 FROM channel_state WHERE org_id = $1 AND container = $2 AND members ? $3", [
-        orgId,
+      const rows = await q("SELECT 1 FROM channel_state WHERE tenant_id = $1 AND container = $2 AND members ? $3", [
+        currentTenant(),
         container,
         principalId,
       ]);
@@ -379,7 +403,10 @@ export function createPostgresSurfaceCache(
     },
 
     async containerState(container) {
-      const rows = await q("SELECT * FROM channel_state WHERE org_id = $1 AND container = $2", [orgId, container]);
+      const rows = await q("SELECT * FROM channel_state WHERE tenant_id = $1 AND container = $2", [
+        currentTenant(),
+        container,
+      ]);
       const r = rows[0];
       if (!r) return null;
       return {
@@ -397,12 +424,12 @@ export function createPostgresSurfaceCache(
       const rows = await q(
         `SELECT s.*, COALESCE(m.n, 0) AS message_count
            FROM channel_state s
-           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE org_id = $1 AND deleted = FALSE GROUP BY container) m
+           LEFT JOIN (SELECT container, COUNT(*)::int AS n FROM channel_messages WHERE tenant_id = $1 AND deleted = FALSE GROUP BY container) m
              ON m.container = s.container
-          WHERE s.org_id = $1
+          WHERE s.tenant_id = $1
           ORDER BY s.updated_at DESC
           LIMIT $2`,
-        [orgId, limit],
+        [currentTenant(), limit],
       );
       return rows.map((r) => {
         let members: string[] = [];

@@ -34,7 +34,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
     initializationStore: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: FAKE_SPRITES_TOKEN,
+    token: async () => FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
     ...extra,

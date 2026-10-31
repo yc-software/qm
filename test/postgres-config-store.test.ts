@@ -10,6 +10,7 @@ import {
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
@@ -32,6 +33,7 @@ const TABLES = [
 ];
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

@@ -55,28 +55,16 @@ const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
 const COOKIE_AUTH = !CORE_SIGNING_SECRET || ALLOW_UNSIGNED_TEST_IDENTITY;
 const AUTH_MODE = COOKIE_AUTH ? "dev" : "portal";
-const ALLOW = (process.env.WEB_UI_PRINCIPALS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
-  const normalizedPrincipalId = principalId.trim().toLowerCase();
-  if (!normalizedPrincipalId) return false;
-  return (configuredUsers ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(normalizedPrincipalId);
-}
-
-async function hasInboxLoopPreview(user: string): Promise<boolean> {
+async function webFeatures(user: string): Promise<ReadonlySet<string>> {
   try {
-    const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
-    return response.status === 200 && JSON.parse(response.text).enabled === true;
+    const response = await coreFetch("GET", `/v1/features?principalId=${encodeURIComponent(user)}`, "", 2_000);
+    const enabled: unknown = response.status === 200 ? JSON.parse(response.text).enabled : [];
+    return new Set(Array.isArray(enabled) ? enabled.filter((f) => typeof f === "string") : []);
   } catch {
-    return false;
+    return new Set();
   }
 }
+const requestFeatures = new WeakMap<IncomingMessage, ReadonlySet<string>>();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
@@ -350,7 +338,7 @@ async function resolveWebConversation(
       message: "you can only chat in your personal context or a shared context you're in",
     };
   }
-  if (threadRef === `web:${user}:inbox` && !(await hasInboxLoopPreview(user)))
+  if (threadRef === `web:${user}:inbox` && !(await webFeatures(user)).has("inbox_loops"))
     return { error: "feature_disabled", message: "inbox access is not enabled for this user" };
   return { conversation };
 }
@@ -438,7 +426,7 @@ interface Identity {
 }
 type Denial = "unauthenticated" | "not_allowed";
 
-function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
+function claimedIdentity(req: IncomingMessage): Identity | null {
   let user: string | null | undefined;
   let name: string | null | undefined;
   let impersonator: string | null | undefined;
@@ -451,16 +439,20 @@ function authenticate(req: IncomingMessage): { identity: Identity } | { denied: 
     name = claims.n ?? null;
     impersonator = claims.imp ?? null;
   } else {
-    if (!COOKIE_AUTH) return { denied: "unauthenticated" };
+    if (!COOKIE_AUTH) return null;
     user = cookie(req, "webuiuser");
     name = cookie(req, "webuiuser_name");
     impersonator = cookie(req, "webui_impersonator");
   }
-  if (!user) return { denied: "unauthenticated" };
-  if (ALLOW.length > 0 && !ALLOW.includes(user)) return { denied: "not_allowed" };
-  return {
-    identity: { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) },
-  };
+  if (!user) return null;
+  return { user, name: name?.trim() || null, impersonator: impersonator ?? null, portalVerified: Boolean(claims) };
+}
+
+function authenticate(req: IncomingMessage): { identity: Identity } | { denied: Denial } {
+  const identity = claimedIdentity(req);
+  if (!identity) return { denied: "unauthenticated" };
+  if (!requestFeatures.get(req)?.has("web_ui")) return { denied: "not_allowed" };
+  return { identity };
 }
 
 function resolveIdentity(req: IncomingMessage): Identity | null {
@@ -1444,8 +1436,9 @@ const apiRoutes: readonly WebRoute[] = [
         connections?: { provider: string }[];
       };
       const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (await hasInboxLoopPreview(user)) {
-        if (isLoopsUser(user)) permissions.push("loops");
+      const features = requestFeatures.get(req);
+      if (features?.has("inbox_loops")) {
+        if (features.has("loops")) permissions.push("loops");
         permissions.push("inbox");
       }
       return json(res, 200, {
@@ -3377,10 +3370,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     })();
     if (!id) return json(res, 400, { error: "bad_request", message: "Enter a principal to sign in as." });
-    if (ALLOW.length > 0 && !ALLOW.includes(id))
+    if (!(await webFeatures(id)).has("web_ui"))
       return json(res, 403, {
         error: "not_allowed",
-        message: `${id.slice(0, 120)} isn't in this instance's allowed principals. Add it to WEB_UI_PRINCIPALS, or leave that unset to allow any principal.`,
+        message: `${id.slice(0, 120)} can't sign in to this instance. An admin can turn on Web UI sign-in for this person or the whole organization in Admin → Feature flags.`,
       });
     res.writeHead(200, {
       "set-cookie": sessionCookie(id),
@@ -3466,20 +3459,21 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   if (path === "/me" || path.startsWith("/api/")) {
     const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
+    const features = requestFeatures.get(req)!;
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
         org: ORG,
         publicUrl: PUBLIC_URL,
+        voice: features.has("voice"),
       });
     }
 
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
     const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
-      return json(res, 403, { error: "feature_disabled" });
+    if ((inboxPath || loopsPath) && !features.has("inbox_loops")) return json(res, 403, { error: "feature_disabled" });
     const ledgerPath =
       /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
-    if (loopsPath && !isLoopsUser(user) && !ledgerPath) {
+    if (loopsPath && !features.has("loops") && !ledgerPath) {
       return json(res, 403, { error: "forbidden" });
     }
     const found = findRoute(apiRoutes, method, path);
@@ -3549,7 +3543,11 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await portalTokenStore.run(token, () => routeRequest(req, res));
+    await portalTokenStore.run(token, async () => {
+      const claimed = claimedIdentity(req);
+      if (claimed) requestFeatures.set(req, await webFeatures(claimed.user));
+      await routeRequest(req, res);
+    });
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });
@@ -3579,8 +3577,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         );
         if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        if (ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
         const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
         t.unref?.();
         void runStateFeed();

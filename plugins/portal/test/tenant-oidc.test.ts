@@ -18,12 +18,13 @@ test("unset settings fall back to the Slack endpoints but never to a client", ()
   assert.equal(oidc.redirectUri, "https://agent.example.com/auth/callback");
   assert.equal(oidc.clientId, "");
   assert.equal(rule.claim, "email");
+  assert.deepEqual(problems({}, { ...prod, isProd: false }), ["OIDC_CLIENT_ID is required"]);
   assert.match(problems({}).join("\n"), /OIDC_CLIENT_ID is required/);
   assert.match(problems({}).join("\n"), /OIDC_CLIENT_SECRET is required/);
 });
 
 test("an own-origin authorize endpoint needs the broker upstream", () => {
-  const values = { OIDC_AUTH_ENDPOINT: "https://agent.example.com/idp/authorize" };
+  const values = { OIDC_AUTH_ENDPOINT: "https://agent.example.com/idp/authorize", OIDC_CLIENT_ID: "client-id" };
   assert.match(problems(values, { ...prod, isProd: false }).join("\n"), /AUTH_BROKER_UPSTREAM is unset/);
   const wired = { ...prod, isProd: false, brokerUpstream: "http://127.0.0.1:9099" };
   assert.deepEqual(problems(values, wired), []);

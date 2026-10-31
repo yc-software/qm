@@ -62,7 +62,6 @@ import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
   auxiliaryModelForProvider,
-  defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
@@ -1581,9 +1580,9 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async shouldRespond(detect: DetectInput): Promise<DetectResult> {
+      const models = await resolveModels();
       const modelId = detectModelId();
       const model = requiredModel(modelId);
-      const models = await resolveModels();
       if (!keyForModel(models, model)) return { respond: true };
       const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
       const prompt = renderDetectPrompt(detect);
@@ -1602,8 +1601,8 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async compactHistory(input: CompactInput): Promise<string> {
-      const primaryId = resolveModelId();
       const models = await resolveModels();
+      const primaryId = resolveModelId();
       const runtime = await buildModelRuntime(models.keys, models.gateway);
       const summarize = (compactModelId: string) =>
         summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
@@ -1643,15 +1642,15 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-      const model = requiredModel(resolveModelId());
       const models = await resolveModels();
+      const model = requiredModel(resolveModelId());
       if (!keyForModel(models, model)) return undefined;
       return oneShot("pi-oneshot", model, models.keys, systemPrompt, prompt, { modelGateway: models.gateway });
     },
 
     async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
-      const model = requiredModel(judgeModelId());
       const models = await resolveModels();
+      const model = requiredModel(judgeModelId());
       if (!keyForModel(models, model)) return undefined;
       return oneShot("pi-judge", model, models.keys, systemPrompt, prompt, {
         modelGateway: models.gateway,
@@ -1669,9 +1668,9 @@ export function createAgent(opts?: AgentOptions): Agent {
       recordLlmRequest,
     }) {
       try {
+        const models = await resolveModels();
         const modelId = configuredScreenModel ?? detectModelId();
         const model = requiredModel(modelId);
-        const models = await resolveModels();
         if (!keyForModel(models, model)) return undefined;
         recordModelCall({
           model: modelId,
@@ -1720,8 +1719,8 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const model = requiredModel(titleModelId());
       const models = await resolveModels();
+      const model = requiredModel(titleModelId());
       if (!keyForModel(models, model)) return undefined;
       const out = await oneShot("pi-title", model, models.keys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
         modelGateway: models.gateway,
@@ -1731,8 +1730,8 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
       if (!command.trim()) return undefined;
-      const model = requiredModel(titleModelId());
       const models = await resolveModels();
+      const model = requiredModel(titleModelId());
       if (!keyForModel(models, model)) return undefined;
       const prompt = [
         `Policy flagged this as: ${reason}`,
@@ -1742,7 +1741,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         command.slice(0, 4000),
       ].join("\n");
       const out = (
-        await oneShot("pi-approval-summary", model, models.keys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway: models.gateway })
+        await oneShot("pi-approval-summary", model, models.keys, APPROVAL_SUMMARY_PROMPT, prompt, {
+          modelGateway: models.gateway,
+        })
       )?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);

@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if ((req.url ?? "").startsWith("/d/")) {
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
@@ -20,7 +22,6 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = "deployment-preview-test-secret";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

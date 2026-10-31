@@ -153,10 +153,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     updatedBy: "internal:admin",
   });
   await built.mcpToolService.refresh();
-  assert.equal(
-    await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"),
-    "operator-token",
-  );
+  assert.equal(await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"), null);
   assert.match(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Sign in to CRM/);
   assert.equal(remote.requests.length, 0);
   await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
+import { answerFeatures } from "./core-features.ts";
 
 interface RecordedBlob {
   sha: string;
@@ -21,6 +22,7 @@ const setTurnBody = (b: TurnBody | null): void => {
 };
 
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (req.method === "POST" && u.startsWith("/v1/blobs")) {
     const sha = String(req.headers["x-content-sha256"] ?? "");
@@ -54,7 +56,6 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 const SECRET = "blob-route-test-secret";
 process.env.CORE_API_URL = coreUrl;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 

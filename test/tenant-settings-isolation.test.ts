@@ -1,20 +1,20 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, type TestContext } from "node:test";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { requireTenantSetting, TenantSettingMissingError, type TenantSettingValues } from "../src/tenants/settings.ts";
-import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
 import { configuredModelFor } from "../src/model/tenant-models.ts";
 import type { BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { THIRD_TENANT } from "./support/tenant-settings.ts";
 import { testConfig } from "./support/test-config.ts";
 
-const unbound = AsyncLocalStorage.snapshot();
-const TENANT_B = "00000000-0000-4000-8000-00000000000b";
-const TENANT_C = "00000000-0000-4000-8000-00000000000c";
+const TENANT_B = OTHER_TENANT;
+const TENANT_C = THIRD_TENANT;
 
 interface SeenRequest {
   path: string;
@@ -96,22 +96,22 @@ function turnInput(threadRef: string, text: string) {
   };
 }
 
-function piHarnessOf(built: BuiltApp) {
-  return createPiHarness({
-    defaultModelId: () => configuredModelFor(built.tenantSettings.peek(), "pi"),
+function agentOf(built: BuiltApp) {
+  return createAgent({
+    defaultModelId: () => configuredModelFor(built.tenantSettings.peek()),
     resolveModelGateway: () => built.modelGatewayTransport(),
     resolveProviderKeys: () => built.resolveBrowserCompanyKeys(),
   });
 }
 
-test("a pi harness call under each tenant reaches only that tenant's gateway with that tenant's key", async (t) => {
+test("an agent call under each tenant reaches only that tenant's gateway with that tenant's key", async (t) => {
   const gateway = await startGateway(t);
   const tenantSettings = testTenantSettings(gatewaySettings(gateway.url, "a"));
   await withTenant(TENANT_B, () => tenantSettings.update(gatewaySettings(gateway.url, "b")));
-  const built = buildApp(testConfig({ harness: "pi" }), { tenantSettings });
-  const harness = piHarnessOf(built);
+  const built = buildApp(testConfig(), { tenantSettings });
+  const agent = agentOf(built);
 
-  const replyA = await withTenant(TEST_TENANT, () => harness.models.oneShot!("Reply briefly", "hello from a"));
+  const replyA = await withTenant(TEST_TENANT, () => agent.oneShot!("Reply briefly", "hello from a"));
   assert.equal(replyA, "reply from gateway a");
   const seenByA = gateway.seen.splice(0);
   const messagesA = seenByA.filter((r) => r.path.endsWith("/v1/messages"));
@@ -122,7 +122,7 @@ test("a pi harness call under each tenant reaches only that tenant's gateway wit
     assert.equal(request.gatewayKey, "gateway-key-a");
   }
 
-  const replyB = await withTenant(TENANT_B, () => harness.models.oneShot!("Reply briefly", "hello from b"));
+  const replyB = await withTenant(TENANT_B, () => agent.oneShot!("Reply briefly", "hello from b"));
   assert.equal(replyB, "reply from gateway b");
   const seenByB = gateway.seen.splice(0);
   const messagesB = seenByB.filter((r) => r.path.endsWith("/v1/messages"));
@@ -134,7 +134,7 @@ test("a pi harness call under each tenant reaches only that tenant's gateway wit
     assert.notEqual(request.apiKey, "gateway-key-a");
   }
 
-  const again = await withTenant(TEST_TENANT, () => harness.models.oneShot!("Reply briefly", "hello again from a"));
+  const again = await withTenant(TEST_TENANT, () => agent.oneShot!("Reply briefly", "hello again from a"));
   assert.equal(again, "reply from gateway a");
   assert.ok(gateway.seen.splice(0).every((r) => r.path.startsWith("/a/") && r.gatewayKey === "gateway-key-a"));
 });
@@ -143,16 +143,13 @@ test("a tenant without gateway settings or keys never borrows another tenant's g
   const gateway = await startGateway(t);
   const tenantSettings = testTenantSettings(gatewaySettings(gateway.url, "a"));
   await withTenant(TENANT_C, () => tenantSettings.update({ PI_MODEL: "claude-opus-5" }));
-  const built = buildApp(testConfig({ harness: "pi" }), { tenantSettings });
-  const harness = piHarnessOf(built);
-  assert.equal(
-    await withTenant(TEST_TENANT, () => harness.models.oneShot!("Reply briefly", "warm a")),
-    "reply from gateway a",
-  );
+  const built = buildApp(testConfig(), { tenantSettings });
+  const agent = agentOf(built);
+  assert.equal(await withTenant(TEST_TENANT, () => agent.oneShot!("Reply briefly", "warm a")), "reply from gateway a");
   gateway.seen.splice(0);
   assert.equal(await withTenant(TENANT_C, () => built.modelGatewayTransport()), undefined);
   assert.deepEqual(await withTenant(TENANT_C, () => built.resolveBrowserCompanyKeys()), {});
-  assert.equal(await withTenant(TENANT_C, () => harness.models.oneShot!("Reply briefly", "hello from c")), undefined);
+  assert.equal(await withTenant(TENANT_C, () => agent.oneShot!("Reply briefly", "hello from c")), undefined);
   assert.deepEqual(gateway.seen, []);
 });
 
@@ -171,8 +168,8 @@ test("a missing tenant setting fails closed with the setting's name", async () =
 test("tenant-owned settings and model routes refuse to resolve with no tenant bound", async (t) => {
   const gateway = await startGateway(t);
   const tenantSettings = testTenantSettings(gatewaySettings(gateway.url, "a"));
-  const built = buildApp(testConfig({ harness: "pi" }), { tenantSettings });
-  await unbound(async () => {
+  const built = buildApp(testConfig(), { tenantSettings });
+  await withoutTenant(async () => {
     await assert.rejects(async () => built.tenantSettings.get(), /No tenant is bound/);
     await assert.rejects(async () => built.modelGatewayTransport(), /No tenant is bound/);
     await assert.rejects(async () => built.modelCredentials.availability(), /No tenant is bound/);

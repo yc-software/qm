@@ -1,16 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import {
-  companySubscriptionAuth,
-  baseModelProviders,
-  loadConfig,
-  configuredModel,
-  providerKeysPresent,
-  CONFIG_DEFAULTS,
-} from "../src/config.ts";
+import { loadConfig, CONFIG_DEFAULTS } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
-import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -90,7 +82,6 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
   assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
@@ -205,6 +196,29 @@ test("the server can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ANTHROPIC_API_KEY: "sk-ant" }));
   assert.doesNotThrow(() => loadConfig(productionEnv));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, ANTHROPIC_API_KEY: "sk-ant" }));
+});
+
+test("the sandbox backend and provider keys are not read from the environment", () => {
+  const env = {
+    SANDBOX_BACKEND: "sprites",
+    SANDBOX_SECONDARY_BACKEND: "smolmachines",
+    SPRITES_TOKEN: "sprites-env-token",
+    MODAL_TOKEN_ID: "modal-env-id",
+    MODAL_TOKEN_SECRET: "modal-env-secret",
+    SUPERSERVE_API_KEY: "ss_live_k",
+    E2B_API_KEY: "e2b-env-key",
+    ANTHROPIC_API_KEY: "anthropic-env-key",
+    OPENAI_API_KEY: "openai-env-key",
+  };
+  const config = loadConfig(env);
+  assert.ok(!("sandboxBackend" in config));
+  assert.ok(!("sandboxSecondaryBackend" in config));
+  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k"])
+    assert.ok(!JSON.stringify(config).includes(value), value);
+  for (const value of ["anthropic-env-key", "openai-env-key"])
+    assert.ok(!JSON.stringify(config).includes(value), value);
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
+  assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
 });
 
 test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
@@ -327,13 +341,9 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
-    /PORTER_DEPLOY_PROJECT_ID/,
-  );
+test("a Porter token locates the API and shares the deploy provider's token", () => {
+  assert.throws(() => loadConfig({ PORTER_DEPLOY_API_TOKEN: "tok" }), /PORTER_DEPLOY_PROJECT_ID/);
   const inCluster = loadConfig({
-    SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",

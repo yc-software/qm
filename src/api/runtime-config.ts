@@ -28,10 +28,7 @@ import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "
 import type { RuntimeChoice } from "../agent/agent.ts";
 
 export type RuntimeDeps = Partial<
-  Pick<
-    AppDeps,
-    "config" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
-  >
+  Pick<AppDeps, "config" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials">
 > & { baseModelDefault?: () => string | undefined };
 
 export function runtimeFallback(ctx: { deps: RuntimeDeps }): RuntimeChoice {

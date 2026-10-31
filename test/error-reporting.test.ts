@@ -142,6 +142,9 @@ test("operator error records send one classified event with the record details",
     const { withErrorReporting } = await import('./src/admin/error-log.ts');
     const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
     const { testDatabaseUrl } = await import('./test/support/test-database.ts');
+    const { enterTenant } = await import('./src/tenants/context.ts');
+    const { TEST_TENANT } = await import('./test/support/tenant.ts');
+    enterTenant(TEST_TENANT);
     const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
     const error = new Error('private-job-failure');
     console.error('[worker] private-job-failure');
@@ -319,6 +322,9 @@ test("reportFailure sends one classified event per distinct failure and skips ca
     const { withErrorReporting } = await import('./src/admin/error-log.ts');
     const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
     const { testDatabaseUrl } = await import('./test/support/test-database.ts');
+    const { enterTenant } = await import('./src/tenants/context.ts');
+    const { TEST_TENANT } = await import('./test/support/tenant.ts');
+    enterTenant(TEST_TENANT);
     const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
     const recorded = new Error('private-turn-failure');
     errors.record({category:'turn', code:'error', message:recorded.message, scopeLabel:'private-scope'}, recorded);

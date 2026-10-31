@@ -412,7 +412,7 @@ function deniedGate() {
     <button class="btn" type="button" @click=${signOut}>Sign out</button>
     ${
       authMode === "dev"
-        ? html`<div class="hint">This instance lists its principals in <b>WEB_UI_PRINCIPALS</b>.</div>`
+        ? html`<div class="hint">An admin turns on <b>Web UI sign-in</b> in Admin → Feature flags.</div>`
         : nothing
     }
   `);

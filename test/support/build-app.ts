@@ -12,6 +12,7 @@ import {
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 import { TEST_TENANT } from "./tenant.ts";
+import { seedSettingsTenants } from "./tenant-settings.ts";
 import { TEST_ADMIN_GRANTS, testMigratedDatabaseUrl } from "./test-database.ts";
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
@@ -30,12 +31,18 @@ export function testTenantSettings(
     keyMaterial: "test-connector-key-distinct-from-ingress-auth",
     onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
   });
-  const seeded = withTenant(TEST_TENANT, () => store.update({ ...TEST_TENANT_SETTINGS, ...values }));
+  const seeded = seedSettingsTenants(databaseUrl).then(() =>
+    withTenant(TEST_TENANT, () => store.update({ ...TEST_TENANT_SETTINGS, ...values })),
+  );
   return {
     ...store,
     get: async () => {
       await seeded;
       return store.get();
+    },
+    update: async (changes) => {
+      await seeded;
+      return store.update(changes);
     },
   };
 }
@@ -76,14 +83,11 @@ export function buildApp(
 ): BuiltApp & { modelCalls: ModelCall[] } {
   const modelCalls: ModelCall[] = [];
   const app = stopAtEnd(
-    buildProductionApp(
-      config,
-      {
-        tenantSettings: testTenantSettings({}, config.databaseUrl),
-        agent: recordingModelCalls(createMockAgent(), modelCalls),
-        ...overrides,
-      },
-    ),
+    buildProductionApp(config, {
+      tenantSettings: testTenantSettings({}, config.databaseUrl),
+      agent: recordingModelCalls(createMockAgent(), modelCalls),
+      ...overrides,
+    }),
   );
   return Object.assign(app, { modelCalls });
 }

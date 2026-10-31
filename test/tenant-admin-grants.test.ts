@@ -9,8 +9,9 @@ test("admin grants are seeded from the tenant's ADMIN_GRANTS setting, not the en
   const saved = process.env.ADMIN_GRANTS;
   process.env.ADMIN_GRANTS = "env-admin@example.com:org_admin";
   try {
-    const built = buildApp(testConfig({ databaseUrl: undefined }), {
-      tenantSettings: testTenantSettings({ ADMIN_GRANTS: "tenant-admin@example.com:org_admin" }),
+    const config = testConfig();
+    const built = buildApp(config, {
+      tenantSettings: testTenantSettings({ ADMIN_GRANTS: "tenant-admin@example.com:org_admin" }, config.databaseUrl),
     });
     const target = scopeId("org", "default-org");
     assert.equal(await built.admin.canAdminister({ id: "tenant-admin@example.com", type: "internal" }, target), true);

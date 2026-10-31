@@ -9,6 +9,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a synchronous turn waiting on a run another worker holds does not poll claims", { timeout: 30_000 }, async () => {
   const built = buildApp(

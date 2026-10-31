@@ -5,11 +5,13 @@ import {
   type AmbientJudgmentStore,
 } from "../src/surface-cache/ambient-judgment-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ambient-judgment tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

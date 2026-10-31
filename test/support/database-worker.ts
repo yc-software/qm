@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { parentPort, workerData, type MessagePort } from "node:worker_threads";
 import pg from "pg";
+import { seedTestTenants } from "./tenant-seed.ts";
 
 const { base, signal, port } = workerData as { base: string; signal: Int32Array; port: MessagePort };
 const baseUrl = new URL(base);
@@ -23,6 +24,11 @@ function quoted(name: string): string {
 async function createDatabase(template: string): Promise<string> {
   const name = `${prefix}_${randomBytes(6).toString("hex")}`;
   await (await admin()).query(`CREATE DATABASE ${quoted(name)}${template ? ` TEMPLATE ${quoted(template)}` : ""}`);
+  if (!template) {
+    const url = new URL(baseUrl);
+    url.pathname = `/${name}`;
+    await seedTestTenants(url.toString());
+  }
   return name;
 }
 

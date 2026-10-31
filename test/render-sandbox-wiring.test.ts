@@ -3,14 +3,14 @@ import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TenantSettingMissingError } from "../src/tenants/settings.ts";
-import { TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("Render sandboxes can start without S3 storage configuration", async () => {
   const built = buildApp(
     testConfig({
       workspaceStore: "postgres",
-      databaseUrl: "postgres://unused/unused",
       snapshotStore: "local",
       s3Bucket: undefined,
     }),
@@ -30,7 +30,7 @@ test("Render sandboxes can start without S3 storage configuration", async () => 
 });
 
 test("a tenant's default sandbox backend fails closed without that provider's keys", async () => {
-  const built = buildApp(testConfig({ workspaceStore: "postgres", databaseUrl: "postgres://unused/unused" }), {
+  const built = buildApp(testConfig({ workspaceStore: "postgres" }), {
     tenantSettings: testTenantSettings({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "render-test-key" }),
   });
   try {

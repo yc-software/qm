@@ -66,7 +66,9 @@ test("a re-established LISTEN connection announces a resync to subscribers", asy
   const admin = createPgPool(url, []);
   try {
     const listenerPids = async (): Promise<Set<number>> => {
-      const rows = await admin.q("SELECT pid FROM pg_stat_activity WHERE query LIKE '%LISTEN session_state'");
+      const rows = await admin.q(
+        "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND query LIKE '%LISTEN session_state'",
+      );
       return new Set(rows.map((r) => Number(r.pid)));
     };
     const until = async <T>(probe: () => Promise<T | null> | T | null, what: string): Promise<T> => {

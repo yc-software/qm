@@ -6,8 +6,10 @@ import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { JSDOM } from "jsdom";
+import { answerFeatures } from "./core-features.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   if ((req.url ?? "").startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ branding: { accent: "#f0652f", mark: "Y", selfLabel: "QM" } }));
@@ -19,7 +21,6 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "web-ui-branding-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const distDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web");
 const distIndex = join(distDir, "index.html");

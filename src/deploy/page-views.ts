@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
 
@@ -27,6 +28,7 @@ const clip = (value: string | null, max: number): string | null => (value === nu
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
   const { q } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "deploy/app-page-views/0001",
       statements: [
@@ -46,6 +48,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
         `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
       ],
     },
+    tenantTables("deploy/app-page-views/0002-tenants", [{ table: "app_page_views", primaryKey: "id" }]),
   ]);
   let inFlight = 0;
   let dropped = 0;
