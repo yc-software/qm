@@ -702,11 +702,20 @@ test("Render keeps waiting endpoint requests while an apply or an archive starts
   const live = await f.provider.apply(d, v1);
   d.status = "running";
   d.appliedVersion = 1;
+  const read = f.store.get;
   for (const operation of ["apply", "destroy"] as const) {
     const provider = f.restart(sha);
     const held = f.holdServiceRead();
+    let reads = 0;
+    const { promise: bothRead, resolve } = Promise.withResolvers<void>();
+    f.store.get = async (id) => {
+      const record = await read(id);
+      if (++reads === 2) resolve();
+      return record;
+    };
     const waiting = [provider.resolveEndpoint!(d, v1), provider.resolveEndpoint!(d, v1)];
-    await held.reached;
+    await Promise.all([held.reached, bothRead]);
+    f.store.get = read;
     const running = operation === "apply" ? provider.apply(d, { ...v1, version: 2 }) : provider.destroy(d);
     held.release();
     for (const endpoint of await Promise.all(waiting)) assert.deepEqual(endpoint, live);
