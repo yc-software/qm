@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
+import { seedTestTenants } from "../test/support/tenant-seed.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -100,6 +101,7 @@ async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
     await admin.query(`CREATE DATABASE ${name}`);
+    await seedTestTenants(databaseUrl(name));
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {

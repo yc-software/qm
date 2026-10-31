@@ -15,7 +15,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -36,6 +36,7 @@ async function withSchema(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
@@ -158,7 +159,7 @@ test("pg items reject a second call with the same call id, leaving the log untou
 });
 
 test(
-  "pg tool output: the inline cap comes from qm_settings and parked text reads back by a gateway call id carrying a large thought signature",
+  "pg tool output: the inline cap is the default and parked text reads back by a gateway call id carrying a large thought signature",
   { skip },
   async () => {
     await withSchema("items_tool_output", async ({ raw, url, store }) => {
@@ -167,19 +168,13 @@ test(
       try {
         const scope = scopeId("personal", "alice");
         const session = await store.getOrCreateByThread("web:tool-output", "dm", scope);
-        let clock = Date.now();
+        const clock = Date.now();
         const outputs = createPostgresToolOutputStore({
           pool,
           bytesFor: (prefix) => createLocalDurableByteStore(join(dir, prefix)),
           now: () => clock,
         });
         assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS);
-        await raw.query(
-          "INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '0') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        );
-        assert.equal(await outputs.inlineTokens(), DEFAULT_INLINE_TOKENS, "cached for a short while");
-        clock += 60_000;
-        assert.equal(await outputs.inlineTokens(), 0);
 
         const full = "ünï line\n".repeat(10_000);
         const blob = await outputs.save(full);

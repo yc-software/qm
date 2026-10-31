@@ -1,10 +1,9 @@
-import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, TENANT, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 
 export interface Environment {
   id: string;
-  orgId: string;
   name: string | null;
   ownerActorId: string | null;
   createdAt: number;
@@ -42,7 +41,6 @@ export async function resolveEnvironmentId(store: EnvironmentStore | undefined, 
 function rowToEnvironment(r: Record<string, unknown>): Environment {
   return {
     id: r.id as string,
-    orgId: r.org_id as string,
     name: (r.name as string | null) ?? null,
     ownerActorId: (r.owner_actor_id as string | null) ?? null,
     createdAt: Number(r.created_at),
@@ -65,6 +63,7 @@ export function createPostgresEnvironmentStore(
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
   const { q } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "environments/store/0001",
       statements: [
@@ -81,14 +80,31 @@ export function createPostgresEnvironmentStore(
         ON environment_attachments(environment_id)`,
       ],
     },
+    tenantTables(
+      "environments/store/0002-tenants",
+      [
+        { table: "environments", primaryKey: "id", replacesOrgId: [] },
+        { table: "environment_attachments", primaryKey: "scope_id" },
+      ],
+      {
+        foreignKeys: [
+          {
+            table: "environment_attachments",
+            name: "environment_attachments_environment_id_fkey",
+            columns: "environment_id",
+            references: "environments(tenant_id, id)",
+          },
+        ],
+      },
+    ),
   ]);
   return {
     async create(input): Promise<Environment> {
       const ts = now();
       await q(
-        `INSERT INTO environments(id, org_id, name, owner_actor_id, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$5) ON CONFLICT (id) DO NOTHING`,
-        [input.id, configOrgId(), input.name ?? null, input.ownerActorId ?? null, ts],
+        `INSERT INTO environments(id, name, owner_actor_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$4) ON CONFLICT (tenant_id, id) DO NOTHING`,
+        [input.id, input.name ?? null, input.ownerActorId ?? null, ts],
       );
       const rows = await q("SELECT * FROM environments WHERE id = $1", [input.id]);
       return rowToEnvironment(rows[0]!);
@@ -98,14 +114,14 @@ export function createPostgresEnvironmentStore(
       return rows[0] ? rowToEnvironment(rows[0]) : null;
     },
     async list(): Promise<Environment[]> {
-      const rows = await q("SELECT * FROM environments WHERE org_id = $1 ORDER BY updated_at DESC", [configOrgId()]);
+      const rows = await q(`SELECT * FROM environments WHERE tenant_id = ${TENANT} ORDER BY updated_at DESC`);
       return rows.map(rowToEnvironment);
     },
     async attach(scopeId, environmentId, attachedBy): Promise<void> {
       await q(
         `INSERT INTO environment_attachments(scope_id, environment_id, attached_by, attached_at)
          VALUES ($1,$2,$3,$4)
-         ON CONFLICT (scope_id) DO UPDATE SET environment_id = EXCLUDED.environment_id,
+         ON CONFLICT (tenant_id, scope_id) DO UPDATE SET environment_id = EXCLUDED.environment_id,
            attached_by = EXCLUDED.attached_by, attached_at = EXCLUDED.attached_at`,
         [scopeId, environmentId, attachedBy, now()],
       );
