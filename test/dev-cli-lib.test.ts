@@ -409,17 +409,19 @@ test("supervised children share the selected dev org", () => {
     sandboxEnv: {},
   };
   const specs = buildChildSpecs(inputs);
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
+  const coreEnv = specs.find((spec) => spec.name === "core")!.env;
+  assert.equal(coreEnv.ORG_ID, undefined);
+  assert.equal(coreEnv.DATABASE_OWNER_URL, "postgres://localhost/qm");
+  assert.equal(new URL(coreEnv.DATABASE_URL!).username, "qm_app");
+  assert.equal(new URL(coreEnv.DATABASE_READER_URL!).username, "qm_reader");
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
     assert.equal(spec.env.HOME, undefined);
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
-  for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
+  for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, undefined);
   assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
-  inputs.baseEnv = {};
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });
 
 test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
@@ -442,7 +444,7 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
   assert.equal(core.env.SLACK_APP_TOKEN, "");
   assert.equal(core.env.DEV_INTROSPECTION, undefined);
   assert.equal(core.env.DEV_HEALTH_PORT, undefined);
-  assert.equal(core.env.CORE_ORG_ID, "acme");
+  assert.equal(core.env.CORE_ORG_ID, undefined);
   inputs.web = false;
   inputs.slack = { botToken: "xoxb-test", appToken: "xapp-test" };
   const slackOnly = buildChildSpecs(inputs);

@@ -33,7 +33,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     assert.match(r.out, /DRY RUN/);
     assert.match(r.out, new RegExp(`network: qm-${org}`));
     assert.match(r.out, /core: image registry\.invalid\/qm\/qm-core@sha256:a{64}/);
-    assert.match(r.out, /env: .*\bORG_ID\b/);
+    assert.match(r.out, /env: .*\bDATA_DIR\b/);
     assert.match(r.out, /layer:/);
     assert.match(r.out, /plugin widget: build plugins\/widget\/Dockerfile/);
     assert.match(r.out, /plugin ext: pull ghcr\.io\/example\/ext:1\.2/);
