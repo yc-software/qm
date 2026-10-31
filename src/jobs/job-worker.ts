@@ -23,7 +23,7 @@ export type JobDisposition = "done" | "release" | number;
 
 export type JobHandler = (params: unknown) => Promise<JobDisposition>;
 
-export interface HandleOptions {
+interface HandleOptions {
   concurrency?: number;
   maxAttempts?: number;
 }
@@ -39,7 +39,7 @@ export interface JobWorker {
   stop(): Promise<void>;
 }
 
-export const JOBS_READY_CHANNEL = "qm_jobs_ready";
+const JOBS_READY_CHANNEL = "qm_jobs_ready";
 
 const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const UNKNOWN_JOB_RETRY_MS = 60_000;
@@ -59,7 +59,7 @@ const CLEANUP_BATCH = 1000;
 const claimBudget = () => Math.max(1, Math.floor(pgPoolMax("query") / 2));
 const clampConcurrency = (n: number) => Math.min(claimBudget(), Math.max(1, Math.trunc(n)));
 
-export const releaseRetryAt = (attempt: number, now = Date.now()): number =>
+const releaseRetryAt = (attempt: number, now = Date.now()): number =>
   now + Math.min(RELEASE_RETRY_MAX_MS, RELEASE_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
 
 function serializeStart(worker: JobWorker): JobWorker {
@@ -215,7 +215,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
   }
 
   async function drained(): Promise<void> {
-    while (active.size) await Promise.allSettled([...active]);
+    while (active.size) await Promise.allSettled(active);
   }
 
   async function stopClaims(): Promise<void> {

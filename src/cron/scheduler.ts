@@ -62,7 +62,7 @@ interface CronManualFireJob {
 }
 
 export const CRON_FIRE_JOB = "cron-fire";
-export const CRON_MANUAL_FIRE_JOB = "cron-fire-manual";
+const CRON_MANUAL_FIRE_JOB = "cron-fire-manual";
 
 export interface Scheduler {
   tick(now?: number): Promise<void>;

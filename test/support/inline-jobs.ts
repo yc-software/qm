@@ -3,7 +3,7 @@ import type { JobDisposition, JobHandler, JobWorker } from "../../src/jobs/job-w
 const pending = new Set<Promise<unknown>>();
 
 export async function inlineJobsSettled(): Promise<void> {
-  while (pending.size) await Promise.allSettled([...pending]);
+  while (pending.size) await Promise.allSettled(pending);
 }
 
 export interface InlineJobs extends JobWorker {
