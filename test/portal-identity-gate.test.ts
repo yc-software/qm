@@ -35,6 +35,7 @@ describe("user-scoped routes always require a portal-verified actor", () => {
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
     server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
