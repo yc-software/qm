@@ -5,17 +5,19 @@ import { createModelCredentialStore } from "../src/model/model-credential-store.
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
 import { scopeId } from "../src/types.ts";
-import { testConfigStore } from "./support/test-database.ts";
-import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { testConfigStore, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { seedSettingsTenants, testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 
 const KEY = "import-test-connector-key-0123456789";
 const root = scopeId("org", "acme");
 
 async function deps() {
+  const modelUrl = testMigratedDatabaseUrl();
+  await seedSettingsTenants(modelUrl);
   return {
     settings: await testSettingsStore(),
-    modelCredentials: createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: KEY }),
+    modelCredentials: createModelCredentialStore({ backing: testModelTables(modelUrl).credentials, keyMaterial: KEY }),
     featureFlags: testFeatureFlagStore(),
     config: testConfigStore({ connectorSecretKey: KEY }),
     rootScope: root,
