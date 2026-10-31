@@ -29,6 +29,9 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 

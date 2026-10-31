@@ -10,6 +10,9 @@ import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capabi
 import { externalTools } from "../src/core/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -48,7 +51,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   );
   await b.config.hydrate?.();
   await b.identity.hydrate();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   t.after(async () => {
     b.scheduler.stop();
     b.deploymentLayerRefresh.stop();

@@ -1,5 +1,8 @@
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -8,6 +11,103 @@ export interface PrincipalLink {
   evidence: string;
   linkedBy: string;
   createdAt: number;
+}
+
+export interface PrincipalLinkStore {
+  list(): Promise<PrincipalLink[]>;
+  insertIfAbsent(link: PrincipalLink): Promise<PrincipalLink>;
+  take(principalId: string): Promise<PrincipalLink | null>;
+  close?(): Promise<void>;
+}
+
+const PRINCIPAL_LINKS_MIGRATION = typedTableMigration({
+  table: "principal_links",
+  columns: [
+    "principal_id TEXT NOT NULL",
+    "canonical_id TEXT NOT NULL",
+    "evidence TEXT NOT NULL",
+    "linked_by TEXT NOT NULL",
+    "created_at BIGINT NOT NULL",
+  ],
+  primaryKey: ["principal_id"],
+  backfill: {
+    principal_id: "id",
+    canonical_id: "json->>'canonicalId'",
+    evidence: "json->>'evidence'",
+    linked_by: "json->>'linkedBy'",
+    created_at: "round((json->>'createdAt')::numeric)::bigint",
+  },
+  where: `json->>'canonicalId' IS NOT NULL AND json->>'evidence' IS NOT NULL
+    AND json->>'linkedBy' IS NOT NULL AND json->>'createdAt' IS NOT NULL`,
+});
+
+const LINK_COLUMNS = "principal_id, canonical_id, evidence, linked_by, created_at";
+
+function principalLink(row: Record<string, unknown>): PrincipalLink {
+  return {
+    principalId: String(row.principal_id),
+    canonicalId: String(row.canonical_id),
+    evidence: String(row.evidence),
+    linkedBy: String(row.linked_by),
+    createdAt: Number(row.created_at),
+  };
+}
+
+export function createPrincipalLinkStore(): PrincipalLinkStore {
+  const tenants = new Map<string, Map<string, PrincipalLink>>();
+  const rows = () => {
+    const tenant = currentTenant();
+    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
+  };
+  return {
+    list: async () => [...rows().values()],
+    async insertIfAbsent(link) {
+      const principalId = foldPrincipalId(link.principalId);
+      const existing = rows().get(principalId);
+      if (existing) return existing;
+      rows().set(principalId, { ...link, principalId });
+      return { ...link, principalId };
+    },
+    async take(principalId) {
+      const link = rows().get(foldPrincipalId(principalId)) ?? null;
+      rows().delete(foldPrincipalId(principalId));
+      return link;
+    },
+  };
+}
+
+export function createPostgresPrincipalLinkStore(connectionString: string): PrincipalLinkStore {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, PRINCIPAL_LINKS_MIGRATION]);
+  return {
+    async list() {
+      const rows = await q(
+        `SELECT ${LINK_COLUMNS} FROM principal_links WHERE tenant_id = ${TENANT} ORDER BY created_at, principal_id`,
+      );
+      return rows.map(principalLink);
+    },
+    async insertIfAbsent(link) {
+      const principalId = foldPrincipalId(link.principalId);
+      const inserted = await q(
+        `INSERT INTO principal_links(${LINK_COLUMNS}) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant_id, principal_id) DO NOTHING RETURNING ${LINK_COLUMNS}`,
+        [principalId, link.canonicalId, link.evidence, link.linkedBy, link.createdAt],
+      );
+      const [row] = inserted.length
+        ? inserted
+        : await q(`SELECT ${LINK_COLUMNS} FROM principal_links WHERE tenant_id = ${TENANT} AND principal_id = $1`, [
+            principalId,
+          ]);
+      return row ? principalLink(row) : link;
+    },
+    async take(principalId) {
+      const [row] = await q(
+        `DELETE FROM principal_links WHERE tenant_id = ${TENANT} AND principal_id = $1 RETURNING ${LINK_COLUMNS}`,
+        [foldPrincipalId(principalId)],
+      );
+      return row ? principalLink(row) : null;
+    },
+    close,
+  };
 }
 
 interface PrincipalLinkInput {
@@ -41,10 +141,9 @@ function validId(value: unknown): value is string {
 }
 
 export function createPrincipalLinkService(
-  backing?: DurableMap<PrincipalLink>,
+  store: PrincipalLinkStore = createPrincipalLinkStore(),
   lock: AdvisoryLock = createMemoryAdvisoryLock(),
 ): PrincipalLinkService {
-  const store = backing ?? createMemoryMap<PrincipalLink>();
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
   let refreshedAt = 0;
@@ -67,7 +166,7 @@ export function createPrincipalLinkService(
     while (refreshP) await refreshP;
     if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
     refreshP = store
-      .all()
+      .list()
       .then(index)
       .then(() => {
         refreshedAt = Date.now();
@@ -124,7 +223,7 @@ export function createPrincipalLinkService(
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.putIfAbsent(aliasKey, {
+        const stored = await store.insertIfAbsent({
           principalId,
           canonicalId,
           evidence,
@@ -139,7 +238,7 @@ export function createPrincipalLinkService(
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.take(foldPrincipalId(principalId));
+        const row = await store.take(principalId);
         await refresh(true);
         return row;
       });

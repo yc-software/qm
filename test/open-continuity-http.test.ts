@@ -9,6 +9,9 @@ import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capabili
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 mock.module("./support/mock-harness.ts", {
   namedExports: {
@@ -50,7 +53,7 @@ async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.hydrate();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,

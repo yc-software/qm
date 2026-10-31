@@ -1,42 +1,151 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { pgJsonText } from "../util/text.ts";
 
 export interface PersistedUiState {
   value: unknown;
   updatedAt: number;
 }
 
-export type UiStateStore = DurableMap<PersistedUiState>;
+export interface UiStateStore {
+  get(principalId: string, key: string): Promise<PersistedUiState | null>;
+  put(principalId: string, key: string, state: PersistedUiState): Promise<void>;
+  putIfAbsent(principalId: string, key: string, state: PersistedUiState): Promise<PersistedUiState>;
+  putNewer(principalId: string, key: string, state: PersistedUiState): Promise<{ ok: boolean; updatedAt: number }>;
+  modify(
+    principalId: string,
+    key: string,
+    apply: (current: PersistedUiState | null) => PersistedUiState,
+  ): Promise<PersistedUiState>;
+  take(principalId: string, key: string): Promise<PersistedUiState | null>;
+  delete(principalId: string, key: string): Promise<void>;
+  close?(): Promise<void>;
+}
 
 export const UI_STATE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const UI_STATE_MAX_BYTES = 65536;
 export const UI_STATE_MAX_FUTURE_SKEW_MS = 300_000;
 
-export function uiStateId(principalId: string, key: string): string {
-  return `${principalId}#${key}`;
+const WEB_UI_STATE_MIGRATION = typedTableMigration({
+  table: "web_ui_state",
+  columns: ["principal_id TEXT NOT NULL", "key TEXT NOT NULL", "value JSONB NOT NULL", "updated_at BIGINT NOT NULL"],
+  primaryKey: ["principal_id", "key"],
+  backfill: {
+    principal_id: "substring(id FROM '^(.*)#[^#]*$')",
+    key: "substring(id FROM '#([^#]*)$')",
+    value: "COALESCE(json->'value', 'null'::jsonb)",
+    updated_at: "round((json->>'updatedAt')::numeric)::bigint",
+  },
+  where: `id ~ '^.+#[^#]+$' AND CASE WHEN jsonb_typeof(json->'updatedAt') = 'number'
+    THEN abs((json->>'updatedAt')::numeric) < 9e15 ELSE false END`,
+});
+
+const SELECT = `SELECT value, updated_at FROM web_ui_state WHERE tenant_id = ${TENANT} AND principal_id = $1 AND key = $2`;
+const INSERT = `INSERT INTO web_ui_state(principal_id, key, value, updated_at) VALUES ($1, $2, $3::jsonb, $4)
+  ON CONFLICT (tenant_id, principal_id, key)`;
+const UPSERT = `${INSERT} DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`;
+
+const jsonValue = (state: PersistedUiState) => pgJsonText(state.value ?? null);
+
+function uiState(rows: Rows): PersistedUiState | null {
+  const row = rows[0];
+  return row ? { value: row.value, updatedAt: Number(row.updated_at) } : null;
 }
 
-export async function storeUiState(
-  store: UiStateStore,
-  id: string,
-  next: PersistedUiState,
-): Promise<{ ok: boolean; updatedAt: number }> {
-  if (!store.update || !store.insertIfAbsent) {
-    const existing = await store.get(id);
-    if (existing && existing.updatedAt > next.updatedAt) return { ok: false, updatedAt: existing.updatedAt };
-    await store.put(id, next);
-    return { ok: true, updatedAt: next.updatedAt };
-  }
-  for (;;) {
-    let refusedAt = 0;
-    const updated = await store.update(id, (existing) => {
-      if (existing.updatedAt > next.updatedAt) {
-        refusedAt = existing.updatedAt;
-        return existing;
-      }
+export function createUiStateStore(): UiStateStore {
+  const tenants = new Map<string, Map<string, PersistedUiState>>();
+  const rows = () => {
+    const tenant = currentTenant();
+    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
+  };
+  const id = (principalId: string, key: string) => `${principalId}#${key}`;
+  const take = (principalId: string, key: string) => {
+    const state = rows().get(id(principalId, key)) ?? null;
+    rows().delete(id(principalId, key));
+    return state;
+  };
+  return {
+    get: async (principalId, key) => rows().get(id(principalId, key)) ?? null,
+    put: async (principalId, key, state) => void rows().set(id(principalId, key), state),
+    async putIfAbsent(principalId, key, state) {
+      const existing = rows().get(id(principalId, key));
+      if (existing) return existing;
+      rows().set(id(principalId, key), state);
+      return state;
+    },
+    async putNewer(principalId, key, state) {
+      const existing = rows().get(id(principalId, key));
+      if (existing && existing.updatedAt > state.updatedAt) return { ok: false, updatedAt: existing.updatedAt };
+      rows().set(id(principalId, key), state);
+      return { ok: true, updatedAt: state.updatedAt };
+    },
+    async modify(principalId, key, apply) {
+      const next = apply(rows().get(id(principalId, key)) ?? null);
+      rows().set(id(principalId, key), next);
       return next;
-    });
-    if (refusedAt) return { ok: false, updatedAt: refusedAt };
-    if (updated) return { ok: true, updatedAt: next.updatedAt };
-    if (await store.insertIfAbsent(id, next)) return { ok: true, updatedAt: next.updatedAt };
-  }
+    },
+    take: async (principalId, key) => take(principalId, key),
+    delete: async (principalId, key) => void take(principalId, key),
+  };
+}
+
+export function createPostgresUiStateStore(connectionString: string): UiStateStore {
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, WEB_UI_STATE_MIGRATION]);
+  return {
+    get: async (principalId, key) => uiState(await q(SELECT, [principalId, key])),
+    async put(principalId, key, state) {
+      await q(UPSERT, [principalId, key, jsonValue(state), state.updatedAt]);
+    },
+    async putIfAbsent(principalId, key, state) {
+      const inserted = await q(`${INSERT} DO NOTHING RETURNING value, updated_at`, [
+        principalId,
+        key,
+        jsonValue(state),
+        state.updatedAt,
+      ]);
+      return uiState(inserted) ?? uiState(await q(SELECT, [principalId, key])) ?? state;
+    },
+    async putNewer(principalId, key, state) {
+      const written = await q(`${UPSERT} WHERE web_ui_state.updated_at <= EXCLUDED.updated_at RETURNING updated_at`, [
+        principalId,
+        key,
+        jsonValue(state),
+        state.updatedAt,
+      ]);
+      if (written.length) return { ok: true, updatedAt: state.updatedAt };
+      return { ok: false, updatedAt: uiState(await q(SELECT, [principalId, key]))?.updatedAt ?? state.updatedAt };
+    },
+    async modify(principalId, key, apply) {
+      return withPgTransaction(await pool(), async (client) => {
+        for (;;) {
+          const current = uiState((await client.query(`${SELECT} FOR UPDATE`, [principalId, key])).rows);
+          const next = apply(current);
+          const written = await client.query(`${current ? UPSERT : `${INSERT} DO NOTHING`} RETURNING updated_at`, [
+            principalId,
+            key,
+            jsonValue(next),
+            next.updatedAt,
+          ]);
+          if (written.rows.length) return next;
+        }
+      });
+    },
+    take: async (principalId, key) =>
+      uiState(
+        await q(
+          `DELETE FROM web_ui_state WHERE tenant_id = ${TENANT} AND principal_id = $1 AND key = $2
+           RETURNING value, updated_at`,
+          [principalId, key],
+        ),
+      ),
+    async delete(principalId, key) {
+      await q(`DELETE FROM web_ui_state WHERE tenant_id = ${TENANT} AND principal_id = $1 AND key = $2`, [
+        principalId,
+        key,
+      ]);
+    },
+    close,
+  };
 }

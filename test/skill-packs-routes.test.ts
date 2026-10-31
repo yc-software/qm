@@ -10,6 +10,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
@@ -518,7 +521,7 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
     assert.equal(stale.status, 500);
     assert.equal((await json(stale)).message, "internal server error");
     assert.equal((await s.built.skillBundles.get(id))?.commit, newestCommit);
-    const stored = (await s.built.skills.list()).find(
+    const stored = (await s.built.skills.listAll()).find(
       (skill) => skill.createdBy === `pack:${id}` && skill.manifest.name === "reg-alpha",
     );
     assert.equal(stored?.manifest.description, "newest");

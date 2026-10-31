@@ -16,6 +16,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 
@@ -707,6 +710,8 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const second = await store.promote(src.id, scopeId("org", ORG));
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
+  const orgRecords = (await store.listAll()).filter(
+    (x) => x.scopeId === scopeId("org", ORG) && x.status === "published",
+  );
   assert.equal(orgRecords.length, 1);
 });

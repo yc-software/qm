@@ -1,3 +1,4 @@
+import { currentTenant } from "../tenants/context.ts";
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { isObj } from "../util/objects.ts";
@@ -308,28 +309,29 @@ export interface ApprovalRegistry<T> {
 
 export function createApprovalRegistry<T>(): ApprovalRegistry<T> {
   const pending = new Map<string, { ctx: T; inFlight: boolean }>();
+  const key = (id: string) => `${currentTenant()}\u0000${id}`;
   return {
     remember(id, ctx) {
-      pending.set(id, { ctx, inFlight: false });
+      pending.set(key(id), { ctx, inFlight: false });
     },
     get(id) {
-      return pending.get(id)?.ctx;
+      return pending.get(key(id))?.ctx;
     },
     busy(id) {
-      return pending.get(id)?.inFlight === true;
+      return pending.get(key(id))?.inFlight === true;
     },
     begin(id) {
-      const entry = pending.get(id);
+      const entry = pending.get(key(id));
       if (!entry) return { state: "missing" };
       if (entry.inFlight) return { state: "busy" };
       entry.inFlight = true;
       return { state: "ready", ctx: entry.ctx };
     },
     settle(id) {
-      pending.delete(id);
+      pending.delete(key(id));
     },
     release(id) {
-      const entry = pending.get(id);
+      const entry = pending.get(key(id));
       if (entry) entry.inFlight = false;
     },
   };

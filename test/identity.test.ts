@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
-import type { ExternalMember } from "../src/identity/external-members.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createDeactivationStore, createIdentityService } from "../src/identity/identity-service.ts";
+import { createExternalMemberStore, type ExternalMember } from "../src/identity/external-members.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const id = createIdentityService();
 
@@ -64,29 +66,29 @@ test("case fold does not merge distinct emails or touch non-email ids", async ()
 });
 
 test("durable rehydration folds a cased stored deactivation", async () => {
-  const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
+  const deactivations = createDeactivationStore();
+  const first = createIdentityService({ deactivations });
   await first.deactivate("Carol@Corp.com");
-  const second = createIdentityService(backing);
+  const second = createIdentityService({ deactivations });
   await second.hydrate();
   assert.equal(second.classify("carol@corp.com").type, "guest");
 });
 
 test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
-  const backing = createMemoryMap<DeactivationRecord>();
-  const first = createIdentityService(backing);
+  const deactivations = createDeactivationStore();
+  const first = createIdentityService({ deactivations });
   await first.deactivate("U-leaver");
 
-  const second = createIdentityService(backing);
+  const second = createIdentityService({ deactivations });
   assert.equal(second.classify("U-leaver").type, "internal");
   await second.hydrate();
   assert.equal(second.classify("U-leaver").type, "guest");
 });
 
 test("a running instance refreshes deactivations written by another instance", async () => {
-  const backing = createMemoryMap<DeactivationRecord>();
-  const writer = createIdentityService(backing);
-  const reader = createIdentityService(backing);
+  const deactivations = createDeactivationStore();
+  const writer = createIdentityService({ deactivations });
+  const reader = createIdentityService({ deactivations });
   await reader.hydrate();
   await writer.deactivate("U-leaver");
   assert.equal(reader.classify("U-leaver").type, "internal");
@@ -95,9 +97,9 @@ test("a running instance refreshes deactivations written by another instance", a
 });
 
 test("external members written by one instance reach another over the same backing", async () => {
-  const externalMembers = createMemoryMap<ExternalMember>();
-  const writer = createIdentityService(undefined, { externalMembers });
-  const reader = createIdentityService(undefined, { externalMembers });
+  const externalMembers = createExternalMemberStore();
+  const writer = createIdentityService({ externalMembers });
+  const reader = createIdentityService({ externalMembers });
   await reader.hydrate();
   const now = Date.now();
   const member = (expiresAt: number): ExternalMember => ({
@@ -119,7 +121,7 @@ test("external members written by one instance reach another over the same backi
   assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
   await reader.refresh(true);
   assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
-  const late = createIdentityService(undefined, { externalMembers });
+  const late = createIdentityService({ externalMembers });
   await late.hydrate();
   assert.equal(late.classify("pat@partner.example").type, "guest");
 });

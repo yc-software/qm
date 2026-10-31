@@ -9,12 +9,15 @@ import {
 } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
+import { createSkillStore } from "../src/skills/skill-store.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",
@@ -119,38 +122,6 @@ test("invalid descriptors never replace the durable current layer", async () => 
   );
   assert.equal((await store.get())?.contentHash, first.contentHash);
   assert.equal((await store.get())?.version, 1);
-});
-
-test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
-  const skillBacking = createMemoryMap<Skill>();
-  const org = scopeId("org", "default-org");
-  await skillBacking.put("legacy", {
-    id: "legacy",
-    scopeId: org,
-    manifest: { name: "My Skill", description: "legacy", requiredCapabilities: [], body: "legacy" },
-    signature: "legacy",
-    status: "published",
-    createdBy: "legacy-import",
-    version: 1,
-    grantedCapabilities: [],
-    approvals: [],
-  });
-  const skills = createSkillStore({ signingSecret: "layer-test", backing: skillBacking });
-  const store = createDeploymentLayerStore({
-    ...singleProcessDeps(),
-    backing: createMemoryMap<StoredDeploymentLayer>(),
-    runtime: emptyDeploymentLayer(),
-    skills,
-    scopeId: org,
-  });
-
-  await store.put({ contract: 1, tools: [], skills: [] }, "test");
-  assert.deepEqual(await skills.visibleFor([org]), []);
-  assert.equal(
-    (await skills.get("legacy"))?.status,
-    "published",
-    "quarantine does not silently rename or mutate the legacy row",
-  );
 });
 
 test("a stale baked-in filesystem seed never downgrades or resurrects the durable layer", async () => {
@@ -1039,12 +1010,12 @@ test("a foreign skill racing after validation reports the revision as persisted 
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const baseSkills = createSkillStore({ signingSecret: "layer-test" });
   const org = scopeId("org", "default-org");
-  const realList = baseSkills.list.bind(baseSkills);
+  const realInScopes = baseSkills.inScopes.bind(baseSkills);
   let calls = 0;
   const skills = {
     ...baseSkills,
-    list: async () => {
-      if (++calls === 1) return realList();
+    inScopes: async (scopes: readonly ScopeId[], name?: string) => {
+      if (++calls === 1) return realInScopes(scopes, name);
       if (calls === 2) {
         await baseSkills.create({
           scopeId: org,
@@ -1052,7 +1023,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
           createdBy: "user:alice",
         });
       }
-      return realList();
+      return realInScopes(scopes, name);
     },
   };
   const runtime = emptyDeploymentLayer();
@@ -1090,7 +1061,7 @@ test("an archived foreign skill does not block the layer; a later live collision
     "archived skills never collide",
   );
 
-  for (const s of await skills.list()) {
+  for (const s of await skills.listAll()) {
     if (s.createdBy === "system:deployment-layer") await skills.delete(s.id);
   }
   const mine = await skills.create({

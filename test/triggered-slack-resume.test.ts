@@ -9,6 +9,9 @@ import { testConfig } from "./support/test-config.ts";
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import type { TriggerOutcome } from "../src/triggers/run-trigger.ts";
 import type { Destination, ScopeId, TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: [] };
 const namespace = externalSlackNamespace("TBATCH", policy);

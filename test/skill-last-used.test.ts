@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "default-org");
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };

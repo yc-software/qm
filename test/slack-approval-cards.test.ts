@@ -7,6 +7,9 @@ import {
   recoveredApprovalContext,
   createApprovalRegistry,
 } from "../src/slack/lib.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);

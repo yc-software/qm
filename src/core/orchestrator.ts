@@ -260,9 +260,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
   const approvalGrantsFor = async (actorId: string) =>
-    (await approvalGrants.select({ where: { field: "actorId", anyOfFold: rosterIds(actorId) } })).filter((grant) =>
-      samePerson(grant.actorId, actorId),
-    );
+    (await approvalGrants.forActors(rosterIds(actorId))).filter((grant) => samePerson(grant.actorId, actorId));
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
@@ -1162,7 +1160,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
+      await deps.skillsReady?.();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(

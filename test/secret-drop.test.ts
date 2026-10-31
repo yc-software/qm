@@ -16,7 +16,7 @@ import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/se
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   mintCapabilityToken,
@@ -29,6 +29,9 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -96,8 +99,8 @@ describe("SecretDropStore", () => {
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-    identity: createIdentityService(createMemoryMap()),
+    idempotency: createIdempotencyStore(),
+    identity: createIdentityService(),
     run,
   });
 
@@ -151,8 +154,8 @@ describe("fireDropResolution", () => {
     const deliveries = createDeliveryStore();
     const deps = {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
-      identity: createIdentityService(createMemoryMap()),
+      idempotency: createIdempotencyStore(),
+      identity: createIdentityService(),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;

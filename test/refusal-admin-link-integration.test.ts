@@ -28,6 +28,9 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { refusalNote } from "../src/slack/lib.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";

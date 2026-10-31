@@ -37,6 +37,9 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -61,7 +64,7 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const featureFlags = createFeatureFlagStore();
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({

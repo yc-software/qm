@@ -1,7 +1,18 @@
+import "./support/auto-fake-sprites.ts";
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "default-org");
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };
@@ -50,4 +61,27 @@ test("create carries pack provenance, kept out of the signature", async () => {
   });
   assert.deepEqual(s.pack, { packId: "src1", commit: "abc123", upstreamName: "demo" });
   assert.ok(skills.verify(s));
+});
+
+test("a person sees their archived skill stored under a linked identity", async (t) => {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "skills-linked-")), orgId: "acme", seedSkills: false }),
+  );
+  installPrincipalLinks({
+    canonical: (key) => (key === "U123" ? "alice@acme.com" : undefined),
+    aliases: (key) => (key === "alice@acme.com" ? ["U123"] : []),
+  });
+  t.after(() => installPrincipalLinks(null));
+  const sk = await built.skills.create({
+    scopeId: scopeId("personal", "U123"),
+    manifest: { name: "from-slack", description: "d", requiredCapabilities: [], body: "# x" },
+    createdBy: "U123",
+  });
+  await built.skills.archive(sk.id);
+  const archived = await built.app.listSkills({ archivedFor: "Alice@acme.com" });
+  assert.deepEqual(
+    archived.map((skill) => skill.id),
+    [sk.id],
+  );
+  assert.deepEqual(await built.app.listSkills({ archivedFor: "bob@acme.com" }), []);
 });

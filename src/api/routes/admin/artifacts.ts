@@ -69,24 +69,22 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { scopeId: scope, deployments });
   }
   const packsById = new Map((await app.listSkillPacks()).map((p) => [p.id, p]));
-  const skills = (await app.listSkills())
-    .filter((s) => orgWide || s.scopeId === scope)
-    .map((s) => {
-      const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
-      return {
-        id: s.id,
-        ownerScopeId: s.scopeId,
-        name: s.manifest.name,
-        description: s.manifest.description,
-        status: s.status,
-        version: s.version,
-        createdBy: s.createdBy,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
-        lastUsedAt: s.lastUsedAt,
-        ...(provenancePack ? { pack: { id: provenancePack.id, url: provenancePack.url } } : {}),
-      };
-    });
+  const skills = (orgWide ? await app.listSkills() : await app.listSkills({ scope })).map((s) => {
+    const provenancePack = s.pack ? packsById.get(s.pack.packId) : undefined;
+    return {
+      id: s.id,
+      ownerScopeId: s.scopeId,
+      name: s.manifest.name,
+      description: s.manifest.description,
+      status: s.status,
+      version: s.version,
+      createdBy: s.createdBy,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      lastUsedAt: s.lastUsedAt,
+      ...(provenancePack ? { pack: { id: provenancePack.id, url: provenancePack.url } } : {}),
+    };
+  });
   return sendJson(res, 200, { scopeId: scope, skills });
 }
 

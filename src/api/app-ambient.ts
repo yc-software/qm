@@ -50,8 +50,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
     const scheduled = opts?.reason === "scheduled";
     const policy = await deps.channelPolicy?.get(container);
-    const cursorKey = `${orgIdOf()}:${surface}:${container}`;
-    const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
+    const cursor = deps.ambientCursors ? await deps.ambientCursors.get(surface, container) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { limit: 60, noFallback: true });
     const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
@@ -68,7 +67,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const advanceCursor = async (): Promise<void> => {
       if (deps.ambientCursors && rawDelta.length && rawLatestTs)
         await deps.ambientCursors
-          .put(cursorKey, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
+          .put(surface, container, { lastJudgedTs: rawLatestTs, lastJudgedAt: Date.now() })
           .catch(() => undefined);
     };
     if (!delta.length && !scheduled) {

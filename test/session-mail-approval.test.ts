@@ -32,6 +32,9 @@ import { createSessionMailbox, type SessionMessage } from "../src/sessions/sessi
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -61,7 +64,7 @@ async function scenario() {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const featureFlags = createFeatureFlagStore();
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,
