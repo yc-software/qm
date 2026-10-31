@@ -511,6 +511,11 @@ function shareObjectStorage(ctx: FlyCtx): void {
   const missing = flyProviderSecrets(ctx.config, "harness").filter((name) => !secretNames(harness)?.has(name));
   if (!missing.length) return;
   const edge = flyApp(ctx.appPrefix, "edge");
+  const invalid = missing.find((name) => !/^[A-Z][A-Z0-9_]*$/.test(name));
+  if (invalid)
+    throw new CliError(
+      `cannot share object storage secret ${JSON.stringify(invalid)}: not an environment variable name`,
+    );
   const source = `process.stdout.write(${JSON.stringify(FLY_SHARED_SECRETS)}+Buffer.from(JSON.stringify(Object.fromEntries(${JSON.stringify(missing)}.map(n=>[n,process.env[n]||""])))).toString("base64"))`;
   const command = `node -e "eval(Buffer.from('${Buffer.from(source).toString("base64")}','base64').toString('utf8'))"`;
   const output = flySensitive(
