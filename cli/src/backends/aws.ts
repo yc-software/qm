@@ -442,8 +442,14 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
 }
 
 function coreStopTimeoutSeconds(config: QmConfig): number {
-  const drainMs = Number(serviceEnvironment(config, "core").SHUTDOWN_DRAIN_MS ?? 30_000);
-  return Math.min(120, Math.ceil(drainMs / 1000) + 30);
+  const drain = serviceEnvironment(config, "core").SHUTDOWN_DRAIN_MS;
+  const drainSeconds = Math.ceil((drain === undefined ? 30_000 : Number(drain)) / 1000);
+  if (!Number.isFinite(drainSeconds) || drainSeconds < 0 || drainSeconds + 10 > 120) {
+    throw new CliError(
+      `SHUTDOWN_DRAIN_MS must be a number of milliseconds that leaves core time to hand its turns back within Fargate's 120 s stop timeout`,
+    );
+  }
+  return Math.min(120, drainSeconds + 30);
 }
 
 function workloadEnvironment(config: QmConfig, workload: string): Record<string, string> {

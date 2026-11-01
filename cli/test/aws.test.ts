@@ -4857,6 +4857,11 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     env: { ...config.env, core: { ...config.env.core, SHUTDOWN_DRAIN_MS: "75000" } },
   };
   assert.equal(renderTaskDefinition(longDrain, "core", image).containerDefinitions[0]!.stopTimeout, 105);
+  const overlong: QmConfig = {
+    ...config,
+    env: { ...config.env, core: { ...config.env.core, SHUTDOWN_DRAIN_MS: "115000" } },
+  };
+  assert.throws(() => renderTaskDefinition(overlong, "core", image), /Fargate's 120 s stop timeout/);
   const adopted: QmConfig = {
     ...config,
     aws: {
