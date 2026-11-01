@@ -533,7 +533,7 @@ function projectChildren(
   )}${
     capped
       ? html`<button
-          class="recent-project-more"
+          class="archived-toggle recent-project-more"
           type="button"
           aria-expanded=${expanded ? "true" : "false"}
           @click=${() => toggleProjectExpanded(item.scopeId)}
@@ -544,7 +544,6 @@ function projectChildren(
   }`;
 }
 
-// A capped project still shows the rows the user is acting on.
 function keepVisible(s: CoreSession): boolean {
   return (
     isActiveRow(s) || selection.ids.has(s.id) || sessionsState.openMenuId === s.id || sessionsState.renamingId === s.id
