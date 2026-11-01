@@ -2,6 +2,8 @@ import type { AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
 import { canonicalPerson } from "../directory/person.ts";
+import { isTeammate, type ExternalMember } from "../identity/external-members.ts";
+import type { SeenPerson } from "../identity/identity-service.ts";
 
 export interface AdminUserRow {
   principalId: string;
@@ -13,10 +15,11 @@ export interface AdminUserRow {
 
 export interface UsersInput extends AttributionInput {
   grants: readonly AdminGrant[];
+  people: readonly string[];
 }
 
 export function computeUsers(input: UsersInput): AdminUserRow[] {
-  const { grants } = input;
+  const { grants, people } = input;
 
   const sessionsByUser = new Map<string, Set<string>>();
   const turnsByUser = new Map<string, number>();
@@ -40,7 +43,7 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
     },
   });
 
-  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => canonicalPerson(g.principalId))]);
+  const ids = new Set(people.map(canonicalPerson));
   return [...ids]
     .map((principalId) => ({
       principalId,
@@ -50,4 +53,23 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
       admin: adminStatusFromGrants(grants, principalId),
     }))
     .sort((a, b) => Number(b.admin.isAdmin) - Number(a.admin.isAdmin) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0));
+}
+
+export function rosterHistory(input: {
+  turns: readonly { author: string; firstAt: number }[];
+  grants: readonly AdminGrant[];
+  externals: readonly ExternalMember[];
+  now: number;
+}): SeenPerson[] {
+  return [
+    ...input.turns.map((t): SeenPerson => ({ principalId: t.author, source: "turn", at: t.firstAt })),
+    ...input.grants.map((g): SeenPerson => ({
+      principalId: g.principalId,
+      source: "admin",
+      at: g.createdAt || input.now,
+    })),
+    ...input.externals
+      .filter(isTeammate)
+      .map((m): SeenPerson => ({ principalId: m.email, source: "invite", at: m.createdAt })),
+  ];
 }

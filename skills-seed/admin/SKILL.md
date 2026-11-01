@@ -207,6 +207,12 @@ GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
+The roster is the people QM has met: someone joins it on their own first message to QM,
+when invited as a teammate, or when made an admin. Being added to a conversation or
+project they never wrote in does not put them on it; linked sign-ins share one row. Each
+row carries `firstSeenAt` and `source` (`turn`, `invite` or `admin`); session, turn and
+last-seen counts are computed from activity.
+
 ## External users
 
 Outside collaborators, admitted by email with a role and an expiry; they sign in at the

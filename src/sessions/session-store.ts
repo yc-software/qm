@@ -582,6 +582,8 @@ export interface SessionStore {
 
   attributedTurns(): Promise<AttributedTurn[]>;
 
+  firstAuthoredTurns(): Promise<{ author: string; firstAt: number }[]>;
+
   spendRollup(range: { from: number; to: number }): Promise<SpendRow[]>;
 
   spendReport?(range: { from: number; to: number }): Promise<{ rows: SpendRow[]; asOf?: number }>;

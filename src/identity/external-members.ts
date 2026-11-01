@@ -11,6 +11,10 @@ export interface ExternalMember {
   updatedAt: number;
 }
 
+export function isTeammate(m: Pick<ExternalMember, "kind">): boolean {
+  return m.kind === "teammate";
+}
+
 export function externalMemberActive(m: ExternalMember, now = Date.now()): boolean {
   return (m.kind === "teammate" && m.expiresAt === null) || (typeof m.expiresAt === "number" && m.expiresAt > now);
 }

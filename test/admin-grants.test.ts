@@ -213,3 +213,24 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
     await s.close();
   }
 });
+
+test("granting admin puts the person on the roster, and a failed roster write never undoes or fails the grant", async () => {
+  const { createAdminService } = await import("../src/admin/admin-service.ts");
+  const noted: string[] = [];
+  const svc = createAdminService(testAdminGrantStore(), {
+    roster: { notePerson: async (id) => void noted.push(id) },
+  });
+  const admin = { id: "admin-alice", type: "internal" as const };
+  await svc.createGrant(admin, { principalId: "new-admin", role: "org_admin", scopeId: "org:default-org" });
+  assert.deepEqual(noted, ["new-admin"]);
+
+  const failing = createAdminService(testAdminGrantStore(), {
+    roster: {
+      notePerson: async () => {
+        throw new Error("store down");
+      },
+    },
+  });
+  await failing.createGrant(admin, { principalId: "other-admin", role: "org_admin", scopeId: "org:default-org" });
+  assert.equal((await failing.adminStatusOf({ id: "other-admin", type: "internal" })).isAdmin, true);
+});

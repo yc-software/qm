@@ -1753,7 +1753,10 @@ export function buildApp(
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
   });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const admin = createAdminService(adminGrantStore, {
+    trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    roster: identity,
+  });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,

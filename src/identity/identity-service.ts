@@ -1,8 +1,9 @@
+import { reportFailure } from "../util/errors.ts";
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
-import { externalMemberActive, type ExternalMember } from "./external-members.ts";
+import { externalMemberActive, isTeammate, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
@@ -29,8 +30,18 @@ export interface OffboardedChange {
 
 export type PrincipalSummary = Omit<PrincipalRecord, "offboardChanges">;
 
+type PrincipalSource = "turn" | "invite" | "admin";
+
+export interface SeenPerson {
+  principalId: string;
+  source: PrincipalSource;
+  at: number;
+}
+
 export interface PrincipalRecord {
   principalId: string;
+  firstSeenAt?: number;
+  source?: PrincipalSource;
   offboarded: boolean;
   offboardedAt?: number;
   offboardedBy?: string;
@@ -55,6 +66,8 @@ export interface IdentityService extends IdentityProvider {
   offboarded(externalId: string): boolean;
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
+  notePerson(externalId: string, source: PrincipalSource): Promise<void>;
+  recordPeople(people: readonly SeenPerson[]): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -62,6 +75,19 @@ export interface IdentityService extends IdentityProvider {
   putExternalMember(m: ExternalMember): Promise<void>;
   removeExternalMember(principalId: string): Promise<void>;
   refresh(force?: boolean): Promise<void>;
+}
+
+function mergeSummaries(a: PrincipalSummary, b: PrincipalSummary): PrincipalSummary {
+  const [primary, other] = foldPrincipalId(b.principalId) === personKey(b.principalId) ? [b, a] : [a, b];
+  const firstSeen = [a, b]
+    .filter((r) => r.firstSeenAt !== undefined)
+    .sort((x, y) => x.firstSeenAt! - y.firstSeenAt!)[0];
+  return {
+    ...other,
+    ...primary,
+    offboarded: a.offboarded || b.offboarded,
+    ...(firstSeen ? { firstSeenAt: firstSeen.firstSeenAt, source: firstSeen.source } : {}),
+  };
 }
 
 export function actorAssertionActive(
@@ -105,7 +131,11 @@ export function createIdentityService(
       deactivated.clear();
       externals.clear();
       principals.clear();
-      for (const r of records) principals.set(personKey(r.principalId), r);
+      for (const r of records) {
+        const key = personKey(r.principalId);
+        const other = principals.get(key);
+        principals.set(key, other ? mergeSummaries(other, r) : r);
+      }
       for (const r of deactivations) {
         const key = personKey(r.principalId);
         if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
@@ -133,11 +163,48 @@ export function createIdentityService(
   }
 
   const remember = ({ offboardChanges: _changes, ...summary }: PrincipalRecord): PrincipalRecord => {
-    principals.set(personKey(summary.principalId), summary);
+    const key = personKey(summary.principalId);
+    const other = principals.get(key);
+    principals.set(
+      key,
+      other && foldPrincipalId(other.principalId) !== foldPrincipalId(summary.principalId)
+        ? mergeSummaries(other, summary)
+        : summary,
+    );
     return { offboardChanges: _changes, ...summary };
   };
   const principalKey = (externalId: string): string =>
     foldPrincipalId(principals.get(personKey(externalId))?.principalId ?? externalId);
+
+  async function recordSeen(people: readonly SeenPerson[]): Promise<number> {
+    const earliest = new Map<string, SeenPerson>();
+    for (const person of people) {
+      const principalId = canonicalPerson(person.principalId);
+      const id = principalKey(principalId);
+      if (!id || principals.get(personKey(principalId))?.firstSeenAt !== undefined) continue;
+      const known = earliest.get(id);
+      if (!known || person.at < known.at) earliest.set(id, { ...person, principalId });
+    }
+    let added = 0;
+    const records = await principalStore.mutateMany(
+      [...earliest].map(([id, person]) => ({
+        id,
+        apply: (existing) => {
+          if (existing?.firstSeenAt !== undefined) return existing;
+          added++;
+          return {
+            ...existing,
+            principalId: existing?.principalId ?? person.principalId,
+            offboarded: existing?.offboarded ?? false,
+            firstSeenAt: person.at,
+            source: person.source,
+          };
+        },
+      })),
+    );
+    for (const record of records) remember(record);
+    return added;
+  }
 
   async function reactivateNow(externalId: string, by?: string): Promise<void> {
     deactivated.delete(personKey(externalId));
@@ -182,6 +249,11 @@ export function createIdentityService(
       await refresh();
       return [...principals.values()];
     },
+    async notePerson(externalId, source) {
+      if (principals.get(personKey(externalId))?.firstSeenAt !== undefined) return;
+      await exclusive(() => recordSeen([{ principalId: externalId, source, at: Date.now() }]));
+    },
+    recordPeople: (people) => exclusive(() => recordSeen(people)),
     recordOffboarded: (externalId, by, changes) =>
       exclusive(async () => {
         const [record] = await principalStore.mutateMany([
@@ -228,6 +300,10 @@ export function createIdentityService(
       return exclusive(async () => {
         externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
+        if (isTeammate(m))
+          await recordSeen([{ principalId: m.email, source: "invite", at: m.createdAt }]).catch((err: unknown) =>
+            reportFailure("identity: record person", err),
+          );
       });
     },
     removeExternalMember(principalId: string): Promise<void> {

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   desktopClientForTurn,
+  introducesPerson,
   normalizeTurnOrigin,
   resolveTurnOrigin,
   turnOriginRequestFields,
@@ -130,4 +131,17 @@ test("desktop execution requires a human web turn with a live desktop binding", 
     { attempt: 2 },
   ])
     assert.equal(desktopClientForTurn({ ...human, ...patch }), undefined);
+});
+
+test("only a person's own message introduces them to the roster", () => {
+  assert.equal(introducesPerson({ kind: "direct" }, {}), true);
+  assert.equal(introducesPerson({ kind: "human" }, {}), true);
+  assert.equal(introducesPerson({ kind: "automation" }, {}), false);
+  assert.equal(introducesPerson({ kind: "ambient" }, {}), false);
+  assert.equal(introducesPerson({ kind: "direct" }, { sessionSenderId: "s1" }), false);
+  assert.equal(
+    introducesPerson({ kind: "direct" }, { externalSlack: { accountId: "a" } as never }),
+    false,
+    "someone from another Slack workspace is not one of ours",
+  );
 });
