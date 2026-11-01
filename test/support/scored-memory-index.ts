@@ -15,7 +15,7 @@ export function scoredMemoryIndex(
           return [{ factId: fact.id, updatedAt: fact.updatedAt, score: similarity, at: fact.createdAt }];
         })
         .sort((a, b) => b.score - a.score || b.at - a.at);
-      return rows;
+      return rows.slice(0, input.limit);
     },
   };
 }
