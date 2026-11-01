@@ -1019,7 +1019,8 @@ a.chat-row-open {
   font: inherit;
   font-size: var(--session-title-size);
 }
-.session-rename-input:focus {
+.session-rename-input:focus,
+.queued-edit-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
 }
@@ -2415,11 +2416,6 @@ qm-markdown .tok-in {
   color: var(--foreground);
   font: inherit;
   line-height: 1.5;
-}
-.queued-edit-input:focus,
-.queued-edit-input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
 }
 .queued-chip + .queued-chip {
   margin-top: -10px;
