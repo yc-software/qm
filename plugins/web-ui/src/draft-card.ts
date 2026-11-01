@@ -1,7 +1,6 @@
 import "@mariozechner/mini-lit/dist/CopyButton.js";
 import { LitElement, html } from "lit";
 
-/** A ```draft fence: text the person will copy and send elsewhere, shown as a card with a copy button. */
 export class DraftCard extends LitElement {
   static properties = { text: {} };
 
