@@ -717,6 +717,7 @@ export interface ContextSummary {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: ProjectView;
+  groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
 
 interface FileListItem {

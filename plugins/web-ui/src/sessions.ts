@@ -447,6 +447,26 @@ function newChatHint(name: string): string {
   return `Start a new chat in ${name}`;
 }
 
+function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateResult | typeof nothing {
+  if (item.groupKind !== "group") return nothing;
+  const context = contextsState.list.find((candidate) => candidate.scopeId === item.scopeId);
+  const members = context && !context.project ? (context.groupMembers ?? []) : [];
+  if (!members.length) return nothing;
+  const shown = members.length > 3 ? members.slice(0, 2) : members;
+  const overflow = members.length - shown.length;
+  const everyone = members.map((member) => member.displayName).join(", ");
+  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`}>
+    ${shown.map((member) =>
+      member.avatarUrl
+        ? html`<img class="group-avatar" src=${member.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />`
+        : html`<span class="group-avatar initial" aria-hidden="true"
+            >${[...member.displayName.trim()][0]?.toUpperCase() ?? "?"}</span
+          >`,
+    )}
+    ${overflow ? html`<span class="group-avatar more" aria-hidden="true">+${overflow}</span>` : nothing}
+  </span>`;
+}
+
 function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): TemplateResult {
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
@@ -481,6 +501,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
+                ${groupAvatars(item)}
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
