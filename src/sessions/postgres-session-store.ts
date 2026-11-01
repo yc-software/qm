@@ -1307,6 +1307,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }));
     },
 
+    async firstAuthoredTurns() {
+      const rows = await q(
+        `SELECT e.author, ${msOf("MIN(e.created_at)")} AS first_at
+           FROM items e
+          WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND ${userTurn("e")}
+          GROUP BY e.author`,
+      );
+      return rows.map((r) => ({ author: r.author as string, firstAt: Number(r.first_at) }));
+    },
+
     async spendRollup(range): Promise<SpendRow[]> {
       return (await q(spendSql, [range.from, range.to])).map(rowToSpendRow);
     },

@@ -29,8 +29,18 @@ export interface OffboardedChange {
 
 export type PrincipalSummary = Omit<PrincipalRecord, "offboardChanges">;
 
+export type PrincipalSource = "turn" | "invite" | "admin" | "link";
+
+export interface SeenPerson {
+  principalId: string;
+  source: PrincipalSource;
+  at: number;
+}
+
 export interface PrincipalRecord {
   principalId: string;
+  firstSeenAt?: number;
+  source?: PrincipalSource;
   offboarded: boolean;
   offboardedAt?: number;
   offboardedBy?: string;
@@ -55,6 +65,8 @@ export interface IdentityService extends IdentityProvider {
   offboarded(externalId: string): boolean;
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
+  notePerson(externalId: string, source: PrincipalSource): Promise<void>;
+  backfillPrincipals(history: () => Promise<SeenPerson[]>): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -62,6 +74,19 @@ export interface IdentityService extends IdentityProvider {
   putExternalMember(m: ExternalMember): Promise<void>;
   removeExternalMember(principalId: string): Promise<void>;
   refresh(force?: boolean): Promise<void>;
+}
+
+function mergeSummaries(a: PrincipalSummary, b: PrincipalSummary): PrincipalSummary {
+  const [primary, other] = foldPrincipalId(b.principalId) === personKey(b.principalId) ? [b, a] : [a, b];
+  const firstSeen = [a, b]
+    .filter((r) => r.firstSeenAt !== undefined)
+    .sort((x, y) => x.firstSeenAt! - y.firstSeenAt!)[0];
+  return {
+    ...other,
+    ...primary,
+    offboarded: a.offboarded || b.offboarded,
+    ...(firstSeen ? { firstSeenAt: firstSeen.firstSeenAt, source: firstSeen.source } : {}),
+  };
 }
 
 export function actorAssertionActive(
@@ -86,6 +111,7 @@ export function createIdentityService(
   const principalStore = opts.principals;
   const principals = new Map<string, PrincipalSummary>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
+  const noted = new Set<string>();
 
   const keptByDirectorySync = (key: string): boolean =>
     directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
@@ -105,7 +131,11 @@ export function createIdentityService(
       deactivated.clear();
       externals.clear();
       principals.clear();
-      for (const r of records) principals.set(personKey(r.principalId), r);
+      for (const r of records) {
+        const key = personKey(r.principalId);
+        const other = principals.get(key);
+        principals.set(key, other ? mergeSummaries(other, r) : r);
+      }
       for (const r of deactivations) {
         const key = personKey(r.principalId);
         if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
@@ -138,6 +168,36 @@ export function createIdentityService(
   };
   const principalKey = (externalId: string): string =>
     foldPrincipalId(principals.get(personKey(externalId))?.principalId ?? externalId);
+
+  async function recordSeen(people: readonly SeenPerson[]): Promise<number> {
+    const earliest = new Map<string, SeenPerson>();
+    for (const person of people) {
+      const principalId = canonicalPerson(person.principalId);
+      const id = principalKey(principalId);
+      if (!id) continue;
+      const known = earliest.get(id);
+      if (!known || person.at < known.at) earliest.set(id, { ...person, principalId });
+    }
+    let added = 0;
+    const records = await principalStore.mutateMany(
+      [...earliest].map(([id, person]) => ({
+        id,
+        apply: (existing) => {
+          if (existing?.firstSeenAt !== undefined) return existing;
+          added++;
+          return {
+            ...existing,
+            principalId: existing?.principalId ?? person.principalId,
+            offboarded: existing?.offboarded ?? false,
+            firstSeenAt: person.at,
+            source: person.source,
+          };
+        },
+      })),
+    );
+    for (const record of records) remember(record);
+    return added;
+  }
 
   async function reactivateNow(externalId: string, by?: string): Promise<void> {
     deactivated.delete(personKey(externalId));
@@ -181,6 +241,24 @@ export function createIdentityService(
     async listPrincipals(): Promise<PrincipalSummary[]> {
       await refresh();
       return [...principals.values()];
+    },
+    notePerson(externalId, source) {
+      const key = personKey(externalId);
+      if (!key || noted.has(key) || principals.get(key)?.firstSeenAt !== undefined) return Promise.resolve();
+      noted.add(key);
+      return exclusive(() => recordSeen([{ principalId: externalId, source, at: Date.now() }])).then(
+        () => undefined,
+        (error: unknown) => {
+          noted.delete(key);
+          throw error;
+        },
+      );
+    },
+    async backfillPrincipals(history) {
+      await refresh(true);
+      if ([...principals.values()].some((r) => r.firstSeenAt !== undefined)) return 0;
+      const people = await history();
+      return exclusive(() => recordSeen(people));
     },
     recordOffboarded: (externalId, by, changes) =>
       exclusive(async () => {
@@ -228,6 +306,7 @@ export function createIdentityService(
       return exclusive(async () => {
         externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
+        if (m.kind === "teammate") await recordSeen([{ principalId: m.email, source: "invite", at: m.createdAt }]);
       });
     },
     removeExternalMember(principalId: string): Promise<void> {

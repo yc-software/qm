@@ -236,6 +236,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
         { sessionId: "s2", principalId: EMAIL, validFrom: 20, validTo: null, validFromSeq: null, validToSeq: null },
       ],
       turns: [],
+      people: [OIDC, EMAIL],
     });
     assert.equal(users.length, 1);
     assert.equal(users[0]!.principalId, EMAIL);

@@ -19,6 +19,37 @@ test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin(undefined), "conversation");
 });
 
+test("firstAuthoredTurns names only people who wrote a turn, with their first one", async () => {
+  const nowRef = { v: 20_000_000_000 };
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v });
+  const scope = scopeId("channel", "C-roster");
+  const s = await store.getOrCreateByThread("ch:C-roster:t1", "channel", scope);
+  await store.addParticipant(s.id, "roster-talker");
+  await store.addParticipant(s.id, "roster-silent");
+  const { lease } = await store.acquireLease(s.id);
+  assert.ok(lease);
+  nowRef.v += 1000;
+  const first = await store.append(lease, {
+    type: "user",
+    author: "roster-talker",
+    payload: { text: "first" },
+    scopeLabel: scope,
+  });
+  nowRef.v += 1000;
+  await store.append(lease, { type: "user", author: "roster-talker", payload: { text: "again" }, scopeLabel: scope });
+  await store.append(lease, {
+    type: "user",
+    author: "roster-overheard",
+    payload: { overheard: true, text: "chatter" },
+    scopeLabel: scope,
+  });
+  await store.append(lease, { type: "assistant", payload: { text: "reply" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+
+  const rows = (await store.firstAuthoredTurns()).filter((r) => r.author.startsWith("roster-"));
+  assert.deepEqual(rows, [{ author: "roster-talker", firstAt: first.createdAt }]);
+});
+
 test("attributedTurns applies each window's [validFrom,validTo) and excludes overheard", async () => {
   const nowRef = { v: 10_000_000_000 };
   const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v });

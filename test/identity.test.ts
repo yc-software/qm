@@ -7,6 +7,7 @@ import {
   type PrincipalRecord,
 } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
 import { testMap } from "./support/test-database.ts";
 
 const id = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
@@ -255,4 +256,79 @@ test("deactivated means signed out: manual, or removed by directory sync and not
     ),
     [true, true, false, false],
   );
+});
+
+test("a person joins the roster once, folded to one record, on the first thing that makes them real", async () => {
+  const principals = testMap<PrincipalRecord>();
+  let writes = 0;
+  const counted = {
+    ...principals,
+    mutateMany: (updates: Parameters<typeof principals.mutateMany>[0]) => {
+      writes++;
+      return principals.mutateMany(updates);
+    },
+  };
+  const svc = createIdentityService(testMap(), { externalMembers: testMap(), principals: counted });
+  await svc.refresh();
+  await svc.notePerson("Pat@Example.com", "turn");
+  await svc.notePerson("pat@example.com", "turn");
+  await svc.notePerson("pat@example.com", "admin");
+  assert.equal(writes, 1, "later notes for someone already on the roster cost no write");
+  const [pat] = await svc.listPrincipals();
+  assert.deepEqual([pat!.principalId, pat!.source, pat!.offboarded], ["Pat@Example.com", "turn", false]);
+  assert.equal(typeof pat!.firstSeenAt, "number");
+
+  const reader = createIdentityService(testMap(), { externalMembers: testMap(), principals });
+  await reader.notePerson("pat@example.com", "link");
+  assert.equal((await reader.principal("pat@example.com"))!.source, "turn", "another instance keeps the first arrival");
+
+  await svc.recordOffboarded("gone@example.com", "admin-alice", []);
+  await reader.notePerson("gone@example.com", "turn");
+  const gone = (await reader.principal("gone@example.com"))!;
+  assert.deepEqual([gone.offboarded, gone.offboardedBy, gone.source], [true, "admin-alice", "turn"]);
+
+  await svc.putExternalMember({
+    email: "guest@example.com",
+    role: "member",
+    expiresAt: null,
+    kind: "teammate",
+    invitedBy: "admin-alice",
+    createdAt: 1234,
+    updatedAt: 1234,
+  });
+  const guest = (await svc.principal("guest@example.com"))!;
+  assert.deepEqual([guest.source, guest.firstSeenAt], ["invite", 1234]);
+});
+
+test("the roster backfill runs once, takes each person's earliest arrival, and folds linked ids", async () => {
+  installPrincipalLinks({
+    canonical: (key) => (key === "U-SLACK" ? "sam@example.com" : undefined),
+    aliases: (key) => (key === "sam@example.com" ? ["U-SLACK"] : []),
+  });
+  try {
+    const principals = testMap<PrincipalRecord>();
+    const svc = createIdentityService(testMap(), { externalMembers: testMap(), principals });
+    await svc.recordOffboarded("left@example.com", "admin-alice", []);
+    let loads = 0;
+    const history = async () => {
+      loads++;
+      return [
+        { principalId: "U-SLACK", source: "turn" as const, at: 300 },
+        { principalId: "sam@example.com", source: "admin" as const, at: 200 },
+        { principalId: "left@example.com", source: "turn" as const, at: 100 },
+        { principalId: "Ann@Example.com", source: "invite" as const, at: 50 },
+      ];
+    };
+    assert.equal(await svc.backfillPrincipals(history), 3);
+    const rows = Object.fromEntries((await svc.listPrincipals()).map((r) => [r.principalId, r]));
+    assert.deepEqual(Object.keys(rows).sort(), ["Ann@Example.com", "left@example.com", "sam@example.com"]);
+    assert.deepEqual([rows["sam@example.com"]!.source, rows["sam@example.com"]!.firstSeenAt], ["admin", 200]);
+    assert.deepEqual([rows["left@example.com"]!.offboarded, rows["left@example.com"]!.firstSeenAt], [true, 100]);
+
+    const again = createIdentityService(testMap(), { externalMembers: testMap(), principals });
+    assert.equal(await again.backfillPrincipals(history), 0);
+    assert.equal(loads, 1, "a second boot sees the roster and skips the history scan");
+  } finally {
+    installPrincipalLinks(null);
+  }
 });

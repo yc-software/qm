@@ -12,6 +12,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { rosterHistory } from "./admin/users.ts";
 
 const config = loadConfig();
 
@@ -20,6 +21,15 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
+const backfilledPeople = await built.identity.backfillPrincipals(async () =>
+  rosterHistory({
+    turns: await built.sessions.firstAuthoredTurns(),
+    grants: await built.admin.listGrants(),
+    externals: await built.identity.listExternalMembers(),
+    now: Date.now(),
+  }),
+);
+if (backfilledPeople > 0) console.log(`[qm] backfilled ${backfilledPeople} people into principals`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);

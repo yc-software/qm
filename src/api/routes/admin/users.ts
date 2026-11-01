@@ -35,7 +35,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
-  const users = computeUsers({ participants, turns, grants });
+  const roster = (await deps.identity?.listPrincipals()) ?? [];
+  const users = computeUsers({ participants, turns, grants, people: roster.map((r) => r.principalId) });
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
@@ -44,25 +45,17 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  const offboarded = ((await deps.identity?.listPrincipals()) ?? []).filter((r) => r.offboarded);
-  for (const principalId of [
-    ...externalUsers.filter((m) => m.kind === "teammate" && m.status === "active").map((m) => m.email),
-    ...offboarded.map((r) => r.principalId),
-  ]) {
-    if (!users.some((u) => samePerson(u.principalId, principalId)))
-      users.push({
-        principalId,
-        sessionCount: 0,
-        turnCount: 0,
-        lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, principalId),
-      });
-  }
-  const rows = users.map((u) => ({
-    ...u,
-    deactivated: deps.identity?.deactivated(u.principalId) === true,
-    offboarded: deps.identity?.offboarded(u.principalId) === true,
-  }));
+  const records = new Map(roster.map((r) => [personKey(r.principalId), r]));
+  const rows = users.map((u) => {
+    const record = records.get(personKey(u.principalId));
+    return {
+      ...u,
+      firstSeenAt: record?.firstSeenAt ?? null,
+      source: record?.source ?? null,
+      deactivated: deps.identity?.deactivated(u.principalId) === true,
+      offboarded: record?.offboarded === true,
+    };
+  });
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
@@ -495,6 +488,7 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
       role: b.role as AdminRole,
       scopeId: String(b.scopeId ?? ""),
     });
+    await deps.identity?.notePerson(grant.principalId, "admin");
     audit(deps, {
       principalId: actor.id,
       action: "grant.create",

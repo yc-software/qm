@@ -827,6 +827,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         linkedBy: access.principal,
       });
       await deps.identity?.refresh(true);
+      await deps.identity?.notePerson(access.principal, "link");
       audit(deps, {
         principalId: access.principal,
         action: "principal_link.create",

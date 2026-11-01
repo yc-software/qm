@@ -24,7 +24,7 @@ test("computeUsers dedupes participants, credits in-window turns, and joins admi
     { principalId: "U1", sessionId: "s2", day: 0, turns: 1, firstAt: 250, lastAt: 250 },
   ];
   const grants = [{ principalId: "U2", scopeId: "org:default-org", role: "org_admin" as const }];
-  const rows = computeUsers({ participants, turns, grants });
+  const rows = computeUsers({ participants, turns, grants, people: ["U1", "U2"] });
   const byId: Record<string, any> = Object.fromEntries(rows.map((r) => [r.principalId, r]));
 
   assert.equal(byId.U1.sessionCount, 2);
@@ -42,17 +42,21 @@ test("computeUsers sums a window's turn rollup and takes its latest timestamp", 
     ],
     turns: [{ principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 100, lastAt: 199 }],
     grants: [],
+    people: ["U1"],
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.turnCount, 2, "the window's two in-window turns");
   assert.equal(rows[0]!.lastSeenAt, 199);
 });
 
-test("computeUsers includes a grant-holder who has never participated", () => {
+test("computeUsers lists exactly the roster: a quiet admin gets a row, a participant who is not on it does not", () => {
   const rows = computeUsers({
-    participants: [],
+    participants: [
+      { sessionId: "s1", principalId: "U9", validFrom: 100, validTo: null, validFromSeq: null, validToSeq: null },
+    ],
     turns: [],
     grants: [{ principalId: "ghost-admin", scopeId: "org:default-org", role: "org_admin" as const }],
+    people: ["ghost-admin"],
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.principalId, "ghost-admin");
@@ -65,6 +69,7 @@ function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
+    identity: built.identity,
     sessions: built.sessions,
     files: built.files,
     directory: built.directory,
@@ -86,13 +91,36 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       text: "hello",
     };
     assert.equal((await s.built.app.turn(dm)).status, "ok");
+    const session = await s.built.sessions.getByThread("dm:U1:t1");
+    await s.built.sessions.addParticipant(session!.id, "U-preloaded");
+    await s.built.app.turn({
+      ...dm,
+      actor: { externalId: "U-cron" },
+      conversation: { kind: "dm", threadRef: "dm:U-cron:t1" },
+      origin: { kind: "automation" },
+    });
+    const granted = await fetch(`${s.base}/v1/admin/grants`, {
+      method: "POST",
+      headers: { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "new-admin", role: "org_admin", scopeId: "org:default-org" }),
+    });
+    assert.equal(granted.status, 200);
 
     const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
-    assert.ok(
-      d.users.some((u: { principalId: string }) => u.principalId === "U1"),
-      "the DM participant appears",
+    const u1 = d.users.find((u: { principalId: string }) => u.principalId === "U1");
+    assert.equal(u1?.source, "turn", "someone who talked is on the roster");
+    assert.equal(typeof u1?.firstSeenAt, "number");
+    assert.deepEqual(
+      ["U-preloaded", "U-cron"].filter((id) => d.users.some((u: { principalId: string }) => u.principalId === id)),
+      [],
+      "someone only added to a session, or only acted for by an automation, is not",
+    );
+    assert.equal(
+      d.users.find((u: { principalId: string }) => u.principalId === "new-admin")?.source,
+      "admin",
+      "granting admin puts the person on the roster",
     );
     assert.ok(
       Array.isArray(d.grants) && d.grants.some((g: { principalId: string }) => g.principalId === "admin-alice"),

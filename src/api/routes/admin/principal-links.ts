@@ -45,6 +45,7 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
       linkedBy: actor.id,
     });
     await deps.identity?.refresh(true);
+    await deps.identity?.notePerson(link.canonicalId, "link");
     audit(deps, {
       principalId: actor.id,
       action: "principal_link.create",
