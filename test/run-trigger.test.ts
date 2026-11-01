@@ -346,3 +346,60 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     assert.equal((await d.deliveries.pending("slack")).length, 1);
   });
 });
+
+it("leaves a bound scheduled run's outcome to its own run delivery and keeps the failure note", async () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approve", command: "send", reason: "approval required" }],
+    },
+    { status: "ok", reply: "Update" },
+    { status: "failed", reason: "boom" },
+  ];
+  for (const result of results) {
+    const d = deps(async (request) => {
+      assert.equal(request.deliveryTarget, "web:U1:bound");
+      return { ...result, runId: "scheduled-run" };
+    });
+    const outcome = await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+      input: "scheduled task",
+      fireKey: "cron:1:fire:1",
+      surface: "cron",
+      destination: {
+        type: "webhook",
+        target: "web:U1:bound",
+        webhook: { binding: "binding", url: "https://receiver.example/qm" },
+      },
+      errorNotice: () => "failed",
+    });
+    assert.deepEqual(await d.deliveries.pending("webhook"), []);
+    if (result.status === "failed") assert.match(outcome.note ?? "", /boom/);
+  }
+});
+
+it("keeps shadow webhook results out of terminal-run recovery", async () => {
+  let request: TurnRequest | undefined;
+  const d = deps(async (submitted) => {
+    request = submitted;
+    return { status: "ok", reply: "Update", runId: "scheduled-run" };
+  });
+  await runTrigger(d, {
+    owner: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    input: "scheduled task",
+    fireKey: "cron:shadow",
+    surface: "cron",
+    shadow: true,
+    destination: {
+      type: "webhook",
+      target: "web:U1:bound",
+      webhook: { binding: "binding", url: "https://receiver.example/qm" },
+    },
+  });
+  assert.ok(request);
+  assert.equal(request.deliveryTarget, undefined);
+  assert.deepEqual(await d.deliveries.pending("webhook"), []);
+  assert.equal((await d.deliveries.listShadow()).length, 1);
+});

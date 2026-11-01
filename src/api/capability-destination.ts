@@ -4,6 +4,7 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 const stripCandidate = (c: CandidateDestination): Destination => ({
   type: c.type,
   target: c.target,
+  ...(c.webhook ? { webhook: c.webhook } : {}),
   ...(c.audienceScopeId ? { audienceScopeId: c.audienceScopeId } : {}),
 });
 

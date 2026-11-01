@@ -151,6 +151,8 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { createOutboundQueue } from "./delivery/outbound-queue.ts";
+import { webhookChannel } from "./delivery/webhook-channel.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -1780,7 +1782,8 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const outbox = createPostgresDeliveryStore(databaseUrl);
+  const deliveries = withWebTranscriptDeliveries(outbox, sessions);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2786,6 +2789,7 @@ export function buildApp(
   let backgroundClaimsStopping: Promise<void> = Promise.resolve();
   let monitorDrained: Promise<void> = Promise.resolve();
   let backgroundGeneration = 0;
+  let outboundQueue: ReturnType<typeof createOutboundQueue> | undefined;
   function startBackground(): void {
     if (backgroundRunning) return;
     backgroundRunning = true;
@@ -2829,6 +2833,12 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      if (databaseUrl && !outboundQueue) {
+        outboundQueue = createOutboundQueue(databaseUrl, { outbox, deliveries }, [
+          webhookChannel(config.signingSecret),
+        ]);
+        outboundQueue.start();
+      }
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2841,7 +2851,10 @@ export function buildApp(
     backgroundGeneration++;
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
+    const outboundStopping = outboundQueue?.stop();
+    outboundQueue = undefined;
     const stopping = [
+      outboundStopping,
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),

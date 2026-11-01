@@ -1,4 +1,4 @@
-import type { TurnOrigin, TurnRequest } from "../types.ts";
+import type { DeliveryWebhook, TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
 
 type LegacyTurnOrigin = Pick<
@@ -132,4 +132,19 @@ export function desktopClientForTurn(
     (input.attempt ?? 1) <= 1
     ? input.desktopClientId
     : undefined;
+}
+
+export function boundWebhook(
+  request: Pick<
+    Partial<TurnRequest>,
+    "deliveryWebhook" | "deliveryTarget" | "approval" | "origin" | keyof LegacyTurnOrigin
+  >,
+): { webhook: DeliveryWebhook; target: string } | undefined {
+  if (request.deliveryWebhook && request.deliveryTarget)
+    return { webhook: request.deliveryWebhook, target: request.deliveryTarget };
+  const origin = resolveTurnOrigin(request);
+  const destination = origin.kind === "automation" ? origin.destination : undefined;
+  if (destination?.type !== "webhook" || !destination.webhook) return undefined;
+  if (!request.approval && request.deliveryTarget !== destination.target) return undefined;
+  return { webhook: destination.webhook, target: destination.target };
 }

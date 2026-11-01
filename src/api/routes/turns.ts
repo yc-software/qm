@@ -123,6 +123,26 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
+  if (body.deliveryWebhook !== undefined) {
+    const parsed = z
+      .object({
+        binding: z.uuid(),
+        url: z
+          .url({ protocol: /^https?$/ })
+          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
+      })
+      .strict()
+      .safeParse(body.deliveryWebhook);
+    if (
+      !parsed.success ||
+      body.surfaceTools ||
+      body.surface !== "web" ||
+      body.conversation.kind !== "dm" ||
+      body.deliveryCandidates?.length ||
+      body.deliveryTarget !== body.conversation.threadRef
+    )
+      return { error: "invalid delivery webhook" };
+  }
   const {
     slackSource: _slackSource,
     externalSlack: _externalSlack,
