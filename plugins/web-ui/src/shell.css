@@ -3849,6 +3849,35 @@ qm-markdown .tok-in {
   background: none;
   padding: 0;
 }
+qm-draft {
+  display: block;
+  margin: 12px 0;
+  padding: 10px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--background);
+}
+qm-draft .draft-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin: 0 -4px 6px 0;
+}
+qm-draft .draft-card-label {
+  color: var(--muted-foreground);
+  font-size: 0.9em;
+}
+qm-draft copy-button button {
+  color: var(--muted-foreground);
+}
+qm-draft copy-button button:hover {
+  color: var(--foreground);
+}
+qm-draft .draft-card-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .assistant-body code-block[language="text"] pre,
 .user-bubble code-block[language="text"] pre {
   margin: 0;
