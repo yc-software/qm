@@ -310,7 +310,8 @@ test("the roster backfill runs once, takes each person's earliest arrival, and f
     const svc = createIdentityService(testMap(), { externalMembers: testMap(), principals });
     await svc.recordOffboarded("left@example.com", "admin-alice", []);
     let loads = 0;
-    const history = async () => {
+    const history = async (firstRun: boolean) => {
+      if (!firstRun) return [{ principalId: "late-admin@example.com", source: "admin" as const, at: 400 }];
       loads++;
       return [
         { principalId: "U-SLACK", source: "turn" as const, at: 300 },
@@ -326,8 +327,10 @@ test("the roster backfill runs once, takes each person's earliest arrival, and f
     assert.deepEqual([rows["left@example.com"]!.offboarded, rows["left@example.com"]!.firstSeenAt], [true, 100]);
 
     const again = createIdentityService(testMap(), { externalMembers: testMap(), principals });
-    assert.equal(await again.backfillPrincipals(history), 0);
-    assert.equal(loads, 1, "a second boot sees the roster and skips the history scan");
+    assert.equal(await again.backfillPrincipals(history), 1);
+    assert.equal(loads, 1, "a later boot skips the turn history but still records a grant or invite the roster missed");
+    assert.equal((await again.principal("late-admin@example.com"))!.source, "admin");
+    assert.equal(await again.backfillPrincipals(history), 0, "and writes nothing once the roster has them");
   } finally {
     installPrincipalLinks(null);
   }

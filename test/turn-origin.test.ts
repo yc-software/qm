@@ -135,7 +135,7 @@ test("desktop execution requires a human web turn with a live desktop binding", 
 
 test("only a person's own message introduces them to the roster", () => {
   assert.equal(introducesPerson({ origin: { kind: "direct" } }), true);
-  assert.equal(introducesPerson({ liveActor: true }), true);
+  assert.equal(introducesPerson({ origin: { kind: "human" } }), true);
   assert.equal(introducesPerson({ origin: { kind: "automation" } }), false);
   assert.equal(introducesPerson({ origin: { kind: "ambient" } }), false);
   assert.equal(introducesPerson({ origin: { kind: "direct" }, sessionSenderId: "s1" }), false);

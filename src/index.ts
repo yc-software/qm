@@ -21,9 +21,9 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
-const backfilledPeople = await built.identity.backfillPrincipals(async () =>
+const backfilledPeople = await built.identity.backfillPrincipals(async (firstRun) =>
   rosterHistory({
-    turns: await built.sessions.firstAuthoredTurns(),
+    turns: firstRun ? await built.sessions.firstAuthoredTurns() : [],
     grants: await built.admin.listGrants(),
     externals: await built.identity.listExternalMembers(),
     now: Date.now(),
