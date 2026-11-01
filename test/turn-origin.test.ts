@@ -134,13 +134,13 @@ test("desktop execution requires a human web turn with a live desktop binding", 
 });
 
 test("only a person's own message introduces them to the roster", () => {
-  assert.equal(introducesPerson({ origin: { kind: "direct" } }), true);
-  assert.equal(introducesPerson({ origin: { kind: "human" } }), true);
-  assert.equal(introducesPerson({ origin: { kind: "automation" } }), false);
-  assert.equal(introducesPerson({ origin: { kind: "ambient" } }), false);
-  assert.equal(introducesPerson({ origin: { kind: "direct" }, sessionSenderId: "s1" }), false);
+  assert.equal(introducesPerson({ kind: "direct" }, {}), true);
+  assert.equal(introducesPerson({ kind: "human" }, {}), true);
+  assert.equal(introducesPerson({ kind: "automation" }, {}), false);
+  assert.equal(introducesPerson({ kind: "ambient" }, {}), false);
+  assert.equal(introducesPerson({ kind: "direct" }, { sessionSenderId: "s1" }), false);
   assert.equal(
-    introducesPerson({ origin: { kind: "direct" }, externalSlack: { accountId: "a" } as never }),
+    introducesPerson({ kind: "direct" }, { externalSlack: { accountId: "a" } as never }),
     false,
     "someone from another Slack workspace is not one of ours",
   );

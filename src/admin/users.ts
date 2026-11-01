@@ -2,7 +2,7 @@ import type { AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
 import { canonicalPerson } from "../directory/person.ts";
-import type { ExternalMember } from "../identity/external-members.ts";
+import { isTeammate, type ExternalMember } from "../identity/external-members.ts";
 import type { SeenPerson } from "../identity/identity-service.ts";
 
 export interface AdminUserRow {
@@ -69,7 +69,7 @@ export function rosterHistory(input: {
       at: g.createdAt || input.now,
     })),
     ...input.externals
-      .filter((m) => m.kind === "teammate")
+      .filter(isTeammate)
       .map((m): SeenPerson => ({ principalId: m.email, source: "invite", at: m.createdAt })),
   ];
 }

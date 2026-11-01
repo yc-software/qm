@@ -3,7 +3,7 @@ import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
-import { externalMemberActive, type ExternalMember } from "./external-members.ts";
+import { externalMemberActive, isTeammate, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
@@ -67,7 +67,7 @@ export interface IdentityService extends IdentityProvider {
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
   notePerson(externalId: string, source: PrincipalSource): Promise<void>;
-  reconcilePrincipals(people: () => Promise<SeenPerson[]>): Promise<number>;
+  reconcilePrincipals(people: (firstRun: boolean) => Promise<SeenPerson[]>): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -255,7 +255,8 @@ export function createIdentityService(
     },
     async reconcilePrincipals(people) {
       await refresh(true);
-      const seen = await people();
+      const firstRun = ![...principals.values()].some((r) => r.firstSeenAt !== undefined);
+      const seen = await people(firstRun);
       return exclusive(() => recordSeen(seen));
     },
     recordOffboarded: (externalId, by, changes) =>
@@ -304,7 +305,7 @@ export function createIdentityService(
       return exclusive(async () => {
         externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
-        if (m.kind === "teammate")
+        if (isTeammate(m))
           await recordSeen([{ principalId: m.email, source: "invite", at: m.createdAt }]).catch((err: unknown) =>
             reportFailure("identity: record person", err),
           );
