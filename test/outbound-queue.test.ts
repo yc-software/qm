@@ -33,7 +33,12 @@ test(
         sent.push(d.text);
       },
     };
-    const queue = createOutboundQueue(url, store, [channel]);
+    let held = true;
+    const deliveries = {
+      ...store,
+      pending: async (type: string) => (await store.pending(type)).filter((d) => !held || d.text !== "h1"),
+    };
+    const queue = createOutboundQueue(url, { outbox: store, deliveries }, [channel]);
     await queue.start();
     try {
       const enqueue = (target: string, text: string) =>
@@ -42,7 +47,14 @@ test(
       await enqueue("conversation-a", "a1");
       await enqueue("conversation-a", "a2");
       await enqueue("conversation-b", "b1");
+      await enqueue("conversation-h", "h1");
+      await enqueue("conversation-h", "h2");
       await until(() => sent.length === 3);
+      assert.ok(!sent.includes("h2"), "a row is not sent ahead of an earlier one that is not ready");
+      held = false;
+      await enqueue("conversation-z", "z1");
+      await until(() => sent.length === 6);
+      assert.ok(sent.indexOf("h1") < sent.indexOf("h2"));
       assert.ok(sent.indexOf("b1") < sent.indexOf("a1"), "a stuck conversation does not hold up another");
       assert.ok(sent.indexOf("a1") < sent.indexOf("a2"), "a conversation keeps its order through a retry");
       assert.deepEqual(await store.pending("webhook"), []);

@@ -1,5 +1,4 @@
-import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { sharedPgBoss } from "../persistence/pg-boss.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
@@ -29,21 +28,8 @@ export function createPgBossCronQueue(
   schema: string = "pgboss",
   fireConcurrency: number = 1,
 ): CronJobQueue {
-  let pg: PgPool | null = null;
-  const boss = new PgBoss({
-    schema,
-    db: {
-      executeSql: async (text, values) => {
-        if (!pg) throw new Error("Cron queue database is closed");
-        return (await pg.pool()).query(text, values);
-      },
-    },
-  });
-  async function closePool() {
-    const previous = pg;
-    pg = null;
-    await previous?.close();
-  }
+  const shared = sharedPgBoss(databaseUrl, schema);
+  const boss = shared.boss;
   let started = false;
   let initialized = false;
   let lastErrorAt = 0;
@@ -54,12 +40,11 @@ export function createPgBossCronQueue(
   return {
     async start(handlers) {
       if (started) return;
-      pg ??= createPgPool(databaseUrl);
+      if (!initialized) {
+        await shared.retain();
+        initialized = true;
+      }
       try {
-        if (!initialized) {
-          await boss.start();
-          initialized = true;
-        }
         await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
         await boss.work<CronFireJob>(
@@ -70,16 +55,9 @@ export function createPgBossCronQueue(
           },
         );
       } catch (e) {
-        if (initialized) {
-          await boss
-            .offWork(FIRE_QUEUE, { wait: false })
-            .catch(swallowAs("cron queue: stop worker after failed start", undefined));
-        } else {
-          await boss
-            .stop({ close: true, graceful: false })
-            .catch(swallowAs("cron queue: stop after failed start", undefined));
-          await closePool();
-        }
+        await boss
+          .offWork(FIRE_QUEUE, { wait: false })
+          .catch(swallowAs("cron queue: stop worker after failed start", undefined));
         throw e;
       }
       started = true;
@@ -107,11 +85,12 @@ export function createPgBossCronQueue(
     },
     async stop() {
       started = false;
+      if (!initialized) return;
+      initialized = false;
       try {
-        await boss.stop({ close: true, graceful: false });
+        await boss.offWork(FIRE_QUEUE, { wait: false });
       } finally {
-        initialized = false;
-        await closePool();
+        await shared.release();
       }
     },
   };

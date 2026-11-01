@@ -6,11 +6,12 @@ export function webhookSigningKey(signingSecret: string): string {
   return createHmac("sha256", signingSecret).update("delivery-webhook").digest("hex");
 }
 
-export function webhookChannel(signingSecret: string, fetcher: typeof fetch = fetch): OutboundChannel {
-  const key = webhookSigningKey(signingSecret);
+export function webhookChannel(signingSecret: string | undefined, fetcher: typeof fetch = fetch): OutboundChannel {
+  const key = signingSecret && webhookSigningKey(signingSecret);
   return {
     type: "webhook",
     async send(d) {
+      if (!key) return { refused: "core has no CORE_SIGNING_SECRET to sign webhook deliveries with" };
       const url = new URL(d.destination.webhook!.url);
       const body = JSON.stringify(d);
       const res = await fetcher(url, {

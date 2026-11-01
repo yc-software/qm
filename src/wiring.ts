@@ -1784,7 +1784,8 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const outbox = createPostgresDeliveryStore(databaseUrl);
+  const deliveries = withWebTranscriptDeliveries(outbox, sessions);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -2847,8 +2848,10 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
-      if (config.signingSecret && databaseUrl && !outboundQueue) {
-        outboundQueue = createOutboundQueue(databaseUrl, deliveries, [webhookChannel(config.signingSecret)]);
+      if (databaseUrl && !outboundQueue) {
+        outboundQueue = createOutboundQueue(databaseUrl, { outbox, deliveries }, [
+          webhookChannel(config.signingSecret),
+        ]);
         void outboundQueue.start().catch(swallowAs("wiring: outbound queue start failed", undefined));
       }
     };

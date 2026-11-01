@@ -1,5 +1,4 @@
-import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { sharedPgBoss } from "../persistence/pg-boss.ts";
 import { DELIVERY_MAX_AGE_MS, type DeliveryStore } from "./delivery-store.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -10,33 +9,33 @@ export interface OutboundChannel {
   send(d: Delivery): Promise<{ refused: string } | void>;
 }
 
-const RETRY_DELAY_SECONDS = 5;
+const RETRY_DELAY_MAX_SECONDS = 300;
 
-export function createOutboundQueue(databaseUrl: string, deliveries: DeliveryStore, channels: OutboundChannel[]) {
-  let pg: PgPool | null = null;
-  const boss = new PgBoss({
-    schema: "pgboss",
-    db: {
-      executeSql: async (text, values) => {
-        if (!pg) throw new Error("Outbound queue database is closed");
-        return (await pg.pool()).query(text, values);
-      },
-    },
-  });
-  boss.on("error", (e) => reportFailure("outbound queue: pg-boss error", e));
+export function createOutboundQueue(
+  databaseUrl: string,
+  stores: { outbox: DeliveryStore; deliveries: DeliveryStore },
+  channels: OutboundChannel[],
+) {
+  const { outbox, deliveries } = stores;
+  const shared = sharedPgBoss(databaseUrl);
+  const { boss } = shared;
   const queueOf = (type: string): string => `deliver-${type}`;
+  let retained = false;
 
   const feed = async (): Promise<void> => {
     for (const channel of channels) {
+      const ready = new Set((await deliveries.pending(channel.type)).map((d) => d.id));
       const heads = new Map<string, Delivery>();
-      for (const d of await deliveries.pending(channel.type))
+      for (const d of await outbox.pending(channel.type))
         if (!heads.has(d.destination.target)) heads.set(d.destination.target, d);
-      for (const d of heads.values()) await boss.send(queueOf(channel.type), { id: d.id }, { id: d.id });
+      for (const d of heads.values())
+        if (ready.has(d.id)) await boss.send(queueOf(channel.type), { id: d.id }, { id: d.id });
     }
   };
   let feeding: Promise<void> | undefined;
   let again = false;
   const wake = (): void => {
+    if (!retained) return;
     if (feeding) {
       again = true;
       return;
@@ -55,25 +54,29 @@ export function createOutboundQueue(databaseUrl: string, deliveries: DeliverySto
   let unsubscribe: (() => void) | undefined;
 
   const deliver = async (channel: OutboundChannel, id: string): Promise<void> => {
-    const d = await deliveries.get(id);
+    const d = await outbox.get(id);
     if (!d || d.deliveredAt !== null || d.expiredAt !== undefined) return;
-    const outcome = await channel.send(d);
-    if (outcome) await deliveries.fail(id, outcome.refused, Date.now());
-    else await deliveries.ack(id, Date.now());
+    const outcome = await channel.send(d).catch((e: unknown) => {
+      reportFailure(`outbound queue: ${channel.type} delivery not accepted; pg-boss will retry`, e, `delivery=${id}`);
+      throw e;
+    });
+    if (outcome) await outbox.fail(id, outcome.refused, Date.now());
+    else await outbox.ack(id, Date.now());
     wake();
   };
 
   return {
     async start(): Promise<void> {
-      pg ??= createPgPool(databaseUrl);
-      await boss.start();
+      await shared.retain();
+      retained = true;
       for (const channel of channels) {
         await boss.createQueue(queueOf(channel.type), {
           notify: true,
-          retryDelay: RETRY_DELAY_SECONDS,
+          expireInSeconds: 60,
+          retryDelay: 5,
           retryBackoff: true,
-          retryDelayMax: 300,
-          retryLimit: DELIVERY_MAX_AGE_MS / 1000 / RETRY_DELAY_SECONDS,
+          retryDelayMax: RETRY_DELAY_MAX_SECONDS,
+          retryLimit: DELIVERY_MAX_AGE_MS / 1000 / RETRY_DELAY_MAX_SECONDS,
         });
         await boss.work<{ id: string }>(queueOf(channel.type), { batchSize: 1 }, async ([job]) => {
           await deliver(channel, job!.data.id);
@@ -88,12 +91,12 @@ export function createOutboundQueue(databaseUrl: string, deliveries: DeliverySto
       unsubscribe = undefined;
       await sweeper.stop();
       await feeding;
+      if (!retained) return;
+      retained = false;
       try {
-        await boss.stop({ close: true, graceful: false });
+        for (const channel of channels) await boss.offWork(queueOf(channel.type), { wait: false });
       } finally {
-        const previous = pg;
-        pg = null;
-        await previous?.close();
+        await shared.release();
       }
     },
   };
