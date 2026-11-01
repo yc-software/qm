@@ -455,7 +455,7 @@ function groupAvatars(item: Extract<RecentItem, { kind: "project" }>): TemplateR
   const shown = members.length > 3 ? members.slice(0, 2) : members;
   const overflow = members.length - shown.length;
   const everyone = members.map((member) => member.displayName).join(", ");
-  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`} ${tip(everyone)}>
+  return html`<span class="group-avatar-stack" role="img" aria-label=${`With ${everyone}`}>
     ${shown.map((member) =>
       member.avatarUrl
         ? html`<img class="group-avatar" src=${member.avatarUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />`
@@ -499,9 +499,9 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
-                ${groupAvatars(item)}
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
+                ${groupAvatars(item)}
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
