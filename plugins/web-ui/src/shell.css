@@ -2416,6 +2416,10 @@ qm-markdown .tok-in {
   font: inherit;
   line-height: 1.5;
 }
+.queued-edit-input:focus,
+.queued-edit-input:focus-visible {
+  outline: none;
+}
 .queued-chip + .queued-chip {
   margin-top: -10px;
 }
