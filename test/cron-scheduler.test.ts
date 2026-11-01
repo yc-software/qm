@@ -413,7 +413,7 @@ test("a failing interval cron does not starve later due crons across ticks", asy
 
   assert.deepEqual(
     calls.map((call) => call.idempotencyKey),
-    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:2001`],
   );
 });
 
@@ -498,7 +498,7 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
   assert.equal(new Set(threads).size, 3, "each fire gets a fresh internal thread");
   assert.ok(threads.every((thread) => thread?.startsWith(`cron:${cron.id}:fire:`)));
   assert.equal(calls[0]?.idempotencyKey, `cron:${cron.id}:1`);
-  assert.equal(calls[1]?.idempotencyKey, `cron:${cron.id}:3000`);
+  assert.equal(calls[1]?.idempotencyKey, `cron:${cron.id}:2001`);
   assert.match(calls[2]?.idempotencyKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
   assert.notEqual(calls[1]?.conversation.threadRef, calls[1]?.idempotencyKey);
 });

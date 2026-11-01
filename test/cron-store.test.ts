@@ -364,7 +364,18 @@ test("claimSlot: exactly one claimant wins a slot; the claim advances the schedu
   assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_000_600), false, "a second claim on the same slot loses");
   const after = (await store.get(cron.id))!;
   assert.equal(after.lastFiredAt, 1_000_500);
-  assert.equal(after.nextFireAt, 1_060_500, "the claim advances like markFired");
+  assert.equal(after.nextFireAt, 1_060_000, "an interval cron stays on its slot marks, not the late fire time");
+});
+
+test("claimSlot: a late interval claim skips the missed slots and stays on the marks", async () => {
+  const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const cron = await store.create({ ...base, schedule: { everyMs: 60_000, firstFireAt: 1_000_000 } });
+  assert.equal(await store.claimSlot(cron.id, 1_000_000, 1_190_000), true);
+  assert.equal(
+    (await store.get(cron.id))!.nextFireAt,
+    1_240_000,
+    "the next mark after the late fire, no catch-up burst",
+  );
 });
 
 test("claimSlot: concurrent claimants on one slot still yield exactly one winner", async () => {

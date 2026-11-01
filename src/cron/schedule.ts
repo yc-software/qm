@@ -154,6 +154,13 @@ export function recoverNextFireAt(
   return everyMs === undefined ? undefined : lastFiredAt + everyMs;
 }
 
+export function nextFireAfterSlot(schedule: CronSchedule, slot: number, firedAt: number): number | undefined {
+  if (isCalendarSchedule(schedule)) return nextCalendarFireAfter(schedule, slot);
+  const everyMs = finitePositiveMs(schedule.everyMs, "schedule.everyMs");
+  if (everyMs === undefined) return undefined;
+  return slot + everyMs * (Math.floor(Math.max(0, firedAt - slot) / everyMs) + 1);
+}
+
 export function advanceNextFireAt(schedule: CronSchedule, firedAt: number): number | undefined {
   if (isCalendarSchedule(schedule)) return nextCalendarFireAfter(schedule, firedAt);
   const everyMs = finitePositiveMs(schedule.everyMs, "schedule.everyMs");
