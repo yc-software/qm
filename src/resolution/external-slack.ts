@@ -1,6 +1,6 @@
+import { activeCapabilityRun } from "../runs/capability-run.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { RunStore } from "../runs/run-store.ts";
-import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
 import type { TurnRequest } from "../types.ts";
@@ -49,16 +49,9 @@ export async function currentExternalSlackRun(
   claims: Pick<CapabilityClaims, "runId" | "runLeaseToken" | "runAttempt" | "threadRef" | "actorId" | "scopeId">,
   deps: { runs?: RunStore; externalSlackPolicies?: ExternalSlackPolicies },
 ) {
-  const run = claims.runId ? await deps.runs?.get(claims.runId) : null;
+  const run = await activeCapabilityRun(deps.runs, claims);
   if (
     !run ||
-    run.status !== "running" ||
-    !claims.runLeaseToken ||
-    run.leaseToken !== claims.runLeaseToken ||
-    run.attempts !== claims.runAttempt ||
-    run.sessionId !== claims.threadRef ||
-    !samePerson(run.request.actor.id, claims.actorId) ||
-    (run.leaseExpiresAt ?? 0) <= Date.now() ||
     !run.request.externalSlack ||
     !externalSlackRequestAllowed({ ...run.request, surface: run.request.surface ?? "" }, deps.externalSlackPolicies) ||
     conversationScope(run.request.conversation, run.request.actor.id) !== claims.scopeId
