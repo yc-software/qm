@@ -29,7 +29,7 @@ export interface OffboardedChange {
 
 export type PrincipalSummary = Omit<PrincipalRecord, "offboardChanges">;
 
-export type PrincipalSource = "turn" | "invite" | "admin" | "link";
+export type PrincipalSource = "turn" | "invite" | "admin";
 
 export interface SeenPerson {
   principalId: string;
@@ -66,7 +66,7 @@ export interface IdentityService extends IdentityProvider {
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
   notePerson(externalId: string, source: PrincipalSource): Promise<void>;
-  backfillPrincipals(history: () => Promise<SeenPerson[]>): Promise<number>;
+  backfillPrincipals(sources: { standing: SeenPerson[]; history: () => Promise<SeenPerson[]> }): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -174,7 +174,7 @@ export function createIdentityService(
     for (const person of people) {
       const principalId = canonicalPerson(person.principalId);
       const id = principalKey(principalId);
-      if (!id) continue;
+      if (!id || principals.get(personKey(principalId))?.firstSeenAt !== undefined) continue;
       const known = earliest.get(id);
       if (!known || person.at < known.at) earliest.set(id, { ...person, principalId });
     }
@@ -254,10 +254,10 @@ export function createIdentityService(
         },
       );
     },
-    async backfillPrincipals(history) {
+    async backfillPrincipals({ standing, history }) {
       await refresh(true);
-      if ([...principals.values()].some((r) => r.firstSeenAt !== undefined)) return 0;
-      const people = await history();
+      const firstRun = ![...principals.values()].some((r) => r.firstSeenAt !== undefined);
+      const people = [...standing, ...(firstRun ? await history() : [])];
       return exclusive(() => recordSeen(people));
     },
     recordOffboarded: (externalId, by, changes) =>

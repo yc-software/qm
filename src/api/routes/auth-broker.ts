@@ -156,7 +156,6 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
     const { grant, created } = await deps.admin.provisionTrustedEntry(claims.issuer, claims.subject);
-    await deps.identity?.notePerson(grant.principalId, "admin");
     if (created)
       audit(deps, {
         principalId: grant.grantedBy!,

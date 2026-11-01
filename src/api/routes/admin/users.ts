@@ -488,7 +488,6 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
       role: b.role as AdminRole,
       scopeId: String(b.scopeId ?? ""),
     });
-    await deps.identity?.notePerson(grant.principalId, "admin");
     audit(deps, {
       principalId: actor.id,
       action: "grant.create",

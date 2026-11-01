@@ -208,9 +208,9 @@ GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
 The roster is the people QM has met: someone joins it on their own first message to QM,
-when invited as a teammate, when made an admin, or when their sign-in is linked. Being
-added to a conversation or project they never wrote in does not put them on it. Each row
-carries `firstSeenAt` and `source` (`turn`, `invite`, `admin` or `link`); session, turn and
+when invited as a teammate, or when made an admin. Being added to a conversation or
+project they never wrote in does not put them on it; linked sign-ins share one row. Each
+row carries `firstSeenAt` and `source` (`turn`, `invite` or `admin`); session, turn and
 last-seen counts are computed from activity.
 
 ## External users

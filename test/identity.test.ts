@@ -279,7 +279,7 @@ test("a person joins the roster once, folded to one record, on the first thing t
   assert.equal(typeof pat!.firstSeenAt, "number");
 
   const reader = createIdentityService(testMap(), { externalMembers: testMap(), principals });
-  await reader.notePerson("pat@example.com", "link");
+  await reader.notePerson("pat@example.com", "admin");
   assert.equal((await reader.principal("pat@example.com"))!.source, "turn", "another instance keeps the first arrival");
 
   await svc.recordOffboarded("gone@example.com", "admin-alice", []);
@@ -314,20 +314,24 @@ test("the roster backfill runs once, takes each person's earliest arrival, and f
       loads++;
       return [
         { principalId: "U-SLACK", source: "turn" as const, at: 300 },
-        { principalId: "sam@example.com", source: "admin" as const, at: 200 },
         { principalId: "left@example.com", source: "turn" as const, at: 100 },
-        { principalId: "Ann@Example.com", source: "invite" as const, at: 50 },
       ];
     };
-    assert.equal(await svc.backfillPrincipals(history), 3);
+    const standing = [
+      { principalId: "sam@example.com", source: "admin" as const, at: 200 },
+      { principalId: "Ann@Example.com", source: "invite" as const, at: 50 },
+    ];
+    assert.equal(await svc.backfillPrincipals({ standing, history }), 3);
     const rows = Object.fromEntries((await svc.listPrincipals()).map((r) => [r.principalId, r]));
     assert.deepEqual(Object.keys(rows).sort(), ["Ann@Example.com", "left@example.com", "sam@example.com"]);
     assert.deepEqual([rows["sam@example.com"]!.source, rows["sam@example.com"]!.firstSeenAt], ["admin", 200]);
     assert.deepEqual([rows["left@example.com"]!.offboarded, rows["left@example.com"]!.firstSeenAt], [true, 100]);
 
     const again = createIdentityService(testMap(), { externalMembers: testMap(), principals });
-    assert.equal(await again.backfillPrincipals(history), 0);
-    assert.equal(loads, 1, "a second boot sees the roster and skips the history scan");
+    const late = { principalId: "late-admin@example.com", source: "admin" as const, at: 400 };
+    assert.equal(await again.backfillPrincipals({ standing: [...standing, late], history }), 1);
+    assert.equal(loads, 1, "a later boot skips the history scan but still records a grant or invite the roster missed");
+    assert.equal((await again.principal("late-admin@example.com"))!.source, "admin");
   } finally {
     installPrincipalLinks(null);
   }

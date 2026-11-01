@@ -59,6 +59,7 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
+  roster?: { notePerson(principalId: string, source: "admin"): Promise<void> };
 }
 
 export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
@@ -101,6 +102,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         createdAt: now(),
       };
       const created = await grants.addIfAbsent(grant);
+      await opts.roster?.notePerson(principalId, "admin");
       return { grant, created };
     },
     listGrants() {
@@ -120,6 +122,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
       await grants.add(grant);
+      await opts.roster?.notePerson(principalId, "admin");
       return grant;
     },
     async revokeGrant(actor, principalId, scope, role) {
