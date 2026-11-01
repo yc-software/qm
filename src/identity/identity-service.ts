@@ -67,7 +67,7 @@ export interface IdentityService extends IdentityProvider {
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
   notePerson(externalId: string, source: PrincipalSource): Promise<void>;
-  backfillPrincipals(sources: { standing: SeenPerson[]; history: () => Promise<SeenPerson[]> }): Promise<number>;
+  backfillPrincipals(history: () => Promise<SeenPerson[]>): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -262,10 +262,10 @@ export function createIdentityService(
         },
       );
     },
-    async backfillPrincipals({ standing, history }) {
+    async backfillPrincipals(history) {
       await refresh(true);
-      const firstRun = ![...principals.values()].some((r) => r.firstSeenAt !== undefined);
-      const people = [...standing, ...(firstRun ? await history() : [])];
+      if ([...principals.values()].some((r) => r.firstSeenAt !== undefined)) return 0;
+      const people = await history();
       return exclusive(() => recordSeen(people));
     },
     recordOffboarded: (externalId, by, changes) =>

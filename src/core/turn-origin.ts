@@ -133,3 +133,10 @@ export function desktopClientForTurn(
     ? input.desktopClientId
     : undefined;
 }
+
+export function introducesPerson(
+  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "externalSlack"> &
+    Partial<LegacyTurnOrigin> & { origin?: TurnOrigin },
+): boolean {
+  return isPersonAuthored(resolveTurnOrigin(input).kind) && !isSessionTurn(input) && input.externalSlack === undefined;
+}

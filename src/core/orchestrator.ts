@@ -51,13 +51,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import {
-  desktopClientForTurn,
-  isPersonAuthored,
-  isSessionTurn,
-  resolveTurnOrigin,
-  turnOriginRequestFields,
-} from "./turn-origin.ts";
+import { desktopClientForTurn, introducesPerson, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -1302,7 +1296,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
-      if (isPersonAuthored(input.origin.kind) && !sessionTurn && !external)
+      if (introducesPerson(input))
         await deps.identity
           .notePerson(actor.id, "turn")
           .catch((err: unknown) => reportFailure("orchestrator: record person", err));
@@ -3300,12 +3294,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
             prepareSteer: async (text, request) => {
               const author = request ? deps.identity.resolve(request.actor).id : actor.id;
-              if (
-                request &&
-                isPersonAuthored(resolveTurnOrigin(request).kind) &&
-                !isSessionTurn(request) &&
-                request.externalSlack === undefined
-              )
+              if (request && introducesPerson(request))
                 await deps.identity
                   .notePerson(author, "turn")
                   .catch((err: unknown) => reportFailure("orchestrator: record person", err));

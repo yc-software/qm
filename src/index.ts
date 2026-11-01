@@ -21,16 +21,14 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
-const backfilledPeople = await built.identity.backfillPrincipals({
-  standing: rosterHistory({
-    turns: [],
+const backfilledPeople = await built.identity.backfillPrincipals(async () =>
+  rosterHistory({
+    turns: await built.sessions.firstAuthoredTurns(),
     grants: await built.admin.listGrants(),
     externals: await built.identity.listExternalMembers(),
     now: Date.now(),
   }),
-  history: async () =>
-    rosterHistory({ turns: await built.sessions.firstAuthoredTurns(), grants: [], externals: [], now: Date.now() }),
-});
+);
 if (backfilledPeople > 0) console.log(`[qm] backfilled ${backfilledPeople} people into principals`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;

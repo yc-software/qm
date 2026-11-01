@@ -130,16 +130,9 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     );
 
     const fresh = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
-    await fresh.backfillPrincipals({
-      standing: [],
-      history: async () =>
-        rosterHistory({
-          turns: await s.built.sessions.firstAuthoredTurns(),
-          grants: [],
-          externals: [],
-          now: Date.now(),
-        }),
-    });
+    await fresh.backfillPrincipals(async () =>
+      rosterHistory({ turns: await s.built.sessions.firstAuthoredTurns(), grants: [], externals: [], now: Date.now() }),
+    );
     const backfilled = (await fresh.listPrincipals()).map((r) => r.principalId);
     assert.ok(backfilled.includes("U1"), "the backfill finds the person who wrote");
     assert.equal(backfilled.includes("U-preloaded"), false, "and, like the live path, not someone only added");
