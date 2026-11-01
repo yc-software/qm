@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler, CRON_FIRE_JOB } from "../src/cron/scheduler.ts";
+import { WORK_ADMISSION_CLOSED } from "../src/util/admitted-work.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -9,7 +10,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { type DirectoryStore } from "../src/directory/directory-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { inlineJobsSettled } from "./support/inline-jobs.ts";
+import { createInlineJobs, inlineJobsSettled } from "./support/inline-jobs.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
@@ -413,7 +414,7 @@ test("a failing interval cron does not starve later due crons across ticks", asy
 
   assert.deepEqual(
     calls.map((call) => call.idempotencyKey),
-    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:2001`],
   );
 });
 
@@ -498,7 +499,7 @@ test("a cron fires into fresh per-fire threads while keeping per-fire idempotenc
   assert.equal(new Set(threads).size, 3, "each fire gets a fresh internal thread");
   assert.ok(threads.every((thread) => thread?.startsWith(`cron:${cron.id}:fire:`)));
   assert.equal(calls[0]?.idempotencyKey, `cron:${cron.id}:1`);
-  assert.equal(calls[1]?.idempotencyKey, `cron:${cron.id}:3000`);
+  assert.equal(calls[1]?.idempotencyKey, `cron:${cron.id}:2001`);
   assert.match(calls[2]?.idempotencyKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
   assert.notEqual(calls[1]?.conversation.threadRef, calls[1]?.idempotencyKey);
 });
@@ -1037,4 +1038,46 @@ test("a cron whose model can't run fires on the default model and is told why", 
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
+});
+
+test("a cron fire whose turn is handed back at shutdown retries its slot and delivers the reply once", async () => {
+  const jobs = createInlineJobs();
+  let handingBack = true;
+  const { crons, deliveries, calls } = agent(
+    async () =>
+      handingBack
+        ? { status: "queued", sessionId: "s1", runId: "r1", errorCode: WORK_ADMISSION_CLOSED }
+        : { status: "ok", reply: "CRON-DONE" },
+    undefined,
+    () => 2000,
+    { jobs },
+  );
+  const cron = await crons.create({
+    schedule: { everyMs: 1000, firstFireAt: 1 },
+    action: "check in",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+  });
+  const job = { cronId: cron.id, scheduledAt: 1 };
+  assert.equal(typeof (await jobs.run(CRON_FIRE_JOB, job)), "number", "the fire job is rescheduled, not failed");
+  assert.equal((await deliveries.pending("slack")).length, 0, "no failure notice while the turn finishes elsewhere");
+  assert.equal((await crons.get(cron.id))?.nextFireAt, 1, "the slot is still due");
+
+  handingBack = false;
+  assert.equal(await jobs.run(CRON_FIRE_JOB, job), "done");
+  assert.deepEqual(
+    calls.map((call) => call.idempotencyKey),
+    [`cron:${cron.id}:1`, `cron:${cron.id}:1`],
+    "the retry re-attaches to the same turn",
+  );
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((delivery) => delivery.text),
+    ["CRON-DONE"],
+  );
+  assert.deepEqual(
+    (await crons.listFires(cron.id)).runs.map((fire) => fire.status),
+    ["ok"],
+  );
 });

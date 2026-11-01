@@ -1410,7 +1410,7 @@ test("screening defaults off and the model classifier needs no proxy settings", 
   }
 });
 
-test("AWS ownership control is opt-in and reserves deployment identity allocation", () => {
+test("the obsolete aws.backgroundWorkControl setting loads with a warning and is ignored", () => {
   const aws = {
     accountId: "123456789012",
     region: "us-west-2",
@@ -1421,18 +1421,26 @@ test("AWS ownership control is opt-in and reserves deployment identity allocatio
     networking: { cloudMapNamespace: "acme.internal" },
     services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
   };
-  withConfig({ target: "aws", aws }, ({ path }) =>
-    assert.equal(loadConfigAt(path).config.aws!.backgroundWorkControl, undefined),
-  );
-  withConfig({ target: "aws", aws: { ...aws, backgroundWorkControl: true } }, ({ path }) =>
-    assert.equal(loadConfigAt(path).config.aws!.backgroundWorkControl, true),
-  );
-  withConfig({ target: "aws", aws: { ...aws, backgroundWorkControl: "true" } }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /backgroundWorkControl/),
-  );
-  withConfig({ target: "aws", aws, env: { core: { BACKGROUND_DEPLOYMENT_ID: "reused" } } }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /allocated/),
-  );
+  const warnings: string[] = [];
+  const priorWarn = console.warn;
+  console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
+  try {
+    for (const value of [true, false, "true"]) {
+      warnings.length = 0;
+      withConfig({ target: "aws", aws: { ...aws, backgroundWorkControl: value } }, ({ path }) =>
+        assert.equal("backgroundWorkControl" in loadConfigAt(path).config.aws!, false),
+      );
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /"aws\.backgroundWorkControl" is obsolete and ignored; remove it/);
+    }
+    warnings.length = 0;
+    withConfig({ target: "aws", aws, env: { core: { BACKGROUND_DEPLOYMENT_ID: "reused" } } }, ({ path }) =>
+      assert.equal(loadConfigAt(path).config.env.core?.BACKGROUND_DEPLOYMENT_ID, "reused"),
+    );
+    assert.deepEqual(warnings, []);
+  } finally {
+    console.warn = priorWarn;
+  }
 });
 
 test("proxy deployment rendering names the mode and classifier", () => {

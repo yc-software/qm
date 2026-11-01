@@ -37,7 +37,6 @@ function routerAt(pathname: string, search = "", base = "/admin") {
       "history",
       "files",
       "memory",
-      "live",
       "audit",
       "errors",
       "skills",

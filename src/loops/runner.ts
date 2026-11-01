@@ -1,3 +1,4 @@
+import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
@@ -67,6 +68,7 @@ function emptySummary(loop: Loop, ran: boolean): FireSummary {
 }
 
 function recordFailure(summary: FireSummary, label: string, error: unknown): void {
+  if (error instanceof WorkAdmissionClosed) throw error;
   summary.failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
   if (!isTransientFailure(error)) summary.persistentFailures += 1;
 }

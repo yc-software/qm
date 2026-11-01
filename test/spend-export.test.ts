@@ -91,7 +91,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
 test("spend export: the token authorizes the export and nothing else", async () => {
   const s = fixture();
   try {
-    for (const path of ["/v1/admin/spend", "/v1/admin/whoami", "/v1/admin/users", "/v1/background-work"]) {
+    for (const path of ["/v1/admin/spend", "/v1/admin/whoami", "/v1/admin/users"]) {
       const res = await s.get(path);
       assert.equal(res.status, 401, path);
     }

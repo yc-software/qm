@@ -147,20 +147,10 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const runs = await getJson(s.base, "/v1/admin/runs?scope=org:default-org");
-    assert.ok(runs.runs.length >= 1, "the run is listed");
-    assert.equal(runs.runs[0].sessionType, "dm");
+    assert.equal((await get(s.base, "/v1/admin/runs?scope=org:default-org")).status, 404, "the runs listing is gone");
 
     const actions = (await s.built.auditLog.events()).map((e) => e.action);
-    for (const a of [
-      "sessions.read",
-      "session.read",
-      "files.read",
-      "file.read",
-      "file.download",
-      "file.view",
-      "runs.read",
-    ]) {
+    for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
   } finally {
@@ -1140,7 +1130,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
     const UMA = { "x-admin-actor": "user-uma@default-org" };
     assert.equal((await get(s.base, "/v1/admin/sessions?scope=org:default-org", UMA)).status, 403);
     assert.equal(
-      (await get(s.base, "/v1/admin/runs?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
+      (await get(s.base, "/v1/admin/errors?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
       403,
     );
     assert.equal((await get(s.base, "/v1/admin/files")).status, 400);

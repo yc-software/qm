@@ -325,7 +325,6 @@ const READS = [
   "skills",
   "skill-packs",
   "sessions",
-  "runs",
   "files",
   "retention",
   "users",

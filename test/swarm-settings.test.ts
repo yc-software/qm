@@ -154,7 +154,6 @@ test("operators can disable swarms without changing other background work", () =
   assert.equal(loadConfig({ SWARMS_ENABLED: "true" }).swarmsEnabled, true);
   const disabled = loadConfig({ SWARMS_ENABLED: "false" });
   assert.equal(disabled.swarmsEnabled, false);
-  assert.equal(disabled.backgroundWorkEnabled, true);
   assert.throws(() => loadConfig({ SWARMS_ENABLED: "invalid" }), /SWARMS_ENABLED/);
 });
 

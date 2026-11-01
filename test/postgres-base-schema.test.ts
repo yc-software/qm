@@ -20,6 +20,11 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
     await run(url.toString(), admin);
   } finally {
     await admin.end();
+    for (let i = 0; i < 40; i++) {
+      const open = await parent.query("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name]);
+      if (!open.rowCount) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
     await parent.end();
   }

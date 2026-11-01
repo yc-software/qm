@@ -13,7 +13,13 @@ import {
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
-import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
+import {
+  advanceNextFireAt,
+  isCalendarSchedule,
+  nextFireAfterSlot,
+  normalizeSchedule,
+  recoverNextFireAt,
+} from "./schedule.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -230,8 +236,7 @@ export function createCronStore(
         if (recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== scheduledAt)
           return cron;
         claimed = true;
-        const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
-        const next = advanceNextFireAt(cron.schedule, advanceFrom);
+        const next = nextFireAfterSlot(cron.schedule, scheduledAt, at);
         const { nextFireAt: _dropped, deferUntil: _cleared, ...rest } = cron;
         return { ...rest, lastFiredAt: at, ...(next !== undefined ? { nextFireAt: next } : {}) };
       };

@@ -6743,7 +6743,6 @@
         history: "Sessions",
         files: "Files",
         memory: "Memory",
-        live: "Live",
         errors: "Errors",
         audit: "Audit",
         skills: "Skills",
@@ -6762,7 +6761,6 @@
         "history",
         "files",
         "memory",
-        "live",
         "audit",
         "errors",
         "skills",
@@ -6782,7 +6780,7 @@
         "customize",
         "slack-settings",
       ]);
-      const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
+      const ENDPOINT = { history: "sessions", files: "files" };
       const HISTORY_PAGE_SIZE = 50;
       const ERRORS_PAGE_SIZE = 50;
 
@@ -9085,7 +9083,6 @@
           history: renderHistory,
           files: renderFiles,
           memory: renderMemory,
-          live: renderLive,
           errors: renderErrors,
           audit: renderAudit,
           skills: renderSkills,
@@ -10799,10 +10796,6 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
-      }
-
-      function renderLive(root, d) {
-        governanceUI.artifacts.live(root, d, artifactContext());
       }
 
       refresh();

@@ -395,6 +395,79 @@ test("a turn over the crash-loop claim cap fails instead of running again", { sk
   assert.match(run?.result?.reason ?? "", /crash loop/);
 });
 
+function countingOrchestrator() {
+  const calls: OrchestratorInput[] = [];
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
+      calls.push(input);
+      return { status: "ok", sessionId: input.conversation.threadRef, reply: "finished" };
+    },
+  } as unknown as Orchestrator;
+  return { calls, orchestrator };
+}
+
+test("clean shutdown hand-backs do not spend the crash-loop claim budget", { skip }, async () => {
+  const thread = `web:alice:${randomUUID()}`;
+  const admitted = await admit(thread);
+  for (let i = 0; i < 10; i++) {
+    const { run, token } = await claim();
+    assert.equal(await ledger.handBack(run, token, { stop: { kind: "shutdown" } }), true);
+  }
+  const handed = await runStore.runs.get(admitted.run.id);
+  assert.deepEqual([handed?.status, handed?.attempts, handed?.handbacks], ["pending", 10, 10]);
+  const { calls, orchestrator } = countingOrchestrator();
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50, maxClaims: 8 });
+  runner.start();
+  try {
+    const run = await eventually(() => runStore.runs.get(admitted.run.id), {
+      until: (found) => found?.status === "done",
+      label: "the redeployed turn finished",
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(run?.result?.reply, "finished");
+  } finally {
+    await runner.stopClaims();
+  }
+});
+
+test("a turn whose claims keep lapsing is parked at the crash-loop cap", { skip }, async () => {
+  const thread = `web:alice:${randomUUID()}`;
+  const admitted = await admit(thread);
+  let held = await claim();
+  for (let i = 1; i < 8; i++) {
+    if (i === 4) {
+      assert.equal(await ledger.handBack(held.run, held.token, { stop: { kind: "shutdown" } }), true);
+      held = await claim();
+    }
+    await admin.query(
+      "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
+      [held.run.absurdRunId],
+    );
+    held = await reclaimLapsed();
+  }
+  await admin.query(
+    "UPDATE absurd.r_turns_people SET claim_expires_at = absurd.current_time() - interval '1 second' WHERE run_id = $1",
+    [held.run.absurdRunId],
+  );
+  const lapsed = await ledger.claim("turns_people", `test:${randomUUID()}`, "test");
+  assert.equal(lapsed.run, null);
+  await retryDue(URL!);
+  const { calls, orchestrator } = countingOrchestrator();
+  const runner = createTurnRunner({ ledger, orchestrator, queues: TURN_QUEUES, slots: 1, pollMs: 50, maxClaims: 8 });
+  runner.start();
+  try {
+    const run = await eventually(() => runStore.runs.get(admitted.run.id), {
+      until: (found) => found?.status === "failed",
+      label: "the crash-looping turn was parked",
+    });
+    assert.equal(calls.length, 0);
+    assert.equal(run?.handbacks, 1);
+    assert.match(run?.result?.reason ?? "", /after 8 claims without completing \(suspected crash loop\)/);
+  } finally {
+    await runner.stopClaims();
+  }
+});
+
 function gate() {
   const started: OrchestratorInput[] = [];
   const releases = new Map<string, () => void>();
@@ -586,6 +659,7 @@ test(
   "cutover: legacy pending and running rows are queued and started in order; nothing is failed",
   { skip },
   async () => {
+    await admin.query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS lease_expires_at BIGINT");
     const thread = `web:alice:${randomUUID()}`;
     const running = randomUUID();
     const waiting = randomUUID();
@@ -599,6 +673,7 @@ test(
     const cutover = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0012-absurd-turns")!;
     for (const statement of cutover.statements.filter((sql) => sql.trim().startsWith("UPDATE runs")))
       await admin.query(statement);
+    await admin.query("ALTER TABLE runs DROP COLUMN lease_expires_at");
     const resumed = await runStore.runs.get(running);
     assert.equal(resumed?.status, "queued");
     assert.deepEqual(resumed?.lastStop, { kind: "shutdown" });

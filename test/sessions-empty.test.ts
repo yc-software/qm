@@ -61,12 +61,12 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
 
   const thread = "web:U1:fresh";
   const id = await strandShell(sessions, thread);
-  await runs.enqueue({ sessionId: thread, request: enqueueRequest(thread) });
+  const { run } = await runs.enqueue({ sessionId: thread, request: enqueueRequest(thread) });
 
   const row = (await app.listSessions("U1")).find((s) => s.id === id);
   assert.equal(row?.working, true, "a brand-new chat is visible (and working) while its first turn runs");
 
-  await endTurn((await claimTurn(ledger))!, { status: "failed", reason: "boom" });
+  await endTurn((await claimTurn(ledger, run.id))!, { status: "failed", reason: "boom" });
 
   assert.ok(
     !(await app.listSessions("U1")).find((s) => s.id === id),

@@ -1,3 +1,4 @@
+import { ADMISSION_CLOSED_RETRY_MS, WorkAdmissionClosed } from "../util/admitted-work.ts";
 import type { Destination } from "../types.ts";
 import type { Webhook } from "../triggers/types.ts";
 import type { WebhookEvent, WebhookStore } from "./webhook-store.ts";
@@ -92,12 +93,17 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
   async function fire({ webhookId, deliveryId }: WebhookFireJob): Promise<void> {
     const wh = await deps.webhooks.get(webhookId);
     if (!wh) return;
+    let handedBack = false;
     try {
       if (wh.enabled) await fireEvent(wh, deliveryId);
+    } catch (e) {
+      handedBack = e instanceof WorkAdmissionClosed;
+      throw e;
     } finally {
-      await deps.webhooks
-        .settleEvent(wh.id, deliveryId)
-        .catch(reportFailureAs("webhook: settle event", undefined, `webhook=${wh.id}`));
+      if (!handedBack)
+        await deps.webhooks
+          .settleEvent(wh.id, deliveryId)
+          .catch(reportFailureAs("webhook: settle event", undefined, `webhook=${wh.id}`));
     }
   }
 
@@ -128,6 +134,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         ...(outcome.note ? { error: outcome.note } : {}),
       });
     } catch (e) {
+      if (e instanceof WorkAdmissionClosed) throw e;
       reportFailure("webhook: fire", e, `webhook=${wh.id}`);
       await deps.webhooks
         .recordFire(wh.id, { at: Date.now(), error: errMessage(e) })
@@ -137,8 +144,13 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
   deps.jobs.handle(
     WEBHOOK_FIRE_JOB,
     async (params) => {
-      await fire(params as WebhookFireJob);
-      return "done";
+      try {
+        await fire(params as WebhookFireJob);
+        return "done";
+      } catch (e) {
+        if (e instanceof WorkAdmissionClosed) return Date.now() + ADMISSION_CLOSED_RETRY_MS;
+        throw e;
+      }
     },
     { maxAttempts: WEBHOOK_FIRE_MAX_ATTEMPTS },
   );

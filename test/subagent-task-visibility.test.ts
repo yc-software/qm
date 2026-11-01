@@ -59,7 +59,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary" });
   assert.ok(opened.ok);
   const child = (await built.sessions.get(opened.sessionId))!;
-  built.runtime.startBackground();
+  built.runtime.start();
   const first = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.equal(first.request.origin.kind, "human");
   assert.deepEqual(await userEntry(first), { hidden: false, display: "Summarize the repo" });
@@ -117,7 +117,7 @@ test("human-origin delegated input is screened before model execution", async (t
   const child = (await built.sessions.get(opened.sessionId))!;
   const run = (await built.runs.latestForThread(child.threadRef))!;
   assert.equal(run.request.origin.kind, "human");
-  built.runtime.startBackground();
+  built.runtime.start();
   await settle(async () => ["done", "failed"].includes((await built.runs.get(run.id))!.status));
   assert.equal((await built.runs.get(run.id))!.result?.status, "pending_approval");
   assert.ok(screened.some((payload) => payload.includes("session-delegation") && payload.includes("UNTRUSTED_TASK")));
@@ -154,7 +154,7 @@ for (const fork of [false, true]) {
     assert.ok("session" in out);
     const queued = (await built.runs.latestForThread(out.session.threadRef))!;
     assert.equal(queued.request.modelAccount, "company");
-    built.runtime.startBackground();
+    built.runtime.start();
     await settle(async () => (await built.runs.get(queued.id))!.status === "done");
     const run = (await built.runs.get(queued.id))!;
     assert.equal(run.result?.status, "ok");

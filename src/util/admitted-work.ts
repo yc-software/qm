@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
+export const WORK_ADMISSION_CLOSED = "work_admission_closed";
+export const ADMISSION_CLOSED_RETRY_MS = 5000;
+
 export class WorkAdmissionClosed extends Error {
   constructor() {
     super("This deployment is not accepting synchronous work");
