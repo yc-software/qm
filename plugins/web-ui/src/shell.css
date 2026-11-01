@@ -687,8 +687,8 @@ a.chat-row-open {
 .session-row.menu-open .unread-dot {
   visibility: hidden;
 }
-.session-row.unread .title .tl {
-  font-weight: 600;
+.session-row.unread .session {
+  padding-right: 11px;
 }
 .working-mark {
   display: inline-flex;
