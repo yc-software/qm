@@ -2419,7 +2419,7 @@ qm-markdown .tok-in {
 .queued-edit-input:focus,
 .queued-edit-input:focus-visible {
   outline: none;
-  border-color: color-mix(in oklab, var(--foreground) 30%, var(--border));
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
 }
 .queued-chip + .queued-chip {
   margin-top: -10px;
