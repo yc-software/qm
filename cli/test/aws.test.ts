@@ -1240,6 +1240,40 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
   }
 });
 
+test("AWS up from a stopped core switches the task definition at zero before scaling up", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-stopped-core-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const config = oneServiceConfig();
+  const fake = statefulAws(dir, config);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(config, dir, { yes: true });
+    const stopped = JSON.parse(readFileSync(fake.state, "utf8"));
+    stopped.services["acme-core"].desiredCount = 0;
+    writeFileSync(fake.state, JSON.stringify(stopped));
+    const priorTask = stopped.services["acme-core"].taskDefinition;
+    writeFileSync(fake.log, "");
+    await awsUp({ ...config, env: { ...config.env, core: { ...config.env.core, LOG_LEVEL: "debug" } } }, dir, {
+      yes: true,
+    });
+    const updates = readFileSync(fake.log, "utf8")
+      .split("\n")
+      .filter((line) => /ecs update-service .*--service acme-core /.test(line));
+    const next = JSON.parse(readFileSync(fake.state, "utf8")).services["acme-core"];
+    assert.notEqual(next.taskDefinition, priorTask);
+    assert.equal(updates.length, 2);
+    assert.match(updates[0]!, new RegExp(`--task-definition ${next.taskDefinition} --desired-count 0`));
+    assert.match(updates[1]!, new RegExp(`--task-definition ${next.taskDefinition} --desired-count 1`));
+    assert.equal(next.desiredCount, 1);
+  } finally {
+    process.env.PATH = priorPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("AWS up scales services to the configured desired count and live check flags drift from it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-desired-count-"));
   const dockerBin = join(dir, "docker");
@@ -4816,7 +4850,13 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     (derived.logConfiguration as { options: Record<string, string> }).options["awslogs-group"],
     "/ecs/acme-core",
   );
-  assert.equal(derived.stopTimeout, undefined);
+  assert.equal(derived.stopTimeout, 60, "core gets time to hand its turns back before ECS kills it");
+  assert.equal(renderTaskDefinition(config, "web-ui", image).containerDefinitions[0]!.stopTimeout, undefined);
+  const longDrain: QmConfig = {
+    ...config,
+    env: { ...config.env, core: { ...config.env.core, SHUTDOWN_DRAIN_MS: "75000" } },
+  };
+  assert.equal(renderTaskDefinition(longDrain, "core", image).containerDefinitions[0]!.stopTimeout, 105);
   const adopted: QmConfig = {
     ...config,
     aws: {

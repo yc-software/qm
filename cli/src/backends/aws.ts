@@ -441,6 +441,11 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
 }
 
+function coreStopTimeoutSeconds(config: QmConfig): number {
+  const drainMs = Number(serviceEnvironment(config, "core").SHUTDOWN_DRAIN_MS ?? 30_000);
+  return Math.min(120, Math.ceil(drainMs / 1000) + 30);
+}
+
 function workloadEnvironment(config: QmConfig, workload: string): Record<string, string> {
   if (isServiceName(workload)) return serviceEnvironment(config, workload);
   const plugin = config.plugins.find((entry) => entry.name === workload);
@@ -516,6 +521,7 @@ export function renderTaskDefinition(
         startPeriod: 30,
       }
     : undefined;
+  const stopTimeout = spec.stopTimeout ?? (service === "core" ? coreStopTimeoutSeconds(config) : undefined);
   return {
     family: spec.ecsService,
     networkMode: "awsvpc",
@@ -545,7 +551,7 @@ export function renderTaskDefinition(
           },
         ],
         ...(healthCheck ? { healthCheck } : {}),
-        ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
+        ...(stopTimeout !== undefined ? { stopTimeout } : {}),
         logConfiguration: {
           logDriver: "awslogs",
           options: {
@@ -1393,6 +1399,7 @@ interface RolloutTarget {
   taskDefinition: string;
   desiredCount: number;
   deploymentId?: string;
+  soleDeployment?: boolean;
 }
 
 async function awaitServiceTargets(
@@ -1494,7 +1501,9 @@ async function awaitServiceTargets(
         }
       } else if (
         deployment.rolloutState !== "COMPLETED" ||
-        (state.deployments ?? []).some((item) => item !== deployment && (item.runningCount ?? 0) > 0)
+        (state.deployments ?? []).some(
+          (item) => item !== deployment && (want.soleDeployment || (item.runningCount ?? 0) > 0),
+        )
       ) {
         waiting.push(`${workload} (prior tasks are still stopping)`);
       }
@@ -1903,20 +1912,33 @@ async function applyServiceTargets(
           options.timeoutMs,
         );
       }
-      const args = [
-        "ecs",
-        "update-service",
-        "--cluster",
-        aws.cluster,
-        "--service",
-        aws.services[workload]!.ecsService,
-        "--task-definition",
-        targets[workload]!,
-        "--desired-count",
-        String(expectedCounts[workload]),
-      ];
+      const update = (desiredCount: number): void =>
+        void awsText(aws, [
+          "ecs",
+          "update-service",
+          "--cluster",
+          aws.cluster,
+          "--service",
+          aws.services[workload]!.ecsService,
+          "--task-definition",
+          targets[workload]!,
+          "--desired-count",
+          String(desiredCount),
+        ]);
       changed.push(workload);
-      awsText(aws, args);
+      if (
+        before.counts[workload] === 0 &&
+        expectedCounts[workload]! > 0 &&
+        before.tasks[workload] !== targets[workload]
+      ) {
+        update(0);
+        await awaitServiceTargets(
+          config,
+          { [workload]: { taskDefinition: targets[workload]!, desiredCount: 0, soleDeployment: true } },
+          options.timeoutMs,
+        );
+      }
+      update(expectedCounts[workload]!);
     }
     options.onSubmitted?.();
     await awaitServiceTargets(
