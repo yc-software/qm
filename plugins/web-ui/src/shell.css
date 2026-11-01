@@ -5733,30 +5733,7 @@ a.connector-widget:focus-visible {
 .files-layout-toggle {
   margin-left: auto;
   display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.files-layout-option {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 30px;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.files-layout-option + .files-layout-option {
-  border-left: 1px solid var(--border);
-}
-.files-layout-option:hover {
-  color: var(--foreground);
-}
-.files-layout-option.active {
-  background: var(--accent, var(--muted));
-  color: var(--foreground);
+  gap: 2px;
 }
 .file-grid {
   display: grid;
@@ -5808,17 +5785,8 @@ a.file-card:hover {
   width: 14px;
   flex: none;
 }
-.file-card-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-}
-.file-card-meta {
+.file-card .list-row-meta {
   padding: 2px 10px 8px;
-  color: var(--muted-foreground);
-  font-size: 11px;
 }
 .file-row .list-row-title {
   min-width: 0;

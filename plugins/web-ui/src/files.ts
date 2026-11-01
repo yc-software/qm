@@ -1,5 +1,5 @@
 import { previewFile } from "./file-open.ts";
-import { html, nothing, render } from "lit";
+import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
   FileArchive,
@@ -75,7 +75,7 @@ function setFilesLayout(layout: FilesLayout): void {
   try {
     localStorage.setItem(FILES_LAYOUT_KEY, layout);
   } catch {
-    // Storage can be unavailable (private mode); the choice still applies for this page view.
+    void 0;
   }
   drawFiles();
 }
@@ -84,7 +84,7 @@ function layoutToggle() {
   const option = (layout: FilesLayout, glyph: IconNode, label: string) =>
     html`<button
       type="button"
-      class="files-layout-option ${filesLayout === layout ? "active" : ""}"
+      class="cron-filter-chip ${filesLayout === layout ? "active" : ""}"
       aria-pressed=${filesLayout === layout ? "true" : "false"}
       aria-label=${label}
       title=${label}
@@ -275,57 +275,59 @@ function drawFiles(loading = false): void {
   );
 }
 
-function fileRow(f: FileRow) {
+function fileMeta(f: FileRow) {
+  return html`<span class="list-row-meta"
+    ><span>${formatBytes(f.sizeBytes)}</span><span>${relTime(f.createdAt)}</span>${
+      f.openable ? nothing : html`<span>Unavailable</span>`
+    }</span
+  >`;
+}
+
+function fileLink(f: FileRow, className: string, content: TemplateResult) {
   const contentUrl = fileContentUrl(f.id, f.name);
-  const visual = fileVisual(f);
-  const content = html`
-    <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 18)}</span>
-    <span class="list-row-title" dir="auto">${f.name}</span>
-    <span class="list-row-meta"
-      ><span>${formatBytes(f.sizeBytes)}</span><span>${relTime(f.createdAt)}</span>${
-        f.openable ? nothing : html`<span>Unavailable</span>`
-      }</span
-    >
-  `;
   return f.openable
     ? html`<a
-        class="list-row file-row"
+        class=${className}
         href=${contentUrl}
         target="_blank"
         rel="noreferrer"
         @click=${(event: MouseEvent) => previewFile(event, f.name, contentUrl, f.mimetype)}
         >${content}</a
       >`
-    : html`<article class="list-row file-row">${content}</article>`;
+    : html`<article class="${className} unavailable">${content}</article>`;
+}
+
+function fileRow(f: FileRow) {
+  const visual = fileVisual(f);
+  return fileLink(
+    f,
+    "list-row file-row",
+    html`
+      <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 18)}</span>
+      <span class="list-row-title" dir="auto">${f.name}</span>
+      ${fileMeta(f)}
+    `,
+  );
 }
 
 function fileCard(f: FileRow) {
-  const contentUrl = fileContentUrl(f.id, f.name);
   const visual = fileVisual(f);
   const thumb =
     f.openable && visual.kind === "image"
-      ? html`<img src=${contentUrl} alt="" loading="lazy" decoding="async" />`
+      ? html`<img src=${fileContentUrl(f.id, f.name)} alt="" loading="lazy" decoding="async" />`
       : html`<span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 40)}</span>`;
-  const content = html`
-    <span class="file-card-thumb ${visual.kind}">${thumb}</span>
-    <span class="file-card-body">
-      <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 14)}</span>
-      <span class="file-card-name" dir="auto" title=${f.name}>${f.name}</span>
-    </span>
-    <span class="file-card-meta"
-      >${formatBytes(f.sizeBytes)} · ${relTime(f.createdAt)}${f.openable ? nothing : " · Unavailable"}</span
-    >
-  `;
-  return f.openable
-    ? html`<a
-        class="file-card"
-        href=${contentUrl}
-        target="_blank"
-        rel="noreferrer"
-        @click=${(event: MouseEvent) => previewFile(event, f.name, contentUrl, f.mimetype)}
-        >${content}</a
-      >`
-    : html`<article class="file-card unavailable">${content}</article>`;
+  return fileLink(
+    f,
+    "file-card",
+    html`
+      <span class="file-card-thumb ${visual.kind}">${thumb}</span>
+      <span class="file-card-body">
+        <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 14)}</span>
+        <span class="list-row-title" dir="auto" title=${f.name}>${f.name}</span>
+      </span>
+      ${fileMeta(f)}
+    `,
+  );
 }
 
 async function fileSha256(file: globalThis.File): Promise<string> {
