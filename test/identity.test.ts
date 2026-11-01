@@ -300,7 +300,7 @@ test("a person joins the roster once, folded to one record, on the first thing t
   assert.deepEqual([guest.source, guest.firstSeenAt], ["invite", 1234]);
 });
 
-test("the roster backfill runs once, takes each person's earliest arrival, and folds linked ids", async () => {
+test("the boot reconcile takes each person's earliest arrival, folds linked ids, and only fills gaps", async () => {
   installPrincipalLinks({
     canonical: (key) => (key === "U-SLACK" ? "sam@example.com" : undefined),
     aliases: (key) => (key === "sam@example.com" ? ["U-SLACK"] : []),
@@ -309,28 +309,23 @@ test("the roster backfill runs once, takes each person's earliest arrival, and f
     const principals = testMap<PrincipalRecord>();
     const svc = createIdentityService(testMap(), { externalMembers: testMap(), principals });
     await svc.recordOffboarded("left@example.com", "admin-alice", []);
-    let loads = 0;
-    const history = async (firstRun: boolean) => {
-      if (!firstRun) return [{ principalId: "late-admin@example.com", source: "admin" as const, at: 400 }];
-      loads++;
-      return [
-        { principalId: "U-SLACK", source: "turn" as const, at: 300 },
-        { principalId: "sam@example.com", source: "admin" as const, at: 200 },
-        { principalId: "left@example.com", source: "turn" as const, at: 100 },
-        { principalId: "Ann@Example.com", source: "invite" as const, at: 50 },
-      ];
-    };
-    assert.equal(await svc.backfillPrincipals(history), 3);
+    const people = [
+      { principalId: "U-SLACK", source: "turn" as const, at: 300 },
+      { principalId: "sam@example.com", source: "admin" as const, at: 200 },
+      { principalId: "left@example.com", source: "turn" as const, at: 100 },
+      { principalId: "Ann@Example.com", source: "invite" as const, at: 50 },
+    ];
+    assert.equal(await svc.reconcilePrincipals(async () => people), 3);
     const rows = Object.fromEntries((await svc.listPrincipals()).map((r) => [r.principalId, r]));
     assert.deepEqual(Object.keys(rows).sort(), ["Ann@Example.com", "left@example.com", "sam@example.com"]);
     assert.deepEqual([rows["sam@example.com"]!.source, rows["sam@example.com"]!.firstSeenAt], ["admin", 200]);
     assert.deepEqual([rows["left@example.com"]!.offboarded, rows["left@example.com"]!.firstSeenAt], [true, 100]);
 
     const again = createIdentityService(testMap(), { externalMembers: testMap(), principals });
-    assert.equal(await again.backfillPrincipals(history), 1);
-    assert.equal(loads, 1, "a later boot skips the turn history but still records a grant or invite the roster missed");
-    assert.equal((await again.principal("late-admin@example.com"))!.source, "admin");
-    assert.equal(await again.backfillPrincipals(history), 0, "and writes nothing once the roster has them");
+    const late = { principalId: "late@example.com", source: "turn" as const, at: 400 };
+    assert.equal(await again.reconcilePrincipals(async () => [...people, late]), 1, "a later boot fills only the gap");
+    assert.equal((await again.principal("sam@example.com"))!.firstSeenAt, 200, "and never moves a first arrival");
+    assert.equal(await again.reconcilePrincipals(async () => [...people, late]), 0);
   } finally {
     installPrincipalLinks(null);
   }

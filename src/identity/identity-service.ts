@@ -67,7 +67,7 @@ export interface IdentityService extends IdentityProvider {
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
   notePerson(externalId: string, source: PrincipalSource): Promise<void>;
-  backfillPrincipals(people: (firstRun: boolean) => Promise<SeenPerson[]>): Promise<number>;
+  reconcilePrincipals(people: () => Promise<SeenPerson[]>): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -112,7 +112,6 @@ export function createIdentityService(
   const principalStore = opts.principals;
   const principals = new Map<string, PrincipalSummary>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
-  const noted = new Set<string>();
 
   const keptByDirectorySync = (key: string): boolean =>
     directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
@@ -250,22 +249,13 @@ export function createIdentityService(
       await refresh();
       return [...principals.values()];
     },
-    notePerson(externalId, source) {
-      const key = personKey(externalId);
-      if (!key || noted.has(key) || principals.get(key)?.firstSeenAt !== undefined) return Promise.resolve();
-      noted.add(key);
-      return exclusive(() => recordSeen([{ principalId: externalId, source, at: Date.now() }])).then(
-        () => undefined,
-        (error: unknown) => {
-          noted.delete(key);
-          throw error;
-        },
-      );
+    async notePerson(externalId, source) {
+      if (principals.get(personKey(externalId))?.firstSeenAt !== undefined) return;
+      await exclusive(() => recordSeen([{ principalId: externalId, source, at: Date.now() }]));
     },
-    async backfillPrincipals(people) {
+    async reconcilePrincipals(people) {
       await refresh(true);
-      const firstRun = ![...principals.values()].some((r) => r.firstSeenAt !== undefined);
-      const seen = await people(firstRun);
+      const seen = await people();
       return exclusive(() => recordSeen(seen));
     },
     recordOffboarded: (externalId, by, changes) =>

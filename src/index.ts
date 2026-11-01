@@ -21,15 +21,6 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
-const backfilledPeople = await built.identity.backfillPrincipals(async (firstRun) =>
-  rosterHistory({
-    turns: firstRun ? await built.sessions.firstAuthoredTurns() : [],
-    grants: await built.admin.listGrants(),
-    externals: await built.identity.listExternalMembers(),
-    now: Date.now(),
-  }),
-);
-if (backfilledPeople > 0) console.log(`[qm] backfilled ${backfilledPeople} people into principals`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);
@@ -57,6 +48,20 @@ await built.identity.refresh();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
+
+void built.identity
+  .reconcilePrincipals(async () =>
+    rosterHistory({
+      turns: await built.sessions.firstAuthoredTurns(),
+      grants: await built.admin.listGrants(),
+      externals: await built.identity.listExternalMembers(),
+      now: Date.now(),
+    }),
+  )
+  .then((added) => {
+    if (added > 0) console.log(`[qm] added ${added} people to the roster from turns, grants and invites`);
+  })
+  .catch(reportFailureAs("roster reconcile", undefined));
 
 server.listen(config.port, () => {
   console.log(
