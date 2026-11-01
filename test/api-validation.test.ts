@@ -63,6 +63,7 @@ test("webhook options are validated consistently on turns and steer requests", a
       { ...request, deliveryWebhook: { binding: "bad", url: "https://receiver.example/qm" } },
       { ...request, deliveryWebhook: { binding: request.deliveryWebhook.binding } },
       { ...request, deliveryWebhook: { ...request.deliveryWebhook, url: "file:///etc/passwd" } },
+      { ...request, deliveryWebhook: { ...request.deliveryWebhook, url: "http://receiver.example/qm" } },
       { ...request, deliveryTarget: "different" },
       { ...request, surfaceTools: true },
     ]) {

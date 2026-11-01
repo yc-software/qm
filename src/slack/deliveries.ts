@@ -34,7 +34,6 @@ import type { TurnFlow } from "./turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
-import { drainClaimedDeliveries } from "../delivery/relay.ts";
 
 const DELIVERY_CLAIM_MS = 15_000;
 const SLOW_DRAIN_ALARM_MS = 120_000;
@@ -50,6 +49,8 @@ const PERMANENT_POST_ERRORS = new Set([
 const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot"]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
+
+const DELIVERY_CLAIM_MARGIN_MS = 2_000;
 
 const RUN_RECOVERY_GRACE_MS = 15_000;
 const STATUS_PLACEHOLDER_LOOKBACK_MS = 6 * 3_600_000;
@@ -76,22 +77,83 @@ export function createDeliveryPoller(deps: {
   const { core, flow, threads, clientForIdentity } = deps;
   const claimMs = deps.claimMs ?? DELIVERY_CLAIM_MS;
   const slowDrainMs = deps.slowDrainMs ?? SLOW_DRAIN_ALARM_MS;
+  const claimMargin = Math.min(DELIVERY_CLAIM_MARGIN_MS, Math.floor(claimMs / 3));
   const recoveredRow = (d: Delivery): boolean => typeof d.createdAt === "number" && Date.now() - d.createdAt > claimMs;
   const { inFlightRuns } = flow;
 
-  const drainClaimed = (
+  async function drainClaimed(
     types: string[],
     deliver: (d: Delivery) => Promise<void>,
     leaseLost?: () => boolean,
-  ): Promise<number> =>
-    drainClaimedDeliveries({
-      claim: (type, ms) => core.claimDeliveries(type, ms),
-      claimMs,
-      types,
-      deliver,
-      label: "slack-plugin",
-      leaseLost,
-    });
+  ): Promise<number> {
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+    const expiresAt = new Map<string, number>();
+
+    const claim = async (): Promise<{ rows: Delivery[]; complete: boolean }> => {
+      const rows: Delivery[] = [];
+      let complete = true;
+      for (const t of types) {
+        try {
+          const claimed = await core.claimDeliveries(t, claimMs);
+          const at = Date.now();
+          for (const r of claimed) expiresAt.set(r.id, at + claimMs);
+          rows.push(...claimed);
+        } catch {
+          complete = false;
+        }
+      }
+      return { rows, complete };
+    };
+    const t0 = Date.now();
+    const queue = (await claim()).rows;
+    const seen = new Set(queue.map((d) => d.id));
+    const absorb = (fresh: Delivery[]): void => {
+      for (const f of fresh) {
+        if (!seen.has(f.id)) {
+          seen.add(f.id);
+          queue.push(f);
+        }
+      }
+    };
+
+    const reclaimOwnership = async (id: string): Promise<boolean> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (leaseLost?.()) return false;
+        if (attempt > 0) await sleep(Math.min(300, claimMargin));
+        const { rows, complete } = await claim();
+        absorb(rows);
+        if (rows.some((f) => f.id === id)) return true;
+        if (!complete) continue;
+      }
+      return false;
+    };
+    for (let i = 0; i < queue.length; i++) {
+      if (leaseLost?.()) {
+        console.error("[slack-plugin] delivery dispatch lease lost mid-drain — stopping; rows recover after claim TTL");
+        return queue.length;
+      }
+      const d = queue[i]!;
+      const exp = expiresAt.get(d.id) ?? 0;
+      if (Date.now() >= exp - claimMargin) {
+        const remaining = exp - Date.now();
+        if (remaining > 0) await sleep(remaining);
+        if (!(await reclaimOwnership(d.id))) {
+          seen.delete(d.id);
+          console.log(
+            `[slack-plugin] delivery ${d.id} claim lost after ${Date.now() - t0}ms (another relay owns it, or it was acked) — skipping`,
+          );
+          continue;
+        }
+      }
+      if (leaseLost?.()) {
+        console.error("[slack-plugin] delivery dispatch lease lost mid-drain — stopping; rows recover after claim TTL");
+        return queue.length;
+      }
+      await deliver(d);
+    }
+    return queue.length;
+  }
 
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number } | undefined);

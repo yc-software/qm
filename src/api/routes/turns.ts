@@ -125,7 +125,12 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   if (body.deliveryWebhook !== undefined) {
     const parsed = z
-      .object({ binding: z.uuid(), url: z.url({ protocol: /^https?$/ }) })
+      .object({
+        binding: z.uuid(),
+        url: z
+          .url({ protocol: /^https?$/ })
+          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
+      })
       .strict()
       .safeParse(body.deliveryWebhook);
     if (
