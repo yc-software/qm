@@ -6,17 +6,28 @@ export async function runNowSettled(scheduler: Scheduler, cronId: string): Promi
   if (r.started) await inlineJobsSettled();
 }
 
-export const settle = async (check: () => Promise<boolean>): Promise<void> => {
-  const deadline = Date.now() + 15_000;
+export async function settle(check: () => Promise<boolean>): Promise<void> {
+  await eventually(check).catch((err: unknown) =>
+    console.error("[settle] condition never held; last error:", (err as Error).cause ?? err),
+  );
+}
+
+export async function eventually<T>(
+  read: () => T | Promise<T>,
+  opts: { until?: (value: T) => unknown; timeoutMs?: number; label?: string } = {},
+): Promise<T> {
+  const { until = Boolean, timeoutMs = 15_000, label = "condition" } = opts;
+  const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  for (;;) {
     try {
-      if (await check()) return;
+      const value = await read();
+      if (until(value)) return value;
       lastError = undefined;
     } catch (err) {
       lastError = err;
     }
-    await new Promise((r) => setTimeout(r, 100));
+    if (Date.now() >= deadline) throw new Error(`${label} did not hold within ${timeoutMs}ms`, { cause: lastError });
+    await new Promise((r) => setTimeout(r, 20));
   }
-  if (lastError !== undefined) console.error("[settle] condition never held; last error:", lastError);
-};
+}

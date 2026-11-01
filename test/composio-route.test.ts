@@ -43,9 +43,9 @@ function fixture() {
         sessionId: "cron:test-cron:fire:test-fire",
         attempts: 1,
         leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
         request: { actor: { id: "alice" } },
       }),
+      leaseHeld: async (run: { status: string }) => run.status === "running",
     } as unknown as ServerDeps["runs"],
     composioFetch: (async (input, init) => {
       calls.push({ url: String(input), init });
@@ -732,7 +732,10 @@ test("finished runs and stale lease capabilities cannot reuse backend connection
   }
   const f = fixture();
   await f.own();
-  f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+  f.deps.runs = {
+    get: async () => ({ status: "done" }),
+    leaseHeld: async () => false,
+  } as unknown as ServerDeps["runs"];
   assert.equal((await f.invoke("/v1/composio/connections", undefined, null, privateCap)).status, 403);
   assert.equal(f.calls.length, 0);
 });
@@ -743,7 +746,10 @@ test("ending the run during account lookup prevents execution", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = {
+      get: async () => ({ status: "done" }),
+      leaseHeld: async () => false,
+    } as unknown as ServerDeps["runs"];
     return response;
   };
   f.replies.push(aliceAccount, gmailTool);
@@ -758,7 +764,10 @@ test("ending the run during account lookup prevents disconnecting", async () => 
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = {
+      get: async () => ({ status: "done" }),
+      leaseHeld: async () => false,
+    } as unknown as ServerDeps["runs"];
     return response;
   };
   f.replies.push(aliceAccount);

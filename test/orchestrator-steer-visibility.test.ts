@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
 import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { eventually } from "./support/settle.ts";
+import { retryDue } from "./support/absurd-clock.ts";
+import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
@@ -26,7 +28,8 @@ const { buildApp } = await import("./support/build-app.ts");
 
 for (const mode of ["retry", "handoff"] as const) {
   test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async () => {
-    const built = buildApp(testConfig());
+    const config = testConfig();
+    const built = buildApp(config);
     const request: TurnRequest = {
       surface: "test",
       actor: { externalId: "U1" },
@@ -34,7 +37,14 @@ for (const mode of ["retry", "handoff"] as const) {
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",
     };
-    if (mode === "retry") await assert.rejects(built.app.turn(request), /boom/);
+    let pending: Promise<TurnResult> | undefined;
+    if (mode === "retry") {
+      pending = built.app.turn(request);
+      await eventually(async () => (await built.runs.list({ limit: 5 }))[0]?.errorAttempts, {
+        until: (errors) => errors === 1,
+        label: "the first attempt failed and was handed back for a retry",
+      });
+    }
     let runId: string | undefined;
     exercise = async (turn) => {
       runId = turn.runId;
@@ -61,7 +71,8 @@ for (const mode of ["retry", "handoff"] as const) {
       });
     };
     try {
-      const result = await built.app.turn(request);
+      if (pending) assert.equal(await retryDue(config.databaseUrl!), 1);
+      const result = await (pending ?? built.app.turn(request));
       assert.equal(result.status, "ok");
       const session = await built.app.getSession(result.sessionId!);
       const users = session!.entries.filter((entry) => entry.type === "user");

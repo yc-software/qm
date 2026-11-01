@@ -12,7 +12,7 @@ import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } 
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { claimTurn, endTurn, testRunStore } from "./support/turns.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -272,13 +272,12 @@ async function terminalRun(
   result: TurnResult | { fail: string },
   duringTurn?: () => Promise<void>,
 ): Promise<string> {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs, ledger } = testRunStore();
   wireRunResultDeliveries(runs, deliveries);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await claimTurn(ledger, run.id))!;
   await duringTurn?.();
-  if ("fail" in result) await runs.fail(run.id, claimed?.leaseToken ?? "", result.fail, { retry: true });
-  else await runs.complete(run.id, claimed?.leaseToken ?? "", result);
+  await endTurn(claimed, "fail" in result ? { status: "failed", sessionId: THREAD, reason: result.fail } : result);
   const deadline = Date.now() + 2_000;
   while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);
   return run.id;
@@ -304,11 +303,14 @@ test("a parked web run's failure note lands as a turn_failure entry the web tran
 test("an onTerminal-recorded failure entry suppresses the web drain's duplicate for the same run", async () => {
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
-  const runs = createPostgresRunStore(testDatabaseUrl()).runs;
+  const { runs, ledger } = testRunStore();
   wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
+  await endTurn((await claimTurn(ledger, run.id))!, {
+    status: "failed",
+    sessionId: THREAD,
+    reason: "lease expired (reaped)",
+  });
   const deadline = Date.now() + 2_000;
   while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);
 

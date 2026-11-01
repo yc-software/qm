@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn } from "./support/turns.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 
 test("initial persistence includes settings, pool, message and pending work in one write", async () => {
@@ -75,8 +76,8 @@ test("a replaced run cannot commit the initial pool after admission", async () =
   const run = (await f.runs.get(f.caller.claims.runId!))!;
   const create = f.store.create.bind(f.store);
   f.store.create = async (...args) => {
-    await f.runs.releaseLease(run.id, run.leaseToken!);
-    await f.runs.claimById(run.id, "replacement", 60_000);
+    await f.ledger.handBack(run, run.leaseToken!, {});
+    assert.ok(await claimTurn(f.ledger, run.id));
     return create(...args);
   };
   await assert.rejects(

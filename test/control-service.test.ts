@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
@@ -47,7 +46,7 @@ function claims(
   };
 }
 
-function setup(): { built: BuiltApp; control: ControlService } {
+function setup(): { built: ReturnType<typeof buildApp>; control: ControlService } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }));
   const control = createControlService(built.app, built.scheduler, built.admin);
   return { built, control };
@@ -1074,16 +1073,16 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
-  await assert.rejects(
-    built.app.turn({
-      surface: "cron",
-      triggered: true,
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
-      text: "must not execute",
-      model: "claude-sonnet-5",
-      fastMode: false,
-    }),
-    /runtime is no longer available/,
-  );
+  const result = await built.app.turn({
+    surface: "cron",
+    triggered: true,
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
+    text: "must not execute",
+    model: "claude-sonnet-5",
+    fastMode: false,
+  });
+  assert.equal(result.status, "failed", JSON.stringify(result));
+  assert.match(result.reason ?? "", /runtime is no longer available/);
+  assert.equal(built.modelCalls.length, 0);
 });

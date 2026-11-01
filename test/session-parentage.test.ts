@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn } from "./support/turns.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
@@ -59,7 +60,9 @@ test("direct child enqueues share the tree cap across concurrent callers", async
 });
 
 test("a late child steer remains pending when admission fails, then replays once", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) });
+  const built = buildApp(config);
+  const ledger = appLedger(built, config.databaseUrl!);
   const root = await built.sessions.getOrCreateByThread("web:U1:signal-root", "dm", "personal:U1");
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:signal-child", "dm", "personal:U1");
   await built.sessions.setParentSession(child.id, root.id);
@@ -74,8 +77,8 @@ test("a late child steer remains pending when admission fails, then replays once
     origin: { kind: "direct" as const },
   };
   const { run } = await built.runs.enqueue({ sessionId: child.threadRef, request });
-  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(ledger, run.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const full = [];
   for (let i = 0; i < SUBAGENT_TREE_RUN_CAP; i++)
     full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
@@ -104,7 +107,9 @@ test("a late child steer remains pending when admission fails, then replays once
 });
 
 test("late human child messages retain their sender and revalidate access", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) });
+  const built = buildApp(config);
+  const ledger = appLedger(built, config.databaseUrl!);
   await built.app.upsertDirectory([
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
@@ -128,8 +133,8 @@ test("late human child messages retain their sender and revalidate access", asyn
     sessionId: child.threadRef,
     request: { actor, conversation, text: "original", origin: { kind: "direct" } },
   });
-  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(ledger, run.id);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
   const send = async (text: string) => {
     await built.signals.send(run.id, {
       kind: "steer",
