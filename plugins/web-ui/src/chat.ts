@@ -43,8 +43,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Cog,
   Clock3,
+  Cog,
   Copy,
   FileImage,
   FileText,
@@ -2635,7 +2635,9 @@ export function createChatSurface(
           aria-expanded=${String(bgPanel.open)}
           @click=${toggleBackgroundPanel}
         >
-          ${icon((live ?? row)?.jobs ? Cog : Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+          ${icon((live ?? row)?.jobs ? Cog : Activity, 13)}<span class="bg-activity-label"
+            >${label ?? "Background activity"}</span
+          >
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${bgPanel.open ? backgroundPanelBody() : nothing}
