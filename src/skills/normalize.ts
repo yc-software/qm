@@ -5,6 +5,7 @@ export interface PackConfig {
   skillGlobs?: string[];
   exclude?: string[];
   fieldOverrides?: Record<string, string>;
+  sparseCheckout?: boolean;
 }
 
 export interface NormalizedSkill {
