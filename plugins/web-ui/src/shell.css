@@ -553,6 +553,26 @@ a.chat-row-open {
 .recent-project-children[hidden] {
   display: none;
 }
+.recent-project-more {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--session-title-size);
+  text-align: left;
+}
+.recent-project-more:hover {
+  color: var(--foreground);
+}
+.recent-project-more:focus-visible {
+  outline: none;
+  background: var(--secondary);
+}
 #sidebar-body.detach-drop-target {
   position: relative;
 }
