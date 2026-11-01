@@ -96,18 +96,24 @@ test("stopping hands a running turn back at once instead of after the drain wind
   const built = buildApp(config);
   built.runtime.start();
   let stopped = false;
+  const threadRef = `stop-handback-${randomUUID()}`;
   try {
     const queued = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `stop-handback-${randomUUID()}` },
+      conversation: { kind: "dm", threadRef },
       text: "!work-until-shutdown",
       async: true,
     });
-    await eventually(async () => (await built.runs.get(queued.runId!))?.status, {
-      until: (status) => status === "running",
-      label: "the turn is running",
-    });
+    await eventually(
+      async () => {
+        const session = await built.sessions.getByThread(threadRef);
+        return session
+          ? (await built.sessions.getEntries(session.id)).some((entry) => entry.type === "tool_result")
+          : false;
+      },
+      { until: Boolean, label: "the turn is mid-tool" },
+    );
     const started = performance.now();
     await built.runtime.stop();
     stopped = true;
