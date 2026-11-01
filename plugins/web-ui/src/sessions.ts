@@ -451,9 +451,13 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
+  let glyphSize = 14;
   if (item.groupKind === "personal") glyph = null;
   else if (item.groupKind === "channel") glyph = Hash;
-  else if (item.groupKind === "group") glyph = Users;
+  else if (item.groupKind === "group") {
+    glyph = Users;
+    glyphSize = 12;
+  }
   let fallbackName = "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
@@ -475,7 +479,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, 14)}</span>` : nothing}
+                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
