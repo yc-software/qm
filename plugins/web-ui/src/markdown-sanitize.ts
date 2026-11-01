@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import { escapeHtml } from "./html-escape.ts";
+import { decorateGitHubPrLinks } from "./github-pr-link.ts";
 import DOMPurify, { type Config } from "dompurify";
 
 export const MARKDOWN_SANITIZE_CONFIG: Config = {
@@ -48,7 +49,7 @@ export function installMarkdownSanitizer(options: { shared?: boolean } = {}): vo
       postprocess: (html: string) =>
         String(
           DOMPurify.sanitize(
-            rewriteSandboxFileLinks(html),
+            decorateGitHubPrLinks(rewriteSandboxFileLinks(html)),
             options.shared ? SHARED_MARKDOWN_SANITIZE_CONFIG : MARKDOWN_SANITIZE_CONFIG,
           ),
         ),
