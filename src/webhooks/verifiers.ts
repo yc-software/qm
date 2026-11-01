@@ -78,6 +78,8 @@ const slack: Verifier = {
   },
 };
 
+const STRIPE_TS_TOLERANCE_SECONDS = 60 * 5;
+
 const stripe: Verifier = {
   verify({ secret, headers, rawBody }) {
     if (!secret) return false;
@@ -87,6 +89,9 @@ const stripe: Verifier = {
     const t = parts.find(([k]) => k === "t")?.[1];
     const v1s = parts.filter(([k, v]) => k === "v1" && v).map(([, v]) => v);
     if (!t || v1s.length === 0) return false;
+    const tsSeconds = Number(t);
+    if (!Number.isFinite(tsSeconds)) return false;
+    if (Math.abs(Date.now() / 1000 - tsSeconds) > STRIPE_TS_TOLERANCE_SECONDS) return false;
     const expected = hmacHex(secret, `${t}.${rawBody}`);
     return v1s.some((v1) => constantTimeEqual(v1, expected));
   },
