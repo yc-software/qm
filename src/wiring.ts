@@ -2852,7 +2852,7 @@ export function buildApp(
         outboundQueue = createOutboundQueue(databaseUrl, { outbox, deliveries }, [
           webhookChannel(config.signingSecret),
         ]);
-        void outboundQueue.start().catch(swallowAs("wiring: outbound queue start failed", undefined));
+        outboundQueue.start();
       }
     };
     if (backgroundStopping)

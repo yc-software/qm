@@ -1,5 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { createPgPool, type PgPool } from "./pg-pool.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface SharedPgBoss {
   boss: PgBoss;
@@ -15,6 +16,7 @@ export function sharedPgBoss(databaseUrl: string, schema = "pgboss"): SharedPgBo
   if (existing) return existing;
   let pg: PgPool | null = null;
   let started: Promise<unknown> | null = null;
+  let stopping: Promise<void> | null = null;
   let users = 0;
   const boss = new PgBoss({
     schema,
@@ -25,15 +27,24 @@ export function sharedPgBoss(databaseUrl: string, schema = "pgboss"): SharedPgBo
       },
     },
   });
-  const close = async (): Promise<void> => {
-    const previous = pg;
-    pg = null;
-    started = null;
-    await previous?.close();
-  };
+  boss.on("error", (e) => console.error("[pg-boss] error:", errMessage(e)));
+  const shutdown = (): Promise<void> =>
+    (stopping = (async () => {
+      try {
+        await boss.stop({ close: true, graceful: false });
+      } finally {
+        const previous = pg;
+        pg = null;
+        started = null;
+        await previous?.close();
+      }
+    })().finally(() => {
+      stopping = null;
+    }));
   const handle: SharedPgBoss = {
     boss,
     async retain() {
+      await stopping;
       users++;
       if (!started) {
         pg = createPgPool(databaseUrl);
@@ -42,20 +53,13 @@ export function sharedPgBoss(databaseUrl: string, schema = "pgboss"): SharedPgBo
       try {
         await started;
       } catch (e) {
-        if (--users === 0) {
-          await boss.stop({ close: true, graceful: false }).catch(() => {});
-          await close();
-        }
+        if (--users === 0) await shutdown().catch(swallowAs("pg-boss: stop after failed start", undefined));
         throw e;
       }
     },
     async release() {
       if (--users > 0) return;
-      try {
-        await boss.stop({ close: true, graceful: false });
-      } finally {
-        await close();
-      }
+      await shutdown();
     },
   };
   shared.set(key, handle);

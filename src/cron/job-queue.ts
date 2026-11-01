@@ -1,5 +1,5 @@
 import { sharedPgBoss } from "../persistence/pg-boss.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
   cronId: string;
@@ -33,9 +33,8 @@ export function createPgBossCronQueue(
   let started = false;
   let initialized = false;
   let lastErrorAt = 0;
-  boss.on("error", (e) => {
+  boss.on("error", () => {
     lastErrorAt = Date.now();
-    console.error("[cron-queue] pg-boss error:", errMessage(e));
   });
   return {
     async start(handlers) {

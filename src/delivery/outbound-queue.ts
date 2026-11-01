@@ -1,7 +1,7 @@
 import { sharedPgBoss } from "../persistence/pg-boss.ts";
 import { DELIVERY_MAX_AGE_MS, type DeliveryStore } from "./delivery-store.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { reportFailure } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import type { Delivery } from "../types.ts";
 
 export interface OutboundChannel {
@@ -9,6 +9,7 @@ export interface OutboundChannel {
   send(d: Delivery): Promise<{ refused: string } | void>;
 }
 
+const RETRY_DELAY_SECONDS = 5;
 const RETRY_DELAY_MAX_SECONDS = 300;
 
 export function createOutboundQueue(
@@ -50,7 +51,6 @@ export function createOutboundQueue(
         }
       });
   };
-  const sweeper = createSweeper(wake, 60_000, { label: "outbound deliveries" });
   let unsubscribe: (() => void) | undefined;
 
   const deliver = async (channel: OutboundChannel, id: string): Promise<void> => {
@@ -65,36 +65,69 @@ export function createOutboundQueue(
     wake();
   };
 
-  return {
-    async start(): Promise<void> {
-      await shared.retain();
-      retained = true;
+  let stopped = false;
+  let booting: Promise<void> | undefined;
+  const boot = async (): Promise<void> => {
+    await shared.retain();
+    if (stopped) return shared.release();
+    try {
       for (const channel of channels) {
         await boss.createQueue(queueOf(channel.type), {
           notify: true,
           expireInSeconds: 60,
-          retryDelay: 5,
+          retryDelay: RETRY_DELAY_SECONDS,
           retryBackoff: true,
           retryDelayMax: RETRY_DELAY_MAX_SECONDS,
-          retryLimit: DELIVERY_MAX_AGE_MS / 1000 / RETRY_DELAY_MAX_SECONDS,
+          retryLimit:
+            DELIVERY_MAX_AGE_MS / 1000 / RETRY_DELAY_MAX_SECONDS +
+            Math.ceil(Math.log2(RETRY_DELAY_MAX_SECONDS / RETRY_DELAY_SECONDS)),
         });
         await boss.work<{ id: string }>(queueOf(channel.type), { batchSize: 1 }, async ([job]) => {
           await deliver(channel, job!.data.id);
         });
       }
-      unsubscribe = deliveries.onEnqueue(wake);
+    } catch (e) {
+      await offWork();
+      await shared.release();
+      throw e;
+    }
+    retained = true;
+    wake();
+  };
+  const offWork = async (): Promise<void> => {
+    for (const channel of channels)
+      await boss
+        .offWork(queueOf(channel.type), { wait: false })
+        .catch(swallowAs("outbound queue: stop worker", undefined));
+  };
+  const tick = (): void => {
+    if (stopped) return;
+    if (retained) return wake();
+    booting ??= boot()
+      .catch((e) => reportFailure("outbound queue: start failed; retrying on the next sweep", e))
+      .finally(() => {
+        booting = undefined;
+      });
+  };
+  const sweeper = createSweeper(tick, 60_000, { label: "outbound deliveries", immediate: true });
+
+  return {
+    start(): void {
+      stopped = false;
+      unsubscribe ??= deliveries.onEnqueue(tick);
       sweeper.start();
-      wake();
     },
     async stop(): Promise<void> {
+      stopped = true;
       unsubscribe?.();
       unsubscribe = undefined;
       await sweeper.stop();
+      await booting;
       await feeding;
       if (!retained) return;
       retained = false;
       try {
-        for (const channel of channels) await boss.offWork(queueOf(channel.type), { wait: false });
+        await offWork();
       } finally {
         await shared.release();
       }
