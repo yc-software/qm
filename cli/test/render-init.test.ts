@@ -39,6 +39,7 @@ test("qm init --target render creates a deployment from the selected Git source"
   assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "references", "render.md")));
   assert.doesNotMatch(readFileSync(join(dir, ".env"), "utf8"), /^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=/m);
   assert.match(readFileSync(join(dir, ".env"), "utf8"), /^RENDER_API_KEY=$/m);
+  config.sandbox!.baseImage = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
   const { layer } = runChecks(config, dir, join(dir, "sandbox"), { report: false });
   assert.deepEqual(layer.errors, []);
   assert.equal(layer.skills.find((skill) => skill.dir === "render-platform")?.frontmatter.name, "render-platform");

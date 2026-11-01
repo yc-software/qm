@@ -70,6 +70,7 @@ jobs:
             fi
             ref="ghcr.io/$repo@$digest"
             if [ "$service" = sandbox-base ]; then
+              ref="ghcr.io/$repo:$IMAGES_REF@$digest"
               out=$(printf '%s' "$out" | jq --arg r "$ref" '.sandboxBase = $r')
             else
               out=$(printf '%s' "$out" | jq --arg k "$service" --arg r "$ref" '.services[$k] = $r')
@@ -77,10 +78,9 @@ jobs:
           done
           printf '%s\n' "$out" > cli/manifest.json
           cat cli/manifest.json
-          jq -e '[.sandboxBase] + [.services[]]
-                 | length == 7
-                 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$"))
-                 and all(test("@sha256:(.)\\1{63}$") | not)' cli/manifest.json > /dev/null
+          jq -e '(.sandboxBase | test("^ghcr\\.io/yc-software/qm/sandbox-base:[0-9a-f]{40}@sha256:[0-9a-f]{64}$"))
+                 and ([.services[]] | length == 6 and all(test("^ghcr\\.io/yc-software/qm/[a-z-]+@sha256:[0-9a-f]{64}$")))
+                 and ([.sandboxBase] + [.services[]] | all(test("@sha256:(.)\\1{63}$") | not))' cli/manifest.json > /dev/null
           printf 'manifest=%s\n' "$(jq -c . cli/manifest.json)" >> "$GITHUB_OUTPUT"
       - name: Publish
         working-directory: cli

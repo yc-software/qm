@@ -35,9 +35,12 @@ function setup(t: TestContext) {
   const cleanupStore = testMap<StoredRenderCleanup>();
   const advisoryLock = testAdvisoryLock();
   const errors: string[] = [];
+  const ref = `ghcr.io/acme/sandbox-base:${"0".repeat(40)}@sha256:${"a".repeat(64)}`;
+  const golden = { ref, snapshotId: fake.seedGolden(ref) };
   const make = (backing = scratchStore, lock = advisoryLock) =>
     createRenderSandbox(workspace, {
       client: fake.client,
+      base: { ready: async () => golden, prepare: async () => {} },
       store,
       scratchStore: backing,
       cleanupStore,
