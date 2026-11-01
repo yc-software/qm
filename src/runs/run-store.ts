@@ -56,6 +56,7 @@ export interface Run {
   maxAttempts: number;
   priority: RunPriority;
   preemptions: number;
+  handbacks: number;
   leaseToken: string | null;
   workerId: string | null;
   createdAt: number;
@@ -138,12 +139,12 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {
-  return run.attempts - run.preemptions;
+export function countedClaims(run: Pick<Run, "attempts" | "preemptions" | "handbacks">): number {
+  return run.attempts - run.preemptions - run.handbacks;
 }
 
 export function errorParks(
-  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions">,
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions" | "handbacks">,
   maxClaims?: number,
 ): boolean {
   return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);

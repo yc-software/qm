@@ -188,12 +188,12 @@ async function releaseClaim(
   client: PoolClient,
   run: Run,
   token: string,
-  change: { stop: RunStop | null; parks: number; errors: number; unstarted: boolean },
+  change: { stop: RunStop | null; parks: number; handbacks?: number; errors: number; unstarted: boolean },
 ): Promise<number | null> {
   const { rows } = await client.query(
     `UPDATE runs SET status = 'pending', lease_token = NULL, worker_id = NULL,
        last_stop = COALESCE($3, last_stop), preemptions = preemptions + $4, error_attempts = error_attempts + $5,
-       attempts = attempts - $6,
+       attempts = attempts - $6, handbacks = handbacks + $7,
        started_at = CASE WHEN $6 = 1 AND attempts = 1 THEN NULL ELSE started_at END
      WHERE id = $1 AND lease_token = $2 AND status = 'running' RETURNING preemptions`,
     [
@@ -203,6 +203,7 @@ async function releaseClaim(
       change.parks,
       change.errors,
       change.unstarted ? 1 : 0,
+      change.handbacks ?? 0,
     ],
   );
   return rows[0] ? Number(rows[0].preemptions) : null;
@@ -421,6 +422,7 @@ function claims(
         const released = await releaseClaim(client, run, token, {
           stop: stop ?? null,
           parks: stop?.kind === "parked" ? 1 : 0,
+          handbacks: stop?.kind === "shutdown" ? 1 : 0,
           errors: 0,
           unstarted,
         });

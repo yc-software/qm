@@ -33,6 +33,7 @@ export function rowToRun(r: Record<string, unknown>): Run {
     maxAttempts: Number(r.max_attempts),
     priority: Number(r.claim_priority) as RunPriority,
     preemptions: Number(r.preemptions),
+    handbacks: Number(r.handbacks),
     leaseToken: (r.lease_token as string | null) ?? null,
     workerId: (r.worker_id as string | null) ?? null,
     createdAt: Number(r.created_at),
@@ -117,6 +118,13 @@ END $base_schema$`,
   {
     id: "runs/store/0013-drop-lease-expiry",
     statements: [`SET LOCAL lock_timeout = '60s'`, `ALTER TABLE runs DROP COLUMN IF EXISTS lease_expires_at`],
+  },
+  {
+    id: "runs/store/0014-shutdown-handbacks",
+    statements: [
+      `SET LOCAL lock_timeout = '60s'`,
+      `ALTER TABLE runs ADD COLUMN IF NOT EXISTS handbacks INT NOT NULL DEFAULT 0`,
+    ],
   },
 ];
 
