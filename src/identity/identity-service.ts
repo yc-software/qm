@@ -30,7 +30,7 @@ export interface OffboardedChange {
 
 export type PrincipalSummary = Omit<PrincipalRecord, "offboardChanges">;
 
-export type PrincipalSource = "turn" | "invite" | "admin";
+type PrincipalSource = "turn" | "invite" | "admin";
 
 export interface SeenPerson {
   principalId: string;
