@@ -351,3 +351,56 @@ test("failed overlapping preparation releases only its own sandbox lease", async
   await sb.teardown(first);
   assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
 });
+
+test("a hydrate failure right after launch does not orphan the freshly launched microVM", async () => {
+  const fake = installFakeMicrovm();
+
+  let failHomeTarWrites = false;
+  const baseFetch = fake.fetchImpl;
+  const flakyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = new URL(String(url));
+    if (u.pathname === "/write" && failHomeTarWrites) {
+      const payload = init?.body ? (JSON.parse(String(init.body)) as { path?: string }) : {};
+      if (payload.path?.startsWith("/tmp/agent-home.tar")) {
+        return new Response(JSON.stringify({ error: "Bad Gateway" }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+    return baseFetch(url, init);
+  }) as unknown as typeof fetch;
+
+  const terminateCalls: string[] = [];
+  const api = {
+    ...fake.api,
+    async terminate(id: string) {
+      terminateCalls.push(id);
+      return fake.api.terminate(id);
+    },
+  };
+
+  const sb = makeSandbox(fake, { snapshotIntervalMs: 0, api, fetchImpl: flakyFetch });
+  const layers = rw(scopeId("personal", "U8"));
+
+  const h1 = await sb.provision(layers);
+  await sb.writeFile(h1, "keep.txt", "v1");
+  await sb.teardown(h1);
+  fake.killBody(h1.id);
+
+  const idsBefore = new Set(fake.bodies.keys());
+  failHomeTarWrites = true;
+  await assert.rejects(() => sb.provision(layers));
+  failHomeTarWrites = false;
+
+  const newIds = [...fake.bodies.keys()].filter((id) => !idsBefore.has(id));
+  assert.equal(newIds.length, 1);
+  const orphanId = newIds[0]!;
+
+  assert.ok(terminateCalls.includes(orphanId), "orphan terminated");
+  assert.equal(fake.bodies.get(orphanId)!.state, "TERMINATED");
+
+  const h3 = await sb.provision(layers);
+  assert.notEqual(h3.id, orphanId);
+  assert.equal(await sb.readFile(h3, "keep.txt"), "v1");
+});
