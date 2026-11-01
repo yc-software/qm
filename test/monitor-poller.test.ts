@@ -1,5 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+import type { Agent } from "../src/agent/agent.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
+import { turnToolOptions } from "../src/agent/turn-support.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -534,5 +542,83 @@ test("watch wakes and Slack notices use the saved purpose with a legacy command 
     assert.ok(h.calls[0]?.text.includes(purpose ?? "bg: npm run build"));
     const notices = await h.deliveries.pending("slack");
     assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
+  }
+});
+
+test("a watch wake in a delegating conversation keeps the command tools of the turn that armed it", async () => {
+  const toolsBySurface = new Map<string, string[]>();
+  const agent: Agent = {
+    async runTurn(turn) {
+      const tools = createAgentTools(
+        { current: turn.tools, scopeLabel: turn.scopeLabel, emit: turn.emit, pendingApprovals: [] },
+        turnToolOptions({}, turn),
+      );
+      const surface = /<wake reason="monitor"/.test(turn.input) ? "monitor" : "web";
+      toolsBySurface.set(
+        surface,
+        tools.map((t) => t.name),
+      );
+      return { reply: "done", modelCalls: 1 };
+    },
+  };
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "monitor-wake-tools-")) }), { agent });
+  built.runtime.start();
+  try {
+    await built.featureFlags.setEnabled("responsive_spine", scopeId("personal", "U1"), true, "test");
+    const threadRef = "web:U1:watch";
+    const conversation = { kind: "dm" as const, threadRef, audience: [{ externalId: "U1" }] };
+    const armed = await built.app.turn({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation,
+      text: "sign in",
+      liveActor: true,
+    });
+    assert.equal(armed.status, "ok", armed.reply);
+
+    const fake = fakeSandbox();
+    fake.seed("p-1", "aws sso login");
+    fake.append("p-1", "Successfully logged in\n");
+    fake.finish("p-1");
+    const monitors = createMonitorStore();
+    const processes = createMemoryProcessRegistry();
+    await processes.register({
+      processId: "p-1",
+      scopeId: scopeId("personal", "U1"),
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "aws sso login",
+      ttlMs: 600_000,
+    });
+    await monitors.create({
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+      destination: { type: "web", target: threadRef, audienceScopeId: scopeId("personal", "U1") },
+      processId: "p-1",
+      command: "aws sso login",
+      threadRef,
+      expiresAt: Date.now() + 600_000,
+    });
+    const poller = createMonitorPoller({
+      ...singleProcessDeps(),
+      monitors,
+      processes,
+      sandbox: fake.sandbox,
+      deliveries: createDeliveryStore(),
+      idempotency: createIdempotencyStore(),
+      identity: createIdentityService(),
+      run: (req) => built.app.turn(req),
+    });
+    await poller.tick();
+
+    const armingTools = toolsBySurface.get("web") ?? [];
+    const wakeTools = toolsBySurface.get("monitor") ?? [];
+    assert.ok(armingTools.includes("execute") && armingTools.includes("background"), armingTools.join(","));
+    assert.ok(wakeTools.length > 0, "the watch woke the conversation");
+    assert.ok(wakeTools.includes("execute"), `the wake can run commands: ${wakeTools.join(",")}`);
+    assert.ok(wakeTools.includes("background"), `the wake can manage the job it watched: ${wakeTools.join(",")}`);
+  } finally {
+    await built.runtime.stop();
   }
 });
