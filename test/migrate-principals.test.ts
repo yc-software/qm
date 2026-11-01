@@ -28,6 +28,7 @@ before(async () => {
   url.pathname = `/${database}`;
   testUrl = url.toString();
   pool = new pg.Pool({ connectionString: testUrl });
+  pool.on("connect", (client) => client.on("error", () => {}));
   await pool.query(`
     CREATE TABLE participants(session_id TEXT NOT NULL, principal_id TEXT NOT NULL, PRIMARY KEY(session_id, principal_id));
     CREATE TABLE migtest_kv(id TEXT PRIMARY KEY, json JSONB);
