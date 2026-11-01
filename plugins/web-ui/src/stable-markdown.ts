@@ -1,5 +1,6 @@
 import "./marked-dedupe.ts";
 import "./mermaid-block.ts";
+import "./draft-card.ts";
 import { MarkdownBlock } from "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { ReactiveElement, render, type PropertyValues } from "lit";
@@ -56,7 +57,7 @@ export class StableMarkdown extends ReactiveElement {
           result.push(node as Text);
       } else if (
         node.nodeType !== Node.ELEMENT_NODE ||
-        !["code-block", "qm-mermaid", "svg", "style", "script"].includes((node as Element).localName)
+        !["code-block", "qm-mermaid", "qm-draft", "svg", "style", "script"].includes((node as Element).localName)
       )
         node.childNodes.forEach(visit);
     };
@@ -159,7 +160,19 @@ export class StableMarkdown extends ReactiveElement {
       render(this.renderer.render(), this.staging);
       const target = this.staging.cloneNode(true) as HTMLElement;
       for (const code of target.querySelectorAll("code-block")) {
-        if (code.getAttribute("language")?.toLowerCase() !== "mermaid") continue;
+        const language = code.getAttribute("language")?.toLowerCase();
+        if (language === "draft") {
+          const card = document.createElement("qm-draft");
+          card.setAttribute(
+            "text",
+            new TextDecoder().decode(
+              Uint8Array.from(atob(code.getAttribute("code") ?? ""), (character) => character.charCodeAt(0)),
+            ),
+          );
+          code.replaceWith(card);
+          continue;
+        }
+        if (language !== "mermaid") continue;
         const diagram = document.createElement("qm-mermaid");
         diagram.setAttribute(
           "code",
@@ -175,8 +188,8 @@ export class StableMarkdown extends ReactiveElement {
       morphdom(this, target, {
         childrenOnly: true,
         onBeforeElUpdated: (current, next) => {
-          if (["code-block", "qm-mermaid"].includes(current.localName)) {
-            for (const name of ["code", "language", "pending"]) {
+          if (["code-block", "qm-mermaid", "qm-draft"].includes(current.localName)) {
+            for (const name of ["code", "language", "pending", "text"]) {
               const value = next.getAttribute(name);
               if (value !== current.getAttribute(name)) {
                 if (value === null) current.removeAttribute(name);
