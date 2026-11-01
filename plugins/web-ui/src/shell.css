@@ -687,7 +687,6 @@ a.chat-row-open {
 .session-row.menu-open .unread-dot {
   visibility: hidden;
 }
-/* Match the title's 11px left inset so the dot doesn't hug the right edge. */
 .session-row.unread .session {
   padding-right: 11px;
 }
