@@ -1,9 +1,10 @@
+import { turnAlive } from "../runs/capability-run.ts";
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
-import { isTerminal, leaseLapsed, type RunStore } from "../runs/run-store.ts";
+import { isTerminal, type RunStore } from "../runs/run-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -39,7 +40,7 @@ export interface SlackStatusActivity {
 export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
-  runs: Pick<RunStore, "get" | "inFlightForThread">,
+  runs: Pick<RunStore, "get" | "inFlightForThread" | "leaseHeld">,
   flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
@@ -90,7 +91,7 @@ export function createSlackSessionStatus(
                   (run) => run.deliveryState?.replying && !run.request.privateSessionMessage,
                 )
               : [];
-          const processing = active.some((run) => run.status === "running" && !leaseLapsed(run, now()));
+          const processing = (await Promise.all(active.map((run) => turnAlive(runs, run)))).some(Boolean);
           const threadRef = anchor?.request.conversation.threadRef;
           const jobs =
             optedIn && threadRef

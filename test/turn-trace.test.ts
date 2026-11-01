@@ -11,6 +11,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { failedTurnError } from "./support/turns.ts";
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
@@ -161,9 +162,9 @@ test("a human web turn persists its entries inside step.persist spans of the run
 
 test("a turn whose agent fails still sends its dispatch span", async () => {
   transactions.length = 0;
-  const built = buildApp(testConfig());
-  await assert.rejects(
-    built.app.turn({
+  const built = buildApp(testConfig({ maxAttempts: 1 }));
+  assert.match(
+    await failedTurnError(built, {
       surface: "web",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },

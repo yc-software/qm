@@ -14,7 +14,6 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { processRun } from "../src/runs/worker.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
@@ -27,7 +26,7 @@ import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limite
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { settledRun, startTurnRunner, testRunStore } from "./support/turns.ts";
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
@@ -88,8 +87,7 @@ function buildOrchestrator(sessions: SessionStore) {
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const leaseTtlMs = 60_000;
+  const { runs, ledger } = testRunStore();
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
   const request = {
@@ -101,12 +99,11 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   };
   const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
 
-  const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
-  assert.ok(claimed, "claimed for processing");
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
-
-  const stored = await runs.get(run.id);
-  assert.equal(stored?.result?.status, "failed");
+  startTurnRunner(ledger, orchestrator);
+  const stored = await settledRun(runs, run.id);
+  assert.equal(stored.status, "failed");
+  assert.equal(stored.result?.status, "failed");
+  assert.match(stored.result?.reason ?? "", /operator error log/, "the runner records the turn's fault as a failure");
   assert.equal(stored?.result?.sessionId, threadRef, "raw stored result holds the threadRef");
 
   const session = await sessions.getByThread(threadRef);

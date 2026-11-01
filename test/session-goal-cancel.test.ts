@@ -11,10 +11,13 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn } from "./support/turns.ts";
 import { settle } from "./support/settle.ts";
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) });
+  const built = buildApp(config);
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 function runRequest(): OrchestratorInput {
@@ -96,7 +99,8 @@ for (const status of ["active", "paused"] as const) {
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-    const run = await built.runs.claim("w1", 60_000);
+    const claimed = await claimTurn(built.ledger);
+    const run = claimed?.run;
     assert.equal(run?.sessionId, ref);
     const { lease } = await built.sessions.acquireLease(session.id, "turn");
     assert.ok(lease, "the running turn holds the session");
@@ -117,7 +121,7 @@ for (const status of ["active", "paused"] as const) {
     final.tokensUsed = 77;
     await built.sessions.setGoal(lease, final);
     await built.sessions.releaseLease(lease);
-    await built.runs.complete(run!.id, run!.leaseToken ?? "", { status: "ok", reply: "done" });
+    await endTurn(claimed!, { status: "ok", reply: "done" });
 
     assert.deepEqual(await cancelling, { cancelled: true });
     const goal = await sessionGoal(built, session.id);
@@ -136,7 +140,7 @@ test("cancelling with no open goal touches nothing", async () => {
   const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
   await built.sessions.addParticipant(session.id, "U1");
   await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-  const run = await built.runs.claim("w1", 60_000);
+  const run = (await claimTurn(built.ledger))?.run;
   assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
     cancelled: false,
     reason: "no_open_goal",

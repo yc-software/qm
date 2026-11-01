@@ -62,9 +62,9 @@ async function fixture() {
         sessionId: "test-thread",
         attempts: 1,
         leaseToken: "test-lease",
-        leaseExpiresAt: Date.now() + 60_000,
         request: { actor: { id: "alice" } },
       }),
+      leaseHeld: async (run: { status: string }) => run.status === "running",
     } as unknown as ServerDeps["runs"],
     composioFetch: (async (input, init) => {
       calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -206,7 +206,10 @@ test("ending the run during account lookup prevents the upload", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    f.deps.runs = {
+      get: async () => ({ status: "done" }),
+      leaseHeld: async () => false,
+    } as unknown as ServerDeps["runs"];
     return response;
   };
   f.replies.push(xAccount);
@@ -245,7 +248,11 @@ test("ending the run partway through stops sending segments", async () => {
   const original = f.deps.composioFetch!;
   f.deps.composioFetch = async (...args) => {
     const response = await original(...args);
-    if (f.calls.length === 2) f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    if (f.calls.length === 2)
+      f.deps.runs = {
+        get: async () => ({ status: "done" }),
+        leaseHeld: async () => false,
+      } as unknown as ServerDeps["runs"];
     return response;
   };
   f.replies.push(xAccount, proxied({ data: { id: "1004" } }));

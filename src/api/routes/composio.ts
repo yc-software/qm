@@ -1,3 +1,4 @@
+import { activeCapabilityRun } from "../../runs/capability-run.ts";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
@@ -33,17 +34,7 @@ export function composioUserIds(principal: string): string[] {
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const cap = ctx.capability;
   if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  if (
-    !run ||
-    run.status !== "running" ||
-    !cap.runLeaseToken ||
-    run.leaseToken !== cap.runLeaseToken ||
-    run.attempts !== cap.runAttempt ||
-    run.sessionId !== cap.threadRef ||
-    !samePerson(run.request.actor.id, cap.actorId) ||
-    (run.leaseExpiresAt ?? 0) <= Date.now()
-  ) {
+  if (!(await activeCapabilityRun(ctx.deps.runs, cap))) {
     sendJson(ctx.res, 403, {
       error: "inactive_run",
       message: "Connected app access requires this run's current capability.",

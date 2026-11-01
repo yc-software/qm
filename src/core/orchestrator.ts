@@ -388,6 +388,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     scopeId: ScopeId;
     automated: boolean;
     runId?: string;
+    fenceToken?: string;
     surface?: string;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
@@ -400,7 +401,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
     const waitedMs = attempt.waitedMs ?? 0;
     if (attempt.lease)
-      return { lease: args.runId ? { ...attempt.lease, turnId: args.runId } : attempt.lease, waitedMs };
+      return {
+        lease: args.runId
+          ? { ...attempt.lease, turnId: args.runId, ...(args.fenceToken ? { fenceToken: args.fenceToken } : {}) }
+          : attempt.lease,
+        waitedMs,
+      };
     if (attempt.heldUntil === undefined) {
       deps.errors?.record({
         category: "sessions",
@@ -991,6 +997,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.runLeaseToken ? { fenceToken: input.runLeaseToken } : {}),
           ...(input.surface ? { surface: input.surface } : {}),
         });
         if (!acquired.lease) return acquired.refusal;
@@ -1950,6 +1957,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.runLeaseToken ? { fenceToken: input.runLeaseToken } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
       });
       if (!acquired.lease) return acquired.refusal;
@@ -2381,7 +2389,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
-          deps.turnStream?.begin(input.runId);
+          deps.turnStream?.begin(input.runId, input.runLeaseToken);
         }
 
         const backgroundBroker =
@@ -3925,7 +3933,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         throw err;
       } finally {
-        if (input.runId) deps.turnStream?.end(input.runId);
+        if (input.runId) deps.turnStream?.end(input.runId, input.runLeaseToken);
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) {

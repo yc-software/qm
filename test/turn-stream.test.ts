@@ -479,3 +479,16 @@ test("reasoning streams per block beside the reply text, capped, and settles whe
   s.begin("r1");
   assert.deepEqual(s.reasoning("r1"), [], "a retried attempt never serves the previous attempt's blocks");
 });
+
+test("a stale attempt ending does not evict the stream of the attempt that reclaimed its run", async () => {
+  const s = createTurnStream({ graceMs: 10 });
+  s.begin("r1", "attempt-1");
+  s.begin("r1", "attempt-2");
+  s.publish("r1", "fresh");
+  s.end("r1", "attempt-1");
+  await sleep(30);
+  assert.equal(s.snapshot("r1"), "fresh", "the reclaiming attempt keeps its stream");
+  s.end("r1", "attempt-2");
+  await sleep(30);
+  assert.equal(s.snapshot("r1"), null);
+});

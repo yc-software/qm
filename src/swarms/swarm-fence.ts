@@ -12,7 +12,8 @@ export interface SwarmRunFence {
 
 export function assertSwarmRun(
   fence: SwarmRunFence,
-  run: Pick<Run, "status" | "attempts" | "leaseToken" | "leaseExpiresAt" | "sessionId" | "request"> | null,
+  run: Pick<Run, "status" | "attempts" | "leaseToken" | "sessionId" | "request"> | null,
+  claimHeld: boolean,
 ): void {
   if (
     !run ||
@@ -20,8 +21,7 @@ export function assertSwarmRun(
     run.attempts !== fence.attempt ||
     !fence.leaseToken ||
     run.leaseToken !== fence.leaseToken ||
-    run.leaseExpiresAt === null ||
-    run.leaseExpiresAt <= Date.now() ||
+    !claimHeld ||
     run.sessionId !== fence.threadRef ||
     run.request.actor.id !== fence.actorId
   )

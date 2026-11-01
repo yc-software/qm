@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { assignedGoal, createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { claimTurn } from "./support/turns.ts";
 
 const goal = { objective: "Survey every archive for the lane", floor: { minMs: 3_600_000 }, token_cap: 2_000_000 };
 
@@ -77,7 +78,7 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, first.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,
@@ -119,8 +120,8 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   assert.deepEqual(await f.service.handOver(input, [replacement.id, note.id]), []);
   await f.service.sweep();
   assert.equal(await runFor(replacement.id), undefined, "a handed message is never delivered again");
-  await f.runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
-  const straggler = (await f.runs.claimById(noteRun.id, "late-worker", 60_000))!;
+  await f.ledger.finish(claimed, claimed.leaseToken!, { status: "done", result: { status: "ok" } });
+  const straggler = (await claimTurn(f.ledger, noteRun.id))!.run;
   await assert.rejects(
     f.service.binding({ ...straggler.request, runId: straggler.id }),
     /already handed/,
@@ -133,7 +134,7 @@ test("the goal inbox holds a blocked message and everything after it, and settle
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, first.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,
@@ -171,7 +172,7 @@ test("a goal message is still handed over when saving its adopted goal fails mid
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, first.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,
@@ -247,7 +248,7 @@ test("a message a paused goal turn already saw is handed over, not delivered aga
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, first.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,
@@ -278,7 +279,7 @@ test("a message handed over while its run is being withdrawn by a pause stays ha
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
   await f.service.sweep();
   const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const claimed = (await claimTurn(f.ledger, first.id))!.run;
   const input = {
     ...claimed.request,
     runId: claimed.id,

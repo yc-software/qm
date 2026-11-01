@@ -557,7 +557,7 @@ export type AssistantWork = AssistantMessage & {
 };
 
 export interface RunPoll {
-  status: "pending" | "running" | "done" | "failed";
+  status: "queued" | "pending" | "running" | "done" | "failed";
   goal?: GoalStripState;
   runtime?: TurnRuntime;
   input?: {

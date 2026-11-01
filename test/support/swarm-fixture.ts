@@ -10,20 +10,24 @@ import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
-import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import { claimTurn, testRunStore } from "./turns.ts";
+import type { TurnLedger } from "../../src/turns/turn-ledger.ts";
 
 export async function swarmFixture(
   options: {
     store?: SwarmStore;
     sessions?: SessionStore;
     runs?: RunStore;
+    ledger?: TurnLedger;
     lock?: AdvisoryLock;
     backend?: Sandbox;
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
-  const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
+  const owned = options.runs && options.ledger ? null : testRunStore();
+  const runs = options.runs ?? owned!.runs;
+  const ledger = options.ledger ?? owned!.ledger;
   const lock = options.lock ?? testAdvisoryLock();
   const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
   const records = testMap<SandboxResource>();
@@ -93,7 +97,8 @@ export async function swarmFixture(
     ...options.runtime,
   };
   const { run } = await runs.enqueue({ sessionId: root.threadRef, request: template });
-  const claim = (await runs.claimById(run.id, "swarm-fixture", 60_000))!;
+  const claimed = (await claimTurn(ledger, run.id))!;
+  const claim = { ...claimed.run, leaseToken: claimed.token };
   const caller: SwarmCaller = {
     kind: "agent",
     claims: {
@@ -117,7 +122,10 @@ export async function swarmFixture(
       .flatMap((message) => Object.entries(message.notifications))
       .find(([recipient]) => recipient === id)![1];
     let run = await runs.get(notification.runId!);
-    if (run?.status === "pending") run = await runs.claimById(run.id, "swarm-fixture-worker", 60_000);
+    if (run?.status === "pending") {
+      const claimed = (await claimTurn(ledger, run.id))!;
+      run = { ...claimed.run, leaseToken: claimed.token };
+    }
     return {
       kind: "agent",
       claims: {
@@ -138,6 +146,7 @@ export async function swarmFixture(
     store,
     sessions,
     runs,
+    ledger,
     sandboxes,
     sandbox,
     backend,

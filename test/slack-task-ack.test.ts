@@ -4,8 +4,8 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testMap } from "./support/test-database.ts";
+import { claimTurn, endTurn, testRunStore } from "./support/turns.ts";
 
 function setup() {
   const store = testMap<TaskAckState>();
@@ -139,7 +139,7 @@ test("reconciliation retries a persisted move without another incoming message",
 for (const outbound of ["run", "post", "ack", "silent"] as const) {
   test(`restart clears completed task acknowledgement only after delivery, outbound=${outbound}`, async () => {
     const { client, manager, store, events } = setup();
-    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const { runs, ledger } = testRunStore();
     const deliveries = createDeliveryStore();
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({
@@ -158,7 +158,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
-    const claimed = await runs.claimById(run.id, "test", 10000);
+    const claimed = await claimTurn(ledger, run.id);
     assert.ok(claimed);
     const finalDelivery =
       outbound === "silent"
@@ -168,11 +168,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
             text: "Done",
             idempotencyKey: outbound === "post" ? `post:${run.id}:slack:D1:0` : `${outbound}:${run.id}`,
           });
-    await runs.complete(
-      run.id,
-      claimed.leaseToken!,
-      outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
-    );
+    await endTurn(claimed, outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" });
     if (finalDelivery) {
       await restarted.reconcile(client);
       assert.equal((await store.get(run.id))?.finished, false);

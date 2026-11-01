@@ -56,7 +56,9 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query(`INSERT INTO qm_schema_migrations(id, checksum) VALUES
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
-    await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
+    await admin.query(`CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL,
+      lease_token TEXT, lease_expires_at BIGINT, worker_id TEXT, retry_after BIGINT NOT NULL DEFAULT 0, last_stop TEXT,
+      claim_priority SMALLINT NOT NULL DEFAULT 2, created_at BIGINT NOT NULL, seq BIGSERIAL)`);
     await admin.query(`CREATE TABLE items(seq BIGINT, kind TEXT, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");

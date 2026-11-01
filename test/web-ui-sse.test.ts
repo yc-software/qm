@@ -12,12 +12,23 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
+let holdTurn: Promise<void> | null = null;
+const mockAgent = createMockAgent();
+const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }), {
+  agent: {
+    ...mockAgent,
+    async runTurn(input) {
+      if (holdTurn) await holdTurn;
+      return mockAgent.runTurn(input);
+    },
+  },
+});
 built.runtime.start();
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -131,12 +142,11 @@ test("SSE relays tool activity frames and folds them into the done frame", async
 
 test("active run lookup returns the latest tracked run for the caller's web thread", async (t) => {
   const completion = Promise.withResolvers<void>();
-  const complete = built.runs.complete.bind(built.runs);
-  t.mock.method(built.runs, "complete", async (...args: Parameters<typeof complete>) => {
-    await completion.promise;
-    return complete(...args);
+  holdTurn = completion.promise;
+  t.after(() => {
+    holdTurn = null;
+    completion.resolve();
   });
-  t.after(() => completion.resolve());
   const threadRef = `web:alice:${randomUUID()}`;
   const submit = (await (
     await fetch(

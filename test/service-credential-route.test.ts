@@ -26,6 +26,7 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { failedTurnError } from "./support/turns.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -1125,8 +1126,8 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   });
   await selectDefaultSandbox(built, "U1", "personal:U1");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  assert.match(
+    await failedTurnError(built, dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   const res = await built.app.turn(dm("!run echo hi"));
@@ -1177,8 +1178,8 @@ test("a channel grantee stamps the credential in that channel's conversations an
   const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       ...channelTurn("C2"),
       text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
     }),
@@ -1188,8 +1189,8 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
-  await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+  assert.match(
+    await failedTurnError(built, dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   res = await built.app.turn(dm("!run echo hi"));

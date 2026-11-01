@@ -1,3 +1,4 @@
+import { turnAlive } from "../runs/capability-run.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
@@ -167,7 +168,7 @@ export interface SlackCoreClientDeps {
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
-const RUN_STALL_BUDGET_MS = 300_000;
+export const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
@@ -346,8 +347,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
             if (fb?.closed) signalFirstBlock(fb.text);
-            const mark = `${run.status}:${run.attempts}:${run.leaseExpiresAt ?? ""}`;
-            if (mark !== lastMark) {
+            const mark = `${run.status}:${run.attempts}`;
+            const alive = await turnAlive(deps.runs, run).catch(
+              swallowAs("slack-core-client: claim liveness check", false),
+            );
+            if (mark !== lastMark || alive) {
               lastMark = mark;
               lastProgressAt = Date.now();
             }

@@ -9,11 +9,14 @@ import { buildApp } from "./support/build-app.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn } from "./support/turns.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
-  return buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});
+  const config = testConfig({ dataDir });
+  const built = buildApp(config, securityScreener ? { securityScreener } : {});
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 const actor = { externalId: "U1" };
@@ -166,7 +169,7 @@ test("spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a
   const root = "200.2";
   const first = await built.app.turn(mention("@bot do a long thing", channel, root));
   const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
+  assert.ok(await claimTurn(built.ledger, liveRunId));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
@@ -330,7 +333,7 @@ test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => 
   const root = "1100.1";
   const first = await built.app.turn(overheard("hm, interesting", channel, root));
   const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
+  assert.ok(await claimTurn(built.ledger, liveRunId));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live run");
@@ -387,7 +390,7 @@ test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => 
   const root = "1400.1";
   const first = await built.app.turn(automationRun(channel, root));
   const liveRunId = first.runId!;
-  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
+  assert.ok(await claimTurn(built.ledger, liveRunId));
 
   const stop = await built.app.turn(mention("stop", channel, root));
   assert.equal(stop.runId, liveRunId, "the stop attached to the live automation run");
@@ -590,15 +593,15 @@ test("web's queued second run waits for the lock: not claimable until the live r
     "both runs are on the queue before any is claimed",
   );
 
-  const live = await built.runs.claim("w1", 30_000);
-  assert.ok(live && queued.includes(live.id), "one of the two queued runs is claimed");
-  assert.equal(await built.runs.claim("w2", 30_000), null, "the other must NOT be claimable while it runs");
+  const live = await claimTurn(built.ledger);
+  assert.ok(live && queued.includes(live.run.id), "one of the two queued runs is claimed");
+  assert.equal(await claimTurn(built.ledger), null, "the other must NOT be claimable while it runs");
 
-  await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
-  const next = await built.runs.claim("w3", 30_000);
+  await endTurn(live!, { status: "ok", reply: "done" });
+  const next = await claimTurn(built.ledger);
   assert.equal(
-    next?.id,
-    queued.find((id) => id !== live!.id),
+    next?.run.id,
+    queued.find((id) => id !== live!.run.id),
     "the waiting run is claimed once the lock frees",
   );
 });
@@ -607,7 +610,7 @@ test("web's queue is durable and readable: core names the live run, then what wa
   const built = freshApp();
   const threadRef = "web:U1:visible";
   const first = await built.app.turn(web("summarize the incident", threadRef));
-  await built.runs.claimById(first.runId!, "w1", 30_000);
+  await claimTurn(built.ledger, first.runId!);
   const second = await built.app.turn(web("then the timeline", threadRef));
   const third = await built.app.turn(web("and who was paged", threadRef));
 
@@ -641,7 +644,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
   const built = freshApp();
   const threadRef = "web:U1:wake";
   const first = await built.app.turn(web("summarize the incident", threadRef));
-  await built.runs.claimById(first.runId!, "w1", 30_000);
+  await claimTurn(built.ledger, first.runId!);
   const wake = await built.app.turn({
     surface: "monitor",
     actor,
@@ -664,13 +667,13 @@ test("a queued web turn runs on its own — the sender's client need never come 
   const built = freshApp();
   const threadRef = "web:U1:unattended";
   const first = await built.app.turn(web("the long one", threadRef));
-  const live = await built.runs.claimById(first.runId!, "w1", 30_000);
+  const live = await claimTurn(built.ledger, first.runId!);
   const queued = await built.app.turn(web("the queued one", threadRef));
 
-  await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
-  const next = await built.runs.claim("w2", 30_000);
-  assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
-  assert.equal(next?.request.text, "the queued one");
+  await endTurn(live!, { status: "ok", reply: "done" });
+  const next = await claimTurn(built.ledger);
+  assert.equal(next?.run.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
+  assert.equal(next?.run.request.text, "the queued one");
 });
 
 // ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
@@ -695,9 +698,9 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
   const liveRunId = first.runId!;
 
   await built.app.turn({ ...mention("@bot why did you do it wrong?", channel, root), triggerTs: "900.010" });
-  const claimed = await built.runs.claim("w1", 30_000);
-  assert.equal(claimed?.id, liveRunId);
-  await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "silent" });
+  const claimed = await claimTurn(built.ledger);
+  assert.equal(claimed?.run.id, liveRunId);
+  await endTurn(claimed!, { status: "silent" });
 
   const replayed = await until(async () =>
     (await built.runs.list()).find((r) => r.sessionId === threadRef && r.id !== liveRunId),
@@ -753,8 +756,8 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   const root = "1100.1";
   const first = await built.app.turn(mention("@bot go", channel, root));
   const liveRunId = first.runId!;
-  const claimed = await built.runs.claim("w1", 30_000);
-  await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const claimed = await claimTurn(built.ledger);
+  await endTurn(claimed!, { status: "ok", reply: "done" });
 
   const refused = await built.app.signalRun(liveRunId, { kind: "steer", text: "too late" });
   assert.equal(refused.accepted, false);
@@ -766,8 +769,8 @@ function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): v
   const origSend = built.signals.send.bind(built.signals);
   built.signals.send = async (runId, signal) => {
     const sent = await origSend(runId, sanitize ? JSON.parse(jsonbStringify(signal)) : signal);
-    const claimed = await built.runs.claim("w1", 30_000);
-    if (claimed) await built.runs.complete(claimed.id, claimed.leaseToken!, { status: "silent" });
+    const claimed = await claimTurn(built.ledger);
+    if (claimed) await endTurn(claimed!, { status: "silent" });
     return sent;
   };
 }
@@ -849,7 +852,7 @@ test("queued web edits require the author and preserve queue identity", async ()
   const built = freshApp();
   const threadRef = "web:U1:edit";
   const first = await built.app.turn(web("first", threadRef));
-  await built.runs.claimById(first.runId!, "worker", 30000);
+  await claimTurn(built.ledger, first.runId!);
   const second = await built.app.turn(web("second", threadRef));
   const owner = (await built.runs.get(second.runId!))!.request.actor.id;
   assert.deepEqual(await built.app.editQueuedRun(second.runId!, "edited", "second", "internal:other"), {
@@ -919,5 +922,5 @@ test("an addressed stop withdraws queued work before a worker can claim it", asy
   const stop = await built.app.turn(mention("stop", "C_STOP_QUEUED", "100.1"));
   assert.equal(stop.runId, first.runId);
   assert.equal(await built.runs.get(first.runId!), null);
-  assert.equal(await built.runs.claimById(first.runId!, "worker", 30_000), null);
+  assert.equal(await claimTurn(built.ledger, first.runId!), null);
 });

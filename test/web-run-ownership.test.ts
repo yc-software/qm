@@ -80,7 +80,7 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   );
   assert.deepEqual(await built.signals.takePending(live), []);
   const untouched = await built.runs.get(queued);
-  assert.equal(untouched?.status, "pending");
+  assert.equal(untouched?.status, "queued");
   assert.equal(untouched?.request.text, "alice private second");
 });
 
