@@ -553,6 +553,10 @@ a.chat-row-open {
 .recent-project-children[hidden] {
   display: none;
 }
+.archived-toggle.recent-project-more {
+  margin: 2px 0 0;
+  padding-left: 6px;
+}
 #sidebar-body.detach-drop-target {
   position: relative;
 }
