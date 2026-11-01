@@ -21,9 +21,11 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
-const addedPeople = await built.identity.reconcilePrincipals(async (firstRun) =>
+await built.identity.refresh(true);
+const rosterBackfilled = (await built.identity.listPrincipals()).some((r) => r.firstSeenAt !== undefined);
+const addedPeople = await built.identity.recordPeople(
   rosterHistory({
-    turns: firstRun ? await built.sessions.firstAuthoredTurns() : [],
+    turns: rosterBackfilled ? [] : await built.sessions.firstAuthoredTurns(),
     grants: await built.admin.listGrants(),
     externals: await built.identity.listExternalMembers(),
     now: Date.now(),

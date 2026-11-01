@@ -67,7 +67,7 @@ export interface IdentityService extends IdentityProvider {
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
   notePerson(externalId: string, source: PrincipalSource): Promise<void>;
-  reconcilePrincipals(people: (firstRun: boolean) => Promise<SeenPerson[]>): Promise<number>;
+  recordPeople(people: readonly SeenPerson[]): Promise<number>;
   recordOffboarded(externalId: string, by: string, changes: OffboardedChange[]): Promise<PrincipalRecord>;
   recordDirectorySync(removedIds: string[], presentIds: string[]): Promise<DirectorySyncOutcome>;
   listExternalMembers(): Promise<ExternalMember[]>;
@@ -253,12 +253,7 @@ export function createIdentityService(
       if (principals.get(personKey(externalId))?.firstSeenAt !== undefined) return;
       await exclusive(() => recordSeen([{ principalId: externalId, source, at: Date.now() }]));
     },
-    async reconcilePrincipals(people) {
-      await refresh(true);
-      const firstRun = ![...principals.values()].some((r) => r.firstSeenAt !== undefined);
-      const seen = await people(firstRun);
-      return exclusive(() => recordSeen(seen));
-    },
+    recordPeople: (people) => exclusive(() => recordSeen(people)),
     recordOffboarded: (externalId, by, changes) =>
       exclusive(async () => {
         const [record] = await principalStore.mutateMany([
