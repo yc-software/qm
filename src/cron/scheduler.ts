@@ -1,5 +1,5 @@
 import { cronTriggerAuthority } from "./authority.ts";
-import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
+import { ADMISSION_CLOSED_RETRY_MS, WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
@@ -23,7 +23,6 @@ const STRANDED_SWEEP_INTERVAL_MS = 10 * 60_000;
 const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
 const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
-const ADMISSION_CLOSED_RETRY_MS = 5000;
 const MANUAL_FIRE_MAX_ATTEMPTS = 3;
 const REPAIR_INTERVAL_MS = 60_000;
 
@@ -260,6 +259,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         try {
           result = await deps.fireLoop(cron.loopId, fireKey, cron.id);
         } catch (e) {
+          if (e instanceof WorkAdmissionClosed) throw e;
           result = { status: "failed", note: errMessage(e) };
         }
       await deps.crons.recordFire(cron.id, {
@@ -315,6 +315,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
       );
     } catch (e) {
+      if (e instanceof WorkAdmissionClosed) throw e;
       await deps.crons.recordFire(cron.id, {
         fireKey,
         threadRef,
@@ -408,8 +409,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           return;
         }
       } catch (e) {
-        reportFailure("scheduler: fire", e);
         await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
+        if (e instanceof WorkAdmissionClosed) disposition = now() + ADMISSION_CLOSED_RETRY_MS;
+        else reportFailure("scheduler: fire", e);
         return;
       }
       disposition = "done";
@@ -422,9 +424,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function fireManualJob(job: CronManualFireJob): Promise<JobDisposition> {
     const cron = await deps.crons.get(job.cronId);
     if (!cron) return "done";
-    await withCronLifecycle(cron.id, false, () => fire(cron, job.firedAt, job.fireKey)).catch(
-      reportFailureAs("scheduler: manual fire", undefined, `cron=${job.cronId}`),
-    );
+    await withCronLifecycle(cron.id, false, () => fire(cron, job.firedAt, job.fireKey)).catch((e: unknown) => {
+      if (e instanceof WorkAdmissionClosed) throw e;
+      reportFailure("scheduler: manual fire", e, `cron=${job.cronId}`);
+    });
     return "done";
   }
 

@@ -691,6 +691,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
+    if (failure instanceof WorkAdmissionClosed) throw failure;
     const transient = isTransientFailure(failure);
     await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed");
     await applyGovernor(loopId, transient ? { transientFailure: errMessage(failure) } : undefined);
@@ -703,13 +704,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     cronId?: string,
     options?: { enumerate?: boolean },
   ): Promise<LoopFireResult> {
-    try {
-      const work = () => fireAdmitted(loopId, fireKey, cronId, options);
-      return await admitted(work);
-    } catch (error) {
-      if (error instanceof WorkAdmissionClosed) return { status: "refused", note: error.message };
-      throw error;
-    }
+    return admitted(() => fireAdmitted(loopId, fireKey, cronId, options));
   }
 
   async function fireAdmitted(

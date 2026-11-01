@@ -1,3 +1,4 @@
+import { WORK_ADMISSION_CLOSED } from "../util/admitted-work.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -208,6 +209,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     deps.startTurns?.();
     const timeoutMs = deps.runWaitMs ?? 60_000;
     const deadline = performance.now() + timeoutMs;
+    const shutdown = deps.shutdown?.();
+    const stopped = new Promise<void>((resolve) => {
+      if (shutdown?.aborted) resolve();
+      else shutdown?.addEventListener("abort", () => resolve(), { once: true });
+    });
     for (;;) {
       const run = await deps.runs.get(runId);
       if (!run) throw new Error(`run ${runId} not found`);
@@ -216,10 +222,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      if (deps.shutdown?.().aborted) return { status: "queued", sessionId: run.sessionId, runId };
+      if (shutdown?.aborted)
+        return { status: "queued", sessionId: run.sessionId, runId, errorCode: WORK_ADMISSION_CLOSED };
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
-      await deps.runs.waitFor(runId, Math.min(DRIVE_RECHECK_MS, remaining)).catch(() => undefined);
+      await Promise.race([
+        deps.runs.waitFor(runId, Math.min(DRIVE_RECHECK_MS, remaining)).catch(() => undefined),
+        stopped,
+      ]);
     }
   }
 

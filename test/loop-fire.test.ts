@@ -1,4 +1,4 @@
-import { createAdmittedWork } from "../src/util/admitted-work.ts";
+import { createAdmittedWork, WorkAdmissionClosed } from "../src/util/admitted-work.ts";
 import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -816,8 +816,7 @@ test("an admitted loop drains all stages after ownership closes", async () => {
   });
   await Promise.resolve();
   assert.equal(drained, false);
-  const refused = await s.fire.fire(loop.id, "after-handover");
-  assert.equal(refused.status, "refused");
+  await assert.rejects(s.fire.fire(loop.id, "after-handover"), WorkAdmissionClosed, "the fire job retries elsewhere");
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires ?? 0, 0);
   finishIntake();
   assert.equal((await running).status, "ok");

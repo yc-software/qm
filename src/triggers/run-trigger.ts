@@ -1,3 +1,4 @@
+import { WORK_ADMISSION_CLOSED, WorkAdmissionClosed } from "../util/admitted-work.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -304,6 +305,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
       });
+      if (res.errorCode === WORK_ADMISSION_CLOSED) throw new WorkAdmissionClosed();
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       errorCode = res.errorCode;

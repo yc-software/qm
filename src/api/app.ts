@@ -1,4 +1,4 @@
-import { WorkAdmissionClosed } from "../util/admitted-work.ts";
+import { WORK_ADMISSION_CLOSED, WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { createResourceSearchMethods } from "./app-resource-search.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import { createAppHelpers } from "./app-helpers.ts";
@@ -32,7 +32,8 @@ export function createApp(deps: AppDeps): App {
     try {
       return await deps.admittedWork.run(() => turn(req, replay));
     } catch (error) {
-      if (error instanceof WorkAdmissionClosed) return { status: "refused", reason: error.message };
+      if (error instanceof WorkAdmissionClosed)
+        return { status: "refused", reason: error.message, errorCode: WORK_ADMISSION_CLOSED };
       throw error;
     }
   };

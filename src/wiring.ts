@@ -24,7 +24,7 @@ import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
-import { createAdmittedWork } from "./util/admitted-work.ts";
+import { ADMISSION_CLOSED_RETRY_MS, createAdmittedWork, WorkAdmissionClosed } from "./util/admitted-work.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
@@ -374,7 +374,7 @@ import {
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
+import { errMessage, reportFailureAs, swallow, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
@@ -2533,7 +2533,12 @@ export function buildApp(
     LOOP_FIRE_JOB,
     async (params) => {
       const { loopId, fireKey } = params as { loopId: string; fireKey: string };
-      await loopFire.fire(loopId, fireKey).catch(swallowAs(`manual fire of loop ${loopId}`, undefined));
+      try {
+        await loopFire.fire(loopId, fireKey);
+      } catch (e) {
+        if (e instanceof WorkAdmissionClosed) return Date.now() + ADMISSION_CLOSED_RETRY_MS;
+        swallow(`manual fire of loop ${loopId}`, e);
+      }
       return "done";
     },
     { maxAttempts: LOOP_FIRE_MAX_ATTEMPTS },
@@ -2811,13 +2816,16 @@ export function buildApp(
     releaseInFlightRuns,
     async stop() {
       await stopBackground();
+      await releaseInFlightRuns();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
         turnRunner.drained(config.shutdownDrainMs),
+        withTimeout(() => jobs.drained(), config.shutdownDrainMs, "job drain").catch(
+          swallowAs("wiring: job drain failed", undefined),
+        ),
       ]).catch(swallowAs("wiring: turn drain failed", undefined));
-      await releaseInFlightRuns();
       stopStreamSync();
       await Promise.all(
         [

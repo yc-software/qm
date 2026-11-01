@@ -9,6 +9,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { WORK_ADMISSION_CLOSED } from "../src/util/admitted-work.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -412,4 +413,51 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+test("a delivery whose turn is handed back at shutdown stays pending, retries, and delivers the reply once", async () => {
+  const webhooks = createWebhookStore(testMap(), testMap());
+  const deliveries = createDeliveryStore();
+  const jobs = createInlineJobs({ autoRun: () => false });
+  const calls: TurnRequest[] = [];
+  let handingBack = true;
+  const receiver = createWebhookReceiver({
+    webhooks,
+    jobs,
+    deliveries,
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    run: async (req) => {
+      calls.push(req);
+      return handingBack
+        ? { status: "queued", sessionId: "s1", runId: "r1", errorCode: WORK_ADMISSION_CLOSED }
+        : { status: "ok", reply: "WEBHOOK-DONE" };
+    },
+  });
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "x",
+    verification: { scheme: "github", secret: SECRET },
+    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+  });
+  assert.equal((await receiver.deliver(wh.id, githubReq("{}"))).status, 202);
+  const [job] = jobs.spawned;
+  assert.ok(job);
+
+  assert.equal(typeof (await jobs.run(job.name, job.params)), "number", "the fire job is rescheduled, not failed");
+  assert.equal((await deliveries.pending("slack")).length, 0, "no failure notice while the turn finishes elsewhere");
+  assert.equal((await webhooks.listEvents(wh.id))[0]?.pending, true, "the event stays pending for the retry");
+  assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
+
+  handingBack = false;
+  assert.equal(await jobs.run(job.name, job.params), "done");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.idempotencyKey, calls[0]?.idempotencyKey, "the retry re-attaches to the same turn");
+  assert.deepEqual(
+    (await deliveries.pending("slack")).map((delivery) => delivery.text),
+    ["WEBHOOK-DONE"],
+  );
+  assert.equal((await webhooks.listEvents(wh.id))[0]?.pending, false);
 });
