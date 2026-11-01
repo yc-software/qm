@@ -51,7 +51,13 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isPersonAuthored, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import {
+  desktopClientForTurn,
+  isPersonAuthored,
+  isSessionTurn,
+  resolveTurnOrigin,
+  turnOriginRequestFields,
+} from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -3294,6 +3300,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
             prepareSteer: async (text, request) => {
               const author = request ? deps.identity.resolve(request.actor).id : actor.id;
+              if (
+                request &&
+                isPersonAuthored(resolveTurnOrigin(request).kind) &&
+                !isSessionTurn(request) &&
+                request.externalSlack === undefined
+              )
+                await deps.identity
+                  .notePerson(author, "turn")
+                  .catch((err: unknown) => reportFailure("orchestrator: record person", err));
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&

@@ -1311,7 +1311,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await q(
         `SELECT e.author, ${msOf("MIN(e.created_at)")} AS first_at
            FROM items e
-          WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND ${userTurn("e")}
+           JOIN sessions s ON s.id = e.session_id
+          WHERE e.tenant_id = ${TENANT} AND e.author IS NOT NULL AND e.author NOT LIKE 'system:%'
+            AND s.origin = 'conversation' AND s.parent_session_id IS NULL AND ${userTurn("e")}
           GROUP BY e.author`,
       );
       return rows.map((r) => ({ author: r.author as string, firstAt: Number(r.first_at) }));

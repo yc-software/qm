@@ -19,7 +19,7 @@ test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin(undefined), "conversation");
 });
 
-test("firstAuthoredTurns names only people who wrote a turn, with their first one", async () => {
+test("firstAuthoredTurns names only people who wrote in a conversation, with their first turn", async () => {
   const nowRef = { v: 20_000_000_000 };
   const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => nowRef.v });
   const scope = scopeId("channel", "C-roster");
@@ -43,10 +43,25 @@ test("firstAuthoredTurns names only people who wrote a turn, with their first on
     payload: { overheard: true, text: "chatter" },
     scopeLabel: scope,
   });
+  await store.append(lease, {
+    type: "user",
+    author: "system:roster-ambient",
+    payload: { text: "a system wake" },
+    scopeLabel: scope,
+  });
   await store.append(lease, { type: "assistant", payload: { text: "reply" }, scopeLabel: scope });
   await store.releaseLease(lease);
+  const cron = await store.getOrCreateByThread("cron:roster-cron:slot", "dm", scopeId("personal", "roster-owner"));
+  const cronLease = (await store.acquireLease(cron.id)).lease!;
+  await store.append(cronLease, {
+    type: "user",
+    author: "roster-owner",
+    payload: { text: "scheduled prompt" },
+    scopeLabel: scope,
+  });
+  await store.releaseLease(cronLease);
 
-  const rows = (await store.firstAuthoredTurns()).filter((r) => r.author.startsWith("roster-"));
+  const rows = (await store.firstAuthoredTurns()).filter((r) => r.author.includes("roster-"));
   assert.deepEqual(rows, [{ author: "roster-talker", firstAt: first.createdAt }]);
 });
 

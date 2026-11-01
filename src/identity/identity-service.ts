@@ -1,3 +1,4 @@
+import { reportFailure } from "../util/errors.ts";
 import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -163,7 +164,14 @@ export function createIdentityService(
   }
 
   const remember = ({ offboardChanges: _changes, ...summary }: PrincipalRecord): PrincipalRecord => {
-    principals.set(personKey(summary.principalId), summary);
+    const key = personKey(summary.principalId);
+    const other = principals.get(key);
+    principals.set(
+      key,
+      other && foldPrincipalId(other.principalId) !== foldPrincipalId(summary.principalId)
+        ? mergeSummaries(other, summary)
+        : summary,
+    );
     return { offboardChanges: _changes, ...summary };
   };
   const principalKey = (externalId: string): string =>
@@ -306,7 +314,10 @@ export function createIdentityService(
       return exclusive(async () => {
         externals.set(personKey(m.email), m);
         await externalStore.put(foldPrincipalId(m.email), m);
-        if (m.kind === "teammate") await recordSeen([{ principalId: m.email, source: "invite", at: m.createdAt }]);
+        if (m.kind === "teammate")
+          await recordSeen([{ principalId: m.email, source: "invite", at: m.createdAt }]).catch((err: unknown) =>
+            reportFailure("identity: record person", err),
+          );
       });
     },
     removeExternalMember(principalId: string): Promise<void> {

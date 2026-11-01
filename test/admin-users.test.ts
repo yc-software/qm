@@ -8,7 +8,9 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { computeUsers } from "../src/admin/users.ts";
+import { computeUsers, rosterHistory } from "../src/admin/users.ts";
+import { createIdentityService } from "../src/identity/identity-service.ts";
+import { testMap } from "./support/test-database.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -126,6 +128,21 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       Array.isArray(d.grants) && d.grants.some((g: { principalId: string }) => g.principalId === "admin-alice"),
       "authoritative grants present",
     );
+
+    const fresh = createIdentityService(testMap(), { externalMembers: testMap(), principals: testMap() });
+    await fresh.backfillPrincipals({
+      standing: [],
+      history: async () =>
+        rosterHistory({
+          turns: await s.built.sessions.firstAuthoredTurns(),
+          grants: [],
+          externals: [],
+          now: Date.now(),
+        }),
+    });
+    const backfilled = (await fresh.listPrincipals()).map((r) => r.principalId);
+    assert.ok(backfilled.includes("U1"), "the backfill finds the person who wrote");
+    assert.equal(backfilled.includes("U-preloaded"), false, "and, like the live path, not someone only added");
 
     const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "user-uma@default-org" } });
     assert.equal(denied.status, 403);

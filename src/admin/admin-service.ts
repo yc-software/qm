@@ -5,6 +5,7 @@ import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 
+import { reportFailure } from "../util/errors.ts";
 export type { AdminGrant } from "./admin-grant-store.ts";
 
 export interface AdminStatus {
@@ -66,6 +67,10 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
   const orgId = configOrgId();
   const now = opts.now ?? (() => Date.now());
 
+  const noteAdmin = (principalId: string): Promise<void> =>
+    opts.roster?.notePerson(principalId, "admin").catch((err: unknown) => reportFailure("admin: record person", err)) ??
+    Promise.resolve();
+
   async function isOrgAdmin(actor: Principal): Promise<boolean> {
     return adminStatusFromGrants(await grants.list(), actor.id).role === "org_admin";
   }
@@ -102,7 +107,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         createdAt: now(),
       };
       const created = await grants.addIfAbsent(grant);
-      await opts.roster?.notePerson(principalId, "admin");
+      await noteAdmin(principalId);
       return { grant, created };
     },
     listGrants() {
@@ -122,7 +127,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
       await grants.add(grant);
-      await opts.roster?.notePerson(principalId, "admin");
+      await noteAdmin(principalId);
       return grant;
     },
     async revokeGrant(actor, principalId, scope, role) {
