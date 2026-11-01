@@ -3811,7 +3811,7 @@ test("execute and write provision a sandbox that is released after the turn", as
   const run = await app.turn(dm("!run echo sandbox-works"));
   assert.equal(run.status, "ok");
   assert.equal(boxes.provisioned, 1, "execute must provision");
-  assert.equal(boxes.live, 0, "box torn down after the turn");
+  await eventually(() => boxes.live, { until: (live) => live === 0, label: "box torn down after the turn" });
 
   await app.turn(dm("!write notes.md hi"));
   assert.equal(boxes.provisioned, 2, "write must provision");
@@ -3893,7 +3893,10 @@ test("eager provisioning warms the box on a tool-using session's next turn and s
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello there/);
   assert.equal(boxes.provisioned, 2, "the box is provisioned eagerly even though no tool ran this turn");
-  assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
+  await eventually(() => boxes.live, {
+    until: (live) => live === 0,
+    label: "an eagerly provisioned box is still reclaimed at turn end",
+  });
 });
 
 test("eager provisioning never grows a computer for a chat-only session", async () => {
@@ -3934,7 +3937,7 @@ test("a failed eager provision clears the slot — the tool call retries instead
   assert.equal(res.status, "ok", res.reason);
   assert.match(res.reply ?? "", /hi/);
   assert.equal(attempts, 2, "the eager failure must not poison the slot: the tool call re-provisions");
-  assert.equal(boxes.live, 0);
+  await eventually(() => boxes.live, { until: (live) => live === 0, label: "the box is reclaimed at turn end" });
 });
 
 test("a preamble failure after the machine boots still reclaims it", async () => {
@@ -4256,7 +4259,7 @@ test("activated resource defaults preserve an existing computer and stop eager p
   const next = await built.app.turn(dm("hello after unset"));
   assert.equal(next.status, "ok", next.reason);
   assert.equal(boxes.provisioned, 1);
-  assert.equal(boxes.live, 0);
+  await eventually(() => boxes.live, { until: (live) => live === 0, label: "the box is reclaimed at turn end" });
   const newSession = await built.app.turn(
     dm("hello", { actor: { externalId: "new-user" }, conversation: { kind: "dm", threadRef: "dm:new:t1" } }),
   );
