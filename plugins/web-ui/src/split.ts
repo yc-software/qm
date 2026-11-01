@@ -1142,7 +1142,6 @@ function sessionActionItems(sessionId: string, panelId: string): SessionAction[]
 }
 
 function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult {
-  // In the pane header these sit beside the workspace tools, so they share their look.
   const header = cls === "split-group-session-action";
   const base = header ? ["session-tool"] : ["icon-btn", "subtle"];
   return html`${sessionActionItems(sessionId, panelId).map(
