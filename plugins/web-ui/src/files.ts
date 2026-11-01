@@ -10,8 +10,6 @@ import {
   FileSpreadsheet,
   FileText,
   FileVideo,
-  LayoutGrid,
-  List,
   Presentation,
   Search,
   Upload,
@@ -78,23 +76,6 @@ function setFilesLayout(layout: FilesLayout): void {
     void 0;
   }
   drawFiles();
-}
-
-function layoutToggle() {
-  const option = (layout: FilesLayout, glyph: IconNode, label: string) =>
-    html`<button
-      type="button"
-      class="cron-filter-chip ${filesLayout === layout ? "active" : ""}"
-      aria-pressed=${filesLayout === layout ? "true" : "false"}
-      aria-label=${label}
-      title=${label}
-      @click=${() => setFilesLayout(layout)}
-    >
-      ${icon(glyph, 16)}
-    </button>`;
-  return html`<div class="files-layout-toggle" role="group" aria-label="File layout">
-    ${option("list", List, "List view")}${option("grid", LayoutGrid, "Grid view")}
-  </div>`;
 }
 
 function fileScope(f: FileItem): string | null {
@@ -237,7 +218,15 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
-        ${layoutToggle()}
+        ${selectControl(
+          "View",
+          filesLayout,
+          [
+            ["list", "List"],
+            ["grid", "Grid"],
+          ],
+          (v) => setFilesLayout(v as FilesLayout),
+        )}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button

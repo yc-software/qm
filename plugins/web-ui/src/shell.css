@@ -5730,11 +5730,6 @@ a.connector-widget:focus-visible {
 .file-row-icon.document {
   color: #607d9a;
 }
-.files-layout-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 2px;
-}
 .file-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
