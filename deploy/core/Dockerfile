@@ -9,6 +9,19 @@ COPY deploy/connector-sdk ./deploy/connector-sdk
 RUN npm ci --prefix deploy/connector-sdk --ignore-scripts --no-audit --no-fund \
   && node deploy/connector-sdk/build.mjs
 
+FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS web-ui-build
+WORKDIR /app/plugins/web-ui
+ARG WEB_UI_BASE=/
+ENV WEB_UI_BASE=$WEB_UI_BASE
+COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY plugins/web-ui/index.html plugins/web-ui/shared.html plugins/web-ui/vite.config.ts plugins/web-ui/tsconfig.json ./
+COPY plugins/web-ui/public ./public
+COPY plugins/web-ui/src ./src
+COPY plugins/chassis/src /app/plugins/chassis/src
+COPY docs/images/slack-app-config-token-setup.gif /app/docs/images/slack-app-config-token-setup.gif
+RUN npm run build
+
 FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 
 RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli
@@ -18,7 +31,13 @@ COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./plugins/web-ui/
+COPY plugins/portal/package.json plugins/portal/package-lock.json ./plugins/portal/
+COPY plugins/auth/package.json plugins/auth/package-lock.json ./plugins/auth/
 RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
+  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/web-ui \
+  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/portal \
+  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/auth \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
@@ -28,6 +47,11 @@ COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
 COPY plugins/onboarding ./plugins/onboarding
 COPY plugins/chassis ./plugins/chassis
+COPY plugins/auth/src ./plugins/auth/src
+COPY plugins/portal/src ./plugins/portal/src
+COPY plugins/web-ui/server ./plugins/web-ui/server
+COPY plugins/web-ui/src ./plugins/web-ui/src
+COPY --from=web-ui-build /app/plugins/web-ui/dist-web ./plugins/web-ui/dist-web
 COPY tsconfig.json ./
 
 ENV NODE_ENV=production
@@ -35,7 +59,7 @@ ENV DATA_DIR=/data
 ARG GIT_SHA=
 ENV GIT_SHA=$GIT_SHA
 RUN mkdir -p /data && chown node:node /data
-EXPOSE 8080
+EXPOSE 8080 8000
 
 RUN apk add --no-cache util-linux
 USER node
