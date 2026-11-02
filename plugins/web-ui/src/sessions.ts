@@ -1181,6 +1181,12 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 
 let draggingChildId: string | null = null;
 
+function liftForDragSnapshot(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  target.classList.add("drag-snapshot");
+  requestAnimationFrame(() => target.classList.remove("drag-snapshot"));
+}
+
 export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
@@ -1188,6 +1194,7 @@ export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  liftForDragSnapshot(e.currentTarget);
   draggingChildId = s.parentSessionId ? s.id : null;
   appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
   if (!draggingChildId) beginSessionDrag(s);
