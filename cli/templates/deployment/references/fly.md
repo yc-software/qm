@@ -51,17 +51,30 @@ private Tigris and Managed Postgres. The core defaults to a
 After the first successful deployment, rerun `npm exec qm -- up` and confirm it
 reconciles the same apps.
 
-Deployments created before core served the web UI also have `<app-prefix>-web-ui`,
-`<app-prefix>-portal` and `<app-prefix>-auth` apps. Remove `"web-ui"` and
-`"portal"` from `services`, move their `env` entries into `env.core`, and change a
-`publicUrl` of `https://<app-prefix>-portal.fly.dev` to
-`https://<app-prefix>-core.fly.dev` (and a `PUBLIC_API_URL` on the old host, then
-run `qm secrets push`; and the redirect URI registered with an external OIDC
-provider to `<publicUrl>/auth/callback`). `qm up` then deploys core
-with the public front door and, once `https://<app-prefix>-core.fly.dev/healthz`
-answers, destroys the three old apps. A custom domain whose certificate is on the
-portal app keeps them running until the certificate moves to the core app; `qm up`
-prints the steps.
+## Upgrade from separate web UI, portal and auth apps
+
+Deployments created before core served the web UI also run
+`<app-prefix>-web-ui`, `<app-prefix>-portal` and `<app-prefix>-auth` apps. Move
+to core once, by hand:
+
+1. In the config, remove `"web-ui"` and `"portal"` from `services`, move their
+   `env` and `secretEnv` entries into `core`, and delete their `vms` and
+   `imageOverrides` entries.
+2. If `publicUrl` is `https://<app-prefix>-portal.fly.dev`, change it to
+   `https://<app-prefix>-core.fly.dev`. Do the same for `PUBLIC_API_URL` if it
+   names the old host. If sign-in goes through an external OIDC provider,
+   register `<publicUrl>/auth/callback` as its redirect URI.
+3. Run `npm exec qm -- secrets push`, then `npm exec qm -- up`.
+4. Check that `https://<app-prefix>-core.fly.dev/healthz` answers and that you
+   can sign in at the core URL. Then run `npm exec qm -- check --live`.
+5. For each custom domain in `fly certs list -a <app-prefix>-portal`, run
+   `fly certs add <hostname> -a <app-prefix>-core`, point its DNS at the
+   addresses from `fly ips list -a <app-prefix>-core`, wait until
+   `fly certs show <hostname> -a <app-prefix>-core` reports it issued, then run
+   `fly certs remove <hostname> -a <app-prefix>-portal`.
+6. Run `fly apps destroy <app-prefix>-portal`, then
+   `fly apps destroy <app-prefix>-web-ui` and
+   `fly apps destroy <app-prefix>-auth`; skip any app that does not exist.
 
 ## Web UI releases
 
