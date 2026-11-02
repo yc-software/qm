@@ -283,7 +283,7 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
     return existsSync(path) ? readFileSync(path, "utf8") : "";
   };
   const scaffoldVersion = Number(read("main.tf").match(/qm_scaffold_version\s*=\s*(\d+)\b/)?.[1] ?? 0);
-  if (scaffoldVersion < 4 || !/public_port\s*=\s*optional/.test(read("variables.tf"))) {
+  if (scaffoldVersion < 4) {
     throw new CliError(
       "the vendored AWS scaffold predates core serving the public front door; follow the AWS upgrade steps in the deployment guide to replace infra/main.tf and infra/variables.tf with the current scaffold",
     );

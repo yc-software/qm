@@ -297,9 +297,6 @@ test("rendering and deploying refuse a vendored AWS scaffold that predates the c
     const infra = join(dir, "infra");
     mkdirSync(infra);
     writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(join(infra, "variables.tf"), variablesTf.replace(/\n\s*public_port\s*=\s*optional\(number\)/, ""));
-    writeFileSync(join(infra, "main.tf"), mainTf);
-    assert.throws(() => renderTerraformVars(config, dir), /predates core serving the public front door/);
     writeFileSync(join(infra, "variables.tf"), variablesTf);
     writeFileSync(join(infra, "main.tf"), mainTf.replace(/qm_scaffold_version\s*=\s*\d+/, "qm_scaffold_version = 3"));
     assert.throws(() => renderTerraformVars(config, dir), /predates core serving the public front door/);

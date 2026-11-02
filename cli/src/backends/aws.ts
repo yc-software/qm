@@ -1025,16 +1025,6 @@ function liveTask(config: QmConfig, service: string): Record<string, unknown> | 
   );
 }
 
-function coreServesFrontDoor(config: QmConfig): boolean {
-  const containers = liveTask(config, "core")?.containerDefinitions as
-    Array<{ name?: string; portMappings?: Array<{ containerPort?: number }> }> | undefined;
-  return Boolean(
-    containers
-      ?.find((container) => container.name === "core")
-      ?.portMappings?.some((mapping) => mapping.containerPort === PUBLIC_PORT),
-  );
-}
-
 function normalizeLiveTask(task: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!task) return null;
   const copy = structuredClone(task);
@@ -2312,11 +2302,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!label) throw new CliError("aws.imageLabel is required");
   if (!opts.dryRun && !opts.yes) throw new CliError("AWS deploy requires --yes after reviewing `qm plan`");
   assertAwsCallerAccount(aws);
-  if (coreServesFrontDoor(config)) assertAwsPublicFrontDoor(config);
-  else
-    warn(
-      "the running core predates its built-in front door, so the ALB routing is not checked before this deploy; once core is stable, follow the AWS upgrade steps in the deployment guide to route the public URL to core and retire the web-ui and portal services",
-    );
+  assertAwsPublicFrontDoor(config);
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
@@ -3975,16 +3961,19 @@ function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute
   return routes;
 }
 
+export function awsTargetGroupName(config: QmConfig, route: string): string {
+  const aws = requireAws(config);
+  return (
+    aws.services[route]?.targetGroup ??
+    `${aws.cluster.slice(0, 20)}-${route.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`${aws.cluster}:${route}`).digest("hex").slice(0, 6)}`
+  );
+}
+
 export function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
 ): ReadonlyMap<string, string> {
   const aws = requireAws(config);
-  const hash = (value: string, length: number): string =>
-    createHash("sha1").update(value).digest("hex").slice(0, length);
-  const targetName = (name: string): string =>
-    aws.services[name]?.targetGroup ??
-    `${aws.cluster.slice(0, 20)}-${name.replaceAll("-", "").slice(0, 4)}-${hash(`${aws.cluster}:${name}`, 6)}`;
   const routes = awsIngressRoutes(config);
   const ingress = [...routes.keys()];
   const coreHosts = routes.get("core")?.hosts ?? [];
@@ -4007,7 +3996,7 @@ export function assertAwsPublicRouting(
   const productionRules = new Map<string, string>();
   const expectedTargetArns = new Set<string>();
   for (const name of ingress) {
-    const expectedName = targetName(name);
+    const expectedName = awsTargetGroupName(config, name);
     const target = targetGroups.find((group) => group.TargetGroupName === expectedName);
     if (!target?.TargetGroupArn) throw new Error(`target group for ${name} is missing`);
     targets.set(name, target.TargetGroupArn);

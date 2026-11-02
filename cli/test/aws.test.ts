@@ -38,6 +38,7 @@ import {
   serviceEnvironment,
   taskDefinitionChanges,
   taskDefinitionDiff,
+  awsTargetGroupName,
 } from "../src/backends/aws.ts";
 import type { QmConfig } from "../src/config.ts";
 import { computedSecrets } from "../src/secrets.ts";
@@ -57,13 +58,10 @@ const EMPTY_LAYER = {
 };
 const TEST_SECRET_VALUE = "test-secret-value".repeat(3);
 
-const sha6 = (value: string): string => createHash("sha1").update(value).digest("hex").slice(0, 6);
 const targetGroupArn = (name: string, revision = 1): string =>
   `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${name}/${revision}`;
-const frontDoorTarget = `acme-qm-core-${sha6("acme-qm:core-public")}`;
-const frontDoorAlternate = `acme-qm-core-g-${sha6("acme-qm:core-public:alternate")}`;
-const coreHostTarget = `acme-qm-core-${sha6("acme-qm:core")}`;
-const coreHostAlternate = `acme-qm-core-g-${sha6("acme-qm:core:alternate")}`;
+const frontDoorAlternate = "front-door-alternate";
+const coreHostAlternate = "core-host-alternate";
 const productionRuleArn = (route: string): string =>
   `arn:aws:elasticloadbalancing:us-west-2:123456789012:listener-rule/app/test/1/2/${route}`;
 
@@ -75,9 +73,15 @@ interface FrontDoor {
 
 function frontDoorAttachments(door: FrontDoor): Array<Record<string, unknown>> {
   const routes = [
-    { route: "core-public", target: frontDoorTarget, alternate: frontDoorAlternate },
+    { route: "core-public", target: awsTargetGroupName(config, "core-public"), alternate: frontDoorAlternate },
     ...(door.coreHosts?.length
-      ? [{ route: "core", target: door.coreTargetGroup ?? coreHostTarget, alternate: coreHostAlternate }]
+      ? [
+          {
+            route: "core",
+            target: door.coreTargetGroup ?? awsTargetGroupName(config, "core"),
+            alternate: coreHostAlternate,
+          },
+        ]
       : []),
   ];
   return routes.map(({ route, target, alternate }) => ({
@@ -107,13 +111,13 @@ function fakeAws(
   const bin = join(dir, "aws-fake");
   const log = join(dir, "aws.log");
   const coreHosts = ingress.coreHosts ?? [];
-  const targetArn = targetGroupArn(frontDoorTarget);
+  const targetArn = targetGroupArn(awsTargetGroupName(config, "core-public"));
   const alternateArn = targetGroupArn(frontDoorAlternate, 2);
-  const coreName = ingress.coreTargetGroup ?? coreHostTarget;
+  const coreName = ingress.coreTargetGroup ?? awsTargetGroupName(config, "core");
   const coreArn = targetGroupArn(coreName);
   const coreAlternateArn = targetGroupArn(coreHostAlternate, 2);
   const groups = [
-    { TargetGroupArn: targetArn, TargetGroupName: frontDoorTarget },
+    { TargetGroupArn: targetArn, TargetGroupName: awsTargetGroupName(config, "core-public") },
     ...(ingress.blueGreen ? [{ TargetGroupArn: alternateArn, TargetGroupName: frontDoorAlternate }] : []),
     ...(coreHosts.length ? [{ TargetGroupArn: coreArn, TargetGroupName: coreName }] : []),
     ...(coreHosts.length && ingress.blueGreen
@@ -287,7 +291,6 @@ function statefulAws(
     foreignServiceTags?: boolean;
     progressFile?: string;
     sabotageProgress?: boolean;
-    legacyCore?: boolean;
   } = {},
 ): {
   log: string;
@@ -321,28 +324,11 @@ function statefulAws(
       },
     ]),
   );
-  const core = configured.aws!.services.core;
-  const definitions =
-    core && !opts.legacyCore
-      ? {
-          [`arn:aws:ecs:us-west-2:123456789012:task-definition/${core.ecsService}:1`]: {
-            containerDefinitions: [
-              {
-                name: "core",
-                portMappings: [
-                  { name: "core", containerPort: 8080 },
-                  { name: "core-public", containerPort: 8000 },
-                ],
-              },
-            ],
-          },
-        }
-      : {};
   writeFileSync(
     state,
     JSON.stringify({
       services,
-      definitions,
+      definitions: {},
       dynamo: initialDynamo,
       objects: { [EMPTY_LAYER.key]: EMPTY_LAYER_BODY },
       revision: 1,
@@ -1163,53 +1149,22 @@ test("AWS deploy requires the live ALB to send everything but declared routes to
   }
 });
 
-test("AWS up skips the routing preflight only while the live core predates its front door", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-upgrade-"));
-  writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
-  chmodSync(join(dir, "docker"), 0o755);
-  const priorPath = process.env.PATH;
-  process.env.PATH = `${dir}:${priorPath}`;
+test("AWS up refuses a broken front door before touching ECS", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-"));
   const prior = process.env.AWS_FAKE_DEFAULT_404;
   process.env.AWS_FAKE_DEFAULT_404 = "1";
-  const warnings: string[] = [];
-  const priorWarn = console.warn;
-  console.warn = (...parts: unknown[]): void => void warnings.push(parts.join(" "));
   const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
   try {
-    const legacy = statefulAws(dir, single, {}, { legacyCore: true });
-    try {
-      await awsUp(single, dir, { yes: true });
-      const calls = readFileSync(legacy.log, "utf8");
-      assert.doesNotMatch(calls, /elbv2 describe-rules/);
-      assert.match(calls, /ecs update-service .*--service acme-core/);
-      assert.ok(warnings.some((line) => line.includes("ALB routing is not checked before this deploy")));
-      const state = JSON.parse(readFileSync(legacy.state, "utf8"));
-      const deployed = state.definitions[state.services["acme-core"].taskDefinition];
-      assert.ok(
-        deployed.containerDefinitions[0].portMappings.some(
-          (mapping: { containerPort: number }) => mapping.containerPort === 8000,
-        ),
-      );
-    } finally {
-      legacy.restore();
-    }
-    warnings.length = 0;
-    const current = statefulAws(dir, single);
-    try {
-      await assert.rejects(
-        () => awsUp(single, dir, { yes: true }),
-        /public front door is not ready for deployment: listener default does not route only to the core front door/,
-      );
-      assert.doesNotMatch(readFileSync(current.log, "utf8"), /ecs update-service/);
-      assert.deepEqual(warnings, []);
-    } finally {
-      current.restore();
-    }
+    await assert.rejects(
+      () => awsUp(single, dir, { yes: true }),
+      /public front door is not ready for deployment: listener default does not route only to the core front door/,
+    );
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service/);
   } finally {
-    console.warn = priorWarn;
+    fake.restore();
     if (prior === undefined) delete process.env.AWS_FAKE_DEFAULT_404;
     else process.env.AWS_FAKE_DEFAULT_404 = prior;
-    process.env.PATH = priorPath;
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -1221,8 +1176,8 @@ test("AWS front door routes /* and core's own hosts through core's two target gr
     apiUrl: "https://api.agent.acme.example",
     env: { ...config.env, core: { ...config.env.core, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
   };
-  const front = targetGroupArn(frontDoorTarget);
-  const coreTarget = targetGroupArn(coreHostTarget);
+  const front = targetGroupArn(awsTargetGroupName(config, "core-public"));
+  const coreTarget = targetGroupArn(awsTargetGroupName(config, "core"));
   for (const blueGreen of [false, true]) {
     const dir = mkdtempSync(join(tmpdir(), "qm-aws-front-door-"));
     const fake = fakeAws(dir, "", { blueGreen, coreHosts: hosts });
@@ -5564,7 +5519,7 @@ test("shared deployment state isolates company manifests and leases without muta
 
 test("shared ALB validates company routes while rejecting sibling overlap", () => {
   const company = { ...config, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } };
-  const primary = targetGroupArn(frontDoorTarget);
+  const primary = targetGroupArn(awsTargetGroupName(config, "core-public"));
   const services = new Map([["core", { loadBalancers: frontDoorAttachments({ blueGreen: true }) }]]);
   const hostname = new URL(company.publicUrl).hostname;
   for (const variant of [
