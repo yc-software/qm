@@ -1019,7 +1019,8 @@ a.chat-row-open {
   font: inherit;
   font-size: var(--session-title-size);
 }
-.session-rename-input:focus {
+.session-rename-input:focus,
+.queued-edit-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
 }
