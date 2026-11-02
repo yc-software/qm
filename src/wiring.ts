@@ -2200,7 +2200,7 @@ export function buildApp(
   };
   const liveFallback = async (
     container: string,
-    opts?: { limit?: number },
+    opts?: { limit?: number; surface?: string },
   ): Promise<Array<{
     container: string;
     ts: string;
@@ -2210,7 +2210,7 @@ export function buildApp(
     createdAt: number;
   }> | null> => {
     const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
+    if (!puller || (opts?.surface ?? "slack") !== "slack") return null;
     const result = await puller.pull("slack", {
       conversationTarget: container,
       ...(opts?.limit !== undefined ? { count: opts.limit } : {}),

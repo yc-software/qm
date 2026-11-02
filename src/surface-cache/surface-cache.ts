@@ -119,6 +119,7 @@ export function createPostgresSurfaceCache(
     {
       id: "surface-cache/store/0007",
       statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS sent_at BIGINT`,
@@ -143,6 +144,7 @@ export function createPostgresSurfaceCache(
     {
       id: "surface-cache/store/0009",
       statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_messages DROP CONSTRAINT channel_messages_pkey,
             ADD PRIMARY KEY USING INDEX channel_messages_surface_key`,
         `ALTER TABLE channel_state DROP CONSTRAINT channel_state_pkey,
