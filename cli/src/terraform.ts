@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
-import { isServiceName, serviceDef } from "./services.ts";
+import { isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
@@ -157,10 +157,10 @@ function derivedValues(
       "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
     );
   }
-  const corePublicHosts = config.services.includes("portal") ? awsCoreHostnames(config) : [];
+  const corePublicHosts = awsCoreHostnames(config);
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
-      "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
+      "the vendored AWS scaffold predates split front-door/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
     );
   }
   const services = Object.fromEntries(
@@ -177,6 +177,7 @@ function derivedValues(
           memory: service!.memory,
           architecture: awsWorkloadArchitecture(config, name),
           internal_port: isServiceName(name) ? serviceDef(name).docker.internalPort : 8080,
+          ...(name === "core" ? { public_port: PUBLIC_PORT } : {}),
           ...(service!.publicPaths ? { public_paths: service!.publicPaths } : {}),
           ...(service!.taskRoleArn ? { task_role_arn: service!.taskRoleArn } : {}),
           ...(service!.executionRoleArn ? { execution_role_arn: service!.executionRoleArn } : {}),
@@ -276,44 +277,15 @@ function declaredInDir(configDir: string): string[] | undefined {
 }
 
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
-  const services = Object.values(config.aws?.services ?? {});
-  const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
-  const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
-  const hasDatabaseOverrides = config.aws?.dbInstanceClass !== undefined;
-  const hasEgressProxy = Boolean(config.aws?.services["egress-proxy"]);
-  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides && !hasEgressProxy) return;
-  const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
-  if (!existsSync(tfvarsPath)) return;
-  const variablesPath = join(configDir, "infra", "variables.tf");
-  const mainPath = join(configDir, "infra", "main.tf");
-  const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
-  const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
-  if (
-    hasDatabaseOverrides &&
-    (!/variable\s+"db_instance_class"/.test(variables) || !/instance_class\s*=\s*var\.db_instance_class/.test(main))
-  ) {
+  if (!config.aws || !existsSync(join(configDir, "infra", "terraform.tfvars"))) return;
+  const read = (name: string): string => {
+    const path = join(configDir, "infra", name);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
+  const scaffoldVersion = Number(read("main.tf").match(/qm_scaffold_version\s*=\s*(\d+)\b/)?.[1] ?? 0);
+  if (scaffoldVersion < 4 || !/public_port\s*=\s*optional/.test(read("variables.tf"))) {
     throw new CliError(
-      "the vendored AWS scaffold predates aws.dbInstanceClass; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
-    );
-  }
-  if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",
-    );
-  }
-  if (hasEgressProxy && !/resource\s+"aws_lb"\s+"egress_proxy"/.test(main)) {
-    throw new CliError(
-      "the vendored AWS scaffold predates the egress-proxy service; update infra/main.tf and infra/outputs.tf from the current scaffold before enabling it",
-    );
-  }
-  if (
-    hasAssumeRoles &&
-    (!/assume_role_arns\s*=\s*optional/.test(variables) ||
-      !/manage_task_role\s*=\s*optional/.test(variables) ||
-      !/qm_scaffold_version\s*=\s*3\b/.test(main))
-  ) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.assumeRoleArns; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
+      "the vendored AWS scaffold predates core serving the public front door; follow the AWS upgrade steps in the deployment guide to replace infra/main.tf and infra/variables.tf with the current scaffold",
     );
   }
 }

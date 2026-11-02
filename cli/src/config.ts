@@ -1008,20 +1008,29 @@ function rejectRetiredServices(o: Record<string, unknown>, path: string): void {
   const listed = (o["services"] as unknown[]).filter((s): s is string =>
     (RETIRED_SERVICE_NAMES as readonly unknown[]).includes(s),
   );
-  const keyed = ["env", "secretEnv", "vms", "imageOverrides"].flatMap((field) => {
-    const map = o[field];
-    return isPlainObject(map)
-      ? RETIRED_SERVICE_NAMES.filter((name) => map[name] !== undefined).map((name) => `${field}.${name}`)
-      : [];
-  });
-  if (!listed.length && !keyed.length) return;
+  const awsServices = isPlainObject(o["aws"]) ? o["aws"]["services"] : undefined;
+  const keyedBy = (fields: ReadonlyArray<readonly [string, unknown]>): string[] =>
+    fields.flatMap(([field, map]) =>
+      isPlainObject(map)
+        ? RETIRED_SERVICE_NAMES.filter((name) => map[name] !== undefined).map((name) => `${field}.${name}`)
+        : [],
+    );
+  const moved = keyedBy([
+    ["env", o["env"]],
+    ["secretEnv", o["secretEnv"]],
+  ]);
+  const dropped = keyedBy([
+    ["vms", o["vms"]],
+    ["imageOverrides", o["imageOverrides"]],
+    ["aws.services", awsServices],
+  ]);
+  if (!listed.length && !moved.length && !dropped.length) return;
   throw new CliError(
     `${path}: core now serves the web UI and sign-in itself, so the separate ${RETIRED_SERVICE_NAMES.map((s) => JSON.stringify(s)).join(" and ")} services are gone. ` +
       [
         listed.length ? `Remove ${listed.map((s) => JSON.stringify(s)).join(", ")} from "services".` : "",
-        keyed.length
-          ? `Move the settings in ${keyed.join(", ")} into the matching "core" entry (drop vms and imageOverrides entries).`
-          : "",
+        moved.length ? `Move the settings in ${moved.join(", ")} into the matching "core" entry.` : "",
+        dropped.length ? `Delete ${dropped.join(", ")}.` : "",
       ]
         .filter(Boolean)
         .join(" "),

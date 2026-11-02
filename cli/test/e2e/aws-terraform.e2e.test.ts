@@ -234,3 +234,72 @@ run "plaintext" {
     }
   },
 );
+
+test(
+  "AWS init plans core as the public front door with direct core host routes beside it",
+  { skip: !terraformRequested && !terraformBin ? "Terraform is unavailable" : false },
+  () => {
+    assert.ok(terraformBin, `QM_TEST_TERRAFORM is not executable: ${process.env.QM_TEST_TERRAFORM}`);
+    const dir = tmp("aws-front-door");
+    try {
+      const initialized = runCli(["init", dir, "--org", "door", "--target", "aws", "--model-provider", "anthropic"]);
+      assert.equal(initialized.code, 0, initialized.out);
+      configureAwsCoordinates(dir);
+      configureTerraform(dir);
+      const rendered = runCli(["infra", "render", "--config", join(dir, "qm.config.jsonc")]);
+      assert.equal(rendered.code, 0, rendered.out);
+      writeFileSync(
+        join(dir, "infra", "front-door.tftest.hcl"),
+        `mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["us-west-2a", "us-west-2b"] }
+  }
+}
+mock_provider "random" {}
+run "front_door" {
+  command = plan
+  assert {
+    condition = keys(aws_lb_target_group.service) == ["core-public"] && aws_lb_target_group.service["core-public"].port == 8000 && aws_lb_target_group.alternate["core-public"].port == 8000
+    error_message = "core's front door is not the only ingress target"
+  }
+  assert {
+    condition = aws_lb_listener_rule.production["core-public"].priority == 50000 && flatten([for c in aws_lb_listener_rule.production["core-public"].condition : [for p in c.path_pattern : p.values]]) == ["/*"]
+    error_message = "the front-door rule must be the lowest-precedence catch-all"
+  }
+  assert {
+    condition = [for lb in aws_ecs_service.service["core"].load_balancer : lb.container_port] == [8000]
+    error_message = "core is not attached to its front-door target group on the public port"
+  }
+  assert {
+    condition = [for m in jsondecode(aws_ecs_task_definition.bootstrap["core"].container_definitions)[0].portMappings : m.containerPort] == [8080, 8000]
+    error_message = "the bootstrap core task must declare both its API and public ports"
+  }
+  assert {
+    condition = length(aws_cloudwatch_metric_alarm.primary_target_5xx) == 1 && length(aws_ecs_service.service["core"].alarms[0].alarm_names) == 2
+    error_message = "core's front door is not guarded by rollback alarms"
+  }
+}
+run "split_core_hosts" {
+  command = plan
+  variables {
+    certificate_arn   = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+    core_public_hosts = ["api.door.example.com"]
+  }
+  assert {
+    condition = flatten([for c in aws_lb_listener_rule.production["core"].condition : [for h in c.host_header : h.values]]) == ["api.door.example.com"] && aws_lb_listener_rule.production["core"].priority < aws_lb_listener_rule.production["core-public"].priority
+    error_message = "split core hosts must route to core's API ahead of the front door"
+  }
+  assert {
+    condition = toset([for lb in aws_ecs_service.service["core"].load_balancer : lb.container_port]) == toset([8000, 8080]) && length(aws_ecs_service.service["core"].alarms[0].alarm_names) == 4
+    error_message = "core must serve both its API and front-door target groups"
+  }
+}
+`,
+      );
+      terraform(dir, terraformBin, ["init", "-backend=false"]);
+      assert.match(terraform(dir, terraformBin, ["test", "-verbose"]), /Success!.*2 passed, 0 failed/s);
+    } finally {
+      rmDir(dir);
+    }
+  },
+);

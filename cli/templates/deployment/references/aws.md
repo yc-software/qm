@@ -31,25 +31,6 @@ accepts during its restore-point check and does not configure RDS.
 Confirm all other billable AWS resources separately; this deployment does not
 promise whole-stack free-tier compatibility.
 
-Upgrading the CLI does not update an existing deployment's vendored Terraform.
-Before setting `aws.dbInstanceClass`, preserve all local Terraform and tfvars
-customizations, add this variable to `infra/variables.tf`, and change only the
-RDS `instance_class` assignment in `infra/main.tf` to
-`instance_class = var.db_instance_class`:
-
-```hcl
-variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.small"
-  validation {
-    condition     = can(regex("^db\\.[a-z0-9]+\\.[a-z0-9]+$", var.db_instance_class))
-    error_message = "db_instance_class must be a valid RDS DB instance class such as db.t4g.small"
-  }
-}
-```
-
-Then run `qm infra render` and review the Terraform plan before applying.
-
 Configure a private encrypted Terraform backend, then:
 
 ```bash
@@ -84,6 +65,46 @@ The package image manifest supplies first-party control-plane images. The AWS
 backend transfers them into deployment-owned ECR and records immutable digests.
 After the first successful deployment, rerun `npm exec qm -- up --yes` and
 confirm it reconciles the same stack.
+
+## Upgrade an existing stack
+
+Upgrading the CLI does not update a deployment's vendored Terraform, and `qm`
+refuses to render or deploy until `infra/` carries the current scaffold.
+Preserve local Terraform and tfvars customizations, then replace
+`infra/main.tf` and `infra/variables.tf` with the current scaffold.
+
+A stack created before core served the web UI and sign-in itself runs separate
+`web-ui` and `portal` ECS services, with portal behind the ALB's `/*` rule.
+Move the public URL to core without a gap in service:
+
+1. Remove `"web-ui"` and `"portal"` from `services` and `aws.services`, move
+   their `env` and `secretEnv` settings into `core`, and run
+   `npm exec qm -- infra render`.
+2. Run `npm exec qm -- secrets push` and `npm exec qm -- up --yes`. Core now
+   also serves the front door on port 8000 while portal keeps answering the
+   public URL.
+3. Attach core to its front-door target group while portal still routes
+   traffic, then wait until `npm exec qm -- status` reports core stable:
+
+   ```bash
+   terraform -chdir=infra apply -target='aws_ecs_service.service["core"]'
+   ```
+
+4. Delete the retired image repositories, which Terraform cannot remove while
+   they hold images, then apply the full plan. It removes the `web-ui` and
+   `portal` services and their target groups, rule, and log groups, and the
+   public URL falls through to core:
+
+   ```bash
+   aws --profile <profile> --region <region> ecr delete-repository --force \
+     --repository-name <web-ui-ecr-repository>
+   aws --profile <profile> --region <region> ecr delete-repository --force \
+     --repository-name <portal-ecr-repository>
+   terraform -chdir=infra plan -out=qm.tfplan
+   terraform -chdir=infra apply qm.tfplan
+   ```
+
+5. Run `npm exec qm -- doctor` and `npm exec qm -- check --live`.
 
 ## Agent-computer proof
 

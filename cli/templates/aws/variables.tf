@@ -146,6 +146,11 @@ variable "services" {
     assume_role_arns   = optional(set(string))
     manage_task_role   = optional(bool, false)
     public_paths       = optional(list(string), [])
+    public_port        = optional(number)
   }))
+  validation {
+    condition     = try(var.services["core"].public_port, null) != null
+    error_message = "services.core.public_port must be set: core serves the public front door on it"
+  }
 }
 variable "secret_names" { type = set(string) }

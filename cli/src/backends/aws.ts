@@ -51,6 +51,7 @@ import {
   serviceHost,
   serviceDef,
   isServiceName,
+  PUBLIC_PORT,
   virtualServiceEnv,
   type LogOpts,
   type ServiceName,
@@ -427,24 +428,18 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       });
     }
   }
-  if (service === "portal") {
-    env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
+  if (service === "core") {
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
-  }
-  if (config.services.includes("auth")) {
-    Object.assign(
-      env,
-      brokerWiring(service, {
-        publicUrl: config.publicUrl,
-        authBaseUrl: `http://auth.${aws.networking.cloudMapNamespace}:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
-      }),
-    );
-  }
-  if (config.services.includes("portal") && service === "web-ui") {
-    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
+    if (config.services.includes("auth"))
+      Object.assign(
+        env,
+        brokerWiring({
+          publicUrl: config.publicUrl,
+          ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
+            ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
+            : {}),
+        }),
+      );
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
@@ -567,6 +562,17 @@ export function renderTaskDefinition(
             protocol: "tcp",
             ...(def?.tcpIngress ? {} : { appProtocol: "http" }),
           },
+          ...(service === "core"
+            ? [
+                {
+                  name: CORE_PUBLIC_PORT_NAME,
+                  containerPort: PUBLIC_PORT,
+                  hostPort: PUBLIC_PORT,
+                  protocol: "tcp",
+                  appProtocol: "http",
+                },
+              ]
+            : []),
         ],
         ...(healthCheck ? { healthCheck } : {}),
         ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
@@ -1018,6 +1024,16 @@ function liveTask(config: QmConfig, service: string): Record<string, unknown> | 
   );
 }
 
+function coreServesFrontDoor(config: QmConfig): boolean {
+  const containers = liveTask(config, "core")?.containerDefinitions as
+    Array<{ name?: string; portMappings?: Array<{ containerPort?: number }> }> | undefined;
+  return Boolean(
+    containers
+      ?.find((container) => container.name === "core")
+      ?.portMappings?.some((mapping) => mapping.containerPort === PUBLIC_PORT),
+  );
+}
+
 function normalizeLiveTask(task: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!task) return null;
   const copy = structuredClone(task);
@@ -1400,6 +1416,7 @@ function prepareBackgroundDeployment(aws: AwsConfig, preparation: BackgroundDepl
 const DEPLOYMENT_POINTER_KEY = "deployment/current";
 const DEPLOYMENT_MANIFEST_PREFIX = "deployment/manifest/";
 const ECS_SERVICE_BATCH_SIZE = 10;
+const CORE_PUBLIC_PORT_NAME = "core-public";
 
 function chunks<T>(values: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -1924,62 +1941,12 @@ function adoptMissingWorkloads(
   return true;
 }
 
-function unchangedWebRouting(
-  config: QmConfig,
-  manifest: DeploymentManifest | undefined,
-  desired: Array<{ service: string; task: EcsTaskDefinition }>,
-): boolean {
-  if (!manifest) return false;
-  const workloads = ["web-ui", "portal"];
-  if (workloads.some((workload) => !desired.some((item) => item.service === workload))) return false;
-  try {
-    const states = describedServices(config, workloads);
-    for (const workload of workloads) {
-      const count = manifest.counts?.[workload];
-      const definition = manifest.tasks[workload];
-      if (!definition || !count || count !== workloadDesiredCount(config, workload)) return false;
-      stableWorkloadCapacity(config, workload, states.get(workload)!, definition, count);
-      const prior = awsJson<{ taskDefinition?: Record<string, unknown> }>(requireAws(config), [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        definition,
-      ]).taskDefinition;
-      const next = desired.find((item) => item.service === workload)!.task;
-      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM"] : [];
-      const settings = (task: Record<string, unknown> | undefined): string[] | undefined => {
-        const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
-        const matches = containers?.filter((container) => container.name === workload);
-        if (matches?.length !== 1) return undefined;
-        const container = matches[0]!;
-        const secrets = (container.secrets ?? []) as Array<{ name: string }>;
-        const environment = (container.environment ?? []) as Array<{ name: string; value: string }>;
-        const values: string[] = [];
-        for (const key of keys) {
-          const entries = environment.filter((entry) => entry.name === key);
-          if (secrets.some((entry) => entry.name === key) || entries.length !== 1 || !entries[0]!.value)
-            return undefined;
-          values.push(entries[0]!.value);
-        }
-        return values;
-      };
-      const previous = settings(prior);
-      const upcoming = settings(next as unknown as Record<string, unknown>);
-      if (!previous || !upcoming || canonicalJson(previous) !== canonicalJson(upcoming)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
   desiredCounts?: Record<string, number>,
   options: {
     timeoutMs?: number;
-    webBeforePortal?: boolean;
     onSubmitted?: () => void;
   } = {},
 ): Promise<void> {
@@ -1993,23 +1960,7 @@ async function applyServiceTargets(
   );
   const changed: string[] = [];
   try {
-    for (const workload of options.webBeforePortal
-      ? [...workloads].sort(
-          (a, b) => Number(a === "portal") - Number(b === "portal") || Number(b === "web-ui") - Number(a === "web-ui"),
-        )
-      : workloads) {
-      if (options.webBeforePortal && workload === "portal" && targets["web-ui"]) {
-        await awaitServiceTargets(
-          config,
-          {
-            "web-ui": {
-              taskDefinition: targets["web-ui"]!,
-              desiredCount: expectedCounts["web-ui"]!,
-            },
-          },
-          options.timeoutMs,
-        );
-      }
+    for (const workload of workloads) {
       const args = [
         "ecs",
         "update-service",
@@ -2360,7 +2311,11 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!label) throw new CliError("aws.imageLabel is required");
   if (!opts.dryRun && !opts.yes) throw new CliError("AWS deploy requires --yes after reviewing `qm plan`");
   assertAwsCallerAccount(aws);
-  assertAwsPublicFrontDoor(config);
+  if (coreServesFrontDoor(config)) assertAwsPublicFrontDoor(config);
+  else
+    warn(
+      "the running core predates its built-in front door, so the ALB routing is not checked before this deploy; once core is stable, apply infra/ to route the public URL to core and retire the web-ui and portal services",
+    );
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
@@ -2570,10 +2525,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         Object.fromEntries(
           Object.keys(rolloutTargets).map((service) => [service, workloadDesiredCount(config, service)]),
         ),
-        {
-          webBeforePortal: !unchangedWebRouting(config, current, desired),
-          onSubmitted: reportProgress ? () => reportProgress(targets) : undefined,
-        },
+        { onSubmitted: reportProgress ? () => reportProgress(targets) : undefined },
       );
       applied = true;
     } else {
@@ -3546,23 +3498,6 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         );
         affected.splice(affected.indexOf("core"), 1);
       }
-      for (const [component, host, marker, expected] of [["auth", "portal", "AUTH_EMBEDDED", "1"]] as const) {
-        if (!config.services.includes(component) || !workloads.includes(host)) continue;
-        const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-          "ecs",
-          "describe-task-definition",
-          "--task-definition",
-          before.tasks[host]!,
-        ]).taskDefinition;
-        const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-          (item) => item.name === host,
-        );
-        const environment = (container?.environment ?? []) as Array<{ name: string; value: string }>;
-        if (!environment.some((entry) => entry.name === marker && entry.value === expected)) {
-          step("secret activation deferred until combined web-ui and portal images are deployed with qm up");
-          return;
-        }
-      }
       const arns = secretArns(config);
       const targets = { ...before.tasks };
       const changed: Record<string, string> = {};
@@ -4022,6 +3957,23 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
   }
 }
 
+interface AwsIngressRoute {
+  service: string;
+  paths: readonly string[];
+  hosts: readonly string[];
+}
+
+function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute> {
+  const routes = new Map<string, AwsIngressRoute>();
+  for (const [name, service] of Object.entries(requireAws(config).services)) {
+    if (service?.publicPaths?.length) routes.set(name, { service: name, paths: service.publicPaths, hosts: [] });
+  }
+  const coreHosts = awsCoreHostnames(config);
+  if (coreHosts.length) routes.set("core", { service: "core", paths: [], hosts: coreHosts });
+  routes.set(CORE_PUBLIC_PORT_NAME, { service: "core", paths: ["/*"], hosts: [] });
+  return routes;
+}
+
 export function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
@@ -4032,16 +3984,14 @@ export function assertAwsPublicRouting(
   const targetName = (name: string): string =>
     aws.services[name]?.targetGroup ??
     `${aws.cluster.slice(0, 20)}-${name.replaceAll("-", "").slice(0, 4)}-${hash(`${aws.cluster}:${name}`, 6)}`;
-  const hasPortal = Boolean(aws.services.portal);
-  const coreHosts = hasPortal ? awsCoreHostnames(config) : [];
-  let ingress = ["core"];
-  if (hasPortal) ingress = coreHosts.length ? ["portal", "core"] : ["portal"];
+  const routes = awsIngressRoutes(config);
+  const ingress = [...routes.keys()];
+  const coreHosts = routes.get("core")?.hosts ?? [];
   const publicPaths = new Map(
-    Object.entries(aws.services).flatMap(([name, service]) =>
-      service?.publicPaths?.length ? [[name, service.publicPaths] as const] : [],
+    [...routes].flatMap(([name, route]) =>
+      route.service === name && route.paths.length ? [[name, route.paths] as const] : [],
     ),
   );
-  ingress.push(...publicPaths.keys());
   const { loadBalancerArn, listener } = awsPublicFrontDoor(config);
   const targetGroups =
     awsJson<{ TargetGroups?: Array<{ TargetGroupArn?: string; TargetGroupName?: string }> }>(aws, [
@@ -4061,11 +4011,12 @@ export function assertAwsPublicRouting(
     if (!target?.TargetGroupArn) throw new Error(`target group for ${name} is missing`);
     targets.set(name, target.TargetGroupArn);
     expectedTargetArns.add(target.TargetGroupArn);
-    const attachment = (routingServices.get(name)?.loadBalancers ?? []).find(
+    const owner = routes.get(name)!.service;
+    const attachment = (routingServices.get(owner)?.loadBalancers ?? []).find(
       (item) => item.targetGroupArn === target.TargetGroupArn,
     );
     if (!attachment) {
-      throw new Error(`ECS service ${name} is not attached to its target group`);
+      throw new Error(`ECS service ${owner} is not attached to its ${name} target group`);
     }
     const alternate = attachment.advancedConfiguration?.alternateTargetGroupArn;
     const productionRule = attachment.advancedConfiguration?.productionListenerRule;
@@ -4081,9 +4032,10 @@ export function assertAwsPublicRouting(
       expectedTargetArns.add(alternate);
     }
   }
+  const ingressServices = new Set([...routes.values()].map((route) => route.service));
   for (const name of deployedAwsServices(aws)) {
     if (
-      !ingress.includes(name) &&
+      !ingressServices.has(name) &&
       !(isServiceName(name) && serviceDef(name).tcpIngress) &&
       (routingServices.get(name)?.loadBalancers ?? []).length
     ) {
@@ -4100,8 +4052,8 @@ export function assertAwsPublicRouting(
   if (alternateTargets.size && alternateTargets.size !== ingress.length) {
     throw new Error("ALB cannot mix rolling and blue/green ingress services");
   }
-  if (aws.sharedAlb && (!hasPortal || coreHosts.length || publicPaths.size || alternateTargets.size !== 1)) {
-    throw new Error("shared ALB requires one blue/green portal ingress without additional public routes");
+  if (aws.sharedAlb && (ingress.length !== 1 || alternateTargets.size !== 1)) {
+    throw new Error("shared ALB requires one blue/green core front-door ingress without additional public routes");
   }
   const defaults = listener.DefaultActions ?? [];
   if (alternateTargets.size) {
@@ -4113,21 +4065,12 @@ export function assertAwsPublicRouting(
     ) {
       throw new Error("blue/green listener default must return a fixed 404 response");
     }
-  } else if (hasPortal) {
-    if (
-      defaults.length !== 1 ||
-      defaults[0]?.Type !== "forward" ||
-      defaults[0].TargetGroupArn !== targets.get("portal")
-    ) {
-      throw new Error("portal listener default does not route only to portal");
-    }
   } else if (
     defaults.length !== 1 ||
-    defaults[0]?.Type !== "fixed-response" ||
-    defaults[0].FixedResponseConfig?.StatusCode !== "404" ||
-    defaults[0].TargetGroupArn
+    defaults[0]?.Type !== "forward" ||
+    defaults[0].TargetGroupArn !== targets.get(CORE_PUBLIC_PORT_NAME)
   ) {
-    throw new Error("non-portal listener default must return a fixed 404 response");
+    throw new Error("listener default does not route only to the core front door");
   }
   const rules =
     awsJson<{
@@ -4159,7 +4102,7 @@ export function assertAwsPublicRouting(
       if (b.startsWith("*.")) return a.endsWith(b.slice(1));
       return false;
     };
-    const ownRule = productionRules.get("portal");
+    const ownRule = productionRules.get(CORE_PUBLIC_PORT_NAME);
     for (const rule of nonDefault) {
       const hosts = rule.Conditions?.filter((condition) => condition.Field === "host-header");
       const values = (hosts?.[0]?.HostHeaderConfig?.Values ?? hosts?.[0]?.Values ?? []).map((value) =>
@@ -4186,7 +4129,7 @@ export function assertAwsPublicRouting(
       );
       if (rule.RuleArn === ownRule) {
         if (values.length !== expectedHosts.length || expectedHosts.some((value) => !values.includes(value)))
-          throw new Error("shared ALB portal rule must match only this company and its configured app hostname");
+          throw new Error("shared ALB front-door rule must match only this company and its configured app hostname");
       } else {
         const referencesOwnTarget = rule.Actions?.some(
           (action) =>
@@ -4236,7 +4179,7 @@ export function assertAwsPublicRouting(
           !pluginRules.has(other) && (!Number.isInteger(Number(other.Priority)) || priority >= Number(other.Priority)),
       )
     ) {
-      throw new Error("public plugin routes must precede core and portal routes");
+      throw new Error("public plugin routes must precede core routes");
     }
   }
 
@@ -4266,12 +4209,7 @@ export function assertAwsPublicRouting(
         condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
       const hostValues =
         condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
-      let expectedPaths: string[];
-      if (publicPaths.has(name)) expectedPaths = publicPaths.get(name)!;
-      else if (name === "portal") expectedPaths = ["/*"];
-      else if (hasPortal) expectedPaths = [];
-      else expectedPaths = ["/v1/*"];
-      const expectedHosts = name === "core" && hasPortal ? coreHosts : [];
+      const { paths: expectedPaths, hosts: expectedHosts } = routes.get(name)!;
       if (
         pathValues.length !== expectedPaths.length ||
         expectedPaths.some((value) => !pathValues.includes(value)) ||
@@ -4285,9 +4223,9 @@ export function assertAwsPublicRouting(
     return targets;
   }
   nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
-  if (hasPortal && !coreHosts.length && nonDefault.length)
-    throw new Error("portal mode must not expose non-default ALB rules");
-  if (hasPortal && coreHosts.length) {
+  if (!coreHosts.length && nonDefault.length)
+    throw new Error("ALB has non-default rules beyond the declared plugin routes");
+  if (coreHosts.length) {
     const found: string[] = [];
     for (const rule of nonDefault) {
       const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
@@ -4296,32 +4234,16 @@ export function assertAwsPublicRouting(
         condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
       if (action?.Type !== "forward" || action.TargetGroupArn !== targets.get("core") || !values.length) {
         throw new Error(
-          `portal ALB has a non-default rule that is not a single host-header forward to core (expected only ${coreHosts.join(", ")})`,
+          `ALB has a non-default rule that is not a single host-header forward to core (expected only ${coreHosts.join(", ")})`,
         );
       }
       found.push(...values.map((value) => value.toLowerCase()));
     }
     if (found.length !== coreHosts.length || coreHosts.some((host) => !found.includes(host))) {
       throw new Error(
-        `portal ALB host rules must route exactly ${coreHosts.join(", ")} to core (live: ${found.join(", ") || "none"})`,
+        `ALB host rules must route exactly ${coreHosts.join(", ")} to core (live: ${found.join(", ") || "none"})`,
       );
     }
-  }
-  if (!hasPortal) {
-    const coreRule = nonDefault.filter(
-      (rule) =>
-        rule.Actions?.length === 1 &&
-        rule.Actions[0]?.Type === "forward" &&
-        rule.Actions[0].TargetGroupArn === targets.get("core") &&
-        rule.Conditions?.length === 1 &&
-        rule.Conditions[0]?.Field === "path-pattern" &&
-        rule.Conditions[0].PathPatternConfig?.Values?.length === 1 &&
-        rule.Conditions[0].PathPatternConfig.Values[0] === "/v1/*",
-    );
-    if (coreRule.length !== 1) {
-      throw new Error("non-portal ALB must route only /v1/* directly to core");
-    }
-    if (nonDefault.length !== 1) throw new Error("non-portal ALB has unexpected non-default rules");
   }
   return targets;
 }

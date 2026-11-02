@@ -130,9 +130,9 @@ const AWS_AGENTS_APPENDIX = `
    \`env.auth.AUTH_ALLOWED_EMAIL_DOMAIN\` (or leave it out and supply
    \`AUTH_ALLOWED_EMAILS\`), then run \`npm exec qm -- setup\` for the sender address
    and the Resend or SMTP credentials; the CLI generates the broker's keys and the
-   portal's client credentials and wires \`OIDC_*\` itself. To use an external
+   sign-in client credentials and wires \`OIDC_*\` into core itself. To use an external
    identity provider instead, drop \`"auth"\` from \`services\`, configure
-   \`env.portal\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
+   \`env.core\` with the provider's OIDC endpoints and an \`OIDC_ALLOWED_EMAILS\`
    or \`OIDC_ALLOWED_EMAIL_DOMAIN\` tenant gate, and register
    \`<publicUrl>/auth/callback\` with the provider. Add optional services and their
    ECS/ECR entries now, then render and apply once more.
@@ -219,11 +219,7 @@ export const awsScaffold: ProviderScaffold = {
   renderConfig: (orgId, modelProvider, emailTransport) => {
     const cluster = clusterName(orgId);
     const services = Object.fromEntries(
-      [
-        ["core", 2048, 4096],
-        ["web-ui", 512, 1024],
-        ["portal", 512, 1024],
-      ].map(([name, cpu, memory]) => [
+      [["core", 2048, 4096]].map(([name, cpu, memory]) => [
         name,
         {
           ecrRepository: `${orgId}-qm-${name}`,
@@ -251,7 +247,7 @@ export const awsScaffold: ProviderScaffold = {
     "services": ${JSON.stringify(services, null, 6).replace(/^/gm, "    ").trimStart()}
   },
 `,
-      services: ["core", "slack", "web-ui", "portal", "auth"],
+      services: ["core", "slack", "auth"],
       env: `{ "core": { "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
@@ -291,7 +287,7 @@ export const awsScaffold: ProviderScaffold = {
   },
   configurationHint: "aws: finish the account, region, public edge, GitHub OIDC, and identity gate fields before setup",
   finalCommand: "terraform -chdir=infra init && terraform -chdir=infra apply",
-  finalWhy: "create inert infrastructure; finish the edge + portal steps in AGENTS.md before up",
+  finalWhy: "create inert infrastructure; finish the edge + sign-in steps in AGENTS.md before up",
 };
 
 export const renderScaffold: ProviderScaffold = {

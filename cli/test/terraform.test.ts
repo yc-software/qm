@@ -108,7 +108,6 @@ test("each AWS workload can assume configured roles through an isolated task rol
     /assume_role_services\s*=\s*\{ for name, service in var\.services : name => service if try\(length\(service\.assume_role_arns\), 0\) > 0 \}/,
   );
   assert.match(mainTf, /managed_assume_role_services\s*=\s*\{[\s\S]*service\.manage_task_role[\s\S]*\}/);
-  assert.match(mainTf, /qm_scaffold_version\s*=\s*3/);
   assert.match(
     readFileSync(new URL("../templates/aws/variables.tf", import.meta.url), "utf8"),
     /manage_task_role\s*=\s*optional\(bool, false\)/,
@@ -292,53 +291,21 @@ test("an active assume-role policy blocks task-role replacement", () => {
   );
 });
 
-test("assume-role config rejects vendored AWS scaffolds that predate workload roles", () => {
+test("rendering and deploying refuse a vendored AWS scaffold that predates the core front door", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-legacy-terraform-"));
   try {
     const infra = join(dir, "infra");
     mkdirSync(infra);
     writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(
-      join(infra, "variables.tf"),
-      'variable "services" { type = map(object({ assume_role_arns = optional(set(string)) })) }\n',
-    );
-    writeFileSync(
-      join(infra, "main.tf"),
-      'resource "aws_iam_role" "assume_role_task" {}\nresource "aws_iam_role_policy" "managed_service_assume_role" {}\nresource "aws_iam_role_policy" "configured_service_assume_role" {}\n',
-    );
-    const configured: QmConfig = {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          core: {
-            ...config.aws!.services.core!,
-            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
-          },
-        },
-      },
-    };
-    assert.throws(
-      () => renderTerraformVars(configured, dir),
-      /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("database class overrides reject vendored AWS scaffolds that cannot render them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-database-"));
-  try {
-    const infra = join(dir, "infra");
-    mkdirSync(infra);
-    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
-    writeFileSync(join(infra, "main.tf"), "");
-    assert.throws(
-      () => renderTerraformVars({ ...config, aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro" } }, dir),
-      /AWS scaffold predates aws\.dbInstanceClass/,
-    );
+    writeFileSync(join(infra, "variables.tf"), variablesTf.replace(/\n\s*public_port\s*=\s*optional\(number\)/, ""));
+    writeFileSync(join(infra, "main.tf"), mainTf);
+    assert.throws(() => renderTerraformVars(config, dir), /predates core serving the public front door/);
+    writeFileSync(join(infra, "variables.tf"), variablesTf);
+    writeFileSync(join(infra, "main.tf"), mainTf.replace(/qm_scaffold_version\s*=\s*\d+/, "qm_scaffold_version = 3"));
+    assert.throws(() => renderTerraformVars(config, dir), /predates core serving the public front door/);
+    writeFileSync(join(infra, "main.tf"), mainTf);
+    renderTerraformVars(config, dir);
+    assert.match(readFileSync(join(infra, "terraform.tfvars"), "utf8"), /"public_port": 8000/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -576,33 +543,12 @@ test("terraform owns secret containers but never creates operator-secret placeho
   assert.match(mainTf, /aws_secretsmanager_secret_version" "database/);
 });
 
-test("AWS module keeps human routes on portal and preserves CLI-owned ECS state", () => {
-  assert.match(
-    mainTf,
-    /public_service_names\s*= concat\(local\.has_portal \? concat\(\["portal"\], length\(var\.core_public_hosts\) > 0 \? \["core"\] : \[\]\) : \["core"\], keys\(local\.public_path_services\)\)/,
-  );
-  assert.match(
-    mainTf,
-    /direct_path_services\s*= merge\(local\.has_portal \? \{\} : \{ core = \["\/v1\/\*"\] \}, local\.public_path_services\)/,
-  );
-  const listener = mainTf.match(/resource "aws_lb_listener" "public" \{([\s\S]*?)\n\}/)?.[1] ?? "";
-  assert.match(listener, /type\s*= "fixed-response"[\s\S]*status_code\s*= "404"/);
-  assert.match(mainTf, /resource "aws_lb_listener_rule" "production"/);
-  assert.match(mainTf, /target_group \{[\s\S]*aws_lb_target_group\.service\[each\.key\]\.arn[\s\S]*weight = 1/);
-  assert.match(mainTf, /target_group \{[\s\S]*aws_lb_target_group\.alternate\[each\.key\]\.arn[\s\S]*weight = 0/);
-  assert.doesNotMatch(listener, /target_group_arn\s*= aws_lb_target_group\.service\[local\.default_service\]/);
-  assert.doesNotMatch(mainTf, /web-ui = \["\/web-ui\/\*"\]/);
-  assert.doesNotMatch(mainTf, /admin = \["\/admin\/\*"\]/);
-  assert.match(mainTf, /ignore_changes\s*= \[task_definition, desired_count\]/);
-});
-
 test("terraform derives split core host routing from the deployment config", () => {
   const rendered = terraformVars(
     {
       ...config,
       publicUrl: "https://agent.acme.example",
       apiUrl: "https://api.agent.acme.example",
-      services: ["core", "portal"],
       env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
     },
     "",
@@ -612,24 +558,18 @@ test("terraform derives split core host routing from the deployment config", () 
     rendered,
     /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
   );
-  assert.match(mainTf, /host_header \{ values = sort\(tolist\(var\.core_public_hosts\)\) \}/);
-  assert.match(mainTf, /each\.key == "core" && local\.has_portal/);
   assert.match(variablesTf, /length\(var\.core_public_hosts\) == 0 \|\| var\.certificate_arn != ""/);
 });
 
-test("an old scaffold fails closed instead of silently hiding a split core API behind portal", () => {
+test("an old scaffold fails closed instead of silently hiding a split core API behind the front door", () => {
   assert.throws(
     () =>
       terraformVars(
-        {
-          ...config,
-          apiUrl: "https://api.agent.acme.example",
-          services: ["core", "portal"],
-        },
+        { ...config, apiUrl: "https://api.agent.acme.example" },
         "",
         declared.filter((name) => name !== "core_public_hosts"),
       ),
-    /predates split portal\/core host routing/,
+    /predates split front-door\/core host routing/,
   );
 });
 
@@ -777,7 +717,7 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   );
   assert.match(
     service,
-    /advanced_configuration \{[\s\S]*alternate_target_group_arn = aws_lb_target_group\.alternate\[load_balancer\.value\]\.arn[\s\S]*production_listener_rule\s*= aws_lb_listener_rule\.production\[load_balancer\.value\]\.arn[\s\S]*role_arn\s*= aws_iam_role\.ecs_load_balancer\.arn/,
+    /advanced_configuration \{[\s\S]*alternate_target_group_arn = aws_lb_target_group\.alternate\[load_balancer\.key\]\.arn[\s\S]*production_listener_rule\s*= aws_lb_listener_rule\.production\[load_balancer\.key\]\.arn[\s\S]*role_arn\s*= aws_iam_role\.ecs_load_balancer\.arn/,
   );
   assert.match(
     service,
@@ -785,13 +725,9 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   );
   assert.match(
     service,
-    /alarm_names = \[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
+    /alarm_names = flatten\(\[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
   );
   assert.match(service, /sigint_rollback = true/);
-  assert.match(
-    mainTf,
-    /portMappings = \[merge\(\{ name = each\.key, containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\]/,
-  );
 });
 
 test("drift check flags wrong derived values but never operator formatting", () => {
@@ -812,25 +748,14 @@ test("the deploy role lists tasks only within its cluster", () => {
   assert.match(listing, /"ecs:cluster" = aws_ecs_cluster\.this\.arn/);
 });
 
-test("terraform routes the app wildcard through portal when both services use the same app domain", () => {
+test("terraform routes the app wildcard through the front door when a shared ALB uses the same app domain", () => {
   for (const key of ["AWS_DEPLOY_APPS_DOMAIN", "DEPLOY_APPS_DOMAIN"]) {
     const rendered = terraformVars(
       {
         ...config,
         apiUrl: "https://api.agent.acme.example",
-        services: ["core", "portal"],
-        aws: {
-          ...config.aws!,
-          sharedAlb: true,
-          services: {
-            ...config.aws!.services,
-            portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
-          },
-        },
-        env: {
-          core: { [key]: "apps.agent.acme.example" },
-          portal: { PORTAL_APPS_DOMAIN: "APPS.AGENT.ACME.EXAMPLE." },
-        },
+        aws: { ...config.aws!, sharedAlb: true },
+        env: { core: { [key]: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "APPS.AGENT.ACME.EXAMPLE." } },
       },
       "",
       declared,
@@ -840,49 +765,29 @@ test("terraform routes the app wildcard through portal when both services use th
   }
 });
 
-test("terraform rejects an app domain that differs between portal and core", () => {
+test("terraform rejects a front-door app domain that differs from core's", () => {
   assert.throws(
     () =>
       terraformVars(
         {
           ...config,
-          services: ["core", "portal"],
-          aws: {
-            ...config.aws!,
-            services: {
-              ...config.aws!.services,
-              portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
-            },
-          },
           env: {
-            core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" },
-            portal: { PORTAL_APPS_DOMAIN: "other.agent.acme.example" },
+            core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "other.agent.acme.example" },
           },
         },
         "",
         declared,
       ),
-    /portal apps domain must match core/,
+    /PORTAL_APPS_DOMAIN must equal the core apps domain/,
   );
 });
 
-test("dedicated ALBs retain direct core app routing when portal declares the same domain", () => {
+test("dedicated ALBs retain direct core app routing when the front door declares the same domain", () => {
   const rendered = terraformVars(
     {
       ...config,
       apiUrl: "https://api.agent.acme.example",
-      services: ["core", "portal"],
-      aws: {
-        ...config.aws!,
-        services: {
-          ...config.aws!.services,
-          portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
-        },
-      },
-      env: {
-        core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" },
-        portal: { PORTAL_APPS_DOMAIN: "apps.agent.acme.example" },
-      },
+      env: { core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "apps.agent.acme.example" } },
     },
     "",
     declared,
