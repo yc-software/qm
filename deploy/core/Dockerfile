@@ -31,13 +31,7 @@ COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./plugins/web-ui/
-COPY plugins/portal/package.json plugins/portal/package-lock.json ./plugins/portal/
-COPY plugins/auth/package.json plugins/auth/package-lock.json ./plugins/auth/
 RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
-  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/web-ui \
-  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/portal \
-  && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix plugins/auth \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
@@ -50,7 +44,7 @@ COPY plugins/chassis ./plugins/chassis
 COPY plugins/auth/src ./plugins/auth/src
 COPY plugins/portal/src ./plugins/portal/src
 COPY plugins/web-ui/server ./plugins/web-ui/server
-COPY plugins/web-ui/src ./plugins/web-ui/src
+COPY plugins/web-ui/src/app-edit.ts ./plugins/web-ui/src/app-edit.ts
 COPY --from=web-ui-build /app/plugins/web-ui/dist-web ./plugins/web-ui/dist-web
 COPY tsconfig.json ./
 

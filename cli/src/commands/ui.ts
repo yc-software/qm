@@ -31,14 +31,16 @@ export function webReleaseStore(config: QmConfig): ReleaseStore {
     const bucket = core.S3_BUCKET?.trim() || awsObjectStoreBucket(config);
     return { root: `s3://${bucket}/${prefix}web-ui/`, region: config.aws.region };
   }
-  if (config.target === "fly") {
-    const bucket = core.S3_BUCKET?.trim();
-    if (!bucket) throw new CliError("qm ui publish needs env.core.S3_BUCKET, the bucket core serves the web UI from");
-    return { root: `s3://${bucket}/${prefix}web-ui/`, region: core.S3_REGION?.trim() || "auto" };
-  }
-  throw new CliError(
-    `qm ui publish writes to the deployment's S3 bucket, which the ${config.target} target keeps private to the deployment; ship web UI changes with \`qm up\``,
-  );
+  if (config.target === "render")
+    throw new CliError(
+      "Render keeps the deployment's object storage private to the Render project, so qm ui publish cannot reach it; ship web UI changes with `qm up`",
+    );
+  const bucket = core.S3_BUCKET?.trim();
+  if (core.SNAPSHOT_STORE !== "s3" || !bucket)
+    throw new CliError(
+      "qm ui publish writes to the deployment's S3 bucket, but env.core does not set SNAPSHOT_STORE=s3 and S3_BUCKET; core serves the web UI from its data directory, so ship web UI changes with `qm up`",
+    );
+  return { root: `s3://${bucket}/${prefix}web-ui/`, region: core.S3_REGION?.trim() || "auto" };
 }
 
 function aws(store: ReleaseStore, args: string[], input?: string): { status: number; stdout: string; stderr: string } {
