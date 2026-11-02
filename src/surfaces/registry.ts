@@ -2,7 +2,6 @@ import type { Surface } from "./contract.ts";
 
 export interface SurfaceRegistry {
   get(kind: string): Surface | undefined;
-  label(kind: string): string | undefined;
 }
 
 export function createSurfaceRegistry(deps: { surfaces: readonly Surface[] }): SurfaceRegistry {
@@ -11,8 +10,5 @@ export function createSurfaceRegistry(deps: { surfaces: readonly Surface[] }): S
     if (byKind.has(surface.kind)) throw new Error(`surface kinds must be unique: ${surface.kind}`);
     byKind.set(surface.kind, surface);
   }
-  return {
-    get: (kind) => byKind.get(kind),
-    label: (kind) => byKind.get(kind)?.label,
-  };
+  return { get: (kind) => byKind.get(kind) };
 }
