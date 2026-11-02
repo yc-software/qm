@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler, noteRefusedCronDelivery } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
-import { scopeId, type Delivery, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { type DirectoryStore } from "../src/directory/directory-store.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
@@ -1911,7 +1911,7 @@ test("a cron whose model can't run fires on the default model and is told why", 
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
 });
 
-test("a refused delivery leaves the cron a note its next fire reads, keeping the agent's own note", async () => {
+test("a fire is told when its previous output was refused by the cron's destination", async () => {
   const { crons, deliveries, calls, scheduler } = agent("tick");
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
@@ -1921,36 +1921,18 @@ test("a refused delivery leaves the cron a note its next fire reads, keeping the
     ownerScopeId: scopeId("personal", "U7"),
     destination: { type: "slack", target: "D7", audienceScopeId: scopeId("personal", "U7") },
   });
-  const refused = (sourceThreadRef: string): Delivery => ({
-    id: "d1",
-    destination: { type: "slack", target: "D7" },
-    text: "tick",
-    idempotencyKey: "k1",
-    createdAt: 0,
-    deliveredAt: null,
-    provenance: {
-      trigger: "cron",
-      surface: "slack",
-      fireKey: "f",
-      sourceScopeId: scopeId("personal", "U7"),
-      sourceThreadRef,
-    },
-  });
   await crons.setFireNote(cron.id, { text: "cursor 42", at: 1_000 });
-  await noteRefusedCronDelivery(crons, refused(`cron:${cron.id}:fire:abc`), "receiver returned HTTP 410", 400);
-  await noteRefusedCronDelivery(crons, refused("web:elsewhere"), "unrelated", 400);
   await runNowSettled(scheduler, cron.id);
-  const input = calls[0]?.text ?? "";
+  const [first] = await deliveries.pending("slack");
+  await deliveries.fail(first!.id, "receiver returned HTTP 410: binding revoked", Date.now());
+  await runNowSettled(scheduler, cron.id);
   assert.match(
-    input,
-    /Note left for this fire by core [^\n]*refused this cron's last delivery \(receiver returned HTTP 410\)/,
+    calls[1]?.text ?? "",
+    /previous fire's output was refused by this cron's destination and not delivered: receiver returned HTTP 410: binding revoked/,
   );
-  assert.match(input, /pause or retarget this cron\. Earlier note: cursor 42/);
-  assert.doesNotMatch(input, /unrelated/);
-  const [d] = await deliveries.pending("slack");
-  assert.match(
-    d!.provenance!.sourceThreadRef,
-    new RegExp(`^cron:${cron.id}:fire:`),
-    "fires carry the thread the note is keyed on",
-  );
+  assert.match(calls[1]?.text ?? "", /cursor 42/, "the agent's own note is untouched");
+  const [second] = await deliveries.pending("slack");
+  await deliveries.ack(second!.id, Date.now());
+  await runNowSettled(scheduler, cron.id);
+  assert.doesNotMatch(calls[2]?.text ?? "", /was refused/);
 });

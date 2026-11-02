@@ -38,10 +38,7 @@ test(
       ...store,
       pending: async (type: string) => (await store.pending(type)).filter((d) => !held || d.text !== "h1"),
     };
-    const refusals: string[] = [];
-    const queue = createOutboundQueue(url, { outbox: store, deliveries }, [channel], async (d, reason) => {
-      refusals.push(`${d.text}: ${reason}`);
-    });
+    const queue = createOutboundQueue(url, { outbox: store, deliveries }, [channel]);
     await queue.start();
     try {
       const enqueue = (target: string, text: string) =>
@@ -62,7 +59,6 @@ test(
       assert.ok(sent.indexOf("a1") < sent.indexOf("a2"), "a conversation keeps its order through a retry");
       assert.deepEqual(await store.pending("webhook"), []);
       assert.equal((await store.get(refused.id))?.failedReason, "receiver returned HTTP 422");
-      assert.deepEqual(refusals, ["refuse: receiver returned HTTP 422"]);
     } finally {
       await queue.stop();
     }
@@ -73,6 +69,7 @@ test("a slow receiver for one conversation does not hold up deliveries to others
   const url = testDatabaseUrl();
   const store = createPostgresDeliveryStore(url);
   const sent: string[] = [];
+  let slowStarted = false;
   let release!: () => void;
   const slow = new Promise<void>((r) => {
     release = r;
@@ -80,17 +77,20 @@ test("a slow receiver for one conversation does not hold up deliveries to others
   const channel: OutboundChannel = {
     type: "webhook",
     async send(d) {
-      if (d.text === "slow") await slow;
+      if (d.text === "slow") {
+        slowStarted = true;
+        await slow;
+      }
       sent.push(d.text);
     },
   };
-  const queue = createOutboundQueue(url, { outbox: store, deliveries: store }, [channel]);
+  const queue = createOutboundQueue(url, { outbox: store, deliveries: store }, [channel], 2);
   await queue.start();
   try {
     const enqueue = (target: string, text: string) =>
       store.enqueue({ destination: { type: "webhook", target }, text, idempotencyKey: `${target}:${text}` });
     await enqueue("conversation-slow", "slow");
-    await new Promise((r) => setTimeout(r, 500));
+    await until(() => slowStarted);
     await enqueue("conversation-fast", "fast");
     await until(() => sent.includes("fast"));
     assert.ok(!sent.includes("slow"));

@@ -16,7 +16,7 @@ export function createOutboundQueue(
   databaseUrl: string,
   stores: { outbox: DeliveryStore; deliveries: DeliveryStore },
   channels: OutboundChannel[],
-  onRefused?: (d: Delivery, reason: string) => Promise<void>,
+  concurrency = 1,
 ) {
   const { outbox, deliveries } = stores;
   const shared = sharedPgBoss(databaseUrl);
@@ -61,10 +61,8 @@ export function createOutboundQueue(
       reportFailure(`outbound queue: ${channel.type} delivery not accepted; pg-boss will retry`, e, `delivery=${id}`);
       throw e;
     });
-    if (outcome) {
-      await outbox.fail(id, outcome.refused, Date.now());
-      await onRefused?.(d, outcome.refused).catch(swallowAs("outbound queue: refusal note", undefined));
-    } else await outbox.ack(id, Date.now());
+    if (outcome) await outbox.fail(id, outcome.refused, Date.now());
+    else await outbox.ack(id, Date.now());
     wake();
   };
 
@@ -85,9 +83,13 @@ export function createOutboundQueue(
             DELIVERY_MAX_AGE_MS / 1000 / RETRY_DELAY_MAX_SECONDS +
             Math.ceil(Math.log2(RETRY_DELAY_MAX_SECONDS / RETRY_DELAY_SECONDS)),
         });
-        await boss.work<{ id: string }>(queueOf(channel.type), { batchSize: 1, localConcurrency: 8 }, async ([job]) => {
-          await deliver(channel, job!.data.id);
-        });
+        await boss.work<{ id: string }>(
+          queueOf(channel.type),
+          { batchSize: 1, localConcurrency: concurrency },
+          async ([job]) => {
+            await deliver(channel, job!.data.id);
+          },
+        );
       }
     } catch (e) {
       await offWork();

@@ -1,7 +1,7 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type Delivery, type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
+import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -141,26 +141,6 @@ function cronFireThreadRef(cronId: string, fireKey: string): string {
   return `cron:${cronId}:fire:${hashId([fireKey], 12)}`;
 }
 
-export async function noteRefusedCronDelivery(
-  crons: Pick<CronStore, "get" | "setFireNote">,
-  d: Delivery,
-  reason: string,
-  maxChars: number,
-): Promise<void> {
-  const cronId = /^cron:([^:]+):fire:/.exec(d.provenance?.sourceThreadRef ?? "")?.[1];
-  if (!cronId) return;
-  const prev = (await crons.get(cronId))?.lastFireNote;
-  const kept = prev && prev.by !== "core" ? ` Earlier note: ${prev.text}` : "";
-  await crons.setFireNote(cronId, {
-    text: `The receiver refused this cron's last delivery (${reason}). Fires keep running and their output is dropped until you pause or retarget this cron.${kept}`.slice(
-      0,
-      maxChars,
-    ),
-    at: Date.now(),
-    by: "core",
-  });
-}
-
 const CRON_MENTION_ROSTER_MAX = 40;
 
 function mentionable(m: DirectoryMember): string {
@@ -175,7 +155,12 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
-function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?: string | null): string {
+function renderCronFireInput(
+  cron: Cron,
+  mentionRoster?: string,
+  runtimeProblem?: string | null,
+  refusedDelivery?: string,
+): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
   if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
@@ -198,6 +183,12 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
       ? [
           `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
           `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+        ]
+      : []),
+    ...(refusedDelivery
+      ? [
+          `The previous fire's output was refused by this cron's destination and not delivered: ${refusedDelivery}`,
+          `Nobody receives this cron's output while that lasts. Unless the task is worth running for its side effects alone, pause it now (cron tool, action="disable", id="${cron.id}") or retarget it, and say why in your note.`,
         ]
       : []),
     ...(mentionRoster
@@ -299,6 +290,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const refusedDelivery =
+        previous && cron.destination
+          ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
+              .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
+              .at(-1)?.failedReason
+          : undefined;
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -312,7 +309,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
         {
           ...cronTriggerAuthority(cron),
-          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem),
+          input: (homeRoster) =>
+            renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
           fireKey,
           threadRef,
           surface: "cron",
