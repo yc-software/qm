@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { QmConfig } from "../config.ts";
-import { CliError, note, ok, step } from "../log.ts";
+import { CliError, note, ok, step, warn } from "../log.ts";
 import { awsObjectStoreBucket } from "../terraform.ts";
 import {
   LIVE_KEY,
@@ -156,12 +156,7 @@ export function runUiPublish(config: QmConfig, o: UiPublishOptions): void {
     if (objectExists(store, releaseKey(id, "index.html"))) step(`web UI release ${id} is already uploaded`);
     else upload(store, o.dir!, bundle);
   }
-  const deployed = readPointer(store)?.deployed;
-  if (!deployed)
-    throw new CliError(
-      `no core has made its web UI live in ${s3Uri(store)} yet, so no running core would serve this release; deploy core with qm up first`,
-    );
-  const pointer: LivePointer = { release: id, deployed };
+  const pointer: LivePointer = { release: id, deployed: readPointer(store)?.deployed ?? "" };
   awsOk(
     store,
     "switching the live web UI release",
@@ -171,5 +166,9 @@ export function runUiPublish(config: QmConfig, o: UiPublishOptions): void {
   ok(
     `web UI release ${id} is live (${((Date.now() - started) / 1000).toFixed(1)}s); running cores pick it up within seconds`,
   );
+  if (!pointer.deployed)
+    warn(
+      `no deployed core has claimed ${s3Uri(store)} yet; only cores built without a bundled web UI serve this release until one does`,
+    );
   if (previous && previous.release !== id) note(`  roll back with: qm ui publish --release ${previous.release}`);
 }
