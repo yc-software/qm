@@ -14,6 +14,14 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/deployments/app-1/git/")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
   if (
     req.url?.startsWith("/v1/deployment-layer") ||
     req.url?.startsWith("/v1/background-work") ||
@@ -741,6 +749,32 @@ test("background ownership forwards both credentials only on its exact control r
     });
     assert.equal(response.status, 404);
   }
+});
+
+test("deployment git requests reach core with their token and without browser credentials", async () => {
+  const refs = await fetch(`${base}/v1/deployments/app-1/git/info/refs?service=git-upload-pack`, {
+    headers: { authorization: "Bearer deploy-git-token", cookie: "portal_session=x", "git-protocol": "version=2" },
+  });
+  assert.equal(refs.status, 200);
+  const refsBody = (await refs.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(refsBody.url, "/v1/deployments/app-1/git/info/refs?service=git-upload-pack");
+  assert.equal(refsBody.headers.authorization, "Bearer deploy-git-token");
+  assert.equal(refsBody.headers["git-protocol"], "version=2");
+  assert.equal(refsBody.headers.cookie, undefined);
+  const pack = await fetch(`${base}/v1/deployments/app-1/git/git-upload-pack`, {
+    method: "POST",
+    headers: { authorization: "Bearer deploy-git-token", "content-type": "application/x-git-upload-pack-request" },
+    body: "0032want",
+  });
+  assert.equal(pack.status, 200);
+  assert.equal(((await pack.json()) as { body: string }).body, "0032want");
+  for (const [method, path] of [
+    ["POST", "/v1/deployments/app-1/git/info/refs"],
+    ["GET", "/v1/deployments/app-1/git/git-upload-pack"],
+    ["GET", "/v1/deployments/app-1/git/HEAD"],
+    ["GET", "/v1/deployments/app-1/versions"],
+  ] as const)
+    assert.equal((await fetch(`${base}${path}`, { method })).status, 404, `${method} ${path}`);
 });
 
 test("Loop ingress forwards signed events and Google identity without a portal session", async () => {

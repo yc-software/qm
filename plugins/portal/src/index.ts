@@ -49,6 +49,7 @@ import {
   proxyToUpstream,
   proxyToAppHost,
   FORWARD_AGENT_API_HEADERS,
+  FORWARD_DEPLOYMENT_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
   FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
@@ -775,6 +776,11 @@ function hasAgentCapability(req: IncomingMessage): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isDeploymentGitPassthrough(method: string, pathname: string): boolean {
+  const route = /^\/v1\/deployments\/[^/]+\/git\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(pathname)?.[1];
+  return route === "info/refs" ? method === "GET" : route !== undefined && method === "POST";
+}
+
 function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
@@ -1206,6 +1212,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
       "authorization",
     ]);
+  }
+
+  if (isDeploymentGitPassthrough(method, pathname)) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      FORWARD_DEPLOYMENT_GIT_HEADERS,
+    );
   }
 
   if (isDeploymentLayerPassthrough(method, pathname)) {

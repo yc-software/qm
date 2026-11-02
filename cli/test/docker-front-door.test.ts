@@ -104,7 +104,7 @@ test(
     assert.deepEqual(removed, ["qm-acme-web-ui", "qm-acme-portal", "qm-acme-auth", "qm-acme-core"]);
     const run = calls.find((args) => args[0] === "run" && args.includes("qm-acme-core"))!;
     assert.ok(run.includes("8080:8080"), run.join(" "));
-    assert.ok(run.includes("8082:8000"), run.join(" "));
+    assert.ok(run.includes("127.0.0.1:8082:8000"), run.join(" "));
     for (const env of [
       "PUBLIC_PORT=8000",
       "PORTAL_PUBLIC_URL=http://localhost:8082",

@@ -57,6 +57,8 @@ const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
 const publicHostPort = (ctx: DockerCtx): number => baseHostPort(ctx) + 2;
 const FRONT_DOOR_READY = /public front door on/;
+const publicBindAddress = (config: QmConfig): string =>
+  ["localhost", "127.0.0.1", "[::1]"].includes(new URL(config.publicUrl).hostname) ? "127.0.0.1:" : "";
 const RETIRED_CONTAINERS = [...RETIRED_SERVICE_NAMES, "auth"];
 
 interface DockerCtx {
@@ -492,7 +494,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
   if (def.docker.hostPortOffset !== undefined) {
     args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
   }
-  if (service === "core") args.push("-p", `${publicHostPort(ctx)}:${PUBLIC_PORT}`);
+  if (service === "core") args.push("-p", `${publicBindAddress(ctx.config)}${publicHostPort(ctx)}:${PUBLIC_PORT}`);
   args.push(image);
   return { args, cleanup };
 }

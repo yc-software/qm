@@ -96,8 +96,10 @@ is retried. The first deployment builds MinIO from the selected QM source.
 
 Deployments created before core served the web UI also have `web-ui` and
 `portal` services. `qm up` deletes them once core's new build is healthy, then
-binds custom domains to core. An assigned `onrender.com` `publicUrl` changes to
-core's URL, so run `qm slack render` and update OAuth redirect URLs afterwards.
+binds custom domains to core. A custom `publicUrl` is unreachable until its DNS
+record points at core's `onrender.com` host, as `qm up` prints, and Render
+verifies it. An assigned `onrender.com` `publicUrl` changes to core's URL, so
+run `qm slack render` and update OAuth redirect URLs afterwards.
 A rollback to a release from before this change fails because those services
 are gone. Web UI changes ship with `qm up`, which rebuilds core;
 `qm ui publish` does not support Render.

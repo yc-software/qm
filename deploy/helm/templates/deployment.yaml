@@ -1,6 +1,6 @@
 {{- range $name, $_ := .Values.services }}
 {{- if not (has $name (list "core" "egress-proxy")) }}
-{{- fail (printf "unknown service %q in services — valid: core, egress-proxy" $name) }}
+{{- fail (printf "unknown service %q in services — valid: core, egress-proxy; core now serves the web UI and sign-in, and auth.enabled turns its built-in sign-in broker on or off" $name) }}
 {{- end }}
 {{- end }}
 {{- if not .Values.publicUrl }}
