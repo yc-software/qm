@@ -55,7 +55,6 @@ Object.assign(process.env, {
   CORE_SIGNING_SECRET: "app-only-core-secret",
   CORE_API_URL: upstreamUrl,
   WEB_UI_UPSTREAM: upstreamUrl,
-  ADMIN_UPSTREAM: upstreamUrl,
   AUTH_BROKER_UPSTREAM: upstreamUrl,
   PORTAL_APPS_DOMAIN: "apps.example.test",
   OIDC_ISSUER: upstreamUrl,
@@ -145,8 +144,8 @@ test("OIDC callback seals core app-only authority; ordinary admission stays ordi
 test("app-only sessions cannot reach or renew on any ordinary portal surface", async () => {
   const paths = [
     "/",
-    "/admin/",
-    "/admin/api/whoami",
+    "/settings/",
+    "/settings/users",
     "/api/whoami",
     "/api/sessions",
     "/api/deliveries/events",

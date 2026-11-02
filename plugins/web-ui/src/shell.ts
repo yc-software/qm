@@ -154,11 +154,7 @@ setSigninRequiredHandler((detail) => {
 
 onExitCanvas(() => exitSplitIfActive());
 
-export const ADMIN_BASE = (() => {
-  const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
-  return base ? base.replace(/\/[^/]+$/, "/admin") : "/admin";
-})();
-export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
+export const ADMIN_HOME_URL = `${UI_BASE}/settings/history`;
 
 export function syncUrlFromState(sessionOverride?: string | null, historyMode: "push" | "replace" = "replace"): void {
   if (navigationInFlight()) return;
@@ -168,6 +164,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
   const sessionId = splitState.active ? singlePaneSessionId() : fromState;
   let next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (appState.currentView === "settings" && linked.view === "settings") return;
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
   if (`${location.pathname}${location.search}` === next) return;

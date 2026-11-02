@@ -626,9 +626,6 @@ function validate(raw: unknown, path: string): QmConfig {
     );
   }
 
-  if (services.includes("admin") && !services.includes("portal") && target === "aws") {
-    throw new CliError(`${path}: admin requires the authenticated portal`);
-  }
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
@@ -696,15 +693,6 @@ function validate(raw: unknown, path: string): QmConfig {
         `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
       );
     }
-  }
-  const portalMountsAdmin = services.includes("portal") && services.includes("admin");
-  if (portalMountsAdmin && env.admin?.ADMIN_BASE_PATH !== undefined && env.admin.ADMIN_BASE_PATH !== "/admin") {
-    throw new CliError(`${path}: env.admin.ADMIN_BASE_PATH must be "/admin" when portal and admin are enabled`);
-  }
-  if (portalMountsAdmin && secretEnv.admin?.ADMIN_BASE_PATH !== undefined) {
-    throw new CliError(
-      `${path}: secretEnv.admin.ADMIN_BASE_PATH is managed by the deployment target and cannot be overridden`,
-    );
   }
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {
@@ -1010,9 +998,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(
       `${path}: AWS web-ui requires the authenticated portal; a portal-free ALB must never expose the Web UI`,
     );
-  }
-  if (config.services.includes("admin") && !hasPortal) {
-    throw new CliError(`${path}: AWS admin requires the authenticated portal`);
   }
   if (hasPortal && !hasWebUi) {
     throw new CliError(`${path}: AWS portal requires web-ui`);

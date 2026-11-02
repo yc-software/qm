@@ -589,8 +589,6 @@ export function renderConfigErrors(
   for (const service of runnableServices(config.services)) {
     if (serviceDef(service).tcpIngress) add(`Render hosting does not support TCP ingress for ${service}`);
   }
-  if (config.services.includes("admin") && !config.services.includes("portal"))
-    add("Render admin requires the authenticated portal");
   if (plugins.some((plugin) => plugin.kind === "image")) add("Render plugins require Git source Dockerfiles");
   if (Object.keys(config.imageOverrides).length || config.imageFrom)
     add("Render builds from Git; remove imageOverrides and imageFrom");

@@ -46,7 +46,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: "invite-test",
   CORE_API_URL: upstreamUrl,
   WEB_UI_UPSTREAM: upstreamUrl,
-  ADMIN_UPSTREAM: upstreamUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
 });

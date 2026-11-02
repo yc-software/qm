@@ -553,6 +553,10 @@ a.chat-row-open {
 .recent-project-children[hidden] {
   display: none;
 }
+.archived-toggle.recent-project-more {
+  margin: 2px 0 0;
+  padding-left: 6px;
+}
 #sidebar-body.detach-drop-target {
   position: relative;
 }
@@ -614,6 +618,9 @@ a.chat-row-open {
 }
 .session:hover {
   background: var(--conversation-hover);
+}
+.drag-snapshot {
+  transform: translateZ(0);
 }
 .session.active {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
@@ -1019,7 +1026,8 @@ a.chat-row-open {
   font: inherit;
   font-size: var(--session-title-size);
 }
-.session-rename-input:focus {
+.session-rename-input:focus,
+.queued-edit-input:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
 }
@@ -1112,6 +1120,81 @@ a.chat-row-open {
   padding-left: 6px;
 }
 
+.settings-layout {
+  max-width: 1180px;
+  margin: 12px auto 0;
+}
+.settings-layout.with-nav {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-nav-label {
+  margin: 14px 8px 4px;
+  font-size: var(--font-12-5);
+  color: var(--muted-foreground);
+}
+.settings-nav-item {
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--foreground);
+  font-size: var(--font-13-5);
+  text-decoration: none;
+}
+.settings-nav-item:hover,
+.settings-nav-item.active {
+  background: var(--secondary);
+}
+.settings-nav-item.active {
+  font-weight: 550;
+}
+.settings-content {
+  min-width: 0;
+}
+.settings-tip {
+  max-width: 1180px;
+  margin: 0 auto;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.settings-page-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.settings-content > .settings-group {
+  margin-top: 0;
+}
+@media (max-width: 720px) {
+  .settings-layout.with-nav {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .settings-nav-label {
+    display: none;
+  }
+  .settings-nav-item {
+    flex: none;
+  }
+}
 .settings-group {
   display: flex;
   flex-direction: column;
@@ -5634,7 +5717,7 @@ a.connector-widget:focus-visible {
   gap: 4px;
   border-bottom: 1px solid var(--border);
 }
-.resource-tabs button {
+.resource-tabs :is(button, a) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5645,13 +5728,14 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
   font: inherit;
   font-size: var(--font-13);
+  text-decoration: none;
   cursor: pointer;
 }
-.resource-tabs button.active {
+.resource-tabs :is(button, a).active {
   border-bottom-color: var(--foreground);
   color: var(--foreground);
 }
-.resource-tabs button span {
+.resource-tabs :is(button, a) span {
   padding: 1px 5px;
   border-radius: 999px;
   background: var(--secondary);
@@ -12632,4 +12716,25 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .ui-canvas-title {
   font-weight: 600;
   margin-right: 4px;
+}
+
+.chat-participants {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-left: 6px;
+}
+.chat-participant {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--background);
+}
+.chat-participant:first-child {
+  margin-left: 0;
+}
+.chat-participant-more {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
 }

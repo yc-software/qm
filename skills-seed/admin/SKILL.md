@@ -79,9 +79,9 @@ still have a key they are not granted. To check the org, read
 means Composio is configured.
 
 **Own OAuth apps.** `GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`) marks each provider
-configured with client credentials, from Admin → Connectors or deployment secrets, with
+configured with client credentials, from Settings → Connectors or deployment secrets, with
 `configured: true`. No such entry means none are.
-`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
+`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Settings →
 Connectors, not ones set by deployment secrets, so it cannot prove absence.
 
 Composio is absent only when the toolkits read fails and the org check finds no such
@@ -89,17 +89,17 @@ credential. If either source exists, skip silently. If a read
 fails, treat it as unknown, not absent, and do not offer setup. Only when both are
 confirmed absent, send one short message:
 
-- Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
+- Composio (recommended): one project key covers most apps. Add it in Settings → Credentials
   as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
   verification as described in QM's `docs/composio.md`. If they would rather paste the
   key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
   `COMPOSIO_API_KEY`) and share its `url`.
   A dropped key enables Composio only for them; teammates need the org credential.
-- Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
+- Own OAuth apps: add each provider in Settings → Connectors. Each one needs the callback URL
   `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
   shows.
 
-Name the pages (Admin → Credentials, Admin → Connectors) without links and offer the drop
+Name the pages (Settings → Credentials, Settings → Connectors) without links and offer the drop
 link. Never invent URLs or ask for keys or client secrets in chat. Never
 ask regular users to configure a source.
 

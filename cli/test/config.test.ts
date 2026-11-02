@@ -60,9 +60,9 @@ test("required fields: orgId, target, services (must include core), valid servic
   );
   withConfig({ services: ["web-ui"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /must include "core"/));
   withConfig({ services: ["core", "nope"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /unknown service/));
-  withConfig({ services: ["core", "web-ui", "admin", "portal"] }, ({ path }) => {
+  withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) => {
     const { config } = loadConfigAt(path);
-    assert.deepEqual(config.services, ["core", "web-ui", "admin", "portal"]);
+    assert.deepEqual(config.services, ["core", "web-ui", "portal"]);
   });
   withConfig({ unknownField: "bad" }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /unknown top-level field "unknownField"/),
@@ -194,21 +194,6 @@ test("listen ports are managed consistently across deployment targets", () => {
   });
   withConfig({ plugins: [{ name: "linear", env: { PORT: "9000" } }] }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /plugins\[0\]\.env\.PORT.*managed/);
-  });
-});
-
-test("portal-mounted admin uses the portal's fixed /admin route", () => {
-  withConfig({ services: ["core", "admin", "portal"], env: { admin: { ADMIN_BASE_PATH: "/ops" } } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /env\.admin\.ADMIN_BASE_PATH.*must be "\/admin"/);
-  });
-  withConfig(
-    { services: ["core", "admin", "portal"], secretEnv: { admin: { ADMIN_BASE_PATH: "ADMIN_PATH_SECRET" } } },
-    ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /secretEnv\.admin\.ADMIN_BASE_PATH.*managed/);
-    },
-  );
-  withConfig({ services: ["core", "admin", "portal"], env: { admin: { ADMIN_BASE_PATH: "/admin" } } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.env.admin?.ADMIN_BASE_PATH, "/admin");
   });
 });
 
@@ -403,16 +388,6 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         aws: aws(["core", "web-ui"]),
       },
       error: /web-ui requires the authenticated portal/,
-    },
-    {
-      label: "admin without portal",
-      config: {
-        target: "aws",
-        publicUrl: "https://agent.acme.example",
-        services: ["core", "admin"],
-        aws: aws(["core", "admin"]),
-      },
-      error: /admin requires the authenticated portal/,
     },
     {
       label: "portal over HTTP",
@@ -1458,7 +1433,7 @@ test("proxy deployment rendering names the mode and classifier", () => {
 });
 
 test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
-  const workloads = ["core", "web-ui", "admin", "portal", "auth", "linear"];
+  const workloads = ["core", "web-ui", "portal", "auth", "linear"];
   const config = {
     plugins: [{ name: "linear" }],
     imageOverrides: {},
