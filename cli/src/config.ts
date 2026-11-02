@@ -6,6 +6,7 @@ import {
   AUTH_BROKER_ENV_KEYS,
   SERVICE_NAMES,
   VIRTUAL_SERVICE_NAMES,
+  serviceHost,
   isDeclaredService,
   isServiceName,
   pluginNameError,
@@ -673,23 +674,31 @@ function validate(raw: unknown, path: string): QmConfig {
   if (securityScreen?.classifier !== "proxy" && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN !== undefined) {
     throw new CliError(`${path}: secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN requires securityScreen classifier proxy`);
   }
-  for (const [service, values] of Object.entries(env)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (values?.[portEnv] !== undefined) {
-      throw new CliError(
-        `${path}: "env.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
-      );
+  const managedPorts = (service: string): string[] => {
+    const host = serviceHost(service);
+    if (!isServiceName(host)) return [];
+    return [serviceDef(host).docker.portEnv, ...(host === "core" ? ["PUBLIC_PORT"] : [])];
+  };
+  for (const [field, map] of [
+    ["env", env],
+    ["secretEnv", secretEnv],
+  ] as const) {
+    for (const [service, values] of Object.entries(map)) {
+      const managed = managedPorts(service).find((name) => values?.[name] !== undefined);
+      if (managed)
+        throw new CliError(
+          `${path}: "${field}.${service}.${managed}" is managed by the deployment target and cannot be overridden`,
+        );
     }
   }
-  for (const [service, entries] of Object.entries(secretEnv)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (entries?.[portEnv] !== undefined) {
+  for (const service of VIRTUAL_SERVICE_NAMES) {
+    const conflict = Object.entries(env[service] ?? {}).find(
+      ([name, value]) => env.core?.[name] !== undefined && env.core[name] !== value,
+    );
+    if (conflict)
       throw new CliError(
-        `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
+        `${path}: env.${service}.${conflict[0]} and env.core.${conflict[0]} set different values, but core receives both; keep one`,
       );
-    }
   }
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {

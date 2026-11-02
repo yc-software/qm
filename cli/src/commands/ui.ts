@@ -14,6 +14,7 @@ export interface UiPublishOptions {
 interface ReleaseStore {
   root: string;
   region: string;
+  endpoint?: string;
 }
 
 interface LivePointer {
@@ -40,11 +41,17 @@ function webReleaseStore(config: QmConfig): ReleaseStore {
     throw new CliError(
       "qm ui publish writes to the deployment's S3 bucket, but env.core does not set SNAPSHOT_STORE=s3 and S3_BUCKET; core serves the web UI from its data directory, so ship web UI changes with `qm up`",
     );
-  return { root: `s3://${bucket}/${prefix}web-ui/`, region: core.S3_REGION?.trim() || "auto" };
+  const endpoint = core.AWS_ENDPOINT_URL_S3?.trim();
+  return {
+    root: `s3://${bucket}/${prefix}web-ui/`,
+    region: core.S3_REGION?.trim() || "auto",
+    ...(endpoint ? { endpoint } : {}),
+  };
 }
 
 function aws(store: ReleaseStore, args: string[], input?: string): { status: number; stdout: string; stderr: string } {
-  const r = spawnSync(process.env.AWS_BIN ?? "aws", [...args, "--region", store.region], {
+  const location = ["--region", store.region, ...(store.endpoint ? ["--endpoint-url", store.endpoint] : [])];
+  const r = spawnSync(process.env.AWS_BIN ?? "aws", [...args, ...location], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] } : { input }),
@@ -164,7 +171,7 @@ export function runUiPublish(config: QmConfig, o: UiPublishOptions): void {
     if (releaseExists(store, id)) step(`web UI release ${id} is already uploaded`);
     else upload(store, o.dir!, id, bundle.files);
   }
-  const pointer: LivePointer = { release: id, deployed: previous?.deployed ?? "" };
+  const pointer: LivePointer = { release: id, deployed: readPointer(store)?.deployed ?? "" };
   awsOk(
     store,
     "switching the live web UI release",
