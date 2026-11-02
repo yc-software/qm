@@ -5,13 +5,16 @@ import { doctorCommon } from "../src/backends/doctor.ts";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
-  emailTransportConfigured,
+  emailSignInState,
   emailTransportPreflight,
   flySandboxTokenPreflight,
   nodeEngineProblem,
   smtpVerify,
   SmtpRejectedError,
 } from "../src/preflight.ts";
+import type { SecretValues } from "../src/secrets.ts";
+
+const complete = (values: ReadonlyMap<string, string>): SecretValues => ({ values, source: "complete" });
 
 const CONFIG: QmConfig = {
   contract: 1,
@@ -150,13 +153,15 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
     const okLines = await quietAsync(() =>
       emailTransportPreflight(
         config,
-        new Map([
-          ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
-          ["SMTP_HOST", "127.0.0.1"],
-          ["SMTP_USERNAME", "user"],
-          ["SMTP_PASSWORD", "right"],
-          ["RESEND_API_KEY", "re_unused"],
-        ]),
+        complete(
+          new Map([
+            ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+            ["SMTP_HOST", "127.0.0.1"],
+            ["SMTP_USERNAME", "user"],
+            ["SMTP_PASSWORD", "right"],
+            ["RESEND_API_KEY", "re_unused"],
+          ]),
+        ),
       ),
     );
     assert.ok(okLines.some((line) => line.includes("credentials accepted")));
@@ -168,12 +173,14 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
       () =>
         emailTransportPreflight(
           config,
-          new Map([
-            ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
-            ["SMTP_HOST", "127.0.0.1"],
-            ["SMTP_USERNAME", "user"],
-            ["SMTP_PASSWORD", "wrong"],
-          ]),
+          complete(
+            new Map([
+              ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+              ["SMTP_HOST", "127.0.0.1"],
+              ["SMTP_USERNAME", "user"],
+              ["SMTP_PASSWORD", "wrong"],
+            ]),
+          ),
         ),
       (e: unknown) => {
         assert.ok(e instanceof CliError);
@@ -196,12 +203,14 @@ test("email preflight warns instead of failing when a STARTTLS relay does not of
     const lines = await quietAsync(() =>
       emailTransportPreflight(
         config,
-        new Map([
-          ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
-          ["SMTP_HOST", "127.0.0.1"],
-          ["SMTP_USERNAME", "user"],
-          ["SMTP_PASSWORD", "right"],
-        ]),
+        complete(
+          new Map([
+            ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+            ["SMTP_HOST", "127.0.0.1"],
+            ["SMTP_USERNAME", "user"],
+            ["SMTP_PASSWORD", "right"],
+          ]),
+        ),
       ),
     );
     assert.ok(lines.some((line) => line.includes("could not verify the SMTP credentials")));
@@ -224,13 +233,13 @@ test("doctor reports an SMTP relay reachable when it answers and unreachable whe
     ["AUTH_EMAIL_FROM", "noreply@example.com"],
   ]);
   try {
-    const lines = await quietAsync(() => doctorCommon(relay(smtp.port), secrets));
+    const lines = await quietAsync(() => doctorCommon(relay(smtp.port), complete(secrets)));
     assert.ok(lines.some((line) => line.includes(`SMTP relay 127.0.0.1:${smtp.port}: reachable`)));
   } finally {
     await smtp.close();
   }
   await assert.rejects(
-    quietAsync(() => doctorCommon(relay(smtp.port), secrets)),
+    quietAsync(() => doctorCommon(relay(smtp.port), complete(secrets))),
     (e: unknown) => e instanceof CliError && e.message.includes("is unreachable"),
   );
 });
@@ -240,10 +249,12 @@ test("email preflight warns when SMTP values are set but the transport is resend
   const lines = await quietAsync(() =>
     emailTransportPreflight(
       config,
-      new Map([
-        ["SMTP_HOST", "smtp.example.com"],
-        ["SMTP_PASSWORD", "hunter2"],
-      ]),
+      complete(
+        new Map([
+          ["SMTP_HOST", "smtp.example.com"],
+          ["SMTP_PASSWORD", "hunter2"],
+        ]),
+      ),
     ),
   );
   assert.ok(lines.some((line) => line.includes('set but env.auth.AUTH_EMAIL_TRANSPORT is "resend"')));
@@ -251,23 +262,31 @@ test("email preflight warns when SMTP values are set but the transport is resend
 
 test("email preflight does nothing without the auth service", async () => {
   const lines = await quietAsync(() =>
-    emailTransportPreflight({ ...CONFIG, services: ["core"] }, new Map([["RESEND_API_KEY", "re_x"]])),
+    emailTransportPreflight({ ...CONFIG, services: ["core"] }, complete(new Map([["RESEND_API_KEY", "re_x"]]))),
   );
   assert.deepEqual(lines, []);
 });
 
-test("missing email credentials disable email without failing deployment checks", async () => {
+test("email sign-in state reports only what its values source can vouch for", async () => {
   for (const transport of ["resend", "smtp"]) {
     const config = { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: transport } } };
-    assert.equal(emailTransportConfigured(config, new Map()), false);
-    await assert.doesNotReject(emailTransportPreflight(config, new Map()));
-    for (const values of [
-      new Map([["AUTH_EMAIL_FROM", "noreply@example.com"]]),
-      new Map([[transport === "resend" ? "RESEND_API_KEY" : "SMTP_HOST", "configured"]]),
-    ]) {
-      assert.equal(emailTransportConfigured(config, values), false);
-      const output = await quietAsync(() => emailTransportPreflight(config, values));
+    const key = transport === "resend" ? "RESEND_API_KEY" : "SMTP_HOST";
+    const partials = [new Map([["AUTH_EMAIL_FROM", "noreply@example.com"]]), new Map([[key, "configured"]])];
+    for (const values of [new Map<string, string>(), ...partials]) {
+      assert.equal(emailSignInState(config, complete(values)), "disabled");
+      await assert.doesNotReject(emailTransportPreflight(config, complete(values)));
+      const output = await quietAsync(() => emailTransportPreflight(config, complete(values)));
       assert.ok(output.some((line) => line.includes("sign-in email: disabled")));
+      for (const source of ["partial"] as const) {
+        assert.equal(emailSignInState(config, { values: values, source: source }), "uninspected");
+        const unread = await quietAsync(() => emailTransportPreflight(config, { values: values, source: source }));
+        assert.ok(!unread.some((line) => line.includes("sign-in email: disabled")));
+        assert.ok(unread.some((line) => line.includes("sign-in email: not inspected")));
+      }
+    }
+    for (const values of [new Map([[key, ""]]), new Map([["AUTH_EMAIL_FROM", " "]])]) {
+      assert.equal(emailSignInState(config, complete(values)), "disabled");
+      assert.equal(emailSignInState(config, { values: values, source: "partial" }), "uninspected");
     }
   }
 });
@@ -284,12 +303,19 @@ test("email preflight rejects conflicting aliases and resolves settings supplied
     ["AUTH_SENDER", "noreply@example.com"],
     ["MAIL_KEY", "re_configured"],
   ]);
-  assert.throws(() => emailTransportConfigured(aliased, secrets), /would receive env AUTH_EMAIL_FROM from both/);
-  await assert.rejects(emailTransportPreflight(aliased, secrets), /would receive env AUTH_EMAIL_FROM from both/);
+  assert.throws(() => emailSignInState(aliased, complete(secrets)), /would receive env AUTH_EMAIL_FROM from both/);
+  await assert.rejects(
+    emailTransportPreflight(aliased, complete(secrets)),
+    /would receive env AUTH_EMAIL_FROM from both/,
+  );
   const direct = {
     ...CONFIG,
     env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_EMAIL_FROM: "noreply@example.com" } },
   };
-  assert.equal(emailTransportConfigured(direct, new Map([["RESEND_API_KEY", "re_configured"]])), true);
-  await assert.doesNotReject(emailTransportPreflight(direct, new Map([["RESEND_API_KEY", "re_configured"]])));
+  for (const source of ["complete", "partial"] as const)
+    assert.equal(
+      emailSignInState(direct, { values: new Map([["RESEND_API_KEY", "re_configured"]]), source: source }),
+      "enabled",
+    );
+  await assert.doesNotReject(emailTransportPreflight(direct, complete(new Map([["RESEND_API_KEY", "re_configured"]]))));
 });

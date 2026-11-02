@@ -7,6 +7,7 @@ import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { emailSignInState } from "../src/preflight.ts";
 import {
   assertAwsDeploymentStorage,
   assertAwsServiceDiscovery,
@@ -5031,6 +5032,50 @@ test("AWS doctor still fails a pushed secret store holding a placeholder value",
   assert.deepEqual(probe.pending, []);
   assert.equal(probe.failures.length, 1);
   assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
+});
+
+test("AWS secret probe marks a denied optional read partial so email reports uninspected, not disabled", () => {
+  const authConfig: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.example.com",
+    target: "aws",
+    services: ["core", "auth"],
+    plugins: [],
+    skills: [],
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+    imageOverrides: {},
+  };
+  const secrets = computedSecrets(authConfig);
+  const optional = secrets.filter((secret) => !secret.required).map((secret) => secret.name);
+  assert.ok(optional.includes("RESEND_API_KEY") && optional.includes("AUTH_EMAIL_FROM"));
+  const awsError = (code: string): Error =>
+    new Error(`An error occurred (${code}) when calling the GetSecretValue operation`);
+  const probe = (optionalError: string, requiredError?: string) =>
+    probeAwsSecretStore(
+      secrets,
+      (name) => {
+        if (optional.includes(name)) throw awsError(optionalError);
+        if (requiredError) throw awsError(requiredError);
+        return TEST_SECRET_VALUE;
+      },
+      () => {},
+    );
+  const missing = probe("ResourceNotFoundException");
+  assert.equal(missing.source, "complete");
+  assert.deepEqual(missing.failures, []);
+  assert.equal(emailSignInState(authConfig, missing), "disabled");
+  const denied = probe("AccessDeniedException");
+  assert.equal(denied.source, "partial");
+  assert.deepEqual(denied.failures, []);
+  assert.equal(emailSignInState(authConfig, denied), "uninspected");
+  const requiredDenied = probe("ResourceNotFoundException", "AccessDeniedException");
+  const required = secrets.filter((secret) => secret.required).map((secret) => `secret ${secret.name}`);
+  assert.deepEqual(
+    requiredDenied.failures.map((failure) => failure.slice(0, failure.indexOf(":"))),
+    required,
+  );
+  assert.deepEqual(requiredDenied.pending, []);
 });
 
 for (const mode of ["draining", "stale", "failed"] as const) {

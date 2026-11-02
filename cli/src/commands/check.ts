@@ -174,7 +174,11 @@ export async function runCheckCommand(
   const result = runChecks(config, configDir, sandboxDir, { report });
   const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
   await flySandboxTokenPreflight(config, secrets, fetch, report);
-  await emailTransportPreflight(config, secrets, report);
+  await emailTransportPreflight(
+    config,
+    { values: secrets, source: hostingProvider(config.target).envFileSource },
+    report,
+  );
   if (report) {
     note("");
     ok("check passed — config, sandbox layer, and plugins are valid.");

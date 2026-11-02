@@ -41,6 +41,7 @@ import {
   runtimeSecretNames,
   secretsForService,
   type ComputedSecret,
+  type SecretValues,
 } from "../secrets.ts";
 import {
   brokerWiring,
@@ -4414,10 +4415,11 @@ export function probeAwsSecretStore(
   secrets: ComputedSecret[],
   read: (name: string) => string,
   checkPublicApiUrl: () => void,
-): { values: Map<string, string>; pending: string[]; failures: string[] } {
+): SecretValues & { values: Map<string, string>; pending: string[]; failures: string[] } {
   const values = new Map<string, string>();
   const pending: string[] = [];
   const failures: string[] = [];
+  let source: SecretValues["source"] = "complete";
   for (const secret of secrets) {
     const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
     try {
@@ -4434,13 +4436,16 @@ export function probeAwsSecretStore(
         } else {
           warn(`${label}: not configured`);
         }
+      } else if (!secret.required && /AccessDeniedException/.test(errMessage(error))) {
+        source = "partial";
+        warn(`${label}: not readable`);
       } else {
         failures.push(`${label}: ${errMessage(error)}`);
         warn(`${label}: failed`);
       }
     }
   }
-  return { values, pending, failures };
+  return { values, pending, failures, source };
 }
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
@@ -4633,33 +4638,24 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
   check("Cloud Map routing", () => assertAwsServiceDiscovery(config, ecsServices));
   check("ALB routing", () => assertAwsPublicRouting(config, ecsServices));
   await checkAsync("public URL DNS and TLS", () => assertAwsPublicNetwork(config));
-  const runtimeSecrets = new Map<string, string>();
-  for (const secret of computedSecrets(config)) {
-    const inspect = (): void => {
-      const id = `${aws.secretsPrefix}${secret.name}`;
-      const value = awsText(aws, ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString"]);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      runtimeSecrets.set(secret.name, value);
-    };
-    if (secret.required)
-      check(`secret ${secret.name}`, () => {
-        inspect();
-        if (secret.name === "PUBLIC_API_URL") assertAwsPublicApiUrl(config);
-      });
-    else {
-      try {
-        inspect();
-        step(`optional secret ${secret.name}: configured`);
-      } catch (error) {
-        if (/ResourceNotFoundException|AccessDeniedException/.test(errMessage(error)))
-          warn(`optional secret ${secret.name}: not configured or not readable`);
-        else {
-          failures.push(`optional secret ${secret.name}: ${errMessage(error)}`);
-          warn(`optional secret ${secret.name}: failed`);
-        }
-      }
-    }
-  }
+  const store = probeAwsSecretStore(
+    computedSecrets(config),
+    (name) =>
+      awsText(aws, [
+        "secretsmanager",
+        "get-secret-value",
+        "--secret-id",
+        `${aws.secretsPrefix}${name}`,
+        "--query",
+        "SecretString",
+      ]),
+    () => assertAwsPublicApiUrl(config),
+  );
+  const runtimeSecrets = store.values;
+  failures.push(
+    ...store.failures,
+    ...store.pending.map((name) => `secret ${name}: not pushed yet — run \`qm secrets push\``),
+  );
   if (failures.length) throw new CliError(`doctor failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
   const runtimeNames = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"] as const;
   const priorRuntime = new Map(runtimeNames.map((name) => [name, process.env[name]]));
@@ -4669,7 +4665,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     else delete process.env[name];
   }
   try {
-    await doctorCommon(config, runtimeSecrets, { configDir });
+    await doctorCommon(config, store, { configDir });
   } finally {
     for (const name of runtimeNames) {
       const prior = priorRuntime.get(name);

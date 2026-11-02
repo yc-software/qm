@@ -13,6 +13,7 @@ import {
   type ProviderScaffold,
 } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
+import type { SecretValues } from "../secrets.ts";
 import { runnableServices, serviceHost } from "../services.ts";
 import {
   awsCheckLive,
@@ -63,6 +64,7 @@ export interface HostingProvider {
   id: Target;
   /** How this target's CLI reaches the deployed core's /v1/deployment-layer endpoint. */
   deploymentLayerTransport: DeploymentLayerTransport;
+  envFileSource: SecretValues["source"];
   /** Per-target env defaults applied when a service env var is not set explicitly. */
   envDefaults: TargetEnvDefaults;
   /** Optional `qm infra` operations; targets without managed infra omit this. */
@@ -107,6 +109,7 @@ const workloadOptions = (flags: Readonly<Record<string, string | boolean>>, flag
 
 const docker: HostingProvider = {
   id: "docker",
+  envFileSource: "complete",
   deploymentLayerTransport: dockerDeploymentLayerTransport,
   envDefaults: TARGET_ENV_DEFAULTS.docker,
   scaffold: dockerScaffold,
@@ -156,6 +159,7 @@ const docker: HostingProvider = {
 
 const fly: HostingProvider = {
   id: "fly",
+  envFileSource: "partial",
   deploymentLayerTransport: flyDeploymentLayerTransport,
   envDefaults: TARGET_ENV_DEFAULTS.fly,
   scaffold: flyScaffold,
@@ -237,6 +241,7 @@ const fly: HostingProvider = {
 
 const aws: HostingProvider = {
   id: "aws",
+  envFileSource: "partial",
   deploymentLayerTransport: awsDeploymentLayerTransport,
   envDefaults: TARGET_ENV_DEFAULTS.aws,
   infra: {
@@ -351,6 +356,7 @@ const aws: HostingProvider = {
 
 const render: HostingProvider = {
   id: "render",
+  envFileSource: "partial",
   deploymentLayerTransport: renderDeploymentLayerTransport,
   envDefaults: TARGET_ENV_DEFAULTS.render,
   scaffold: renderScaffold,
