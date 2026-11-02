@@ -388,6 +388,8 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createSurfaceRegistry } from "./surfaces/registry.ts";
+import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2239,6 +2241,7 @@ export function buildApp(
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
+    surfaces: createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] }),
     runs,
     leaseTtlMs,
     maxAttempts,

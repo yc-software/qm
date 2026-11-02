@@ -81,6 +81,7 @@ import type {
 } from "../surface-cache/surface-cache.ts";
 import { type BotPolicy, type ChannelPolicy, type ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
@@ -698,6 +699,7 @@ export interface AppDeps {
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
+  surfaces?: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;

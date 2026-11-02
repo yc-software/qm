@@ -2,6 +2,7 @@ import { isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot } from "./lib.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
+import { slackTsToMs } from "./message-revisions.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
@@ -39,9 +40,11 @@ export function slackMessageToIngestEvent(
 ): IngestEvent {
   const content = messageWithForwardedContent(m);
   const raw = content.text;
+  const sentAt = slackTsToMs(m.ts);
   return {
     container: m.channel!,
     ts: m.ts!,
+    ...(sentAt !== undefined ? { sentAt } : {}),
     ...(m.subtype !== undefined || !opts.partial
       ? { subtype: m.subtype ?? "", broadcast: m.subtype === "thread_broadcast" }
       : {}),

@@ -147,13 +147,15 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         ...(backdrop.length ? { backdrop } : {}),
         ...(scheduled ? { scheduled: true } : {}),
       };
-      const prompt = renderAmbientPrompt(judgeBatch);
+      const readable = deps.surfaces?.get(surface)?.readableText ?? ((text: string) => text);
+      const prompt = renderAmbientPrompt(judgeBatch, readable);
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {
           judge: deps.ambientJudge,
+          readable,
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },

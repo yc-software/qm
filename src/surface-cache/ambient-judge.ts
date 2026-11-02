@@ -1,5 +1,5 @@
-import { resolveMentions } from "../slack/mrkdwn.ts";
 import { outermostJsonObject } from "../util/text.ts";
+import type { Surface } from "../surfaces/contract.ts";
 import type { CachedMessage } from "./surface-cache.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
@@ -49,9 +49,9 @@ export interface AmbientBatch {
   scheduled?: boolean;
 }
 
-export function renderAmbientPrompt(batch: AmbientBatch): string {
+export function renderAmbientPrompt(batch: AmbientBatch, readable: Surface["readableText"]): string {
   const fmt = (m: CachedMessage): string =>
-    `${m.authorName || m.authorId || "someone"}${m.bot ? " (bot)" : ""}: ${resolveMentions(m.text, m.mentions ? new Map(Object.entries(m.mentions)) : undefined)}`;
+    `${m.authorName || m.authorId || "someone"}${m.bot ? " (bot)" : ""}: ${readable(m.text, m.mentions)}`;
   const fmtBackdrop = (m: CachedMessage): string =>
     m.handled || m.mentionsSelf ? `${fmt(m)} [handled by the direct responder — do not re-engage]` : fmt(m);
   const shown = (ms: CachedMessage[]): CachedMessage[] => ms.filter((m) => !m.deleted && (m.text ?? "").trim());
@@ -104,6 +104,7 @@ export function parseAmbientDecision(raw: string | undefined): AmbientDecision {
 
 export interface AmbientJudgeDeps {
   judge?(systemPrompt: string, prompt: string): Promise<string | undefined>;
+  readable: Surface["readableText"];
   spawnWorker(batch: AmbientBatch, decision: AmbientDecision): Promise<void>;
 }
 
@@ -111,7 +112,7 @@ export async function judgeAmbientBatch(deps: AmbientJudgeDeps, batch: AmbientBa
   const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim());
   if (!shown.length && !batch.scheduled) return { act: false };
   if (!deps.judge) return { act: false };
-  const raw = await deps.judge(AMBIENT_JUDGE_SYSTEM, renderAmbientPrompt(batch));
+  const raw = await deps.judge(AMBIENT_JUDGE_SYSTEM, renderAmbientPrompt(batch, deps.readable));
   const decision = parseAmbientDecision(raw);
   if (decision.act) await deps.spawnWorker(batch, decision);
   return decision;

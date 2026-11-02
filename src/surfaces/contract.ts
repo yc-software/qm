@@ -29,5 +29,6 @@ export interface Surface<Native = unknown> {
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
+  readableText(text: string, mentions: Readonly<Record<string, string>> | undefined): string;
   native(kind: string): Native | null;
 }
