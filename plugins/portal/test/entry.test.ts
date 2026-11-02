@@ -185,3 +185,41 @@ test("production accepts cleartext OIDC only on private-network hosts, and only 
   assert.notEqual(externalCleartext.status, 0, "the relaxation is for the built-in broker only");
   assert.match(externalCleartext.stderr, /OIDC endpoint must be https unless it is the built-in broker/);
 });
+
+test("production serves a cleartext front door only on a loopback address", () => {
+  const command = "import('./src/index.ts').then(m => m.bootChecks())";
+  const env = (publicUrl: string): NodeJS.ProcessEnv => ({
+    ...process.env,
+    NODE_ENV: "production",
+    PORTAL_PUBLIC_URL: publicUrl,
+    PORTAL_SESSION_SECRET: "portal-session-secret",
+    CORE_SIGNING_SECRET: "core-signing-secret",
+    OIDC_CLIENT_ID: "qm-portal",
+    OIDC_CLIENT_SECRET: "client-secret",
+    OIDC_ISSUER: `${publicUrl}/idp`,
+    OIDC_AUTH_ENDPOINT: `${publicUrl}/idp/authorize`,
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+    OIDC_ALLOWED_EMAILS: "admin@example.com",
+    AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+    AUTH_BROKER_PREFIX: "/idp",
+  });
+  const boot = (publicUrl: string): { status: number | null; stderr: string } =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", command], {
+      cwd: process.cwd(),
+      env: env(publicUrl),
+      encoding: "utf8",
+    });
+
+  for (const publicUrl of ["http://localhost:8082", "http://127.0.0.1:8082"]) {
+    const local = boot(publicUrl);
+    assert.equal(local.status, 0, `${publicUrl}: ${local.stderr}`);
+  }
+  for (const publicUrl of ["http://core:8000", "http://agent.example.com"]) {
+    const refused = boot(publicUrl);
+    assert.notEqual(refused.status, 0, publicUrl);
+    assert.match(refused.stderr, /PORTAL_PUBLIC_URL must be https in production unless it is a loopback address/);
+    assert.match(refused.stderr, /OIDC_AUTH_ENDPOINT must be https unless it is a loopback address/);
+  }
+});

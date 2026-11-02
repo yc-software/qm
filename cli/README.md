@@ -40,6 +40,17 @@ legacy source-built first-party candidates without that record require an explic
 architecture matching the image, or regeneration with the current CLI. Candidate
 deployment and migration reject platform mismatches before accessing AWS.
 
+## Docker
+
+`init --target docker` scaffolds a local test drive. Core serves the web UI and
+sign-in at `http://localhost:8082` and its API at `http://localhost:8080`, with
+the built-in sign-in broker. Put the first administrator in `ADMIN_GRANTS`
+(`qm setup` asks for it and derives `AUTH_ALLOWED_EMAILS`), run `qm up`, then
+`qm admin-login` for a sign-in link; no email transport is needed. Sign-in
+accepts plain HTTP only when `publicUrl` is a loopback address. A deployment
+that listed `web-ui` or `portal` must drop them from `services` (add `"auth"` to
+keep built-in sign-in); the next `qm up` removes their containers.
+
 ## Render
 
 ```bash

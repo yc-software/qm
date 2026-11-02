@@ -67,6 +67,8 @@ import {
   readBody,
   PayloadTooLargeError,
   sameOriginRequest as sameOriginFor,
+  isLoopbackUrl,
+  isSecureOrLoopbackUrl,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -96,7 +98,7 @@ const ORIGIN = (() => {
 })();
 const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
-const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLocalPortalUrl(PUBLIC_URL);
+const LOCAL_AUTH_BYPASS = LOCAL_AUTH_BYPASS_REQUESTED && !IS_PROD && isLoopbackUrl(PUBLIC_URL);
 const LOCAL_AUTH_PRINCIPAL = process.env.PORTAL_DEV_PRINCIPAL || process.env.USER || "dev-admin";
 const PLAYGROUND = process.env.PORTAL_PLAYGROUND === "1";
 const DEPLOYMENTS_ENABLED = process.env.PORTAL_DEPLOYMENTS_ENABLED
@@ -382,21 +384,6 @@ export function hostIsWithinDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
   const d = domain.toLowerCase().replace(/^\./, "");
   return !!h && !!d && (h === d || h.endsWith(`.${d}`));
-}
-
-function isLocalPortalUrl(raw: string): boolean {
-  try {
-    const hostname = new URL(raw).hostname.toLowerCase();
-    return (
-      hostname === "localhost" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      hostname === "[::1]"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function originOf(raw: string): string {
@@ -1711,7 +1698,7 @@ export function bootChecks(): void {
   if (LOCAL_AUTH_BYPASS_REQUESTED && IS_PROD) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS may not be enabled in production");
   }
-  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLocalPortalUrl(PUBLIC_URL)) {
+  if (LOCAL_AUTH_BYPASS_REQUESTED && !isLoopbackUrl(PUBLIC_URL)) {
     problems.push("PORTAL_LOCAL_AUTH_BYPASS requires a localhost, 127.0.0.1, or ::1 PORTAL_PUBLIC_URL");
   }
   if (PLAYGROUND) {
@@ -1806,9 +1793,12 @@ export function bootChecks(): void {
     if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
-    if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");
-    if (!OIDC.authEndpoint.startsWith("https://")) {
-      problems.push(`OIDC_AUTH_ENDPOINT must be https, since the browser is sent there: ${OIDC.authEndpoint}`);
+    if (!isSecureOrLoopbackUrl(PUBLIC_URL))
+      problems.push("PORTAL_PUBLIC_URL must be https in production unless it is a loopback address");
+    if (!isSecureOrLoopbackUrl(OIDC.authEndpoint)) {
+      problems.push(
+        `OIDC_AUTH_ENDPOINT must be https unless it is a loopback address, since the browser is sent there: ${OIDC.authEndpoint}`,
+      );
     }
     const brokerOrigin =
       AUTH_BROKER_UPSTREAM && isPrivateNetworkUrl(AUTH_BROKER_UPSTREAM) ? originOf(AUTH_BROKER_UPSTREAM) : "";
