@@ -132,7 +132,8 @@ export const SURFACE_ORIGIN_MIGRATIONS = [
     ifTable(
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
-       WHERE ${oldKeysIn("r.request")}
+       WHERE r.status IN ('done', 'failed')
+         AND ${oldKeysIn("r.request")}
          AND (r.request LIKE '%"externalSlack"%'
            OR ${newerRun()}
            OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})`,

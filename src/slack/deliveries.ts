@@ -528,16 +528,13 @@ export function createDeliveryPoller(deps: {
   return { pollDeliveries };
 }
 
-// The previous release keeps enqueueing `slackAccountId`/`slackTeamId`/`slackPolicyNamespace`
-// destinations during a blue-green overlap, after the surfaces/0001 migration has run.
-// Remove together with the follow-up sweep migration, once no deployed release writes them.
 function destinationAccount(destination: Delivery["destination"]): Delivery["destination"]["account"] {
   if (destination.account) return destination.account;
-  const legacy = destination as { slackAccountId?: string; slackTeamId?: string; slackPolicyNamespace?: string };
-  if (!legacy.slackAccountId && !legacy.slackTeamId) return undefined;
+  const oldKeys = destination as { slackAccountId?: string; slackTeamId?: string; slackPolicyNamespace?: string };
+  if (!oldKeys.slackAccountId && !oldKeys.slackTeamId && !oldKeys.slackPolicyNamespace) return undefined;
   return {
-    id: legacy.slackAccountId || "default",
-    ...(legacy.slackTeamId ? { workspace: legacy.slackTeamId } : {}),
-    ...(legacy.slackPolicyNamespace ? { policyNamespace: legacy.slackPolicyNamespace } : {}),
+    id: oldKeys.slackAccountId || "default",
+    ...(oldKeys.slackTeamId ? { workspace: oldKeys.slackTeamId } : {}),
+    ...(oldKeys.slackPolicyNamespace ? { policyNamespace: oldKeys.slackPolicyNamespace } : {}),
   };
 }
