@@ -13,7 +13,7 @@ import { modalSandboxLifetimeMs, type ModalClient } from "./modal-client.ts";
 import type { RenderClient } from "./render-client.ts";
 import type { SuperserveClient } from "./superserve-client.ts";
 
-const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>> = {
+const CREDENTIAL_KEYS = {
   sprites: ["SPRITES_TOKEN"],
   smolmachines: ["SMOLMACHINES_TOKEN"],
   e2b: ["E2B_API_KEY"],
@@ -22,7 +22,11 @@ const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSet
   superserve: ["SUPERSERVE_API_KEY"],
   "do-managed-agents": ["DO_AGENTS_API_TOKEN"],
   render: ["RENDER_SANDBOX_API_KEY", "RENDER_SANDBOX_WORKSPACE_ID"],
-};
+} as const satisfies Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>>;
+
+type CredentialedBackend = keyof typeof CREDENTIAL_KEYS;
+
+const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>> = CREDENTIAL_KEYS;
 
 export function tenantSandboxBackends(
   settings: TenantSettings,
@@ -75,9 +79,9 @@ export function tenantSandboxRouting(
 
 export function tenantCredential(
   settings: () => Promise<TenantSettings>,
-  key: TenantSettingKey,
+  backend: "sprites" | "smolmachines" | "agent37",
 ): () => Promise<string> {
-  return async () => requireTenantSetting(await settings(), key);
+  return async () => requireTenantSetting(await settings(), CREDENTIAL_KEYS[backend][0]);
 }
 
 export function clientPerCredential<C extends object>(
@@ -102,7 +106,7 @@ type StreamMethod<C> = {
 
 export function tenantSdkClient<C extends object>(opts: {
   settings: () => Promise<TenantSettings>;
-  keys: readonly TenantSettingKey[];
+  backend: CredentialedBackend;
   make: (...credential: string[]) => C;
   methods: Record<AsyncMethod<C>, true>;
   streams?: Record<StreamMethod<C>, true>;
@@ -111,7 +115,7 @@ export function tenantSdkClient<C extends object>(opts: {
   const clientFor = clientPerCredential(opts.make);
   const current = async (): Promise<C> => {
     const settings = await opts.settings();
-    return clientFor(...opts.keys.map((key) => requireTenantSetting(settings, key)));
+    return clientFor(...CREDENTIAL_KEYS[opts.backend].map((key) => requireTenantSetting(settings, key)));
   };
   const bound: Record<string, unknown> = { ...opts.fixed };
   for (const method of Object.keys(opts.methods)) {
@@ -131,13 +135,13 @@ export function tenantSdkClient<C extends object>(opts: {
 
 export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
   return {
-    sprites: tenantCredential(settings, "SPRITES_TOKEN"),
-    smolmachines: tenantCredential(settings, "SMOLMACHINES_TOKEN"),
-    agent37: tenantCredential(settings, "AGENT37_API_KEY"),
+    sprites: tenantCredential(settings, "sprites"),
+    smolmachines: tenantCredential(settings, "smolmachines"),
+    agent37: tenantCredential(settings, "agent37"),
     e2b: (make: (apiKey: string) => E2bClient) =>
       tenantSdkClient({
         settings,
-        keys: ["E2B_API_KEY"],
+        backend: "e2b",
         make,
         methods: { info: true, create: true, connect: true, list: true, kill: true, deleteSnapshot: true },
         fixed: { nativePause: true },
@@ -145,7 +149,7 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
     managedAgents: (make: (apiToken: string) => ManagedAgentsClient) =>
       tenantSdkClient({
         settings,
-        keys: ["DO_AGENTS_API_TOKEN"],
+        backend: "do-managed-agents",
         make,
         methods: { info: true, create: true, connect: true, list: true, rollback: true, kill: true },
         fixed: { nativePause: true },
@@ -153,7 +157,7 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
     modal: (sandboxTimeoutSec: number | undefined, make: (tokenId: string, tokenSecret: string) => ModalClient) =>
       tenantSdkClient({
         settings,
-        keys: ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"],
+        backend: "modal",
         make: (tokenId, tokenSecret) => make(tokenId!, tokenSecret!),
         methods: { create: true, fromId: true, fromName: true, terminate: true },
         streams: { listRunning: true },
@@ -162,14 +166,14 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
     superserve: (make: (apiKey: string) => SuperserveClient) =>
       tenantSdkClient({
         settings,
-        keys: ["SUPERSERVE_API_KEY"],
+        backend: "superserve",
         make,
         methods: { create: true, connect: true, update: true, info: true, list: true, kill: true },
       }),
     render: (make: (apiKey: string, workspaceId: string) => RenderClient) =>
       tenantSdkClient({
         settings,
-        keys: ["RENDER_SANDBOX_API_KEY", "RENDER_SANDBOX_WORKSPACE_ID"],
+        backend: "render",
         make: (apiKey, workspaceId) => make(apiKey!, workspaceId!),
         methods: {
           create: true,

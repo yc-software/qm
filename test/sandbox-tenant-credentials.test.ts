@@ -40,7 +40,7 @@ function recordingClient(store: ReturnType<typeof createTenantSettingsStore>) {
   const used: Array<[string, string]> = [];
   const client = tenantSdkClient<FakeClient>({
     settings: () => store.get(),
-    keys: ["E2B_API_KEY"],
+    backend: "e2b",
     make: (apiKey) => {
       made.push(apiKey);
       return {
@@ -107,7 +107,7 @@ test("a fetch-based provider sends the bound tenant's token and fails closed wit
   const sandbox = createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
     store: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: tenantCredential(() => store.get(), "SMOLMACHINES_TOKEN"),
+    token: tenantCredential(() => store.get(), "smolmachines"),
     fetchImpl: async (_input, init) => {
       seen.push(new Headers(init?.headers).get("authorization") ?? "");
       return Response.json([]);

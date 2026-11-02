@@ -7,6 +7,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { parseSharingPosture } from "../resolution/sharing-posture.ts";
 import { parseSecurityPosture } from "../security/security-posture.ts";
 import { personalScope, type ScopeId } from "../types.ts";
+import { TenantSettingsInvalidError } from "./settings-parse.ts";
 import { isTenantSettingKey, TENANT_SETTING_KEYS, type TenantSettingsStore } from "./settings.ts";
 
 const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
@@ -88,11 +89,13 @@ function parsedPostures(values: Readonly<Record<string, string | undefined>>) {
   const securityPosture = security ? parseSecurityPosture(security) : undefined;
   const sharingPosture = sharing ? parseSharingPosture(sharing) : undefined;
   if (security && !securityPosture)
-    throw new Error(
+    throw new TenantSettingsInvalidError(
       `HARNESS_SECURITY_POSTURE=${JSON.stringify(security)} is not recognized — use dangerous, auto, or strict.`,
     );
   if (sharing && !sharingPosture)
-    throw new Error(`HARNESS_SHARING_POSTURE=${JSON.stringify(sharing)} is not recognized — use isolated or open.`);
+    throw new TenantSettingsInvalidError(
+      `HARNESS_SHARING_POSTURE=${JSON.stringify(sharing)} is not recognized — use isolated or open.`,
+    );
   return { securityPosture, sharingPosture };
 }
 
@@ -138,7 +141,7 @@ export async function importTenantSettings(
   deps: TenantSettingsImportDeps,
 ): Promise<string[]> {
   const unknown = unknownTenantImportKeys(values);
-  if (unknown.length) throw new Error(`Not tenant settings: ${unknown.join(", ")}`);
+  if (unknown.length) throw new TenantSettingsInvalidError(`Not tenant settings: ${unknown.join(", ")}`);
   const present = Object.keys(values).filter((key) => values[key] !== undefined);
   const { securityPosture, sharingPosture } = parsedPostures(values);
   await deps.settings.update(Object.fromEntries(present.filter(isTenantSettingKey).map((key) => [key, values[key]!])));

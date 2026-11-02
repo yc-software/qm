@@ -3,7 +3,7 @@ import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { currentTenant, withTenant } from "./context.ts";
 import { reportFailure } from "../util/errors.ts";
-import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
+import { parseTenantSettings, TenantSettingsInvalidError, type TenantSettings } from "./settings-parse.ts";
 import { TENANCY_BASE, TENANT, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
 
 export type { TenantSettings } from "./settings-parse.ts";
@@ -260,7 +260,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
     async update(changes) {
       const tenant = currentTenant();
       for (const key of Object.keys(changes)) {
-        if (!isTenantSettingKey(key)) throw new Error(`${key} is not a tenant setting`);
+        if (!isTenantSettingKey(key)) throw new TenantSettingsInvalidError(`${key} is not a tenant setting`);
       }
       const normalized: TenantSettingChanges = {};
       for (const key of TENANT_SETTING_KEYS) {

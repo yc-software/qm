@@ -8,7 +8,7 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
   if (!raw && !secret) return null;
   if (!raw || !secret || secret.length < 32)
     throw new Error("Trusted entry requires configuration and a separate client secret of at least 32 characters");
-  if ([env.OIDC_CLIENT_SECRET, env.PORTAL_SESSION_SECRET, env.CORE_SIGNING_SECRET].includes(secret))
+  if ([env.PORTAL_SESSION_SECRET, env.CORE_SIGNING_SECRET].includes(secret))
     throw new Error("Trusted entry requires a distinct client secret");
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))

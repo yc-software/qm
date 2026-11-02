@@ -3,6 +3,7 @@ import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
+import { tenantAllowsEmail } from "../../../tenants/settings-parse.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
@@ -87,9 +88,7 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
 
 async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
   const { deps } = ctx;
-  const settings = await deps.tenantSettings?.get();
-  if (settings?.emailAuthDomain && email.endsWith(`@${settings.emailAuthDomain}`)) return true;
-  if ((settings?.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
+  if (tenantAllowsEmail(await deps.tenantSettings?.get(), email)) return true;
   if (await deps.directory?.get(email)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];

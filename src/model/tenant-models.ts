@@ -72,6 +72,19 @@ export interface TenantModels {
   subscriptionKeys(): Promise<ProviderKeys>;
 }
 
+function perCredential<T>(
+  cache: Map<string, { credentialId: string; value: T }>,
+  tenant: string,
+  credentialId: string,
+  make: () => T,
+): T {
+  const known = cache.get(tenant);
+  if (known?.credentialId === credentialId) return known.value;
+  const value = make();
+  cache.set(tenant, { credentialId, value });
+  return value;
+}
+
 export function createTenantModels(deps: {
   settings: TenantSettingsStore;
   keychain: () => Keychain | undefined;
@@ -79,7 +92,8 @@ export function createTenantModels(deps: {
   anthropicKey: () => Promise<string | null>;
 }): TenantModels {
   const gateways = new Map<string, { fingerprint: string; transport: ModelGatewayTransportConfig }>();
-  const chatgpt = new Map<string, { credentialId: string; auth: CompanyChatGPTAuth }>();
+  const chatgpt = new Map<string, { credentialId: string; value: CompanyChatGPTAuth }>();
+  const claude = new Map<string, { credentialId: string; value: () => Promise<NodeJS.ProcessEnv> }>();
   const directKeys = new Map<string, ModelProviderAvailability>();
 
   function gatewayFor(tenant: string, settings: TenantSettings): ModelGatewayTransportConfig | undefined {
@@ -100,11 +114,7 @@ export function createTenantModels(deps: {
   function companyAuth(tenant: string, credentialId: string | undefined): CompanyChatGPTAuth | undefined {
     const keychain = deps.keychain();
     if (!credentialId || !keychain) return undefined;
-    const known = chatgpt.get(tenant);
-    if (known?.credentialId === credentialId) return known.auth;
-    const auth = keychainCompanyChatGPTAuth({ keychain, credentialId });
-    chatgpt.set(tenant, { credentialId, auth });
-    return auth;
+    return perCredential(chatgpt, tenant, credentialId, () => keychainCompanyChatGPTAuth({ keychain, credentialId }));
   }
 
   async function chatgptKeys(settings: TenantSettings): Promise<ProviderKeys> {
@@ -122,10 +132,10 @@ export function createTenantModels(deps: {
   async function claudeKeys(settings: TenantSettings): Promise<ProviderKeys> {
     const keychain = deps.keychain();
     if (!settings.claudeAuthCredential || !keychain) return {};
-    const env = await keychainEnvCredential(keychain, settings.claudeAuthCredential, [
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "ANTHROPIC_AUTH_TOKEN",
-    ])();
+    const credentialId = settings.claudeAuthCredential;
+    const env = await perCredential(claude, currentTenant(), credentialId, () =>
+      keychainEnvCredential(keychain, credentialId, ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]),
+    )();
     const token = env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
     if (!token)
       console.error(

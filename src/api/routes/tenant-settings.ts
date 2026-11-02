@@ -2,8 +2,8 @@ import { orgId } from "../../config.ts";
 import { withTenant } from "../../tenants/context.ts";
 import { importTenantSettings, unknownTenantImportKeys } from "../../tenants/settings-import.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
+import { TenantSettingsInvalidError } from "../../tenants/settings-parse.ts";
 import { scopeId } from "../../types.ts";
-import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { requireOperatorControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
@@ -44,7 +44,8 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
     );
     return sendJson(res, 200, { tenant, updated });
   } catch (error) {
-    return sendJson(res, 400, { error: "invalid_tenant_settings", message: errMessage(error) });
+    if (!(error instanceof TenantSettingsInvalidError)) throw error;
+    return sendJson(res, 400, { error: "invalid_tenant_settings", message: error.message });
   }
 }
 

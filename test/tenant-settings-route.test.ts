@@ -82,7 +82,13 @@ test("the settings route refuses operator keys and is unavailable without a dist
       error: "not_tenant_settings",
       message: "Not tenant settings: DATABASE_URL",
     });
-    assert.equal((await srv.put({ tenant: SLUG, env: { SANDBOX_BACKEND: "nope" } })).status, 400);
+    const invalid = await srv.put({ tenant: SLUG, env: { SANDBOX_BACKEND: "nope" } });
+    assert.equal(invalid.status, 400);
+    assert.equal(((await invalid.json()) as { error: string }).error, "invalid_tenant_settings");
+    srv.built.featureFlags.setEnabled = async () => {
+      throw new Error("flag store unavailable");
+    };
+    assert.equal((await srv.put({ tenant: SLUG, env: { LOOPS_USERS: "ada@example.com" } })).status, 500);
   } finally {
     await srv.close();
   }
