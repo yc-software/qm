@@ -17,11 +17,8 @@ const ifTable = (table: string, statement: string) =>
 const newerRun = (extra = "") =>
   `NOT EXISTS (SELECT 1 FROM runs n WHERE n.session_id = r.session_id AND (n.created_at, n.seq) > (r.created_at, r.seq)${extra})`;
 
-export const SURFACE_ORIGIN_MIGRATION = {
-  id: "surfaces/0001-neutral-origin-and-account",
-  statements: [
-    `SET LOCAL lock_timeout = '3s'`,
-    `CREATE FUNCTION pg_temp.qm_surface_account(d jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $f$
+const HELPERS = [
+  `CREATE FUNCTION pg_temp.qm_surface_account(d jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $f$
       SELECT CASE
         WHEN jsonb_typeof(d) IS DISTINCT FROM 'object' OR NOT d ?| ${OLD_DESTINATION_KEYS} THEN d
         ELSE (d - 'slackAccountId' - 'slackTeamId' - 'slackPolicyNamespace') || CASE
@@ -32,7 +29,7 @@ export const SURFACE_ORIGIN_MIGRATION = {
             'policyNamespace', NULLIF(d ->> 'slackPolicyNamespace', ''))))
         END
       END $f$`,
-    `CREATE FUNCTION pg_temp.qm_surface_request(r jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
+  `CREATE FUNCTION pg_temp.qm_surface_request(r jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
       DECLARE
         s jsonb;
         e jsonb;
@@ -64,28 +61,41 @@ export const SURFACE_ORIGIN_MIGRATION = {
         END IF;
         RETURN out;
       END $f$`,
-    `CREATE FUNCTION pg_temp.qm_jsonb_or_null(t text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
+  `CREATE FUNCTION pg_temp.qm_jsonb_or_null(t text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
       BEGIN
         RETURN t::jsonb;
       EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
         RETURN NULL;
       END $f$`,
-    `CREATE FUNCTION pg_temp.qm_surface_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+  `CREATE FUNCTION pg_temp.qm_surface_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
       SELECT COALESCE(pg_temp.qm_surface_request(pg_temp.qm_jsonb_or_null(t))::text, t)
     $f$`,
+];
+const DROPS = [
+  "DROP FUNCTION pg_temp.qm_surface_request_text(text)",
+  "DROP FUNCTION pg_temp.qm_jsonb_or_null(text)",
+  "DROP FUNCTION pg_temp.qm_surface_request(jsonb)",
+  "DROP FUNCTION pg_temp.qm_surface_account(jsonb)",
+];
+
+const migration = (id: string, statements: string[]) => ({
+  id,
+  statements: [`SET LOCAL lock_timeout = '3s'`, ...HELPERS, ...statements, ...DROPS],
+});
+
+export const SURFACE_ORIGIN_MIGRATIONS = [
+  migration("surfaces/0001-neutral-origin-and-account", [
     ifTable(
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
-       WHERE ${oldKeysIn("r.request")}
-         AND (r.status NOT IN ('done', 'failed')
-           OR r.request LIKE '%"externalSlack"%'
-           OR r.finished_at >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint - ${RECENTLY_FINISHED_MS}
-           OR ${newerRun()}
-           OR ${newerRun(` AND COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true'`)})`,
+       WHERE r.status IN ('pending', 'running') AND ${oldKeysIn("r.request")}`,
     ),
     ifTable(
-      "sessions",
-      `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
+      "runs",
+      `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
+       WHERE r.status IN ('done', 'failed')
+         AND r.finished_at >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint - ${RECENTLY_FINISHED_MS}
+         AND ${oldKeysIn("r.request")}`,
     ),
     ifTable(
       "run_signals",
@@ -111,9 +121,21 @@ export const SURFACE_ORIGIN_MIGRATION = {
          WHERE jsonb_typeof(json -> '${field}') = 'object' AND (json -> '${field}') ?| ${OLD_DESTINATION_KEYS}`,
       ),
     ),
-    "DROP FUNCTION pg_temp.qm_surface_request_text(text)",
-    "DROP FUNCTION pg_temp.qm_jsonb_or_null(text)",
-    "DROP FUNCTION pg_temp.qm_surface_request(jsonb)",
-    "DROP FUNCTION pg_temp.qm_surface_account(jsonb)",
-  ],
-};
+  ]),
+  migration("surfaces/0002-neutral-origin-spawn-meta", [
+    ifTable(
+      "sessions",
+      `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
+    ),
+  ]),
+  migration("surfaces/0003-neutral-origin-settled-runs", [
+    ifTable(
+      "runs",
+      `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
+       WHERE ${oldKeysIn("r.request")}
+         AND (r.request LIKE '%"externalSlack"%'
+           OR ${newerRun()}
+           OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})`,
+    ),
+  ]),
+];

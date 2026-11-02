@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SURFACE_ORIGIN_MIGRATION } from "../src/surfaces/origin-migration.ts";
+import { SURFACE_ORIGIN_MIGRATIONS } from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -168,7 +168,9 @@ test("stored Slack origins and destination accounts are rewritten once to the ne
         JSON.stringify({ id: "d1", [field]: { ...oldDestination, slackPolicyNamespace: "ns" } }),
       ]);
 
-    await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SURFACE_ORIGIN_MIGRATION.id]);
+    await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+      SURFACE_ORIGIN_MIGRATIONS.map((m) => m.id),
+    ]);
     await migrate(url);
 
     const { runs, close } = createPostgresRunStore(url);
@@ -227,7 +229,9 @@ test("stored Slack origins and destination accounts are rewritten once to the ne
     const migrated = await snapshot(admin);
     await migrate(url);
     assert.deepEqual(await snapshot(admin), migrated);
-    await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SURFACE_ORIGIN_MIGRATION.id]);
+    await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+      SURFACE_ORIGIN_MIGRATIONS.map((m) => m.id),
+    ]);
     await migrate(url);
     assert.deepEqual(await snapshot(admin), migrated);
   });
