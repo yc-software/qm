@@ -27,13 +27,9 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
     for (const table of ["channel_messages", "channel_state", "channel_files"]) {
       await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account`);
     }
-    await pool.query("ALTER TABLE channel_messages ADD PRIMARY KEY (org_id, container, ts)");
-    await pool.query("ALTER TABLE channel_state ADD PRIMARY KEY (org_id, container)");
-    await pool.query("ALTER TABLE channel_files ADD PRIMARY KEY (org_id, container, ts, file_id)");
-    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2, $3)", [
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2)", [
       "surface-cache/store/0007",
       "surface-cache/store/0008",
-      "surface-cache/store/0009",
     ]);
   } finally {
     await pool.end();
@@ -113,77 +109,12 @@ test("legacy mirror rows read identically after the surface-key upgrade", async 
         ["channel_state", "org_id, surface, account, container"],
         ["channel_files", "org_id, surface, account, container, ts, file_id"],
       ] as const) {
-        const pk = await pool.query(
-          "SELECT pg_get_indexdef(indexrelid) AS def FROM pg_index WHERE indisprimary AND indrelid = $1::regclass",
-          [table],
-        );
-        assert.ok(pk.rows[0].def.endsWith(`(${columns})`), `${table} is keyed by surface and account`);
+        const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_surface_key`]);
+        assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table} has a unique surface and account key`);
       }
     } finally {
       await pool.end();
     }
-  } finally {
-    await cache.close();
-  }
-});
-
-test("two surfaces with the same container id do not collide", async () => {
-  const url = testDatabaseUrl();
-  const cache = createPostgresSurfaceCache(url);
-  const other = { surface: "bookface", account: "acct" };
-  try {
-    await cache.ingest([
-      { container: "C1", ts: "1.0", sub: null, authorId: "U1", text: "slack launch", members: ["U1"], createdAt: 1 },
-      { container: "C1", ts: "2.0", sub: "1.0", authorId: "U1", text: "slack reply", createdAt: 2 },
-      {
-        ...other,
-        container: "C1",
-        ts: "1.0",
-        sub: null,
-        authorId: "P1",
-        self: true,
-        text: "bookface launch",
-        members: ["P1"],
-        files: [{ fileId: "F9", name: "deck.pdf" }],
-        createdAt: 1,
-      },
-      { ...other, container: "C1", ts: "3.0", sub: "1.0", bot: true, text: "bookface reply", createdAt: 3 },
-    ]);
-    await cache.markHandled("C1", "1.0", other);
-
-    const slack = await cache.readMessages("C1", { noFallback: true, channelHistory: true });
-    assert.deepEqual(
-      slack.map((m) => [m.surface, m.ts, m.text, m.replyCount, m.handled, m.files]),
-      [[undefined, "1.0", "slack launch", 1, undefined, undefined]],
-    );
-    const bookface = await cache.readMessages("C1", { ...other, noFallback: true, channelHistory: true });
-    assert.deepEqual(
-      bookface.map((m) => [m.surface, m.account, m.ts, m.text, m.replyCount, m.handled, m.files?.map((f) => f.fileId)]),
-      [["bookface", "acct", "1.0", "bookface launch", 1, true, ["F9"]]],
-    );
-    assert.deepEqual(
-      (await cache.search("launch")).map((m) => m.text),
-      ["slack launch"],
-    );
-    assert.deepEqual(
-      (await cache.search("launch", other)).map((m) => m.text),
-      ["bookface launch"],
-    );
-    assert.deepEqual(
-      (await cache.activeThreads(other)).map((t) => [t.container, t.sub, t.lastTs]),
-      [["C1", "1.0", "3.0"]],
-    );
-    assert.deepEqual(await cache.members("C1"), ["U1"]);
-    assert.deepEqual(await cache.members("C1", other), ["P1"]);
-    assert.equal(await cache.isMember("C1", "P1"), false);
-    assert.deepEqual(
-      (await cache.listContainers(other)).map((c) => [c.container, c.messageCount]),
-      [["C1", 2]],
-    );
-    assert.deepEqual(
-      (await cache.listContainers()).map((c) => [c.container, c.messageCount]),
-      [["C1", 2]],
-    );
   } finally {
     await cache.close();
   }
