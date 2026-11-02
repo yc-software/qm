@@ -9173,6 +9173,10 @@ h3.ambient-field-label {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.inbox-item-snippet.inbox-item-snippet-conflict,
+.inbox-item.expanded .inbox-item-snippet.inbox-item-snippet-conflict {
+  color: var(--destructive, #cf222e);
+}
 .src-gmail .inbox-item-snippet {
   pointer-events: none;
 }
