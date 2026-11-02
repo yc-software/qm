@@ -1,15 +1,20 @@
 # QM Helm chart
 
-This chart runs core, web-ui (including the admin settings at `/settings`), portal
-(including `/idp` auth), and the optional egress proxy. `services.auth` configures
-an embedded module, not a separate Deployment or Service.
+This chart runs core and the optional egress proxy. Core serves its API on
+`services.core.port` (8080) for in-cluster callers such as the egress proxy, and the
+public front door on `services.core.publicPort` (8000): sign-in, the web UI with its
+administrator settings at `/settings`, and the agent-facing API. With `auth.enabled`
+(the default) the built-in email sign-in broker runs inside core under `/idp`; set it
+to `false` to sign in through an external OIDC provider configured with `OIDC_*`
+values.
 
 ## Images
 
-There is deliberately no default image tag. Build all enabled services from the
-same checked-out QM revision that supplies this chart, or independently verify a
-release's images include the combined topology and core `/readyz` endpoint. Old
-standalone auth/admin images are not compatible. The chart version is **not** an
+There is deliberately no default image tag. Build both images from the same
+checked-out QM revision that supplies this chart, or independently verify a
+release's core image serves the public front door on `PUBLIC_PORT` and the
+`/readyz` endpoint. Images from before the front door moved into core are not
+compatible. The chart version is **not** an
 application image version.
 
 For example, from the repository root, with a registry you own and are signed into:
@@ -17,7 +22,7 @@ For example, from the repository root, with a registry you own and are signed in
 ```bash
 export REGISTRY=registry.example.com/your-project/qm
 export TAG=$(git rev-parse HEAD)
-for service in core web-ui portal egress-proxy; do
+for service in core egress-proxy; do
   docker buildx build --platform linux/amd64 --push \
     --build-arg GIT_SHA="$TAG" \
     -f "deploy/$service/Dockerfile" -t "$REGISTRY/$service:$TAG" .
@@ -46,6 +51,8 @@ Bring these before installing:
   configure sandbox provisioning or app hosting automatically.
 - DNS and an ingress controller. For TLS, provision the referenced certificate or
   install cert-manager with the configured ClusterIssuer.
+- `publicUrl`, the public HTTPS origin core's front door derives its sign-in and web
+  URLs from; rendering fails without it.
 - The signing/encryption secrets, portal session secret, first administrator grant,
   sign-in allowlist, auth client/signing configuration and email transport described
   in [the deployment reference](../../docs/porter.md) and
@@ -57,16 +64,15 @@ history. Never commit these values. With `envFrom`, explicitly provide both
 `AUTH_ALLOWED_EMAILS` and `OIDC_ALLOWED_EMAILS` (or both corresponding domain
 variables); Helm cannot inspect externally supplied Secret values. When `envFrom`
 is present, the chart does not derive OIDC allowlist environment entries from
-`env` or `services.auth.env`, since those entries would override a potentially
+`env` or `services.core.env`, since those entries would override a potentially
 narrower policy in an external Secret. Set OIDC explicitly in values or the external
 Secret, including when mixing auth values with `envFrom`. Without `envFrom`, auth
-allowlists in `env` or `services.auth.env` propagate unless explicit OIDC values
-in `env` or `secretEnv` override them. Auth allowlists in `secretEnv` are aliased
+allowlists in `env` or `services.core.env` propagate unless explicit OIDC values
+in `env`, `services.core.env` or `secretEnv` override them. Auth allowlists in `secretEnv` are aliased
 inside the chart-managed Secret; later `envFrom` sources retain their precedence.
 
-Only portal should normally have public ingress. `ingress.service` accepts an
-enabled `portal`, `core` or `web-ui`, not embedded modules or the TCP egress proxy.
-Exposing core or web-ui is an operator choice, not required for the portal setup.
+The ingress routes every host to core's public front door port. Core's API port and
+the egress proxy stay cluster-internal.
 
 A minimal **Kubernetes configuration fragment**, not a complete installation:
 
@@ -79,7 +85,6 @@ envFrom:
       name: qm-runtime
 ingress:
   enabled: true
-  service: portal
   hosts: [qm.example.com]
   className: nginx
   clusterIssuer: letsencrypt-prod
@@ -157,8 +162,10 @@ never created or deleted by this chart. Delete retained data manually only when
 you intend to discard it. A null `storageClass` selects the cluster default; `""`
 requests no storage class. Existing-claim size and class are managed externally.
 
-`services.<name>.port` controls the process, Service and probes; conflicting
-`PORT` values are rejected. The egress-proxy image's Envoy listener is fixed at
+`services.<name>.port` controls the process, Service and probes, and
+`services.core.publicPort` controls core's front door listener and its Service port;
+conflicting `PORT` or `PUBLIC_PORT` values are rejected, as is a front door port equal
+to the API port. The egress-proxy image's Envoy listener is fixed at
 48080, so other proxy ports are rejected rather than rendered as broken Services.
 
 Core liveness uses `healthPath: /healthz`; readiness uses
