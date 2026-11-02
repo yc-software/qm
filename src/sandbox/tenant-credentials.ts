@@ -6,7 +6,6 @@ import {
 } from "../tenants/settings.ts";
 import { currentTenant } from "../tenants/context.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import { legacySandboxBackendForScope, type LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { E2bClient } from "./e2b-client.ts";
 import type { ManagedAgentsClient } from "./managed-agents-client.ts";
 import { modalSandboxLifetimeMs, type ModalClient } from "./modal-client.ts";
@@ -51,7 +50,6 @@ export function misconfiguredSandboxError(backend: string, reason: string): Erro
 export function tenantSandboxRouting(
   settings: () => Promise<TenantSettings>,
   backends: Partial<Record<SandboxBackendName, { profile: { egressEnforcement?: string } }>>,
-  legacyScopeDefaults?: LegacySandboxScopeDefaults,
   misconfigured: MisconfiguredSandboxBackends = {},
 ) {
   const constructed = [...Object.keys(backends), ...Object.keys(misconfigured)] as SandboxBackendName[];
@@ -70,14 +68,6 @@ export function tenantSandboxRouting(
         );
       }
       return backend;
-    },
-    legacy: async () => {
-      const current = await settings();
-      const fallback = () => tenantDefaultSandboxBackend(current, constructed);
-      return {
-        available: tenantSandboxBackends(current, constructed),
-        legacyBackend: (scope: string) => legacySandboxBackendForScope(scope, fallback, legacyScopeDefaults),
-      };
     },
   };
 }

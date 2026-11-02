@@ -1,10 +1,6 @@
-import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
-import { parseSandboxBackend } from "../tenants/settings-parse.ts";
-import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 
 export interface SandboxSettings {
-  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
@@ -122,7 +118,6 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
 }
 
 interface E2bSandboxEnv {
-  deployApiKey?: string;
   templateId?: string;
   namePrefix?: string;
   sandboxTtlSec?: number;
@@ -139,7 +134,6 @@ interface E2bSandboxEnv {
 
 function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
   return {
-    ...(env.DEPLOY_PROVIDER === "e2b" && env.E2B_API_KEY ? { deployApiKey: env.E2B_API_KEY } : {}),
     ...(env.E2B_TEMPLATE_ID ? { templateId: env.E2B_TEMPLATE_ID } : {}),
     ...(env.E2B_NAME_PREFIX ? { namePrefix: env.E2B_NAME_PREFIX } : {}),
     ...optNum(env, "E2B_SANDBOX_TTL_SEC", "sandboxTtlSec"),
@@ -371,20 +365,7 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
 }
 
 export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
-  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
-  if (env.SANDBOX_SCOPE_BACKENDS) {
-    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
-    if (!values || typeof values !== "object" || Array.isArray(values))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
-    for (const [kind, value] of Object.entries(values)) {
-      const parsed = parseScopeId(kind + ":scope").kind;
-      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
-        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      legacySandboxScopeDefaults[parsed] = parseSandboxBackend("SANDBOX_SCOPE_BACKENDS." + kind, value);
-    }
-  }
   return {
-    legacySandboxScopeDefaults,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),

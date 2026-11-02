@@ -1,31 +1,9 @@
 import assert from "node:assert/strict";
-import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { settingsDatabase, testSettingsStore, TEST_SETTINGS_KEY, THIRD_TENANT } from "./support/tenant-settings.ts";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
-import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
-import {
-  openTenantSecret,
-  requireTenantSetting,
-  sealTenantSecret,
-  tenantSettingsKey,
-  TenantSettingMissingError,
-} from "../src/tenants/settings.ts";
-
-test("each tenant reads only the settings written under its own binding", async () => {
-  const store = await testSettingsStore();
-  const a = TEST_TENANT;
-  const b = OTHER_TENANT;
-  await withTenant(a, () => store.update({ SPRITES_TOKEN: "token-a", SANDBOX_BACKEND: "sprites" }));
-  await withTenant(b, () => store.update({ E2B_API_KEY: "key-b", SANDBOX_BACKEND: "e2b" }));
-  const seenByA = await withTenant(a, () => store.get());
-  const seenByB = await withTenant(b, () => store.get());
-  assert.equal(seenByA.values.SPRITES_TOKEN, "token-a");
-  assert.equal(seenByA.values.E2B_API_KEY, undefined);
-  assert.equal(seenByA.sandboxBackend, "sprites");
-  assert.equal(seenByB.values.SPRITES_TOKEN, undefined);
-  assert.equal(seenByB.sandboxBackend, "e2b");
-});
+import { setTimeout as sleep } from "node:timers/promises";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
+import { createTenantSettingsStore, requireTenantSetting, TenantSettingMissingError } from "../src/tenants/settings.ts";
 
 test("reading settings with no tenant bound fails closed", async () => {
   const store = await testSettingsStore();
@@ -62,27 +40,21 @@ test("updates are validated against the merged settings and empty values clear",
   });
 });
 
-test("a sealed secret opens only for the tenant and setting it was sealed for", () => {
-  const key = tenantSettingsKey("k".repeat(32));
-  const tenant = randomUUID();
-  const sealed = sealTenantSecret(key, tenant, "SPRITES_TOKEN", "secret");
-  assert.equal(openTenantSecret(key, tenant, "SPRITES_TOKEN", sealed), "secret");
-  assert.throws(() => openTenantSecret(key, randomUUID(), "SPRITES_TOKEN", sealed));
-  assert.throws(() => openTenantSecret(key, tenant, "E2B_API_KEY", sealed));
-  assert.throws(() => openTenantSecret(tenantSettingsKey("x".repeat(32)), tenant, "SPRITES_TOKEN", sealed));
-});
-
-test("a tenant first bound after start has its settings loaded before its work runs", async () => {
-  const tenant = THIRD_TENANT;
-  const store = await testSettingsStore({ [tenant]: { PI_MODEL: "claude-opus-5-5" } });
-  store.start();
+test("a change saved by one process reaches another process's cached settings", async () => {
+  const { url, ready } = settingsDatabase();
+  await ready;
+  const writer = createTenantSettingsStore({ databaseUrl: url, keyMaterial: TEST_SETTINGS_KEY });
+  const reader = createTenantSettingsStore({ databaseUrl: url, keyMaterial: TEST_SETTINGS_KEY });
+  await withTenant(THIRD_TENANT, () => writer.update({ PI_MODEL: "model-a" }));
+  reader.start();
   try {
-    const model = await withTenant(tenant, async () => {
-      await tenantReady();
-      return store.peek().piModel;
+    await withTenant(THIRD_TENANT, async () => {
+      assert.equal((await reader.get()).piModel, "model-a");
+      await writer.update({ PI_MODEL: "model-b" });
+      for (let i = 0; i < 100 && (await reader.get()).piModel !== "model-b"; i++) await sleep(50);
+      assert.equal((await reader.get()).piModel, "model-b");
     });
-    assert.equal(model, "claude-opus-5-5");
   } finally {
-    await store.stop();
+    await reader.stop();
   }
 });

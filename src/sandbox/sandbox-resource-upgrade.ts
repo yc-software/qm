@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { parseScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { AgentComputerSpec } from "./sandbox.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
@@ -16,19 +16,8 @@ export interface LegacySandboxBinding {
   machineId?: string;
 }
 
-export type LegacySandboxScopeDefaults = Partial<Record<ScopeKind, SandboxBackendName>>;
-
 export interface LegacyRoute {
   backend: SandboxBackendName;
-}
-
-export function legacySandboxBackendForScope(
-  scope: string,
-  fallback: () => SandboxBackendName,
-  defaults?: LegacySandboxScopeDefaults,
-): SandboxBackendName {
-  const kind = parseScopeId(scope).kind;
-  return (kind && defaults?.[kind]) || fallback();
 }
 
 export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): string =>
@@ -44,7 +33,7 @@ export async function upgradeLegacySandboxes(opts: {
   legacySandboxes?: () => Promise<LegacySandboxBinding[]>;
   backends: () => Promise<{
     available: readonly SandboxBackendName[];
-    legacyBackend: (scopeId: string) => SandboxBackendName;
+    defaultBackend: () => Promise<SandboxBackendName>;
   }>;
   specFor?: (backend: SandboxBackendName) => AgentComputerSpec | undefined;
 }): Promise<void> {
@@ -52,7 +41,7 @@ export async function upgradeLegacySandboxes(opts: {
   if (await done()) return;
   await opts.lock.withLock("sandbox-resources:activation", async () => {
     if (await done()) return;
-    const [{ available, legacyBackend }, existing, defaults, routes, knownScopes, bindings] = await Promise.all([
+    const [{ available, defaultBackend }, existing, defaults, routes, knownScopes, bindings] = await Promise.all([
       opts.backends(),
       opts.records.all(),
       opts.defaults.entries(),
@@ -63,7 +52,6 @@ export async function upgradeLegacySandboxes(opts: {
     const managed = new Set(existing.filter((record) => !record.legacy).map((record) => record.backingScopeId));
     const valid = (scope: string): boolean => !!parseScopeId(scope).kind && !managed.has(scope);
     const routed = new Map(routes);
-    const backendFor = (scope: string): SandboxBackendName => routed.get(scope)?.backend ?? legacyBackend(scope);
     const scopes = new Set(
       [
         ...knownScopes,
@@ -72,6 +60,10 @@ export async function upgradeLegacySandboxes(opts: {
         ...existing.map((record) => record.ownerScopeId),
       ].filter(valid),
     );
+    let fallback: SandboxBackendName | undefined;
+    const chosen = new Map<string, SandboxBackendName>();
+    for (const scope of scopes) chosen.set(scope, routed.get(scope)?.backend ?? (fallback ??= await defaultBackend()));
+    const backendFor = (scope: string): SandboxBackendName => chosen.get(scope)!;
     const selected = new Map(defaults);
     const retired = new Set(existing.filter((record) => record.state === "retired").map((record) => record.id));
     for (const scope of scopes) {

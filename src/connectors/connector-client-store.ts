@@ -67,15 +67,16 @@ export function deriveConnectorKey(material: Buffer | string, purpose = "connect
   return { current, legacy };
 }
 
-export function encryptSecret(plain: string, key: SecretKey): string {
+export function encryptSecret(plain: string, key: SecretKey, associatedData?: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key.current, iv);
+  if (associatedData !== undefined) cipher.setAAD(Buffer.from(associatedData, "utf8"));
   const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `v2:${iv.toString("base64")}:${tag.toString("base64")}:${ct.toString("base64")}`;
 }
 
-export function decryptSecret(enc: string, key: SecretKey): string {
+export function decryptSecret(enc: string, key: SecretKey, associatedData?: string): string {
   const parts = enc.split(":");
   const v2 = parts[0] === "v2";
   const [ivB, tagB, ctB] = v2 ? parts.slice(1) : parts;
@@ -84,6 +85,7 @@ export function decryptSecret(enc: string, key: SecretKey): string {
   }
   const attempt = (k: SecretKey): string => {
     const decipher = createDecipheriv("aes-256-gcm", v2 ? k.current : k.legacy, Buffer.from(ivB, "base64"));
+    if (associatedData !== undefined) decipher.setAAD(Buffer.from(associatedData, "utf8"));
     decipher.setAuthTag(Buffer.from(tagB, "base64"));
     return Buffer.concat([decipher.update(Buffer.from(ctB, "base64")), decipher.final()]).toString("utf8");
   };

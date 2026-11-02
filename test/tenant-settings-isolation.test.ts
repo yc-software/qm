@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { test, type TestContext } from "node:test";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
-import { requireTenantSetting, TenantSettingMissingError, type TenantSettingValues } from "../src/tenants/settings.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { configuredModelFor } from "../src/model/tenant-models.ts";
 import type { BuiltApp } from "../src/wiring.ts";
@@ -151,18 +151,6 @@ test("a tenant without gateway settings or keys never borrows another tenant's g
   assert.deepEqual(await withTenant(TENANT_C, () => built.resolveBrowserCompanyKeys()), {});
   assert.equal(await withTenant(TENANT_C, () => agent.oneShot!("Reply briefly", "hello from c")), undefined);
   assert.deepEqual(gateway.seen, []);
-});
-
-test("a missing tenant setting fails closed with the setting's name", async () => {
-  const tenantSettings = testTenantSettings({});
-  const built = buildApp(testConfig(), { tenantSettings });
-  const settings = await withTenant(TENANT_C, () => built.tenantSettings.get());
-  assert.throws(
-    () => requireTenantSetting(settings, "MODEL_GATEWAY_API_KEY"),
-    (error: unknown) =>
-      error instanceof TenantSettingMissingError &&
-      error.message === "MODEL_GATEWAY_API_KEY is not set in this tenant's settings",
-  );
 });
 
 test("tenant-owned settings and model routes refuse to resolve with no tenant bound", async (t) => {

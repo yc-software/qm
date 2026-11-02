@@ -160,7 +160,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbStringify } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
@@ -1883,7 +1883,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             providerProfiles.map((profile) => profile.name),
             await turnSandboxResources
               .defaultBackend()
-              .catch(swallowAs("orchestrator: default sandbox backend", undefined)),
+              .catch(reportFailureAs("orchestrator: default sandbox backend", undefined)),
             true,
             providerProfiles.filter((profile) => profile.egressEnforcement === "domain").map((profile) => profile.name),
           )

@@ -578,7 +578,7 @@ export function buildApp(
   const tenantSettings =
     overrides.tenantSettings ??
     createTenantSettingsStore({
-      db: pgArtifactMap.pool,
+      databaseUrl,
       keyMaterial: connectorSecretKey,
       onLoad: (tenant, settings) => {
         setProviderBaseUrls(tenant, settings.providerBaseUrls);
@@ -986,16 +986,14 @@ export function buildApp(
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
   const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
-  const buildSuperserve = (): Sandbox => {
+  const buildSuperserve = (template: string): Sandbox => {
     const ss = config.superserveSandbox;
-    if (!ss.template)
-      throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
     const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
     const generationKey = createHash("sha256")
       .update(
         JSON.stringify([
           config.buildSha ?? "",
-          ss.template,
+          template,
           ss.namePrefix ?? "",
           ss.homeDir ?? "",
           ss.idlePauseSec ?? null,
@@ -1013,11 +1011,11 @@ export function buildApp(
         createSdkSuperserveClient({
           apiKey,
           ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-          ...(ss.template ? { template: ss.template } : {}),
+          template,
         }),
       ),
       ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
-      template: ss.template,
+      template,
       ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
       ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
       keepWarmSec,
@@ -1085,6 +1083,7 @@ export function buildApp(
     });
   };
   const renderProblem = renderSandboxProblem(config.workspaceStore, config.renderSandbox.defaultTimeoutSec);
+  const superserveTemplate = config.superserveSandbox.template;
   const buildBackend: Partial<Record<SandboxBackendName, () => Sandbox>> = {
     ...(config.localSandbox.image ? { local: buildLocal } : {}),
     sprites: buildSprites,
@@ -1095,19 +1094,19 @@ export function buildApp(
     ...(config.porterSandbox.token ? { porter: buildPorter } : {}),
     agent37: buildAgent37,
     ...(renderProblem ? {} : { render: buildRender }),
-    ...(config.superserveSandbox.template ? { superserve: buildSuperserve } : {}),
+    ...(superserveTemplate ? { superserve: () => buildSuperserve(superserveTemplate) } : {}),
     "do-managed-agents": buildManagedAgents,
   };
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = Object.fromEntries(
     Object.entries(buildBackend).map(([name, build]) => [name, build()]),
   );
-  const misconfiguredSandboxes = renderProblem ? { render: renderProblem } : {};
-  const tenantRouting = tenantSandboxRouting(
-    () => tenantSettings.get(),
-    sandboxBackends,
-    config.legacySandboxScopeDefaults,
-    misconfiguredSandboxes,
-  );
+  const misconfiguredSandboxes = {
+    ...(renderProblem ? { render: renderProblem } : {}),
+    ...(superserveTemplate
+      ? {}
+      : { superserve: "superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)" }),
+  };
+  const tenantRouting = tenantSandboxRouting(() => tenantSettings.get(), sandboxBackends, misconfiguredSandboxes);
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
@@ -1115,7 +1114,10 @@ export function buildApp(
     defaults: sandboxDefaults,
     upgrade: () =>
       upgradeLegacySandboxes({
-        backends: tenantRouting.legacy,
+        backends: async () => ({
+          available: await tenantRouting.usable(),
+          defaultBackend: tenantRouting.defaultBackend,
+        }),
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
@@ -1659,9 +1661,8 @@ export function buildApp(
       }),
     e2b: () => {
       const e2b = config.e2bSandbox;
-      if (!e2b.deployApiKey) throw new Error("DEPLOY_PROVIDER=e2b requires E2B_API_KEY");
       return createE2bDeployProvider({
-        client: e2bClient("apps", e2b.deployApiKey),
+        client: tenantClients.e2b((apiKey) => e2bClient("apps", apiKey)),
         ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
         advisoryLock,
         store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),

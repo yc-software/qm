@@ -165,7 +165,6 @@ test("a misconfigured backend stays listed but fails loudly when a tenant select
   const routing = tenantSandboxRouting(
     () => store.get(),
     { sprites: { profile: { egressEnforcement: "domain" } } },
-    undefined,
     { render: "render requires WORKSPACE_STORE=postgres" },
   );
   await withTenant(tenant, async () => {

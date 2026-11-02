@@ -56,7 +56,7 @@ export async function testSettingsStore(
 ): Promise<TenantSettingsStore> {
   const { url, ready } = settingsDatabase();
   await ready;
-  const seed = createTenantSettingsStore({ db: createPgPool(url), keyMaterial: TEST_SETTINGS_KEY });
+  const seed = createTenantSettingsStore({ databaseUrl: url, keyMaterial: TEST_SETTINGS_KEY });
   for (const [tenant, values] of Object.entries(initial)) await withTenant(tenant, () => seed.update(values));
-  return createTenantSettingsStore({ db: createPgPool(url), keyMaterial: TEST_SETTINGS_KEY, ...opts });
+  return createTenantSettingsStore({ databaseUrl: url, keyMaterial: TEST_SETTINGS_KEY, ...opts });
 }

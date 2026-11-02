@@ -1,11 +1,10 @@
-import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
+import { personIds, personKey } from "../directory/person.ts";
+import { foldPrincipalId, scopeId, type Conversation, type Principal, type ScopeId } from "../types.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SharingPosture } from "../resolution/sharing-posture.ts";
-import type { Conversation, Principal, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
 
 interface Team {
   id: string;

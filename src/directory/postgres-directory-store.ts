@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { currentTenant } from "../tenants/context.ts";
-import type { PrincipalType } from "../types.ts";
-import { foldPrincipalId, rosterIds } from "./person.ts";
+import { rosterIds } from "./person.ts";
+import { foldPrincipalId, type PrincipalType } from "../types.ts";
 import {
   MAX_CANDIDATES,
   groupParticipantsKey,

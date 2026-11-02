@@ -12,7 +12,13 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant sett
 const KEY = "connector-key-".padEnd(48, "x");
 
 async function withSettingsDb(
-  fn: (ctx: { app: ReturnType<typeof createPgPool>; admin: pg.Pool; a: string; b: string }) => Promise<void>,
+  fn: (ctx: {
+    app: ReturnType<typeof createPgPool>;
+    appUrl: string;
+    admin: pg.Pool;
+    a: string;
+    b: string;
+  }) => Promise<void>,
 ): Promise<void> {
   const schema = `tenant_settings_${randomUUID().replaceAll("-", "")}`;
   const schemaUrl = new globalThis.URL(URL!);
@@ -34,7 +40,7 @@ async function withSettingsDb(
     appUrl.password = "app";
     const app = createPgPool(appUrl.toString());
     try {
-      await fn({ app, admin, a, b });
+      await fn({ app, appUrl: appUrl.toString(), admin, a, b });
     } finally {
       await app.close();
     }
@@ -46,8 +52,8 @@ async function withSettingsDb(
 }
 
 test("tenant settings are stored per tenant, sealed at rest, and never read across tenants", { skip }, async () => {
-  await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
+  await withSettingsDb(async ({ app, appUrl, admin, a, b }) => {
+    const store = createTenantSettingsStore({ databaseUrl: appUrl, keyMaterial: KEY });
     await withTenant(a, () =>
       store.update({ SPRITES_TOKEN: "sprites-a", SANDBOX_BACKEND: "sprites", PI_MODEL: "m-a" }),
     );
@@ -63,9 +69,9 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
       { token: undefined, e2b: "e2b-b", backend: "e2b" },
     );
     const raw = await admin.query(`SELECT tenant_id::text AS tenant, sprites_token FROM tenant_settings ORDER BY 1`);
-    const sealed = raw.rows.find((row) => row.tenant === a)!.sprites_token as Buffer;
-    assert.ok(Buffer.isBuffer(sealed));
-    assert.equal(sealed.includes(Buffer.from("sprites-a")), false);
+    const sealed = raw.rows.find((row) => row.tenant === a)!.sprites_token as string;
+    assert.equal(typeof sealed, "string");
+    assert.equal(sealed.includes("sprites-a"), false);
     assert.equal((await withTenant(b, () => app.q(`SELECT tenant_id FROM tenant_settings`))).length, 1);
     await withoutTenant(() =>
       assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/),
@@ -79,8 +85,8 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
 });
 
 test("a sealed secret copied into another tenant's row does not open there", { skip }, async () => {
-  await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
+  await withSettingsDb(async ({ appUrl, admin, a, b }) => {
+    const store = createTenantSettingsStore({ databaseUrl: appUrl, keyMaterial: KEY });
     await withTenant(a, () => store.update({ SPRITES_TOKEN: "sprites-a" }));
     await withTenant(b, () => store.update({ PI_MODEL: "m-b" }));
     await admin.query(
@@ -88,7 +94,7 @@ test("a sealed secret copied into another tenant's row does not open there", { s
         WHERE tenant_id = $2`,
       [a, b],
     );
-    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY });
+    const reader = createTenantSettingsStore({ databaseUrl: appUrl, keyMaterial: KEY });
     await assert.rejects(
       withTenant(b, () => reader.get()),
       /Unsupported state or unable to authenticate data/,

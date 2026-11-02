@@ -55,7 +55,7 @@ const SANDBOX_BACKEND_NAMES = [
   "render",
 ] as const satisfies readonly SandboxBackendName[];
 
-export function parseSandboxBackend(name: string, value: string): SandboxBackendName {
+function parseSandboxBackend(name: string, value: string): SandboxBackendName {
   const backend = value.trim();
   if ((SANDBOX_BACKEND_NAMES as readonly string[]).includes(backend)) return backend as SandboxBackendName;
   throw new Error(
@@ -209,6 +209,6 @@ export function parseTenantSettings(values: TenantSettingValues): TenantSettings
     emailAuthPrincipals: emailList(values.AUTH_ALLOWED_EMAILS),
     ...optional("emailAuthDomain", domain),
     ...optional("trustedOidcAdminIssuer", values.TRUSTED_OIDC_ADMIN_ISSUER?.trim()),
-    ...optional("suggestedActivitiesContext", values.SUGGESTED_ACTIVITIES_CONTEXT?.slice(0, 8000)),
+    ...optional("suggestedActivitiesContext", values.SUGGESTED_ACTIVITIES_CONTEXT),
   };
 }

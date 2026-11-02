@@ -1,4 +1,4 @@
-import { createPgPool, pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
@@ -347,7 +347,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!loaded.databaseUrl || !loaded.connectorSecretKey)
     throw new Error("postdeploy smoke needs DATABASE_URL and CONNECTOR_SECRET_KEY to read the tenant's settings");
   const settings = createTenantSettingsStore({
-    db: createPgPool(loaded.databaseUrl),
+    databaseUrl: loaded.databaseUrl,
     keyMaterial: loaded.connectorSecretKey,
   });
   const tenant = await settings.onlyTenant();

@@ -3,7 +3,7 @@ import { boundTenant } from "../tenants/context.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type ModelRuntimeAuthOverrides } from "@earendil-works/pi-coding-agent";
 import {
   calculateCost,
   InMemoryCredentialStore,
@@ -111,8 +111,6 @@ function customModelsPath(): string | null {
   return path;
 }
 
-const TENANT_AUTH_SOURCES = new Set(["stored credential", "OAuth"]);
-
 export async function buildModelRuntime(
   keys: ProviderKeys | string,
   modelGateway?: ModelGatewayTransportConfig,
@@ -131,33 +129,29 @@ export async function buildModelRuntime(
     }));
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
-  const authorized = new Set<string>(subscriptionToken ? [CODEX_SUBSCRIPTION_PROVIDER] : []);
+  const stored = new Set<string>(subscriptionToken ? [CODEX_SUBSCRIPTION_PROVIDER] : []);
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
     if (!apiKey) continue;
-    authorized.add(provider);
+    stored.add(provider);
     await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
-  for (const id of Object.keys(modelGateway?.models ?? {})) {
-    const model = resolveModel(id);
-    if (model) authorized.add(model.provider);
-  }
-  runtime.hasConfiguredAuth = (provider) => authorized.has(provider);
-  const getAuth = runtime.getAuth.bind(runtime) as (
-    model: string | Model<Api>,
-    overrides?: object,
-  ) => Promise<{ source?: string } | undefined>;
-  runtime.getAuth = (async (model: string | Model<Api>, overrides?: object) => {
-    if (typeof model !== "string") {
-      const request = modelGatewayRequest(modelGateway, model);
-      if (request)
-        return {
-          auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
-          source: "model gateway",
-        };
-    }
-    if (!authorized.has(typeof model === "string" ? model : model.provider)) return undefined;
-    const resolution = await getAuth(model, overrides);
-    return resolution && TENANT_AUTH_SOURCES.has(resolution.source ?? "") ? resolution : undefined;
+  const gatewayProviders = new Set(
+    Object.keys(modelGateway?.models ?? {}).flatMap((id) => {
+      const model = resolveModel(id);
+      return model ? [model.provider] : [];
+    }),
+  );
+  runtime.hasConfiguredAuth = (provider) => stored.has(provider) || gatewayProviders.has(provider);
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (model: string | Model<Api>, overrides?: ModelRuntimeAuthOverrides) => {
+    if (typeof model === "string") return stored.has(model) ? getAuth(model, overrides) : undefined;
+    const request = modelGatewayRequest(modelGateway, model);
+    if (request)
+      return {
+        auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
+        source: "model gateway",
+      };
+    return stored.has(model.provider) ? getAuth(model, overrides) : undefined;
   }) as typeof runtime.getAuth;
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;

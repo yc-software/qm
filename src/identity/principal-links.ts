@@ -1,7 +1,8 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
+import type { PrincipalLinkResolver } from "../directory/person.ts";
+import { foldPrincipalId } from "../types.ts";
 
 export interface PrincipalLink {
   principalId: string;

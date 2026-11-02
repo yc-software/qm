@@ -1,8 +1,8 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
-import type { PgPool } from "../persistence/pg-pool.ts";
-import { createSweeper } from "../util/sweeper.ts";
-import { currentTenant, onFirstBind, withTenant } from "./context.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
+import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { currentTenant, withTenant } from "./context.ts";
+import { reportFailure } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
 import { TENANCY_BASE, TENANT, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
 
@@ -59,23 +59,13 @@ export const TENANT_SETTING_KEYS = [
   "PORTAL_EXPECTED_TEAM_ID",
 ] as const;
 
-export const PLUGIN_SETTING_KEYS: readonly TenantSettingKey[] = [
-  "OIDC_ISSUER",
-  "OIDC_AUTH_ENDPOINT",
-  "OIDC_TOKEN_ENDPOINT",
-  "OIDC_USERINFO_ENDPOINT",
-  "OIDC_JWKS_URI",
-  "OIDC_CLIENT_ID",
-  "OIDC_CLIENT_SECRET",
-  "OIDC_SCOPES",
-  "OIDC_PROMPT",
-  "OIDC_PRINCIPAL_CLAIM",
-  "OIDC_ALLOWED_EMAIL_DOMAIN",
-  "OIDC_ALLOWED_EMAILS",
-  "PORTAL_EXPECTED_TEAM_ID",
-];
+export const PLUGIN_SETTING_KEYS: readonly TenantSettingKey[] = TENANT_SETTING_KEYS.filter(
+  (key) => key.startsWith("OIDC_") || key === "PORTAL_EXPECTED_TEAM_ID",
+);
 
 export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
+
+const CHANNEL = "qm_tenant_settings";
 export type TenantSettingValues = Partial<Record<TenantSettingKey, string>>;
 type TenantSettingChanges = Partial<Record<TenantSettingKey, string | null>>;
 
@@ -118,35 +108,8 @@ export function requireTenantSetting(settings: TenantSettings, key: TenantSettin
   return value;
 }
 
-const SEAL_VERSION = 1;
-const IV_BYTES = 12;
-const TAG_BYTES = 16;
-
-export function tenantSettingsKey(material: string | Buffer): Buffer {
-  return Buffer.from(hkdfSync("sha256", material, "qm.tenant-settings", "tenant-settings.v1", 32));
-}
-
-function associatedData(tenant: string, key: TenantSettingKey): Buffer {
-  return Buffer.from(`tenant_settings:${tenant}:${key}`, "utf8");
-}
-
-export function sealTenantSecret(sealKey: Buffer, tenant: string, key: TenantSettingKey, plain: string): Buffer {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", sealKey, iv);
-  cipher.setAAD(associatedData(tenant, key));
-  const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  return Buffer.concat([Buffer.from([SEAL_VERSION]), iv, cipher.getAuthTag(), body]);
-}
-
-export function openTenantSecret(sealKey: Buffer, tenant: string, key: TenantSettingKey, sealed: Buffer): string {
-  if (sealed.length < 1 + IV_BYTES + TAG_BYTES || sealed[0] !== SEAL_VERSION)
-    throw new Error(`${key} in this tenant's settings is not a sealed value`);
-  const iv = sealed.subarray(1, 1 + IV_BYTES);
-  const tag = sealed.subarray(1 + IV_BYTES, 1 + IV_BYTES + TAG_BYTES);
-  const decipher = createDecipheriv("aes-256-gcm", sealKey, iv);
-  decipher.setAAD(associatedData(tenant, key));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(sealed.subarray(1 + IV_BYTES + TAG_BYTES)), decipher.final()]).toString("utf8");
+function associatedData(tenant: string, key: TenantSettingKey): string {
+  return `tenant_settings:${tenant}:${key}`;
 }
 
 interface TenantSettingsBacking {
@@ -157,9 +120,7 @@ interface TenantSettingsBacking {
 }
 
 function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
-  db.registerMigration(TENANCY_BASE);
-  db.registerMigration(TENANT_SETTINGS_MIGRATION);
-  const sealKey = tenantSettingsKey(keyMaterial);
+  const sealKey = deriveConnectorKey(keyMaterial, "tenant-settings");
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
     tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
@@ -174,7 +135,9 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
       for (const key of TENANT_SETTING_KEYS) {
         const raw = row[tenantSettingColumn(key)];
         if (raw === null || raw === undefined) continue;
-        values[key] = TENANT_SECRET_KEYS.has(key) ? openTenantSecret(sealKey, tenant, key, raw as Buffer) : String(raw);
+        values[key] = TENANT_SECRET_KEYS.has(key)
+          ? decryptSecret(String(raw), sealKey, associatedData(tenant, key))
+          : String(raw);
       }
       return values;
     },
@@ -184,12 +147,15 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
       const params = keys.map((key) => {
         const value = changes[key];
         if (value === null || value === undefined) return null;
-        return TENANT_SECRET_KEYS.has(key) ? sealTenantSecret(sealKey, tenant, key, value) : value;
+        return TENANT_SECRET_KEYS.has(key) ? encryptSecret(value, sealKey, associatedData(tenant, key)) : value;
       });
       const names = keys.map(tenantSettingColumn);
       await db.q(
-        `INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (${TENANT}, ${names.map((_, i) => `$${i + 1}`).join(", ")})
-         ON CONFLICT (tenant_id) DO UPDATE SET ${names.map((name) => `${name} = EXCLUDED.${name}`).join(", ")}, updated_at = now()`,
+        `WITH saved AS (
+           INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (${TENANT}, ${names.map((_, i) => `$${i + 1}`).join(", ")})
+           ON CONFLICT (tenant_id) DO UPDATE SET ${names.map((name) => `${name} = EXCLUDED.${name}`).join(", ")}, updated_at = now()
+           RETURNING tenant_id
+         ) SELECT pg_notify('${CHANNEL}', tenant_id::text) FROM saved`,
         params,
       );
     },
@@ -219,10 +185,8 @@ export interface TenantSettingsStore {
 }
 
 export interface TenantSettingsStoreOptions {
-  db: PgPool;
+  databaseUrl: string;
   keyMaterial: string | Buffer;
-  cacheMs?: number;
-  now?: () => number;
   onLoad?: (tenant: string, settings: TenantSettings) => void;
 }
 
@@ -234,47 +198,56 @@ export class TenantSettingsNotLoadedError extends Error {
 }
 
 export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): TenantSettingsStore {
-  const backing = postgresBacking(opts.db, opts.keyMaterial);
-  const cacheMs = opts.cacheMs ?? 10_000;
-  const now = opts.now ?? Date.now;
-  const loading = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
+  const db = createPgPool(opts.databaseUrl);
+  db.registerMigration(TENANCY_BASE);
+  db.registerMigration(TENANT_SETTINGS_MIGRATION);
+  const backing = postgresBacking(db, opts.keyMaterial);
+  const latest = new Map<string, Promise<TenantSettings>>();
   const loaded = new Map<string, TenantSettings>();
+  let stopListening: (() => Promise<void>) | undefined;
 
-  function load(tenant: string, fresh = false): Promise<TenantSettings> {
-    const hit = loading.get(tenant);
-    if (hit && now() - hit.at < cacheMs) return hit.settings;
-    const settings = withTenant(tenant, () => backing.read(tenant).then((values) => parseTenantSettings(values)));
-    const entry = { at: now(), settings };
-    loading.set(tenant, entry);
-    const stale = fresh ? undefined : loaded.get(tenant);
-    settings.then(
+  function read(tenant: string): Promise<TenantSettings> {
+    const pending = withTenant(tenant, () => backing.read(tenant).then((values) => parseTenantSettings(values)));
+    latest.set(tenant, pending);
+    pending.then(
       (value) => {
-        if (loading.get(tenant) !== entry) return;
+        if (latest.get(tenant) !== pending) return;
         loaded.set(tenant, value);
         withTenant(tenant, () => opts.onLoad?.(tenant, value));
       },
       (error: unknown) => {
-        if (loading.get(tenant) !== entry) return;
-        if (!stale) return void loading.delete(tenant);
-        loading.set(tenant, { at: entry.at, settings: Promise.resolve(stale) });
-        reportFailureAs("tenant settings: refresh", undefined)(error);
+        if (latest.get(tenant) === pending && !loaded.has(tenant)) latest.delete(tenant);
+        reportFailure(`tenant settings: load ${tenant}`, error);
       },
     );
-    return stale ? Promise.resolve(stale) : settings;
+    return pending;
   }
 
-  let stopPreload: (() => void) | undefined;
-  const refresher = createSweeper(() => store.refreshAll(), 60_000, { label: "tenant settings refresh" });
+  function reload(tenant: string): void {
+    if (latest.has(tenant)) void read(tenant);
+  }
+
   const store: TenantSettingsStore = {
-    get: () => load(currentTenant()),
+    async get() {
+      const tenant = currentTenant();
+      return loaded.get(tenant) ?? latest.get(tenant) ?? read(tenant);
+    },
+    peek() {
+      const tenant = currentTenant();
+      const settings = loaded.get(tenant);
+      if (settings) return settings;
+      if (!latest.has(tenant)) void read(tenant);
+      throw new TenantSettingsNotLoadedError();
+    },
     start() {
-      refresher.start();
-      stopPreload ??= onFirstBind((tenant) => load(tenant));
+      stopListening ??= subscribePostgresChannel(opts.databaseUrl, CHANNEL, reload, () => {
+        for (const tenant of latest.keys()) reload(tenant);
+      });
     },
     async stop() {
-      stopPreload?.();
-      stopPreload = undefined;
-      await refresher.stop();
+      const stopping = stopListening;
+      stopListening = undefined;
+      await stopping?.();
     },
     tenantForSlug: (slug) => backing.tenantForSlug(slug),
     async onlyTenant() {
@@ -282,16 +255,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       return tenants.length === 1 ? tenants[0]! : null;
     },
     async refreshAll() {
-      for (const tenant of await backing.tenants()) {
-        await withTenant(tenant, () => load(tenant)).catch(reportFailureAs("tenant settings: refresh", undefined));
-      }
-    },
-    peek() {
-      const tenant = currentTenant();
-      const settings = loaded.get(tenant);
-      if (settings) return settings;
-      void load(tenant).catch(reportFailureAs("tenant settings: load", undefined));
-      throw new TenantSettingsNotLoadedError();
+      await Promise.allSettled((await backing.tenants()).map((tenant) => read(tenant)));
     },
     async update(changes) {
       const tenant = currentTenant();
@@ -306,8 +270,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       }
       parseTenantSettings(applyChanges(await backing.read(tenant), normalized));
       await backing.write(tenant, normalized);
-      loading.delete(tenant);
-      return load(tenant, true);
+      return read(tenant);
     },
   };
   return store;

@@ -19,9 +19,9 @@ available until the new revision has passed operational checks.
   migration endpoints and agent action are retired. Sandbox resources are always
   on; scoped execution uses the selected sandbox resource. Disposable computers use
   that resource's provider, or the installation provider when no resource is selected. On upgrade,
-  existing routes and `SANDBOX_SCOPE_BACKENDS` mappings are imported once as
-  sandbox records so existing computers are preserved; afterwards
-  `SANDBOX_SCOPE_BACKENDS` has no runtime effect. To move a scope to another
+  existing routes are imported once as sandbox records so existing computers
+  are preserved, and scopes without a route are imported on the tenant's
+  `SANDBOX_BACKEND`; `SANDBOX_SCOPE_BACKENDS` is not read. To move a scope to another
   provider, create a sandbox there, copy durable work via git or Files, and set
   it as the default. Keep credentials and provider settings for all legacy mappings
   until the import completes; an unconfigured provider needed by the import stops

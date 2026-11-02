@@ -6,7 +6,7 @@ import { sanitizeBranding } from "../resolution/branding.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { parseSharingPosture } from "../resolution/sharing-posture.ts";
 import { parseSecurityPosture } from "../security/security-posture.ts";
-import { scopeId, type ScopeId } from "../types.ts";
+import { personalScope, type ScopeId } from "../types.ts";
 import { isTenantSettingKey, TENANT_SETTING_KEYS, type TenantSettingsStore } from "./settings.ts";
 
 const PROVIDER_KEY_ENV: Record<ModelProvider, string> = {
@@ -129,8 +129,7 @@ async function importOAuthClients(
 
 async function importLoopsUsers(raw: string | undefined, deps: TenantSettingsImportDeps): Promise<void> {
   for (const id of (raw ?? "").split(",")) {
-    const person = id.trim().toLowerCase();
-    if (person) await deps.featureFlags.setEnabled("inbox_loops", scopeId("personal", person), true, deps.actor);
+    if (id.trim()) await deps.featureFlags.setEnabled("inbox_loops", personalScope(id), true, deps.actor);
   }
 }
 

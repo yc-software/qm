@@ -7,7 +7,6 @@ import { createSandboxResources, type SandboxResource, type SandboxDefault } fro
 import { createSandboxRouter, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
   legacySandboxId,
   type LegacyRoute,
   type SandboxResourceUpgradeMarker,
@@ -21,7 +20,7 @@ import { currentTenant, withTenant } from "../src/tenants/context.ts";
 const [TENANT_A, TENANT_B] = ["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"];
 
 function localUpgrade(available: SandboxBackendName[]) {
-  return async () => ({ available, legacyBackend: () => "local" as const });
+  return async () => ({ available, defaultBackend: async () => "local" as const });
 }
 
 type ResourceOptions = Parameters<typeof createSandboxResources>[0];
@@ -623,34 +622,29 @@ test("failed background registration kills its process and releases the resource
   assert.equal((await resources.get(record.id)).cleanupPending, false);
 });
 
-test("resource activation honors scope defaults and preserves explicit legacy provider routes", async () => {
+test("resource activation gives unrouted scopes the default backend and preserves explicit legacy provider routes", async () => {
   const { options, routes, backend, upgrade } = fixture(undefined, [
     "personal:alice",
     "channel:room",
     "personal:existing",
   ]);
   await routes.put("personal:existing", { backend: "aws" });
-  const scopeDefaults = { personal: "modal", channel: "sprites" } as const;
   const resources = createSandboxResources({
     ...options,
     upgrade: upgrade({
       backends: async () => ({
         available: ["aws", "modal", "sprites"],
-        legacyBackend: (scope) => legacySandboxBackendForScope(scope, () => "sprites", scopeDefaults),
+        defaultBackend: async () => "sprites" as const,
       }),
     }),
     backends: { modal: backend, sprites: backend, aws: backend },
     defaultBackend: async () => "sprites",
   });
-  assert.equal((await resources.resolve("personal:alice"))?.backend, "modal");
+  assert.equal((await resources.resolve("personal:alice"))?.backend, "sprites");
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
   assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
   assert.equal(await resources.resolve("personal:new"), null);
   assert.equal(await resources.defaultBackend(), "sprites");
-  assert.equal(
-    legacySandboxBackendForScope("org", () => "sprites", scopeDefaults),
-    "sprites",
-  );
 });
 
 for (const [kind, waiting] of [

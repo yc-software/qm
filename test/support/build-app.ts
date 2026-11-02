@@ -2,7 +2,6 @@ import { after } from "node:test";
 import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { setProviderBaseUrls } from "../../src/model/provider-endpoints.ts";
-import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { withTenant } from "../../src/tenants/context.ts";
 import {
   createTenantSettingsStore,
@@ -28,7 +27,7 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
     ? { url: databaseUrl, ready: migrateSettings(databaseUrl).then(() => seedSettingsTenants(databaseUrl)) }
     : settingsDatabase();
   const store = createTenantSettingsStore({
-    db: createPgPool(target.url),
+    databaseUrl: target.url,
     keyMaterial: "test-connector-key-distinct-from-ingress-auth",
     onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
   });

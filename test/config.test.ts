@@ -218,7 +218,7 @@ test("the sandbox backend and provider keys are not read from the environment", 
   for (const value of ["anthropic-env-key", "openai-env-key"])
     assert.ok(!JSON.stringify(config).includes(value), value);
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
-  assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
+  assert.ok(!JSON.stringify(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" })).includes("e2b-env-key"));
 });
 
 test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
@@ -276,9 +276,8 @@ test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its en
   });
 });
 
-test("DEPLOY_PROVIDER=e2b selects E2B publishing and needs the E2B key", () => {
-  assert.equal(loadConfig({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "e2b-key" }).deployProvider, "e2b");
-  assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "e2b" }), /missing or insecure required core secrets: E2B_API_KEY/);
+test("DEPLOY_PROVIDER=e2b selects E2B publishing", () => {
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: "e2b" }).deployProvider, "e2b");
 });
 
 test("the deploy runner image falls back to the sandbox image", () => {
@@ -484,28 +483,6 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
-});
-
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
-  const credentials = {
-    SPRITES_TOKEN: "unit-test-sprites",
-    MODAL_TOKEN_ID: "unit-test-modal-id",
-    MODAL_TOKEN_SECRET: "unit-test-modal-secret",
-  };
-  assert.deepEqual(
-    loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
-    { personal: "modal", channel: "sprites" },
-  );
-  for (const value of [
-    "[]",
-    "null",
-    '{"personal:someone":"modal"}',
-    '{"personal":"missing"}',
-    '{"unknown":"sprites"}',
-    '{"personal":""}',
-  ])
-    assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
 
 test("Fly shared application name is passed to the deployment provider", () => {

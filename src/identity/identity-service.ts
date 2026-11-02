@@ -1,7 +1,7 @@
-import type { ActorAssertion, Principal } from "../types.ts";
 import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
+import { canonicalPerson, personIds, personKey } from "../directory/person.ts";
+import { foldPrincipalId, type ActorAssertion, type Principal } from "../types.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
 interface IdentityProvider {
