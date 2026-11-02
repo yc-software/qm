@@ -227,32 +227,6 @@ test("custom portal issuers require an HTTPS JWKS URI on Fly", () => {
   );
 });
 
-test("configs written for the separate web-ui and portal services are refused with a migration path", () => {
-  withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /Remove "web-ui", "portal" from "services"/),
-  );
-  for (const field of ["env", "secretEnv"]) {
-    withConfig({ [field]: { portal: {} } }, ({ path }) =>
-      assert.throws(
-        () => loadConfigAt(path),
-        new RegExp(`Move the settings in ${field}\\.portal into the matching "core" entry`),
-      ),
-    );
-  }
-  for (const field of ["vms", "imageOverrides"]) {
-    withConfig({ [field]: { "web-ui": {} } }, ({ path }) =>
-      assert.throws(() => loadConfigAt(path), new RegExp(`Delete ${field}\\.web-ui\\.`)),
-    );
-  }
-  withConfig({ target: "aws", aws: { services: { core: {}, portal: {} } } }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /Delete aws\.services\.portal\./),
-  );
-  withConfig(
-    { env: { core: { OIDC_ALLOWED_EMAIL_DOMAIN: "acme.example", PORTAL_EXPECTED_TEAM_ID: "T1" } } },
-    ({ path }) => assert.equal(loadConfigAt(path).config.env.core?.OIDC_ALLOWED_EMAIL_DOMAIN, "acme.example"),
-  );
-});
-
 test("core's front door port is managed, and core-hosted services may not disagree with core's env", () => {
   for (const [field, value] of [
     ["env", "9000"],

@@ -1,11 +1,20 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import type { WebReleases } from "../../plugins/web-ui/server/index.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { errMessage } from "../util/errors.ts";
+import {
+  LIVE_KEY,
+  WEB_RELEASE_ROOT,
+  parseLivePointer,
+  readWebBundleLayout,
+  releaseKey,
+  type LivePointer,
+} from "../../cli/src/web-release.ts";
 
 export interface WebReleaseStore {
   open(key: string): Promise<Readable | null>;
@@ -13,28 +22,7 @@ export interface WebReleaseStore {
   describe(): string;
 }
 
-export interface LivePointer {
-  release: string;
-  deployed: string;
-}
-
-interface ReleaseFile {
-  key: string;
-  path: string;
-}
-
-export interface WebBundle {
-  id: string;
-  assets: ReleaseFile[];
-  documents: ReleaseFile[];
-}
-
-const LIVE_KEY = "live.json";
-const RELEASE_ID = /^[0-9a-f]{64}$/;
 const UPLOAD_WORKERS = 8;
-
-const releaseKey = (id: string, name: string): string => `releases/${id}/${name}`;
-const isEntryDocument = (file: ReleaseFile): boolean => file.key.endsWith("/index.html");
 
 export function createS3WebReleaseStore(options: {
   bucket: string;
@@ -42,7 +30,7 @@ export function createS3WebReleaseStore(options: {
   region?: string;
   _client?: S3Send;
 }): WebReleaseStore {
-  const root = `${options.prefix ?? ""}web-ui/`;
+  const root = `${options.prefix ?? ""}${WEB_RELEASE_ROOT}`;
   const client = options._client ?? s3Client(options.region);
   const where = (key: string): string => `s3://${options.bucket}/${root}${key}`;
   return {
@@ -68,7 +56,7 @@ export function createS3WebReleaseStore(options: {
   };
 }
 
-export function createLocalWebReleaseStore(dir: string): WebReleaseStore {
+export function createLocalWebReleaseStore(dir: string): WebReleaseStore & { has(key: string): Promise<boolean> } {
   const base = resolve(dir);
   const pathOf = (key: string): string => {
     const path = resolve(base, ...key.split("/"));
@@ -96,23 +84,45 @@ export function createLocalWebReleaseStore(dir: string): WebReleaseStore {
       await writeFile(staging, body);
       await rename(staging, path);
     },
+    async has(key) {
+      return access(pathOf(key)).then(
+        () => true,
+        () => false,
+      );
+    },
     describe: () => `${dir}${sep}`,
   };
 }
 
 export function withLocalAssetCache(store: WebReleaseStore, dir: string): WebReleaseStore {
   const local = createLocalWebReleaseStore(dir);
+  const fetching = new Map<string, Promise<Buffer | null>>();
+  const absent = (key: string): string => `${key}.absent`;
+  async function fetchOnce(key: string): Promise<Buffer | null> {
+    const remote = await store.open(key);
+    if (remote) {
+      const body = await readAll(remote);
+      await local.put(key, body);
+      return body;
+    }
+    const plain = key.endsWith(".gz") ? key.slice(0, -".gz".length) : undefined;
+    if (plain && (await local.has(plain))) await local.put(absent(key), Buffer.alloc(0));
+    return null;
+  }
   return {
     ...store,
     async open(key) {
       if (!key.startsWith("assets/")) return store.open(key);
       const cached = await local.open(key);
       if (cached) return cached;
-      const remote = await store.open(key);
-      if (!remote) return null;
-      const body = await readAll(remote);
-      await local.put(key, body);
-      return Readable.from(body);
+      if (await local.has(absent(key))) return null;
+      let pending = fetching.get(key);
+      if (!pending) {
+        pending = fetchOnce(key).finally(() => fetching.delete(key));
+        fetching.set(key, pending);
+      }
+      const body = await pending;
+      return body ? Readable.from(body) : null;
     },
   };
 }
@@ -126,97 +136,46 @@ async function readAll(stream: Readable): Promise<Buffer> {
 export async function readLivePointer(store: WebReleaseStore): Promise<LivePointer | null> {
   const stream = await store.open(LIVE_KEY);
   if (!stream) return null;
-  const text = (await readAll(stream)).toString("utf8");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${store.describe()}${LIVE_KEY} is not JSON: ${text}`, { cause: error });
-  }
-  const { release, deployed } = (parsed ?? {}) as Partial<Record<keyof LivePointer, unknown>>;
-  if (typeof release !== "string" || !RELEASE_ID.test(release))
-    throw new Error(`${store.describe()}${LIVE_KEY} names no release: ${text}`);
-  return { release, deployed: typeof deployed === "string" ? deployed : "" };
+  return parseLivePointer((await readAll(stream)).toString("utf8"), `${store.describe()}${LIVE_KEY}`);
 }
 
 async function writeLivePointer(store: WebReleaseStore, pointer: LivePointer): Promise<void> {
   await store.put(LIVE_KEY, Buffer.from(`${JSON.stringify(pointer)}\n`));
 }
 
-async function walk(dir: string, rel = ""): Promise<string[]> {
-  const out: string[] = [];
-  for (const entry of await readdir(join(dir, rel), { withFileTypes: true })) {
-    const path = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...(await walk(dir, path)));
-    else if (entry.isFile()) out.push(path);
-  }
-  return out;
-}
-
-export async function readWebBundle(dir: string): Promise<WebBundle> {
-  const files = (await walk(dir)).sort();
-  if (!files.includes("index.html")) throw new Error(`${join(dir, "index.html")} is missing; build the web UI first`);
-  const id = createHash("sha256");
-  for (const file of files) {
-    const digest = createHash("sha256")
-      .update(await readFile(join(dir, file)))
-      .digest("hex");
-    id.update(`${file}\0${digest}\n`);
-  }
-  const releaseId = id.digest("hex");
-  const assets: ReleaseFile[] = [];
-  const documents: ReleaseFile[] = [];
-  for (const file of files) {
-    const path = join(dir, file);
-    if (file.startsWith("assets/")) assets.push({ key: file, path });
-    else documents.push({ key: releaseKey(releaseId, file), path });
-  }
-  return { id: releaseId, assets, documents };
-}
-
-async function uploadAll(store: WebReleaseStore, files: ReleaseFile[]): Promise<void> {
-  const queue = [...files];
+async function uploadAll(store: WebReleaseStore, dir: string, keyed: Array<[string, string]>): Promise<void> {
+  const queue = [...keyed];
   const worker = async (): Promise<void> => {
-    for (let file = queue.shift(); file; file = queue.shift()) await store.put(file.key, await readFile(file.path));
+    for (let next = queue.shift(); next; next = queue.shift())
+      await store.put(next[0], await readFile(join(dir, next[1])));
   };
   await Promise.all(Array.from({ length: Math.min(UPLOAD_WORKERS, queue.length) }, worker));
-}
-
-async function uploadWebBundle(store: WebReleaseStore, bundle: WebBundle): Promise<boolean> {
-  const marker = await store.open(releaseKey(bundle.id, "index.html"));
-  if (marker) {
-    marker.destroy();
-    return false;
-  }
-  await uploadAll(store, bundle.assets);
-  await uploadAll(
-    store,
-    bundle.documents.filter((file) => !isEntryDocument(file)),
-  );
-  await uploadAll(store, bundle.documents.filter(isEntryDocument));
-  return true;
 }
 
 export async function deployBundledRelease(
   store: WebReleaseStore,
   dir: string,
 ): Promise<{ id: string; uploaded: boolean; live: string }> {
-  const bundle = await readWebBundle(dir);
-  const uploaded = await uploadWebBundle(store, bundle);
+  const bundle = readWebBundleLayout(dir);
+  const marker = await store.open(releaseKey(bundle.id, "index.html"));
+  marker?.destroy();
+  if (!marker) {
+    await uploadAll(
+      store,
+      dir,
+      bundle.assets.map((file) => [file, file]),
+    );
+    for (const batch of [bundle.documents.slice(0, -1), bundle.documents.slice(-1)])
+      await uploadAll(
+        store,
+        dir,
+        batch.map((file) => [releaseKey(bundle.id, file), file]),
+      );
+  }
   const pointer = await readLivePointer(store);
-  if (pointer?.deployed === bundle.id) return { id: bundle.id, uploaded, live: pointer.release };
+  if (pointer?.deployed === bundle.id) return { id: bundle.id, uploaded: !marker, live: pointer.release };
   await writeLivePointer(store, { release: bundle.id, deployed: bundle.id });
-  return { id: bundle.id, uploaded, live: bundle.id };
-}
-
-interface WebReleaseFile {
-  body: Readable;
-  gzip: boolean;
-}
-
-export interface WebReleases {
-  document(name: string): Promise<string>;
-  file(path: string, gzip: boolean): Promise<WebReleaseFile | null>;
+  return { id: bundle.id, uploaded: !marker, live: bundle.id };
 }
 
 export function createWebReleaseReader(
@@ -233,8 +192,8 @@ export function createWebReleaseReader(
   const log = opts.log ?? ((line: string) => console.error(line));
   let current: { release: string; readAt: number } | undefined;
   let inflight: Promise<string> | undefined;
-  let documents = new Map<string, string>();
-  let documentsFor = "";
+  let files = new Map<string, Promise<Buffer | null>>();
+  let filesFor = "";
 
   async function refresh(): Promise<string> {
     try {
@@ -259,29 +218,42 @@ export function createWebReleaseReader(
     return inflight;
   }
 
+  async function releaseFile(name: string): Promise<Buffer | null> {
+    const release = await live();
+    if (filesFor !== release) {
+      files = new Map();
+      filesFor = release;
+    }
+    const known = files.get(name);
+    if (known) return known;
+    const loading = store.open(releaseKey(release, name)).then((stream) => (stream ? readAll(stream) : null));
+    files.set(name, loading);
+    loading.then(
+      (body) => body ?? files.delete(name),
+      () => files.delete(name),
+    );
+    return loading;
+  }
+
   return {
     live,
     async document(name) {
-      const release = await live();
-      if (documentsFor !== release) {
-        documents = new Map();
-        documentsFor = release;
-      }
-      const cached = documents.get(name);
-      if (cached !== undefined) return cached;
-      const stream = await store.open(releaseKey(release, name));
-      if (!stream) throw new Error(`web UI release ${release} has no ${name} in ${store.describe()}`);
-      const html = (await readAll(stream)).toString("utf8");
-      if (documentsFor === release) documents.set(name, html);
-      return html;
+      const body = await releaseFile(name);
+      if (!body) throw new Error(`web UI release ${current?.release} has no ${name} in ${store.describe()}`);
+      return body.toString("utf8");
     },
     async file(path, gzip) {
-      const key = path.startsWith("assets/") ? path : releaseKey(await live(), path);
+      if (!path.startsWith("assets/")) {
+        const packed = gzip ? await releaseFile(`${path}.gz`) : null;
+        if (packed) return { body: Readable.from(packed), gzip: true };
+        const plain = await releaseFile(path);
+        return plain ? { body: Readable.from(plain), gzip: false } : null;
+      }
       if (gzip) {
-        const packed = await store.open(`${key}.gz`);
+        const packed = await store.open(`${path}.gz`);
         if (packed) return { body: packed, gzip: true };
       }
-      const plain = await store.open(key);
+      const plain = await store.open(path);
       return plain ? { body: plain, gzip: false } : null;
     },
   };

@@ -90,7 +90,7 @@ test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
   const dockerCore = dockerServiceEnv(docker, "core");
   assert.equal(dockerCore.PUBLIC_PORT, "8000");
-  assert.equal(dockerCore.PORTAL_PUBLIC_URL, "https://agent.example.com");
+  assert.equal(dockerCore.PUBLIC_WEB_URL, "https://agent.example.com");
   assert.equal(dockerCore.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
   assert.equal(dockerCore.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
   assert.equal(dockerCore.OIDC_ISSUER, "https://agent.example.com/idp");

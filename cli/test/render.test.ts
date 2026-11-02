@@ -1640,7 +1640,7 @@ test("Render serves the web UI and sign-in from core's public service and wires 
   assert.equal(d.ctx.config.apiUrl, "https://acme-core-assigned.onrender.com");
   assert.equal(core.PORT, "8000");
   assert.equal(core.PUBLIC_PORT, "8000");
-  assert.equal(core.PORTAL_PUBLIC_URL, "https://acme-core-assigned.onrender.com");
+  assert.equal(core.PUBLIC_WEB_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(core.AUTH_ISSUER, "https://acme-core-assigned.onrender.com/idp");
   assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
@@ -1691,7 +1691,7 @@ test("Render deletes the retired web UI and portal once core is healthy, then mo
     c.customDomains.get("srv-acme-core")!.map((domain) => domain.name),
     ["acme.example", "www.acme.example"],
   );
-  assert.equal(c.envs.get("srv-acme-core")!.PORTAL_PUBLIC_URL, "https://acme.example");
+  assert.equal(c.envs.get("srv-acme-core")!.PUBLIC_WEB_URL, "https://acme.example");
 });
 
 test("Render restores remote drift and grows storage without replacing resources", async (t) => {

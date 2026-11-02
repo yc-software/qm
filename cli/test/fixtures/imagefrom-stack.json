@@ -22,7 +22,6 @@
       "TRANSFER_STORE": "s3",
       "S3_BUCKET": "beta-data",
       "S3_REGION": "auto",
-      "PORTAL_PUBLIC_URL": "https://beta-core.fly.dev",
       "OIDC_CLIENT_ID": "1111111111.2222222222",
       "PORTAL_EXPECTED_TEAM_ID": "T00000000"
     },

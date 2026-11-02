@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
+import { readWebBundleLayout } from "../cli/src/web-release.ts";
 import {
   createLocalWebReleaseStore,
   createWebReleaseReader,
   deployBundledRelease,
   readLivePointer,
-  readWebBundle,
   withLocalAssetCache,
   type WebReleaseStore,
 } from "../src/web/releases.ts";
@@ -35,8 +35,8 @@ test("each deploy makes its bundled release live once, and restarts keep a later
   const store = createLocalWebReleaseStore(join(root, "store"));
   const one = bundle(root, "one", "first");
   const two = bundle(root, "two", "second");
-  const idOne = (await readWebBundle(one)).id;
-  const idTwo = (await readWebBundle(two)).id;
+  const idOne = readWebBundleLayout(one).id;
+  const idTwo = readWebBundleLayout(two).id;
 
   assert.deepEqual(await deployBundledRelease(store, one), { id: idOne, uploaded: true, live: idOne });
   assert.deepEqual(await readLivePointer(store), { release: idOne, deployed: idOne });
@@ -55,10 +55,10 @@ test("the reader switches releases within one pointer refresh and keeps old asse
   const store = createLocalWebReleaseStore(join(root, "store"));
   const one = bundle(root, "one", "first");
   const two = bundle(root, "two", "second");
-  const idTwo = (await readWebBundle(two)).id;
+  const idTwo = readWebBundleLayout(two).id;
   await deployBundledRelease(store, one);
   await deployBundledRelease(store, two);
-  await store.put("live.json", Buffer.from(JSON.stringify({ release: (await readWebBundle(one)).id, deployed: "" })));
+  await store.put("live.json", Buffer.from(JSON.stringify({ release: readWebBundleLayout(one).id, deployed: "" })));
 
   let now = 0;
   const reader = createWebReleaseReader(store, { pointerTtlMs: 2_000, now: () => now });
@@ -118,7 +118,7 @@ test("a core from another deploy line keeps serving its own bundled release", as
   assert.equal(await oldCore.document("index.html"), "<title>old-core</title>");
   assert.equal(await nextCore.document("index.html"), "<title>next-core</title>");
 
-  const hotfixId = (await readWebBundle(bundle(root, "hotfix", "hotfix"))).id;
+  const hotfixId = readWebBundleLayout(bundle(root, "hotfix", "hotfix")).id;
   for (const file of ["index.html", "brand-mark.svg"])
     await store.put(
       `releases/${hotfixId}/${file}`,
@@ -146,7 +146,9 @@ test("assets are fetched from the release store once, then served from the local
   const cached = withLocalAssetCache(counted, join(root, "cache"));
   for (let i = 0; i < 3; i++) assert.equal(await text((await cached.open("assets/app-one.js"))!), "first");
   assert.equal(await cached.open("assets/missing.js"), null);
-  assert.deepEqual(opened, ["assets/app-one.js", "assets/missing.js"]);
+  rmSync(join(root, "store", "assets", "app-one.js.gz"));
+  for (let i = 0; i < 3; i++) assert.equal(await cached.open("assets/app-one.js.gz"), null);
+  assert.deepEqual(opened, ["assets/app-one.js", "assets/missing.js", "assets/app-one.js.gz"]);
   await cached.open("live.json");
   await cached.open("live.json");
   assert.equal(opened.filter((key) => key === "live.json").length, 2);

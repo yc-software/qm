@@ -81,7 +81,6 @@ spec:
           {{- if eq $name "core" }}
           {{- $_ := set $wired "AGENT_API_URL" $base }}
           {{- $_ := set $wired "PUBLIC_WEB_URL" $base }}
-          {{- $_ := set $wired "PORTAL_PUBLIC_URL" $base }}
           {{- $_ := set $wired "WEB_UI_PUBLIC_URL" $base }}
           {{- if $root.Values.auth.enabled }}
           {{- $issuer := printf "%s/idp" $base }}

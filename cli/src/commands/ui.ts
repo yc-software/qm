@@ -1,10 +1,18 @@
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { QmConfig } from "../config.ts";
 import { CliError, note, ok, step } from "../log.ts";
 import { awsObjectStoreBucket } from "../terraform.ts";
+import {
+  LIVE_KEY,
+  RELEASE_ID,
+  WEB_RELEASE_ROOT,
+  parseLivePointer,
+  readWebBundleLayout,
+  releaseKey,
+  type LivePointer,
+  type WebBundleLayout,
+} from "../web-release.ts";
 
 export interface UiPublishOptions {
   dir?: string;
@@ -12,25 +20,20 @@ export interface UiPublishOptions {
 }
 
 interface ReleaseStore {
-  root: string;
-  region: string;
+  bucket: string;
+  prefix: string;
+  region?: string;
   endpoint?: string;
 }
 
-interface LivePointer {
-  release: string;
-  deployed: string;
-}
-
-const RELEASE_ID = /^[0-9a-f]{64}$/;
-const IMMUTABLE = "public, max-age=31536000, immutable";
+const s3Uri = (store: ReleaseStore, key = ""): string => `s3://${store.bucket}/${store.prefix}${key}`;
 
 function webReleaseStore(config: QmConfig): ReleaseStore {
   const core = config.env.core ?? {};
   const prefix = core.S3_PREFIX?.trim() ?? "";
   if (config.target === "aws" && config.aws) {
     const bucket = core.S3_BUCKET?.trim() || awsObjectStoreBucket(config);
-    return { root: `s3://${bucket}/${prefix}web-ui/`, region: config.aws.region };
+    return { bucket, prefix: `${prefix}${WEB_RELEASE_ROOT}`, region: config.aws.region };
   }
   if (config.target === "render")
     throw new CliError(
@@ -46,15 +49,21 @@ function webReleaseStore(config: QmConfig): ReleaseStore {
     throw new CliError(
       `the fly target keeps ${bucket} in Tigris, not AWS S3: export AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev and an AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY pair for the bucket (create one with \`fly storage dashboard ${bucket}\`), then rerun qm ui publish`,
     );
+  const region = core.S3_REGION?.trim() || core.AWS_REGION?.trim();
+  const viaEndpoint = Boolean(endpoint || process.env.AWS_ENDPOINT_URL_S3?.trim());
   return {
-    root: `s3://${bucket}/${prefix}web-ui/`,
-    region: core.S3_REGION?.trim() || "auto",
+    bucket,
+    prefix: `${prefix}${WEB_RELEASE_ROOT}`,
+    ...(region || viaEndpoint ? { region: region || "auto" } : {}),
     ...(endpoint ? { endpoint } : {}),
   };
 }
 
 function aws(store: ReleaseStore, args: string[], input?: string): { status: number; stdout: string; stderr: string } {
-  const location = ["--region", store.region, ...(store.endpoint ? ["--endpoint-url", store.endpoint] : [])];
+  const location = [
+    ...(store.region ? ["--region", store.region] : []),
+    ...(store.endpoint ? ["--endpoint-url", store.endpoint] : []),
+  ];
   const r = spawnSync(process.env.AWS_BIN ?? "aws", [...args, ...location], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
@@ -71,85 +80,51 @@ function awsOk(store: ReleaseStore, what: string, args: string[], input?: string
   return r.stdout;
 }
 
-const isMissingObject = (stderr: string): boolean => /\(404\)|Not Found|NoSuchKey|does not exist/i.test(stderr);
+function objectExists(store: ReleaseStore, key: string): boolean {
+  const full = `${store.prefix}${key}`;
+  const count = awsOk(store, `checking ${s3Uri(store, key)}`, [
+    "s3api",
+    "list-objects-v2",
+    "--bucket",
+    store.bucket,
+    "--prefix",
+    full,
+    "--query",
+    `length(Contents[?Key=='${full}'] || \`[]\`)`,
+    "--output",
+    "text",
+  ]).trim();
+  return count !== "0";
+}
 
 function readPointer(store: ReleaseStore): LivePointer | null {
-  const r = aws(store, ["s3", "cp", `${store.root}live.json`, "-"]);
-  if (r.status !== 0) {
-    if (isMissingObject(r.stderr)) return null;
-    throw new CliError(`reading ${store.root}live.json failed (aws exited ${r.status}): ${r.stderr.trim()}`);
-  }
-  let parsed: unknown;
+  if (!objectExists(store, LIVE_KEY)) return null;
+  const text = awsOk(store, `reading ${s3Uri(store, LIVE_KEY)}`, ["s3", "cp", s3Uri(store, LIVE_KEY), "-"]);
   try {
-    parsed = JSON.parse(r.stdout);
+    return parseLivePointer(text, s3Uri(store, LIVE_KEY));
   } catch (error) {
-    throw new CliError(`${store.root}live.json is not JSON: ${r.stdout}`, { cause: error });
+    throw new CliError((error as Error).message, { cause: error });
   }
-  const { release, deployed } = (parsed ?? {}) as Partial<Record<keyof LivePointer, unknown>>;
-  if (typeof release !== "string" || !RELEASE_ID.test(release))
-    throw new CliError(`${store.root}live.json names no release: ${r.stdout}`);
-  return { release, deployed: typeof deployed === "string" ? deployed : "" };
 }
 
-function releaseExists(store: ReleaseStore, id: string): boolean {
-  const r = aws(store, ["s3", "ls", `${store.root}releases/${id}/index.html`]);
-  if (r.status === 0) return r.stdout.trim().length > 0;
-  if (r.status === 1 && !r.stderr.trim()) return false;
-  throw new CliError(`checking ${store.root}releases/${id}/ failed (aws exited ${r.status}): ${r.stderr.trim()}`);
-}
-
-function bundleFiles(dir: string, rel = ""): string[] {
-  return readdirSync(join(dir, rel), { withFileTypes: true }).flatMap((entry) => {
-    const path = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) return bundleFiles(dir, path);
-    return entry.isFile() ? [path] : [];
-  });
-}
-
-function webBundleId(dir: string): { id: string; files: string[] } {
-  let files: string[];
-  try {
-    files = bundleFiles(dir).sort();
-  } catch (error) {
-    throw new CliError(`cannot read the web UI bundle at ${dir}: ${(error as Error).message}`, { cause: error });
-  }
-  if (!files.includes("index.html"))
-    throw new CliError(
-      `${join(dir, "index.html")} is missing; build the web UI first (npm run build --prefix plugins/web-ui)`,
-    );
-  const id = createHash("sha256");
-  for (const file of files) {
-    const digest = createHash("sha256")
-      .update(readFileSync(join(dir, file)))
-      .digest("hex");
-    id.update(`${file}\0${digest}\n`);
-  }
-  return { id: id.digest("hex"), files };
-}
-
-function upload(store: ReleaseStore, dir: string, id: string, files: string[]): void {
-  step(`uploading web UI release ${id} to ${store.root}`);
-  if (files.some((file) => file.startsWith("assets/")))
+function upload(store: ReleaseStore, dir: string, bundle: WebBundleLayout): void {
+  step(`uploading web UI release ${bundle.id} to ${s3Uri(store)}`);
+  if (bundle.assets.length)
     awsOk(store, "uploading web UI assets", [
       "s3",
       "sync",
       join(dir, "assets"),
-      `${store.root}assets`,
+      s3Uri(store, "assets"),
       "--size-only",
       "--only-show-errors",
-      "--cache-control",
-      IMMUTABLE,
     ]);
-  const documents = files.filter((file) => !file.startsWith("assets/"));
-  for (const file of [...documents.filter((f) => f !== "index.html"), "index.html"])
+  for (const file of bundle.documents)
     awsOk(store, `uploading ${file}`, [
       "s3",
       "cp",
       join(dir, file),
-      `${store.root}releases/${id}/${file}`,
+      s3Uri(store, releaseKey(bundle.id, file)),
       "--only-show-errors",
-      "--cache-control",
-      "no-cache",
     ]);
 }
 
@@ -168,18 +143,29 @@ export function runUiPublish(config: QmConfig, o: UiPublishOptions): void {
   let id: string;
   if (o.release) {
     id = o.release;
-    if (!releaseExists(store, id)) throw new CliError(`web UI release ${id} is not in ${store.root}releases/`);
+    if (!objectExists(store, releaseKey(id, "index.html")))
+      throw new CliError(`web UI release ${id} is not in ${s3Uri(store, "releases/")}`);
   } else {
-    const bundle = webBundleId(o.dir!);
+    let bundle: WebBundleLayout;
+    try {
+      bundle = readWebBundleLayout(o.dir!);
+    } catch (error) {
+      throw new CliError(`cannot read the web UI bundle at ${o.dir}: ${(error as Error).message}`, { cause: error });
+    }
     id = bundle.id;
-    if (releaseExists(store, id)) step(`web UI release ${id} is already uploaded`);
-    else upload(store, o.dir!, id, bundle.files);
+    if (objectExists(store, releaseKey(id, "index.html"))) step(`web UI release ${id} is already uploaded`);
+    else upload(store, o.dir!, bundle);
   }
-  const pointer: LivePointer = { release: id, deployed: readPointer(store)?.deployed ?? "" };
+  const deployed = readPointer(store)?.deployed;
+  if (!deployed)
+    throw new CliError(
+      `no core has made its web UI live in ${s3Uri(store)} yet, so no running core would serve this release; deploy core with qm up first`,
+    );
+  const pointer: LivePointer = { release: id, deployed };
   awsOk(
     store,
     "switching the live web UI release",
-    ["s3", "cp", "-", `${store.root}live.json`, "--cache-control", "no-cache", "--content-type", "application/json"],
+    ["s3", "cp", "-", s3Uri(store, LIVE_KEY)],
     `${JSON.stringify(pointer)}\n`,
   );
   ok(

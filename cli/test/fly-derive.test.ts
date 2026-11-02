@@ -30,7 +30,7 @@ test("core serves the web UI and sign-in at the root of publicUrl on the public 
   for (const publicUrl of [url, `${url}/`]) {
     const env = orgEnv("core", "acme", publicUrl);
     assert.equal(env.WEB_UI_PUBLIC_URL, url);
-    assert.equal(env.PORTAL_PUBLIC_URL, url);
+    assert.equal(env.PUBLIC_WEB_URL, url);
     assert.equal(env.PUBLIC_PORT, "8000");
   }
 });

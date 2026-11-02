@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { CliError, die, errMessage, warn } from "./log.ts";
 import {
-  RETIRED_SERVICE_NAMES,
   AUTH_BROKER_ENV_KEYS,
   SERVICE_NAMES,
   VIRTUAL_SERVICE_NAMES,
@@ -612,7 +611,6 @@ function validate(raw: unknown, path: string): QmConfig {
 
   const servicesRaw = o["services"];
   if (!Array.isArray(servicesRaw)) throw new CliError(`${path}: "services" must be an array`);
-  rejectRetiredServices(o, path);
   const services: DeclaredServiceName[] = [];
   for (const s of servicesRaw) {
     if (typeof s !== "string" || !isDeclaredService(s)) {
@@ -1002,39 +1000,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
       `${path}: AWS requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
     );
   }
-}
-
-function rejectRetiredServices(o: Record<string, unknown>, path: string): void {
-  const listed = (o["services"] as unknown[]).filter((s): s is string =>
-    (RETIRED_SERVICE_NAMES as readonly unknown[]).includes(s),
-  );
-  const awsServices = isPlainObject(o["aws"]) ? o["aws"]["services"] : undefined;
-  const keyedBy = (fields: ReadonlyArray<readonly [string, unknown]>): string[] =>
-    fields.flatMap(([field, map]) =>
-      isPlainObject(map)
-        ? RETIRED_SERVICE_NAMES.filter((name) => map[name] !== undefined).map((name) => `${field}.${name}`)
-        : [],
-    );
-  const moved = keyedBy([
-    ["env", o["env"]],
-    ["secretEnv", o["secretEnv"]],
-  ]);
-  const dropped = keyedBy([
-    ["vms", o["vms"]],
-    ["imageOverrides", o["imageOverrides"]],
-    ["aws.services", awsServices],
-  ]);
-  if (!listed.length && !moved.length && !dropped.length) return;
-  throw new CliError(
-    `${path}: core now serves the web UI and sign-in itself, so the separate ${RETIRED_SERVICE_NAMES.map((s) => JSON.stringify(s)).join(" and ")} services are gone. ` +
-      [
-        listed.length ? `Remove ${listed.map((s) => JSON.stringify(s)).join(", ")} from "services".` : "",
-        moved.length ? `Move the settings in ${moved.join(", ")} into the matching "core" entry.` : "",
-        dropped.length ? `Delete ${dropped.join(", ")}.` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-  );
 }
 
 function validatePlugins(raw: unknown, path: string): PluginEntry[] {

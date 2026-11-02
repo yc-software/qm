@@ -107,7 +107,7 @@ test(
     assert.ok(run.includes("127.0.0.1:8082:8000"), run.join(" "));
     for (const env of [
       "PUBLIC_PORT=8000",
-      "PORTAL_PUBLIC_URL=http://localhost:8082",
+      "PUBLIC_WEB_URL=http://localhost:8082",
       "AUTH_EMBEDDED=1",
       "AUTH_ISSUER=http://localhost:8082/idp",
       "OIDC_AUTH_ENDPOINT=http://localhost:8082/idp/authorize",

@@ -599,7 +599,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(core.ORG_ID, "acme");
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
-  assert.equal(core.PORTAL_PUBLIC_URL, "https://agent.acme.example");
+  assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.PUBLIC_PORT, "8000");
   assert.equal(core.PORTAL_XFF_TRUSTED_HOPS, "1");
   assert.equal(core.REQUIRE_SIGNED_PORTAL_IDENTITY, undefined);

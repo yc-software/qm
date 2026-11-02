@@ -21,7 +21,14 @@ const productionEnv = {
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
+  PUBLIC_PORT: "8000",
 } as const;
+
+test("production refuses to boot without the public front door port", () => {
+  const { PUBLIC_PORT: _, ...withoutFrontDoor } = productionEnv;
+  assert.throws(() => loadConfig(withoutFrontDoor), /PUBLIC_PORT is required in production/);
+  assert.equal(loadConfig(productionEnv).publicPort, 8000);
+});
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);

@@ -17,20 +17,20 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FAKE_S3_ROOT;
 const args = [];
+const opts = {};
 const raw = process.argv.slice(2);
 for (let i = 0; i < raw.length; i++) {
   if (raw[i] === "--size-only" || raw[i] === "--only-show-errors") continue;
-  if (raw[i].startsWith("--")) { i++; continue; }
+  if (raw[i].startsWith("--")) { opts[raw[i]] = raw[++i]; continue; }
   args.push(raw[i]);
 }
 const local = (url) => path.join(root, url.replace(/^s3:\\/\\/[^/]+\\//, ""));
-const missing = () => { process.stderr.write("An error occurred (404) when calling the HeadObject operation: Not Found\\n"); process.exit(1); };
 const [service, verb, a, b] = args;
+if (service === "s3api" && verb === "list-objects-v2") { process.stdout.write(fs.existsSync(path.join(root, opts["--prefix"])) ? "1\\n" : "0\\n"); process.exit(0); }
 if (service !== "s3") { process.stderr.write("unsupported " + args.join(" ")); process.exit(2); }
-if (verb === "cp" && b === "-") { const p = local(a); if (!fs.existsSync(p)) missing(); process.stdout.write(fs.readFileSync(p)); process.exit(0); }
+if (verb === "cp" && b === "-") { process.stdout.write(fs.readFileSync(local(a))); process.exit(0); }
 if (verb === "cp") { const p = local(b); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, a === "-" ? fs.readFileSync(0) : fs.readFileSync(a)); process.exit(0); }
 if (verb === "sync") { const to = local(b); fs.mkdirSync(to, { recursive: true }); for (const f of fs.readdirSync(a)) fs.copyFileSync(path.join(a, f), path.join(to, f)); process.exit(0); }
-if (verb === "ls") { const p = local(a); if (!fs.existsSync(p)) process.exit(1); process.stdout.write("2026-11-02 12:00:00 1 index.html\\n"); process.exit(0); }
 process.stderr.write("unsupported " + args.join(" ")); process.exit(2);
 `;
 const fakeAws = join(work, "aws");

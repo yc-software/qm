@@ -172,7 +172,7 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   }
   assert.equal(core.PORT, "8000");
   assert.equal(core.PUBLIC_PORT, "8000");
-  assert.equal(core.PORTAL_PUBLIC_URL, config.publicUrl);
+  assert.equal(core.PUBLIC_WEB_URL, config.publicUrl);
   assert.equal(core.AUTH_EMBEDDED, "1");
   assert.equal(core.OIDC_ISSUER, `${config.publicUrl}/idp`);
   assert.equal(core.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);

@@ -1012,6 +1012,7 @@ function liveReleases(): WebReleases {
 
 function releaseUnavailable(res: ServerResponse, what: string, error: unknown): void {
   console.error(`[web-ui] ${what} unavailable: ${errChain(error)}`);
+  reportBackendError(error);
   if (!res.headersSent) json(res, 503, { error: "web_ui_unavailable", message: "The web UI release is unavailable." });
   else res.destroy();
 }

@@ -37,7 +37,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         ...(web
           ? {
               PUBLIC_PORT: String(i.ports.portal),
-              PORTAL_PUBLIC_URL: publicUrl,
               WEB_UI_PUBLIC_URL: publicUrl,
               WEB_UI_BASE: i.webUiBasePath,
               WEB_UI_PRINCIPALS: "",
