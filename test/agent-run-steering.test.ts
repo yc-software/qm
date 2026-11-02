@@ -750,7 +750,14 @@ test("a request rejected over an image retries once without this turn's images i
     );
     assert.equal(result.reply, "answered without the image");
     assert.equal(requests.filter((body) => body.includes(dataBase64)).length, 1, "the image is sent only once");
-    assert.match(requests.at(-1)!, /image removed/);
+    assert.match(requests.at(-1)!, /image\/png removed/);
+    const removed = sink.entries.find(
+      (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "attachments_removed",
+    );
+    assert.deepEqual(
+      removed && (({ images, code }) => ({ images, code }))(removed.payload as { images: number; code: string }),
+      { images: 1, code: "bad_request" },
+    );
   } finally {
     globalThis.fetch = realFetch;
   }

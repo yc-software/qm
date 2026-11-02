@@ -8,11 +8,11 @@ import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { textPng } from "./support/text-png.ts";
+import { TINY_PNG } from "./support/tiny-png.ts";
 
 const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
-const PNG = textPng("A");
+const PNG = TINY_PNG;
 
 function memSandbox(seed: Record<string, Uint8Array | string> = {}): {
   sandbox: Sandbox;

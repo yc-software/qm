@@ -11,7 +11,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
-import { textPng } from "./support/text-png.ts";
+import { TINY_PNG } from "./support/tiny-png.ts";
 import { visionImage } from "../src/core/attachments.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -72,7 +72,7 @@ function fulfill(app: any, answer: (query: any) => unknown) {
 test("read_file opens a file on another message by its ts and returns an image the model can see", async () => {
   const built = freshApp();
   built.runtime.start();
-  const png = await built.blobTransfer.put(textPng("AB"));
+  const png = await built.blobTransfer.put(TINY_PNG);
   const fake = await built.blobTransfer.put(Buffer.from([0x89, 0x50, 0x00, 0x01, 0x02, 0x03, 0xff, 0x00]));
   const surface = fulfill(built.app, (q) => {
     if (!q.file) return { messages: [] };
@@ -276,7 +276,7 @@ test("a file on a reply in a neighbouring thread is found by asking Slack for th
 });
 
 test("only real images in a supported format are shown to the model, and refusals say why", async () => {
-  const png = await visionImage(textPng("AB"));
+  const png = await visionImage(TINY_PNG);
   assert.equal(png.ok && png.mimeType, "image/png");
   assert.deepEqual(await visionImage(Buffer.from("<svg/>")), { ok: false, reason: "not an image" });
   assert.deepEqual(await visionImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), {

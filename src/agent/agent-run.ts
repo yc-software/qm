@@ -1402,7 +1402,20 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
+          const images = imageCountSince(entry.agentSession, messagesBefore);
           replaceImagesSince(entry.agentSession, messagesBefore);
+          if (images)
+            await turn.emit({
+              type: "system",
+              payload: {
+                kind: "attachments_removed",
+                images,
+                documents: entry.ref.documents?.length ?? 0,
+                code: documentRejection.code,
+                error: documentRejection.raw || documentRejection.message,
+              },
+              scopeLabel: turn.scopeLabel,
+            });
           const outcome = await reprompt(ATTACHMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")

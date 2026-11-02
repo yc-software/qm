@@ -14,9 +14,12 @@ export function replaceImagesSince(session: AgentSession, from: number): void {
     if (i < from || !Array.isArray(content)) return m;
     return {
       ...m,
-      content: content.map((block: { type?: string }) =>
+      content: content.map((block: { type?: string; mimeType?: string }) =>
         block?.type === "image"
-          ? { type: "text", text: "[image removed: the model provider rejected a request that carried it]" }
+          ? {
+              type: "text",
+              text: `[${block.mimeType ?? "image"} removed: the model provider rejected a request that carried it]`,
+            }
           : block,
       ),
     } as typeof m;
