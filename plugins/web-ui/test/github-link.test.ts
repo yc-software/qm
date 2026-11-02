@@ -16,27 +16,35 @@ const render = (md: string): HTMLElement => {
   return host;
 };
 
-test("prefixes GitHub pull request links with the GitHub mark", () => {
+test("prefixes github.com links with the GitHub mark", () => {
   for (const url of [
     "https://github.com/yc-software/qm/pull/2848",
     "https://github.com/yc-software/qm/pull/2848/files",
     "https://github.com/yc-software/qm/pull/2848#issuecomment-1",
     'https://github.com/yc-software/qm/pull/2848 "a>b"',
+    "https://github.com/yc-software/qm",
+    "https://github.com/yc-software/qm/issues/12",
+    "https://github.com/yc-software/qm/blob/main/README.md",
+    "https://www.github.com/evebouf",
   ]) {
-    const link = render(`See [PR #2848](${url}).`).querySelector("a")!;
-    assert.equal(link.firstElementChild?.getAttribute("class"), "github-pr-mark", url);
-    assert.equal(link.textContent, "PR #2848", url);
+    const link = render(`See [the link](${url}).`).querySelector("a")!;
+    assert.equal(link.firstElementChild?.getAttribute("class"), "github-mark", url);
+    assert.equal(link.textContent, "the link", url);
   }
+});
+
+test("marks bare github.com URLs", () => {
+  const link = render("See https://github.com/yc-software/qm/pull/2848").querySelector("a")!;
+  assert.equal(link.firstElementChild?.getAttribute("class"), "github-mark");
 });
 
 test("leaves other links alone", () => {
   for (const url of [
-    "https://github.com/yc-software/qm",
-    "https://github.com/yc-software/qm/issues/12",
-    "https://github.com/yc-software/qm/pull/abc",
     "https://gitlab.com/yc-software/code/-/merge_requests/1",
+    "https://gist.github.com/someone/abc",
+    "https://github.com.example.com/a/b",
     "https://example.com/?u=https://github.com/a/b/pull/1",
   ]) {
-    assert.equal(render(`[x](${url})`).querySelector(".github-pr-mark"), null, url);
+    assert.equal(render(`[x](${url})`).querySelector(".github-mark"), null, url);
   }
 });
