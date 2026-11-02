@@ -156,8 +156,8 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     quiet(() => runInit({ dir, org: "acme", target: "fly" }));
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "fly");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
-    assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
+    assert.deepEqual(config.services, ["core", "slack", "auth"]);
+    assert.equal(config.publicUrl, "https://acme-core.fly.dev");
     assert.equal(config.flyOrg, "personal");
     assert.ok(config.region, "region is scaffolded");
     assert.equal(config.appPrefix, "acme");

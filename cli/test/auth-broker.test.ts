@@ -46,34 +46,31 @@ test("the auth broker is hosted inside core, never deployed as a service of its 
   assert.equal(new Set(slots).size, slots.length, "dev port slots stay unique");
 });
 
-test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {
-  const portal = derivedTomlFor(brokerConfig(), "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
-  assert.match(portal, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
-  assert.match(portal, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
-  assert.match(portal, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
-  assert.match(portal, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
-  assert.match(portal, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
-  assert.match(portal, /AUTH_BROKER_PREFIX = "\/idp"/);
-  assert.match(portal, /OIDC_PRINCIPAL_CLAIM = "email"/);
-  assert.match(portal, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
-  assert.doesNotMatch(portal, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
-
+test("fly derives core's whole OIDC block from the in-process broker", () => {
   const core = derivedTomlFor(brokerConfig(), "core", repoRoot);
+  assert.match(core, /OIDC_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
+  assert.match(core, /OIDC_AUTH_ENDPOINT = "https:\/\/agent\.example\.com\/idp\/authorize"/);
+  assert.match(core, /OIDC_TOKEN_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/token"/);
+  assert.match(core, /OIDC_USERINFO_ENDPOINT = "http:\/\/127\.0\.0\.1:8099\/userinfo"/);
+  assert.match(core, /OIDC_JWKS_URI = "http:\/\/127\.0\.0\.1:8099\/\.well-known\/jwks\.json"/);
+  assert.match(core, /AUTH_BROKER_UPSTREAM = "http:\/\/127\.0\.0\.1:8099"/);
+  assert.match(core, /AUTH_BROKER_PREFIX = "\/idp"/);
+  assert.match(core, /AUTH_EMBEDDED = "1"/);
+  assert.match(core, /OIDC_PRINCIPAL_CLAIM = "email"/);
+  assert.match(core, /OIDC_ALLOWED_EMAIL_DOMAIN = "example\.com"/);
   assert.match(core, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "core refuses in-domain external invites");
-
-  const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
-  assert.equal(auth, readFileSync(join(repoRoot, "cli", "templates", "fly", "auth.toml"), "utf8"));
-  assert.match(auth, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
-  assert.match(auth, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
+  assert.match(core, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
+  assert.match(core, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
+  assert.match(core, /AUTH_BRAND_NAME = "Acme"/);
+  assert.doesNotMatch(core, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
 });
 
 test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wiring", () => {
   const acme = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc")).config;
   assert.ok(!acme.services.includes("auth"));
-  const portal = derivedTomlFor(acme, "portal", repoRoot);
-  assert.match(portal, /OIDC_ISSUER = "https:\/\/accounts\.google\.com"/);
-  assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
+  const core = derivedTomlFor(acme, "core", repoRoot);
+  assert.match(core, /OIDC_ISSUER = "https:\/\/accounts\.google\.com"/);
+  assert.doesNotMatch(core, /AUTH_BROKER_UPSTREAM|AUTH_EMBEDDED/);
 });
 
 test("a configured botName brands the docker core env, including the sign-in pages", () => {
@@ -240,7 +237,7 @@ test("a broker deployment with no allowlist at all is refused once secret values
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
 });
 
-test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
+test("fly up staging copies a changed .env email allowlist to core under both names", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
@@ -251,18 +248,23 @@ const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.a
   );
   chmodSync(fly, 0o755);
   writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
-  const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
+  const config = configWith(
+    configText({ services: '["core", "auth"]', env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }).replace(
+      '"target": "docker"',
+      '"target": "fly", "region": "sjc", "flyOrg": "personal"',
+    ),
+  );
   const prior = process.env.FLY_BIN;
   process.env.FLY_BIN = fly;
   try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
+    stageFlyEmailAllowlist(config, dir, new Set(["core"]));
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
   }
   const calls = readFileSync(log, "utf8");
-  const prefix = "acme";
-  assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
-  assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  rmSync(dir, { recursive: true, force: true });
+  assert.match(calls, /-a acme-core AUTH_ALLOWED_EMAILS=- value=new@example\.com,other@example\.com/);
+  assert.match(calls, /-a acme-core OIDC_ALLOWED_EMAILS=- value=new@example\.com,other@example\.com/);
+  assert.doesNotMatch(calls, /acme-(portal|auth|web-ui)/);
 });

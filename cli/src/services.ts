@@ -87,7 +87,6 @@ interface FlyServiceSpec {
   managed: (s: ServiceCtx) => Record<string, string>;
   stackKeys: string[];
   deployFlags: string[];
-  flycast?: boolean;
   publicIngress?: boolean;
 }
 

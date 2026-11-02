@@ -62,7 +62,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
       : {}),
     ...(brand ? { brand } : {}),
     coreUrl: `http://${appPrefix}-core.internal:8080`,
-    authUrl: `http://${appPrefix}-auth.flycast`,
   };
 };
 
@@ -661,13 +660,6 @@ export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
   return url.toString();
 }
 
-function ensureFlycast(app: string): void {
-  const ips = fly(["ips", "list", "-a", app]);
-  if (/private/i.test(ips)) return;
-  fly(["ips", "allocate-v6", "--private", "-a", app]);
-  note(`flycast: allocated private v6 for ${app}`);
-}
-
 function ensurePublicIngress(app: string): void {
   let ips: Array<{ Type?: string }>;
   try {
@@ -761,22 +753,66 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "auth"]);
+const FOLDED_APPS = ["portal", "web-ui", "auth"] as const;
+const FRONT_DOOR_WAIT_MS = 120_000;
 
-export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
-  const phases: ServiceName[][] = [];
-  const remaining = [...services];
-  const coreIndex = remaining.indexOf("core");
-  if (coreIndex !== -1) {
-    phases.push(["core"]);
-    remaining.splice(coreIndex, 1);
+async function waitForFrontDoor(url: string): Promise<void> {
+  const deadline = Date.now() + FRONT_DOOR_WAIT_MS;
+  let last = "";
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (response.ok) return;
+      last = `HTTP ${response.status}`;
+    } catch (error) {
+      last = errMessage(error);
+    }
+    await new Promise((done) => setTimeout(done, 2_000));
   }
-  const parallel = remaining.filter((s) => SAFE_AFTER_CORE.has(s));
-  if (parallel.length) phases.push(parallel);
-  for (const s of remaining) {
-    if (!SAFE_AFTER_CORE.has(s)) phases.push([s]);
+  throw new CliError(
+    `core's public front door ${url} did not answer within ${FRONT_DOOR_WAIT_MS / 1000}s (last: ${last})`,
+  );
+}
+
+function certificateHostnames(app: string): string[] {
+  const raw = fly(["certs", "list", "-a", app, "--json"]);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    throw new CliError(`fly certs list returned invalid JSON for ${app}: ${raw}`);
   }
-  return phases;
+  if (!Array.isArray(parsed)) throw new CliError(`fly certs list returned a non-array for ${app}: ${raw}`);
+  return parsed.flatMap((entry: { Hostname?: unknown } | null) =>
+    typeof entry?.Hostname === "string" && entry.Hostname ? [entry.Hostname] : [],
+  );
+}
+
+async function retireFoldedApps(ctx: FlyCtx, timing: ReturnType<typeof createTimingRecorder>): Promise<void> {
+  const existing = flyOrgApps(ctx.flyOrg);
+  const apps = FOLDED_APPS.map((name) => `${ctx.appPrefix}-${name}`).filter((app) => existing.has(app));
+  if (!apps.length) return;
+  const core = `${ctx.appPrefix}-core`;
+  await timing.timeAsync("core", "front door health", () => waitForFrontDoor(`https://${core}.fly.dev/healthz`));
+  const portal = `${ctx.appPrefix}-portal`;
+  const hostnames = apps.includes(portal) ? certificateHostnames(portal) : [];
+  if (hostnames.length) {
+    warn(
+      `${portal} still holds the certificate for ${hostnames.join(", ")}, so ${apps.join(", ")} keep running. ` +
+        `For each hostname: \`fly certs remove <hostname> -a ${portal}\`, \`fly certs add <hostname> -a ${core}\`, ` +
+        `point its DNS at the addresses \`fly ips list -a ${core}\` shows, then rerun \`qm up\` to remove the old apps.`,
+    );
+    return;
+  }
+  const marker = flyOwnershipMarker(ctx.flyOrg, ctx.orgId, ctx.appPrefix);
+  for (const app of apps) {
+    if (!secretNames(app)?.has(marker)) {
+      warn(`left ${app} in place: it is not marked as owned by this deployment`);
+      continue;
+    }
+    step(`destroying ${app}: core now serves the web UI and sign-in`);
+    timing.time(app, "app destroy", () => fly(["apps", "destroy", app, "--yes"]));
+  }
 }
 
 function resolveServices(config: QmConfig, only?: ServiceName[]): ServiceName[] {
@@ -837,6 +873,12 @@ function buildCtx(config: QmConfig, configDir: string, opts: Pick<FlyUpOpts, "bu
     throw new CliError(`--build-from requires a QM checkout containing src/ and deploy/<service>/Dockerfile`);
   }
   const appPrefix = appPrefixOf(config);
+  if (new URL(config.publicUrl).hostname === `${appPrefix}-portal.fly.dev`) {
+    throw new CliError(
+      `"publicUrl" ${config.publicUrl} is the retired ${appPrefix}-portal app; core now serves this deployment at https://${appPrefix}-core.fly.dev. ` +
+        `Set "publicUrl" to that, and if sign-in goes through an external OIDC provider, register https://${appPrefix}-core.fly.dev/auth/callback as its redirect URI; then rerun the command.`,
+    );
+  }
   if (!config.flyOrg)
     throw new CliError(`config: "flyOrg" is required for the fly target (the Fly org slug that owns the apps)`);
   if (!config.region) throw new CliError(`config: "region" is required for the fly target (e.g. "sjc")`);
@@ -864,7 +906,6 @@ async function deployService(
   const spec = serviceDef(service).fly!;
   note(`\n=== deploying ${app} ===`);
   if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
-  if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
   if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
@@ -883,17 +924,6 @@ async function deployService(
   step(`fly ${args.join(" ")}`);
 
   await timing.timeAsync(service, "fly deploy", () => runFlyDeploy(args, ctx.commandCwd));
-}
-
-async function deployPhase(
-  ctx: FlyCtx,
-  phase: ServiceName[],
-  imageSource: ImageSource | undefined,
-  timing: ReturnType<typeof createTimingRecorder>,
-): Promise<void> {
-  if (phase.length > 1)
-    note(`\n=== deploying in parallel: ${phase.map((s) => `${ctx.appPrefix}-${s}`).join(", ")} ===`);
-  await settleAll(phase.map((s) => deployService(ctx, s, imageSource, timing)));
 }
 
 async function buildServiceImage(
@@ -1261,7 +1291,8 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
 
-    for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
+    for (const service of services) await deployService(ctx, service, imageSource, timing);
+    if (services.includes("core")) await retireFoldedApps(ctx, timing);
     await deployPlugins(ctx, plugins, imageSource, timing);
     if (ctx.sourceRoot) recordServiceImages(ctx, services, opts.configPath);
 

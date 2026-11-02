@@ -127,7 +127,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
   publicWebUrl?: string;
-  flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
   skillSigningSecret?: string;
@@ -624,7 +623,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
-    ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),

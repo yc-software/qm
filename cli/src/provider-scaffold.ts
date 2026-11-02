@@ -190,7 +190,7 @@ export const flyScaffold: ProviderScaffold = {
     renderConfig(orgId, {
       target: "fly",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.fly.dev`,
+      publicUrl: `https://${orgId}-core.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
   "appPrefix": ${JSON.stringify(orgId)},
@@ -199,7 +199,7 @@ export const flyScaffold: ProviderScaffold = {
   "region": "sjc",
   "flyOrg": "personal",
 `,
-      services: ["core", "slack", "web-ui", "portal", "auth"],
+      services: ["core", "slack", "auth"],
       env: `{ "core": { "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 

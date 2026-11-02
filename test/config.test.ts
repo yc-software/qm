@@ -483,14 +483,12 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   );
 });
 
-test("Fly identity and Slack runtime settings are parsed once into Config", () => {
+test("Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
-    FLY_APP_NAME: "qm-core",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_API_URL: "https://slack.example/api",
   });
-  assert.equal(config.flyAppName, "qm-core");
   assert.deepEqual(config.slack, {
     botToken: "xoxb-test",
     appToken: "xapp-test",
