@@ -33,7 +33,7 @@ function webReleaseStore(config: QmConfig): ReleaseStore {
   }
   if (config.target === "render")
     throw new CliError(
-      "Render keeps the deployment's object storage private to the Render project, so qm ui publish cannot reach it; ship web UI changes with `qm up`",
+      "Render keeps the credentials for the deployment's MinIO storage only in its Render services, so qm ui publish has none to write the web UI with; ship web UI changes with `qm up`",
     );
   const bucket = core.S3_BUCKET?.trim();
   if (core.SNAPSHOT_STORE !== "s3" || !bucket)
