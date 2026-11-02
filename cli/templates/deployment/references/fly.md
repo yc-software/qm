@@ -63,6 +63,14 @@ answers, destroys the three old apps. A custom domain whose certificate is on th
 portal app keeps them running until the certificate moves to the core app; `qm up`
 prints the steps.
 
+## Web UI releases
+
+`npm exec qm -- ui publish --dir <built dist-web>` makes a new web UI live in
+seconds without restarting core; `--release <id>` switches back. The bucket is
+Tigris, so export `AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev` and an
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair for `env.core.S3_BUCKET`,
+created in the Tigris dashboard that `fly storage dashboard <bucket>` opens.
+
 ## Agent-computer proof
 
 Use the exact signed-in principal to select one sandbox Machine by its

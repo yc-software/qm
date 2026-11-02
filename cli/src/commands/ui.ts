@@ -42,6 +42,10 @@ function webReleaseStore(config: QmConfig): ReleaseStore {
       "qm ui publish writes to the deployment's S3 bucket, but env.core does not set SNAPSHOT_STORE=s3 and S3_BUCKET; core serves the web UI from its data directory, so ship web UI changes with `qm up`",
     );
   const endpoint = core.AWS_ENDPOINT_URL_S3?.trim();
+  if (config.target === "fly" && !endpoint && !process.env.AWS_ENDPOINT_URL_S3?.trim())
+    throw new CliError(
+      `the fly target keeps ${bucket} in Tigris, not AWS S3: export AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev and an AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY pair for the bucket (create one with \`fly storage dashboard ${bucket}\`), then rerun qm ui publish`,
+    );
   return {
     root: `s3://${bucket}/${prefix}web-ui/`,
     region: core.S3_REGION?.trim() || "auto",
