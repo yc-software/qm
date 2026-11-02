@@ -112,10 +112,6 @@
 .side-chat-panel .custom-chat-shell:has(> .chat-scroll):not(.empty-chat) > .chat-bottom-dock {
   margin-top: 0;
 }
-.side-chat-conversation .scroll-bottom-rail {
-  width: calc(100% - 20px);
-  margin-inline: 10px;
-}
 .side-chat-conversation .composer-wrap {
   width: calc(100% - 20px);
   border: 0;
@@ -241,10 +237,6 @@
   margin-bottom: 0;
 }
 
-.side-chat-panel:not(.maximized) .scroll-bottom-rail {
-  width: auto;
-  margin-inline: 10px;
-}
 .side-chat-panel:not(.maximized) .composer-wrap {
   display: flex;
   align-items: flex-end;

@@ -3260,17 +3260,17 @@ qm-markdown .tok-in {
   position: relative;
   z-index: 4;
   min-width: 0;
+  anchor-scope: --qm-composer;
 }
-.scroll-bottom-rail {
-  position: relative;
-  width: min(var(--content-w), calc(100% - 32px));
-  height: 0;
-  margin: 0 auto;
+.chat-bottom-dock .composer-wrap {
+  anchor-name: --qm-composer;
 }
 .scroll-bottom-btn {
   position: absolute;
-  right: 0;
-  bottom: 8px;
+  position-anchor: --qm-composer;
+  right: max(16px, calc((100% - var(--content-w)) / 2));
+  right: anchor(right);
+  bottom: calc(100% + 8px);
   display: grid;
   place-items: center;
   width: 32px;
@@ -3301,9 +3301,12 @@ qm-markdown .tok-in {
     opacity 160ms ease,
     transform 160ms ease;
 }
-.split-canvas:not(.single-pane) .split-pane-chat .scroll-bottom-rail {
-  width: auto;
-  margin-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right));
+@media (prefers-reduced-motion: reduce) {
+  .scroll-bottom-btn,
+  .chat-scroll[data-away-from-bottom] ~ .chat-bottom-dock .scroll-bottom-btn {
+    transform: none;
+    transition: none;
+  }
 }
 .suggested-activities {
   display: grid;
@@ -8261,11 +8264,6 @@ h3.ambient-field-label {
     margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
     margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
   }
-  .scroll-bottom-rail {
-    width: auto;
-    margin-right: max(16px, calc(10px + env(safe-area-inset-right)));
-    margin-left: max(16px, calc(10px + env(safe-area-inset-left)));
-  }
 }
 @container chat (max-width: 470px) {
   .custom-chat-shell {
@@ -8283,10 +8281,6 @@ h3.ambient-field-label {
   .chat-bottom-dock > .bg-activity {
     margin-right: calc(22px + env(safe-area-inset-right));
     margin-left: calc(22px + env(safe-area-inset-left));
-  }
-  .scroll-bottom-rail {
-    margin-right: calc(10px + env(safe-area-inset-right));
-    margin-left: calc(10px + env(safe-area-inset-left));
   }
 }
 [data-density="card"] .live-work-status,
@@ -10551,10 +10545,6 @@ h3.ambient-field-label {
     padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 20px;
   }
-  .scroll-bottom-rail {
-    width: calc(100% - 16px);
-    margin-inline: auto;
-  }
   .composer-wrap > * {
     grid-column: 1 / -1;
   }
@@ -11778,10 +11768,6 @@ body.app-edit-embed .message-stack {
   max-width: none;
   margin: 0;
   padding-inline: 24px;
-}
-body.app-edit-embed .scroll-bottom-rail {
-  width: 100%;
-  margin: 0;
 }
 body.app-edit-embed .composer-wrap {
   --composer-font-size: var(--font-13);
