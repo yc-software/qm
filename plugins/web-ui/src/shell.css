@@ -6609,12 +6609,11 @@ a.connector-widget:focus-visible {
   font-weight: 600;
 }
 .cron-filter-chip:hover {
-  background: var(--secondary);
   color: var(--foreground);
 }
 .cron-filter-chip.active {
-  background: color-mix(in srgb, var(--foreground) 88%, var(--secondary));
-  color: var(--background);
+  background: var(--secondary);
+  color: var(--foreground);
 }
 .cron-filter-count {
   font-variant-numeric: tabular-nums;
