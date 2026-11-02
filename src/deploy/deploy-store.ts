@@ -216,8 +216,8 @@ export function deployTouchDebounceMs(reapTtlMs?: number): number {
 }
 
 function isNameConflict(e: unknown): boolean {
-  const err = e as { code?: string; constraint?: string } | null;
-  return err?.code === "23505" && err?.constraint === NAME_INDEX;
+  const err = e as { code?: string; constraint_name?: string } | null;
+  return err?.code === "23505" && err?.constraint_name === NAME_INDEX;
 }
 
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {

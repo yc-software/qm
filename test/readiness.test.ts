@@ -104,9 +104,9 @@ test("readiness bounds a blackholed Postgres handshake and cleans up the pending
     assert.deepEqual(await response.json(), { ok: false });
     assert.equal((await srv.get("/healthz")).status, 200);
   } finally {
-    for (const socket of sockets) socket.destroy();
     await srv.close();
     await pg.close();
+    for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => blackhole.close(() => resolve()));
   }
 });

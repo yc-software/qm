@@ -6,6 +6,7 @@ import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
 import { rawPg, type RawPg } from "./support/raw-pg.ts";
+import { createPgPool, reservePg } from "../src/persistence/pg-pool.ts";
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);
@@ -132,7 +133,7 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
   );
 });
 
-const storedVectors = async (client: RawPg, scope: string, model: string) =>
+const storedVectors = async (client: Pick<RawPg, "query">, scope: string, model: string) =>
   (
     await client.query(
       `SELECT fact_id, fact_hash, dimensions, embedding::text AS embedding FROM memory_fact_vectors
@@ -146,9 +147,11 @@ test("put waits on in-flight edits and never writes stale or deleted fact vector
   const model = `race-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = rawPg(url!);
+  const holder = createPgPool(url!);
+  const client = await reservePg(await holder.sessionPool());
   t.after(async () => {
-    await client.close();
+    client.release();
+    await holder.close();
     await index.close();
   });
   await base.capture(scope, ["race alpha", "race beta"], 1000);

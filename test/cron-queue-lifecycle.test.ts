@@ -23,6 +23,7 @@ mock.module("../src/persistence/pg-pool.ts", {
         },
       };
     },
+    reservePg: async (sql: { query: () => Promise<unknown> }) => ({ query: sql.query, release: () => {} }),
   },
 });
 

@@ -78,7 +78,7 @@ async function releasePool(
   if (!entry || entry.pool !== pool) return;
   if (--entry.users === 0) {
     sharedPools.delete(key);
-    await usePg(pool, () => pool.end());
+    await usePg(pool, () => pool.end({ timeout: 5 }));
   }
 }
 
@@ -407,7 +407,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
         );
       } finally {
-        await usePg(pool, () => pool.end());
+        await usePg(pool, () => pool.end({ timeout: 5 }));
       }
     });
   }

@@ -483,8 +483,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ],
       )
       .catch((err: unknown) => {
-        const e = err as { code?: unknown; constraint?: unknown };
-        if (e?.code !== "23505" || e.constraint !== "items_one_call_per_kind") throw err;
+        const e = err as { code?: unknown; constraint_name?: unknown };
+        if (e?.code !== "23505" || e.constraint_name !== "items_one_call_per_kind") throw err;
         throw new DuplicateCallError(
           sessionId,
           items.flatMap((item) => (item.callId ? [item.callId] : [])),

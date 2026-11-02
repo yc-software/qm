@@ -23,6 +23,8 @@ export interface PgConnection {
 }
 
 const CONNECT_TIMEOUT_S = 10;
+const IDLE_CLOSE_MS = 10_000;
+const { setTimeout: startTimer, clearTimeout: stopTimer } = globalThis;
 
 function pgText(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
@@ -70,6 +72,7 @@ export function pgConnectionOptions(connectionString: string, ca?: string): PgCo
 interface IdleState {
   busy: number;
   sockets: Set<Socket>;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 interface SocketTarget {
@@ -132,12 +135,19 @@ export function openPgSql(
 function holdPg(sql: Sql): () => void {
   const state = idleStates.get(sql);
   if (!state) return () => {};
-  if (state.busy++ === 0) for (const socket of state.sockets) socket.ref();
+  if (state.busy++ === 0) {
+    stopTimer(state.timer);
+    for (const socket of state.sockets) socket.ref();
+  }
   let held = true;
   return () => {
     if (!held) return;
     held = false;
-    if (--state.busy === 0) for (const socket of state.sockets) socket.unref();
+    if (--state.busy > 0) return;
+    for (const socket of state.sockets) socket.unref();
+    state.timer = startTimer(() => {
+      if (state.busy === 0) void (sql as unknown as { close(): Promise<void> }).close();
+    }, IDLE_CLOSE_MS).unref();
   };
 }
 

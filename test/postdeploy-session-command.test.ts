@@ -5,24 +5,20 @@ import { testConfig } from "./support/test-config.ts";
 const events: string[] = [];
 let invalidIndexes = false;
 let databaseOptions: Record<string, unknown> = {};
-mock.module("pg", {
-  defaultExport: {
-    Client: class {
-      constructor(options: Record<string, unknown>) {
-        databaseOptions = options;
-      }
-      async connect() {
-        events.push("database-connect");
-      }
-      async query(sql: string) {
+mock.module("postgres", {
+  defaultExport: (_url: string, options: Record<string, unknown>) => {
+    databaseOptions = options;
+    events.push("database-connect");
+    return {
+      async unsafe(sql: string) {
         const index = sql.includes("pg_index");
         events.push(index ? "index-check" : "parallel-check");
-        return { rows: index && invalidIndexes ? [{ index_name: "invalid" }] : [] };
-      }
+        return index && invalidIndexes ? [{ index_name: "invalid" }] : [];
+      },
       async end() {
         events.push("database-close");
-      }
-    },
+      },
+    };
   },
 });
 const { runSessionSmoke } = await import("../src/deployment/postdeploy-smoke.ts");
@@ -70,8 +66,8 @@ test("session command preserves archive then database checks with bounded reques
     "database-close",
   ]);
   assert.deepEqual(timeouts, [300_000, 60_000, 30_000, 30_000, 30_000]);
-  for (const option of ["connectionTimeoutMillis", "query_timeout", "statement_timeout"])
-    assert.equal(databaseOptions[option], 30_000);
+  assert.equal(databaseOptions.connect_timeout, 30);
+  assert.deepEqual(databaseOptions.connection, { statement_timeout: 30_000 });
   invalidIndexes = true;
   events.length = 0;
   try {

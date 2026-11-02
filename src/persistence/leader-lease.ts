@@ -38,7 +38,8 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
       entry.cp = pg.dedicated({
         onclose: () => {
           if (conn !== entry) return;
-          swallow("leader-lease: lock connection died (its locks auto-released)", new Error("connection closed"));
+          if (entry.lost.size)
+            swallow("leader-lease: lock connection died (its locks auto-released)", new Error("connection closed"));
           void entry.cp.then((c) => drop(entry, c));
         },
       });
