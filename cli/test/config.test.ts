@@ -301,7 +301,7 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
@@ -310,11 +310,11 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
             taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
             assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
           },
-          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+          linear: { ecrRepository: "linear", ecsService: "acme-linear", cpu: 512, memory: 1024 },
         },
       },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by linear/),
   );
   withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
@@ -670,12 +670,12 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     withConfig(
       {
         target: "aws",
-        services: ["core", "web-ui"],
+        plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
         aws: {
           ...aws,
           services: {
             core: service,
-            "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", [field]: service[field] },
+            linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", [field]: service[field] },
           },
         },
       },
@@ -764,12 +764,12 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
           core: { ...service, targetGroup: "shared-tg" },
-          "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", targetGroup: "shared-tg" },
+          linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", targetGroup: "shared-tg" },
         },
       },
     },
@@ -1481,7 +1481,7 @@ test("proxy deployment rendering names the mode and classifier", () => {
 });
 
 test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
-  const workloads = ["core", "web-ui", "portal", "auth", "linear"];
+  const workloads = ["core", "egress-proxy", "linear"];
   const config = {
     plugins: [{ name: "linear" }],
     imageOverrides: {},

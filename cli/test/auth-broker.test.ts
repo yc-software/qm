@@ -104,7 +104,7 @@ test("docker and AWS wire the broker with parity", () => {
 
   const aws = configWith(`{
     "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
-    "services": ["core", "web-ui", "portal", "auth"], "plugins": [], "skills": [],
+    "services": ["core", "auth"], "plugins": [], "skills": [],
     "env": { "core": { "AWS_DEPLOY_IMAGE": "acme-sandbox" }, "auth": { "AUTH_EMAIL_TRANSPORT": "smtp", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } },
     "aws": {
       "accountId": "123456789012", "region": "us-west-2", "cluster": "acme-qm",
@@ -112,25 +112,22 @@ test("docker and AWS wire the broker with parity", () => {
       "secretsPrefix": "acme/qm/", "imageLabel": "latest",
       "networking": { "cloudMapNamespace": "acme.internal" },
       "services": {
-        "core": { "ecrRepository": "acme-qm-core", "ecsService": "acme-qm-core", "cpu": 2048, "memory": 4096 },
-        "web-ui": { "ecrRepository": "acme-qm-web-ui", "ecsService": "acme-qm-web-ui", "cpu": 512, "memory": 1024 },
-        "portal": { "ecrRepository": "acme-qm-portal", "ecsService": "acme-qm-portal", "cpu": 512, "memory": 1024 },
-        "auth": { "ecrRepository": "acme-qm-auth", "ecsService": "acme-qm-auth", "cpu": 256, "memory": 512 }
+        "core": { "ecrRepository": "acme-qm-core", "ecsService": "acme-qm-core", "cpu": 2048, "memory": 4096 }
       }
     }
   }`);
-  const awsPortal = serviceEnvironment(aws, "portal");
-  assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(awsPortal.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
-  assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
-  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+  const awsCore = serviceEnvironment(aws, "core");
+  assert.equal(awsCore.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(awsCore.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+  assert.equal(awsCore.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(awsCore.AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(
-    awsPortal.PORTAL_XFF_TRUSTED_HOPS,
+    awsCore.PORTAL_XFF_TRUSTED_HOPS,
     "1",
     "only the hop the load balancer appends is unforgeable; counting further left would select a client-prepended entry",
   );
-  assert.equal(serviceEnvironment(aws, "auth").AUTH_ISSUER, "https://agent.example.com/idp");
-  assert.equal(serviceEnvironment(aws, "auth").PORT, "8080");
+  assert.equal(awsCore.AUTH_ISSUER, "https://agent.example.com/idp");
+  assert.equal(awsCore.PORT, "8080");
 });
 
 test("docker local wires the host daemon coordinates only into core", () => {
