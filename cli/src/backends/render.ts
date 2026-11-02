@@ -668,7 +668,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           throw new CliError("Render rollback is incomplete; run qm rollback before deployment");
         const values = credentialValues(ctx);
         requireSecrets(ctx, values);
-        await doctorCommon(ctx.config, values, { configDir: ctx.configDir });
+        await doctorCommon(ctx.config, { values, source: "partial" }, { configDir: ctx.configDir });
         const request = api(ctx);
         await request(`/owners/${state.workspaceId}`);
         await recoverPendingCreate(ctx, request, state, desired);
@@ -1024,7 +1024,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
     doctor: async () => {
       const values = credentialValues(ctx);
       requireSecrets(ctx, values);
-      await doctorCommon(ctx.config, values, { configDir: ctx.configDir });
+      await doctorCommon(ctx.config, { values, source: "partial" }, { configDir: ctx.configDir });
       const render = coordinates(ctx.config);
       const request = api(ctx);
       await request(`/owners/${render.workspaceId}`);

@@ -10,8 +10,8 @@ import {
 } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, readEnvFile, which } from "../util.ts";
-import { serviceSecretValue } from "../secrets.ts";
-import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
+import { serviceSecretValue, type SecretValues } from "../secrets.ts";
+import { EMAIL_DISABLED_STEP, emailSignInState, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
@@ -142,9 +142,10 @@ export function requireFlyAuth(): void {
 
 export async function doctorCommon(
   config: QmConfig,
-  secrets: Map<string, string>,
+  store: SecretValues,
   opts: { allowMissingValues?: boolean; configDir?: string } = {},
 ): Promise<void> {
+  const secrets = store.values;
   if (localSandboxActive(config)) {
     step("local Docker sandbox: configured");
   } else if (config.target === "render") {
@@ -187,11 +188,11 @@ export async function doctorCommon(
         : "portal OIDC client and tenant trust boundary: ok",
     );
   }
-  if (config.services.includes("auth")) await authBrokerCheck(config, secrets, !opts.allowMissingValues);
+  if (config.services.includes("auth")) await authBrokerCheck(config, store);
   await baseModelCheck(config, secrets);
 }
 
-async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
+async function baseModelCheck(config: QmConfig, secrets: ReadonlyMap<string, string>): Promise<void> {
   const provider = effectiveModelProvider(config);
   if (!provider) {
     step("base model: no modelProvider set — an administrator supplies the key from the Admin page");
@@ -253,15 +254,16 @@ async function resendCheck(apiKey: string): Promise<void> {
   if (!res.ok) throw new CliError(`the Resend API returned HTTP ${res.status}; retry when it recovers`);
 }
 
-async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, haveValues: boolean): Promise<void> {
-  if (haveValues && !emailTransportConfigured(config, secrets)) {
-    step("sign-in email: disabled; use qm admin-login for administrator access");
+async function authBrokerCheck(config: QmConfig, secrets: SecretValues): Promise<void> {
+  const state = emailSignInState(config, secrets);
+  if (state === "disabled") {
+    step(EMAIL_DISABLED_STEP);
     return;
   }
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
-  const value = (name: string): string | undefined => serviceSecretValue(config, "auth", name, secrets);
+  const value = (name: string): string | undefined => serviceSecretValue(config, "auth", name, secrets.values);
   const sender = value("AUTH_EMAIL_FROM");
-  if (haveValues) {
+  if (state === "enabled") {
     const address = (/<([^>]+)>\s*$/.exec((sender ?? "").trim())?.[1] ?? sender ?? "").trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
       throw new CliError(

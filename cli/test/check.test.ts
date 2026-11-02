@@ -536,3 +536,49 @@ test("only public PostHog ingestion tokens may be configured as plaintext", () =
     }
   }
 });
+
+test("check reports sign-in email as uninspected, not disabled, when a remote secret store holds the values", async () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    imageLabel: "release",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    networking: { cloudMapNamespace: "acme.internal" },
+    services: {
+      core: { ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 },
+      auth: { ecrRepository: "qm-auth", ecsService: "acme-auth", cpu: 256, memory: 512 },
+      portal: { ecrRepository: "qm-portal", ecsService: "acme-portal", cpu: 256, memory: 512 },
+    },
+  } as const;
+  const outputOf = async (target: "aws" | "docker", envFile?: string): Promise<string> => {
+    const { dir, config } = deployment(() => {}, {
+      services: ["core", "auth"],
+      sandbox: undefined,
+      env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
+      ...(target === "aws"
+        ? { target, aws, env: { core: { AWS_DEPLOY_IMAGE: "acme-sandbox" }, auth: { AUTH_EMAIL_TRANSPORT: "resend" } } }
+        : {}),
+    });
+    if (envFile !== undefined) writeFileSync(join(dir, ".env"), envFile);
+    const lines: string[] = [];
+    const log = console.log;
+    const warn = console.warn;
+    console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
+    console.warn = (...parts: unknown[]): void => void lines.push(parts.join(" "));
+    try {
+      await runCheckCommand(config, dir, join(dir, "sandbox"), undefined, true);
+    } finally {
+      console.log = log;
+      console.warn = warn;
+      rmSync(dir, { recursive: true, force: true });
+    }
+    return lines.join("\n");
+  };
+  const remote = await outputOf("aws");
+  assert.doesNotMatch(remote, /sign-in email: disabled/);
+  assert.match(remote, /sign-in email: not inspected/);
+  assert.doesNotMatch(await outputOf("aws", "RESEND_API_KEY=\n"), /sign-in email: disabled/);
+  assert.match(await outputOf("docker"), /sign-in email: disabled/);
+});

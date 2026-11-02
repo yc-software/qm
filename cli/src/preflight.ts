@@ -5,7 +5,7 @@ import { createTransport } from "nodemailer";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
-import { emailSecretNames, serviceSecretValue } from "./secrets.ts";
+import { emailSecretNames, serviceSecretValue, type SecretValues } from "./secrets.ts";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -147,22 +147,27 @@ export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
   }
 }
 
-export function emailTransportConfigured(config: QmConfig, secrets: ReadonlyMap<string, string>): boolean {
+export type EmailSignInState = "enabled" | "disabled" | "uninspected";
+
+export function emailSignInState(config: QmConfig, { values, source }: SecretValues): EmailSignInState {
   const names = emailSecretNames(config);
-  return names.length > 0 && names.every((name) => Boolean(serviceSecretValue(config, "auth", name, secrets)?.trim()));
+  if (names.length && names.every((name) => serviceSecretValue(config, "auth", name, values)?.trim())) return "enabled";
+  return source === "complete" ? "disabled" : "uninspected";
 }
 
-export async function emailTransportPreflight(
-  config: QmConfig,
-  secrets: ReadonlyMap<string, string>,
-  report = true,
-): Promise<void> {
+export const EMAIL_DISABLED_STEP = "sign-in email: disabled; use qm admin-login for administrator access";
+
+export async function emailTransportPreflight(config: QmConfig, secrets: SecretValues, report = true): Promise<void> {
   if (!config.services.includes("auth")) return;
-  const configured = emailTransportConfigured(config, secrets);
-  if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
+  const state = emailSignInState(config, secrets);
+  if (state === "disabled") step(EMAIL_DISABLED_STEP);
+  if (state === "uninspected" && report)
+    step("sign-in email: not inspected; the local env file does not show the deployed email settings");
   const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const value = (name: string): string | undefined =>
-    (serviceSecretValue(config, "auth", name, secrets) ?? deploymentSecretValue(name, secrets.get(name)))?.trim();
+    (
+      serviceSecretValue(config, "auth", name, secrets.values) ?? deploymentSecretValue(name, secrets.values.get(name))
+    )?.trim();
   if (transport === "resend") {
     const stray = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].filter((name) => value(name));
     if (stray.length) {
@@ -179,7 +184,7 @@ export async function emailTransportPreflight(
         "core still uses it to email external-user invitations",
     );
   }
-  if (!configured) return;
+  if (state !== "enabled") return;
   const host = value("SMTP_HOST");
   const username = value("SMTP_USERNAME");
   const password = value("SMTP_PASSWORD");

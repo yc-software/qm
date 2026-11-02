@@ -12,6 +12,9 @@ import {
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
 import { dockerDoctor } from "../src/backends/docker.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
+import type { SecretValues } from "../src/secrets.ts";
+
+const complete = (values: ReadonlyMap<string, string>): SecretValues => ({ values, source: "complete" });
 
 const config: QmConfig = {
   contract: 1,
@@ -59,9 +62,9 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
     ["PORTAL_IDENTITY_SECRET", "d".repeat(64)],
     ["SKILL_SIGNING_SECRET", "e".repeat(64)],
   ]);
-  await assert.doesNotReject(doctorCommon(deferredConfig, required));
+  await assert.doesNotReject(doctorCommon(deferredConfig, complete(required)));
   await assert.rejects(
-    doctorCommon(deferredConfig, new Map([...required, ["SLACK_BOT_TOKEN", "xoxb-only"]])),
+    doctorCommon(deferredConfig, complete(new Map([...required, ["SLACK_BOT_TOKEN", "xoxb-only"]]))),
     /both SLACK_BOT_TOKEN and SLACK_APP_TOKEN/,
   );
 });
@@ -76,7 +79,7 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   };
   for (const oidcClientId of ["", "   ", "replace-me", " replace-me "]) {
     await assert.rejects(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: oidcClientId } } }, new Map()),
+      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: oidcClientId } } }, complete(new Map())),
       /OIDC_CLIENT_ID may not be a placeholder/,
     );
   }
@@ -86,7 +89,10 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   ];
   for (const gate of rejectedGates) {
     await assert.rejects(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
+      doctorCommon(
+        { ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } },
+        complete(new Map()),
+      ),
       /must be a valid, non-placeholder email domain|may not be a placeholder/,
     );
   }
@@ -97,7 +103,10 @@ test("doctor rejects missing and placeholder portal OIDC client ids and tenant g
   ];
   for (const gate of acceptedGates) {
     await assert.doesNotReject(
-      doctorCommon({ ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } }, new Map()),
+      doctorCommon(
+        { ...portalConfig, env: { portal: { OIDC_CLIENT_ID: "real-client-id", ...gate } } },
+        complete(new Map()),
+      ),
     );
   }
   assert.doesNotThrow(() =>
@@ -137,10 +146,20 @@ test("remote doctor keeps missing local email values distinct from disabled emai
       const output: string[] = [];
       console.log = (...values: unknown[]): void => void output.push(values.join(" "));
       console.warn = (...values: unknown[]): void => void output.push(values.join(" "));
-      await assert.doesNotReject(doctorCommon(brokerConfig, secrets, { allowMissingValues: true }));
+      await assert.doesNotReject(
+        doctorCommon(brokerConfig, { values: secrets, source: "partial" }, { allowMissingValues: true }),
+      );
       assert.match(output.join("\n"), /RESEND_API_KEY is not available locally/);
       assert.doesNotMatch(output.join("\n"), /sign-in email: disabled/);
     }
+    const blank = new Map([["RESEND_API_KEY", ""]]);
+    const output: string[] = [];
+    console.log = (...values: unknown[]): void => void output.push(values.join(" "));
+    console.warn = (...values: unknown[]): void => void output.push(values.join(" "));
+    await doctorCommon(brokerConfig, { values: blank, source: "partial" });
+    assert.doesNotMatch(output.join("\n"), /sign-in email: disabled/);
+    await doctorCommon(brokerConfig, complete(blank));
+    assert.match(output.join("\n"), /sign-in email: disabled/);
   } finally {
     console.log = log;
     console.warn = warn;
@@ -159,7 +178,7 @@ test("doctor requires portal identity and email sender values by default", async
         services: ["core", "portal"],
         env: { portal: { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
       },
-      new Map(),
+      complete(new Map()),
     ),
     /requires a non-placeholder OIDC_CLIENT_ID/,
   );
@@ -176,10 +195,12 @@ test("doctor requires portal identity and email sender values by default", async
           },
         },
       },
-      new Map([
-        ["RESEND_API_KEY", "re_test"],
-        ["AUTH_EMAIL_FROM", "invalid"],
-      ]),
+      complete(
+        new Map([
+          ["RESEND_API_KEY", "re_test"],
+          ["AUTH_EMAIL_FROM", "invalid"],
+        ]),
+      ),
     ),
     /AUTH_EMAIL_FROM must be a verified sender address/,
   );
@@ -472,7 +493,7 @@ test("slackCheck passes when granted scopes are a superset of the manifest's", a
   const dir = manifestDir();
   try {
     await withStubbedSlack({ auth: authOk("chat:write, users:read, extra:scope") }, () =>
-      doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+      doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir }),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -495,7 +516,7 @@ test("Slack doctor validates deployment-file tokens before conflicting ambient t
       : new Response(JSON.stringify({ ok: true }), { status: 200 });
   }) as typeof fetch;
   try {
-    await doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir });
+    await doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir });
     assert.deepEqual(seen, ["Bearer xoxb-test", "Bearer xapp-test"]);
   } finally {
     globalThis.fetch = priorFetch;
@@ -521,7 +542,7 @@ test("Slack doctor validates the bot through its configured API while Socket Mod
   try {
     await doctorCommon(
       slackConfig(),
-      new Map([...SLACK_TOKENS, ["SLACK_API_URL", "https://slack-twin.example/api/"]]),
+      complete(new Map([...SLACK_TOKENS, ["SLACK_API_URL", "https://slack-twin.example/api/"]])),
       { configDir: dir },
     );
     assert.deepEqual(seen, ["https://slack-twin.example/api/auth.test", "https://slack.com/api/apps.connections.open"]);
@@ -536,7 +557,7 @@ test("Slack doctor does not require a Socket Mode token for HTTP events", async 
   const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
   try {
     await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
-      doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
+      doctorCommon(httpConfig, complete(new Map([["SLACK_BOT_TOKEN", "xoxb-test"]])), { configDir: dir }),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -547,7 +568,10 @@ test("slackCheck fails naming each manifest scope the token lacks", async () => 
   const dir = manifestDir();
   try {
     await withStubbedSlack({ auth: authOk("chat:write") }, () =>
-      assert.rejects(doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }), /missing scopes: users:read/),
+      assert.rejects(
+        doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir }),
+        /missing scopes: users:read/,
+      ),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -561,7 +585,7 @@ test("slackCheck surfaces a rejected bot token with Slack's error code", async (
       { auth: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }) },
       () =>
         assert.rejects(
-          doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+          doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir }),
           /bot token rejected \(invalid_auth\)/,
         ),
     );
@@ -575,7 +599,7 @@ test("slackCheck treats a missing x-oauth-scopes header as zero granted scopes, 
   try {
     await withStubbedSlack({ auth: authOk() }, () =>
       assert.rejects(
-        doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+        doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir }),
         /missing scopes: chat:write, users:read/,
       ),
     );
@@ -594,7 +618,7 @@ test("slackCheck rejects a bad Socket Mode app token even when the bot token pas
       },
       () =>
         assert.rejects(
-          doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+          doctorCommon(slackConfig(), complete(SLACK_TOKENS), { configDir: dir }),
           /app token rejected \(invalid_auth\)/,
         ),
     );
@@ -615,14 +639,16 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
   try {
     await doctorCommon(
       noSandbox,
-      new Map([
-        ["PUBLIC_API_URL", "https://acme.example.com"],
-        ["CAPABILITY_SECRET", "capability-value"],
-        ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
-        ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
-        ["PORTAL_IDENTITY_SECRET", "identity-value"],
-        ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
-      ]),
+      complete(
+        new Map([
+          ["PUBLIC_API_URL", "https://acme.example.com"],
+          ["CAPABILITY_SECRET", "capability-value"],
+          ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
+          ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
+          ["PORTAL_IDENTITY_SECRET", "identity-value"],
+          ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
+        ]),
+      ),
     );
     assert.ok(
       lines.some((line) => line.includes("sandbox: not configured")),
@@ -721,10 +747,15 @@ test("doctor without required local values warns-and-skips the live Slack check 
   const warned: string[] = [];
   console.warn = (...parts: unknown[]): void => void warned.push(parts.join(" "));
   try {
-    await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
-      configDir: dir,
-      allowMissingValues: true,
-    });
+    await doctorCommon(
+      { ...config, services: ["core", "slack"] },
+      { values: new Map(), source: "partial" },
+      {
+        configDir: dir,
+
+        allowMissingValues: true,
+      },
+    );
     assert.ok(
       warned.some((line) => line.includes("skipping the live Slack check")),
       `warned: ${warned.join(" | ")}`,
