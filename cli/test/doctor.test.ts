@@ -16,7 +16,7 @@ import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 const config: QmConfig = {
   contract: 1,
   orgId: "acme",
-  publicUrl: "http://localhost:8080",
+  publicUrl: "http://localhost:8082",
   target: "docker",
   services: ["core"],
   plugins: [],

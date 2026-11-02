@@ -77,7 +77,7 @@ test("layer sync exposes deployment-layer reconciliation", async () => {
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -99,7 +99,7 @@ test("check --json reports failures under a stable contract clause id", async ()
     JSON.stringify({
       contract: 2,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
     }),
@@ -135,7 +135,7 @@ test("check --json reserves exit 2 for an unsupported live invocation", async ()
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -158,7 +158,7 @@ test("check flag typos are invocation errors and never print a success first", a
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -187,7 +187,7 @@ test("non-JSON check --live fails when the target has no live drift implementati
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -390,7 +390,7 @@ test("--tail must be a non-negative integer", async () => {
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -412,7 +412,7 @@ test("--env-file that does not exist is an error", async () => {
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -440,7 +440,7 @@ test("docker --only is rejected explicitly instead of silently restarting the fu
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
     }),
@@ -548,7 +548,7 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
     JSON.stringify({
       contract: 1,
       orgId: "flagged",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -591,7 +591,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },
@@ -630,7 +630,7 @@ test("--target revalidates the effective provider config", async () => {
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { backend: "sprites", app: "acme-sandboxes" },
@@ -649,7 +649,7 @@ test("check --json routes failures on structured clause data, not message sniffi
   const base = {
     contract: 1,
     orgId: "acme",
-    publicUrl: "http://localhost:8080",
+    publicUrl: "http://localhost:8082",
     target: "docker",
     services: ["core"],
     sandbox: { app: "acme-sandboxes" },
@@ -705,7 +705,7 @@ test("check --json groups a multi-clause failure under each error's own clause, 
     JSON.stringify({
       contract: 1,
       orgId: "acme",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: { app: "acme-sandboxes" },

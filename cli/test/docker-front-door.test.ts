@@ -42,7 +42,7 @@ process.exit(0);
   return argvLog;
 }
 
-async function up(logs: string): Promise<{ calls: string[][]; error?: unknown }> {
+async function up(logs: string, publicUrl = "http://localhost:8082"): Promise<{ calls: string[][]; error?: unknown }> {
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-front-door-"));
   const priorPath = process.env.PATH;
   const priorDb = process.env.DATABASE_URL;
@@ -54,7 +54,7 @@ async function up(logs: string): Promise<{ calls: string[][]; error?: unknown }>
       JSON.stringify({
         contract: 1,
         orgId: "acme",
-        publicUrl: "http://localhost:8082",
+        publicUrl,
         target: "docker",
         services: ["core", "auth"],
         env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } },
@@ -107,4 +107,10 @@ test("docker up publishes core's front door on loopback and wires its sign-in", 
 test("docker up does not report core ready until its front door listens", { timeout: 60_000 }, async () => {
   const { error } = await up("[qm] listening on :8080");
   assert.match(String(error), /core exited before becoming ready/);
+});
+
+test("docker up refuses a loopback publicUrl that misses the front door's port", { timeout: 60_000 }, async () => {
+  const { calls, error } = await up("[portal] public front door on http://localhost:8000", "http://localhost:8081");
+  assert.match(String(error), /publicUrl http:\/\/localhost:8081 must use port 8082/);
+  assert.deepEqual(calls, []);
 });

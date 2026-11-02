@@ -13,7 +13,7 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
     JSON.stringify({
       contract: 1,
       orgId: "wiretest",
-      publicUrl: "http://localhost:8080",
+      publicUrl: "http://localhost:8082",
       target: "docker",
       services: ["core"],
       sandbox: {
@@ -157,7 +157,7 @@ test("model → PI_MODEL and host ports follow the offset map (core API+0, core 
 });
 
 test("QM_BASE_PORT overrides the host port base for one run", async () => {
-  const dir = makeDeployment({ services: ["core"] });
+  const dir = makeDeployment({ services: ["core"], publicUrl: "http://localhost:9002" });
   const prev = process.env.QM_BASE_PORT;
   process.env.QM_BASE_PORT = "9000";
   try {

@@ -140,7 +140,13 @@ test("plan honors a host port base from the config", () => {
 test("plan honors QM_BASE_PORT over the config", () => {
   const dir = tmp("plan-portenv");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"], basePort: 31080 });
+    writeConfig(dir, {
+      orgId: "acme",
+      target: "docker",
+      services: ["core"],
+      basePort: 31080,
+      publicUrl: "http://localhost:32101",
+    });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: "32099" } });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /\(host :32099, public :32101\)/);

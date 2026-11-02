@@ -14,6 +14,14 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url === "/readyz" || req.url?.startsWith("/slack/events") || req.url?.startsWith("/v1/spend/export")) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(req.url === "/readyz" ? 503 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+  }
   if (req.url?.startsWith("/v1/deployments/app-1/git/")) {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -749,6 +757,35 @@ test("background ownership forwards both credentials only on its exact control r
     });
     assert.equal(response.status, 404);
   }
+});
+
+test("core's readiness, Slack HTTP events and the spend export reach core through the front door", async () => {
+  assert.equal((await fetch(`${base}/readyz`)).status, 503);
+  const events = await fetch(`${base}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-signature": "v0=sig",
+      "x-slack-request-timestamp": "123",
+      "x-slack-retry-num": "1",
+      cookie: "portal_session=x",
+    },
+    body: '{"type":"event_callback"}',
+  });
+  assert.equal(events.status, 200);
+  const event = (await events.json()) as { headers: Record<string, string>; body: string };
+  assert.equal(event.body, '{"type":"event_callback"}');
+  assert.equal(event.headers["x-slack-signature"], "v0=sig");
+  assert.equal(event.headers["x-slack-retry-num"], "1");
+  assert.equal(event.headers.cookie, undefined);
+  const spend = await fetch(`${base}/v1/spend/export?from=2026-10-01&to=2026-11-01`, {
+    headers: { authorization: "Bearer spend-token" },
+  });
+  assert.equal(spend.status, 200);
+  const exported = (await spend.json()) as { url: string; headers: Record<string, string> };
+  assert.equal(exported.url, "/v1/spend/export?from=2026-10-01&to=2026-11-01");
+  assert.equal(exported.headers.authorization, "Bearer spend-token");
+  assert.equal((await fetch(`${base}/slack/events`)).status === 200, false);
 });
 
 test("deployment git requests reach core with their token and without browser credentials", async () => {
