@@ -7625,7 +7625,6 @@ h3.ambient-field-label {
   display: inline-flex;
 }
 
-/* Tabs size to their title (110–240px) and shrink toward the minimum only when the strip is crowded. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: var(--split-tab-h);
   flex: 0 1 auto;
@@ -12474,8 +12473,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   display: none;
 }
 
-/* In a multi-tab strip the title gets the room: scope crumbs are dropped, a parent collapses to a
-   back-arrow (its name stays in the tooltip), and background-work icons lose their chip fill. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) :is(.split-pane-crumb, .split-pane-crumb-sep) {
   display: none;
 }
