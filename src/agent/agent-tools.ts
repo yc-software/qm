@@ -22,6 +22,7 @@ import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
+import type { Surface, SurfacePromptHints } from "../surfaces/contract.ts";
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
@@ -97,10 +98,7 @@ export interface AgentToolsOptions {
   clientTools?: readonly ClientToolDeclaration[];
 }
 
-export interface SurfaceToolPrompt {
-  label: string;
-  mentionSyntax: string;
-}
+export type SurfaceToolPrompt = Pick<Surface, "label"> & Pick<SurfacePromptHints, "mentionSyntax">;
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,

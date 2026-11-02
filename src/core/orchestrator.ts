@@ -1053,7 +1053,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
-      const surfaceHints = surface?.promptHints();
+      const surfaceHints = surface?.promptHints;
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
@@ -1082,7 +1082,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const surfaceName =
         input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-      const toolSurface = deps.surfaces.get(surfaceName);
+      const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
@@ -2708,7 +2708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
-          ...(surface?.capabilities.actingUser ? { actingSlackUserId: actor.id } : {}),
+          ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
                 layerAuth: {
@@ -3402,7 +3402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
             ...(toolSurface
-              ? { surfacePrompt: { label: toolSurface.label, mentionSyntax: toolSurface.promptHints().mentionSyntax } }
+              ? { surfacePrompt: { label: toolSurface.label, mentionSyntax: toolSurface.promptHints.mentionSyntax } }
               : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length

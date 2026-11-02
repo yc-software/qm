@@ -38,15 +38,13 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
     kind: "slack",
     label: "Slack",
     capabilities: {
-      threads: true,
       mirrored: true,
       firstBlockAck: true,
       replyEngagement: true,
-      actingUser: true,
+      nativeActor: true,
       externalParticipants: true,
-      rateLimitNotice: true,
     },
-    promptHints: () => SLACK_PROMPT_HINTS,
+    promptHints: SLACK_PROMPT_HINTS,
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))
         throw new Error(`slack surface post: reserved idempotency key ${idempotencyKey}`);

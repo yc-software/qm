@@ -25,16 +25,14 @@ interface OutboundMessage {
 }
 
 interface SurfaceCapabilities {
-  threads: boolean;
   mirrored: boolean;
   firstBlockAck: boolean;
   replyEngagement: boolean;
-  actingUser: boolean;
+  nativeActor: boolean;
   externalParticipants: boolean;
-  rateLimitNotice: boolean;
 }
 
-interface SurfacePromptHints {
+export interface SurfacePromptHints {
   mentionSyntax: string;
   linkSyntax: string;
   autonomousStyle: string;
@@ -45,7 +43,7 @@ export interface Surface<Native = unknown> {
   readonly kind: string;
   readonly label: string;
   readonly capabilities: SurfaceCapabilities;
-  promptHints(): SurfacePromptHints;
+  readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;

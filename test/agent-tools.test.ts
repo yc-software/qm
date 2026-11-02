@@ -3201,7 +3201,7 @@ test("surface messages use Markdown and teach only the mention syntax their regi
       surfaceTools: true,
       surfaceName: name,
       ...(registered
-        ? { surfacePrompt: { label: registered.label, mentionSyntax: registered.promptHints().mentionSyntax } }
+        ? { surfacePrompt: { label: registered.label, mentionSyntax: registered.promptHints.mentionSyntax } }
         : {}),
     }).find((t) => t.name === name)!;
     const text = (tool.parameters as { properties: { text: { description: string } } }).properties.text.description;
