@@ -85,7 +85,7 @@ const commandOptions: Record<string, readonly string[]> = {
   doctor: ["json", "fix", "no-slack"],
 };
 
-const devServiceNames = [...CHILD_ORDER, "web-ui"];
+const devServiceNames = [...CHILD_ORDER];
 
 const allowedOptions = commandOptions[command];
 if (allowedOptions) {
@@ -219,7 +219,6 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `worktree=${worktree}`,
       `branch=${branch}`,
       `port=${ports.core}`,
-      `web_port=${ports.web}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
       `web=${withWeb ? "1" : "0"}`,
@@ -315,8 +314,7 @@ function printSuccess(result: BootResult, branch: string): void {
     );
   out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  if (result.webEnabled !== false)
-    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
+  if (result.webEnabled !== false) out(`   web    : http://localhost:${ports.portal}/`);
   out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
@@ -563,7 +561,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        (ports ? `${ports.core}/${ports.web}/${ports.portal}` : "-").padEnd(21),
+        (ports ? `${ports.core}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
@@ -591,9 +589,7 @@ async function withMySupervisor<T>(fn: (sock: string, lease: LeaseInfo) => Promi
   return await fn(sock, mine);
 }
 
-const supervisorChildNames = (names: string[]): string[] => [
-  ...new Set(names.map((name) => (name === "web-ui" ? "web" : name))),
-];
+const supervisorChildNames = (names: string[]): string[] => [...new Set(names)];
 
 async function cmdRestart(): Promise<number> {
   const children = supervisorChildNames(positionals.slice(1));

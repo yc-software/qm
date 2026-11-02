@@ -12,12 +12,11 @@ export const EXIT = {
   doctorCritical: 10,
 } as const;
 
-export type ChildName = "core" | "web" | "portal";
-export const CHILD_ORDER: ChildName[] = ["core", "web", "portal"];
+export type ChildName = "core";
+export const CHILD_ORDER: ChildName[] = ["core"];
 
 export interface SlotPorts {
   core: number;
-  web: number;
   portal: number;
   prodProxy: number;
   slackHealth: number;
