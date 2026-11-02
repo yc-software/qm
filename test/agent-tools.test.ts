@@ -350,6 +350,13 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async readMembers() {
       return { ok: true, members: [{ displayName: "Ada" }, { displayName: "Bob" }] };
     },
+    async readFile(ref) {
+      if (ref === "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        return { ok: true, content: "hello from the file", sizeBytes: 19 };
+      if (ref === "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        return { ok: true, sizeBytes: 1024, contentType: "application/octet-stream" };
+      return { ok: false, message: "I can't find that file — it may have expired." };
+    },
     async getStandingOrder() {
       return { ok: true, orders: "" };
     },
@@ -1102,7 +1109,17 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const refOff: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   const off = createAgentTools(refOff).map((t) => t.name);
   assert.ok(!off.includes("slack"), "off by default (overheard path unchanged)");
-  for (const n of ["post", "react", "edit", "delete", "read_thread", "whats_new", "search", "read_members"]) {
+  for (const n of [
+    "post",
+    "react",
+    "edit",
+    "delete",
+    "read_thread",
+    "whats_new",
+    "search",
+    "read_members",
+    "read_file",
+  ]) {
     assert.ok(!off.includes(n), `${n} is not a standalone tool`);
   }
 
@@ -1405,7 +1422,15 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   assert.match(members, /Ada/);
   assert.match(members, /Bob/);
 
-  for (const n of ["whats_new", "search", "read_members"]) {
+  const txt = textOf(await call(slack, { action: "read_file", ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }));
+  assert.match(txt, /hello from the file/);
+  const bin = textOf(await call(slack, { action: "read_file", ref: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
+  assert.match(bin, /not text/);
+  assert.doesNotMatch(bin, /hello from the file/);
+  const gone = textOf(await call(slack, { action: "read_file", ref: "cccccccccccccccccccccccccccccccc" }));
+  assert.match(gone, /couldn't read that file/);
+
+  for (const n of ["whats_new", "search", "read_members", "read_file"]) {
     const pair = emitted.filter((e) => e.payload.action === n).map((e) => e.type);
     assert.ok(pair.includes("tool_call") && pair.includes("tool_result"), `${n} emits call + result`);
   }
@@ -1417,10 +1442,6 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
   assert.match(out.content[0]!.text, /post, react, edit, delete/);
-  const removed = (await call(slack, { action: "read_file", ref: "a".repeat(32) })) as {
-    content: Array<{ text: string }>;
-  };
-  assert.match(removed.content[0]!.text, /unknown action "read_file"/);
 });
 
 test("the post delivery ack is never screened — a classifier false positive cannot quarantine a sent reply", async () => {
@@ -1477,6 +1498,7 @@ test("each action dispatches to exactly its matching tool-context method", async
     whatsNew: spy("whatsNew", { ok: true, hereNew: 0, activeSubConversations: 0 }),
     search: spy("search", { ok: true, hits: [], source: "live" }),
     readMembers: spy("readMembers", { ok: true, members: [] }),
+    readFile: spy("readFile", { ok: true, content: "x" }),
   } as unknown as ToolContext;
   const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1" });
 
@@ -1488,14 +1510,15 @@ test("each action dispatches to exactly its matching tool-context method", async
   await call(slack, { action: "whats_new", since: "1.0" });
   await call(slack, { action: "search", query: "q", source: "slack" });
   await call(slack, { action: "read_members" });
+  await call(slack, { action: "read_file", ref: "aaaa" });
   await call(slack, { action: "reach", text: "hi", channel: "eng", files: ["report.md"], sandbox_id: "box" });
 
   assert.deepEqual(
     calls.map((c) => c[0]),
-    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "reach"],
+    ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "readFile", "reach"],
   );
   assert.deepEqual(calls[0]![1], ["hi", {}, [{ file_id: "saved" }], "box"]);
-  assert.deepEqual(calls[8]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
+  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
   assert.deepEqual(calls[1]![1], [{ ts: "1.1", emoji: "eyes" }]);
   assert.deepEqual(calls[2]![1], [{ ref: "1.1", text: "y" }]);
   assert.deepEqual(calls[3]![1], [{ ref: "1.1" }]);
@@ -1503,6 +1526,7 @@ test("each action dispatches to exactly its matching tool-context method", async
   assert.deepEqual(calls[5]![1], [{ since: "1.0" }]);
   assert.deepEqual(calls[6]![1], ["q", { source: "slack" }]);
   assert.deepEqual(calls[7]![1], []);
+  assert.deepEqual(calls[8]![1], ["aaaa"]);
 });
 
 test("the surface tool is NAMED after its surface — a telegram surface produces a `telegram` tool", async () => {

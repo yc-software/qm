@@ -429,6 +429,16 @@ interface SurfaceMembersResult {
   message?: string;
 }
 
+interface SurfaceFileResult {
+  ok: boolean;
+  content?: string;
+  name?: string;
+  sizeBytes?: number;
+  contentType?: string;
+  image?: { data: string; mimeType: string };
+  message?: string;
+}
+
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -453,6 +463,7 @@ export interface SurfaceToolDeps {
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
   readMembers(): Promise<SurfaceMembersResult>;
+  readFile(ref: string, pick?: { name?: string; index?: number }): Promise<SurfaceFileResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -1336,6 +1347,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
     readMembers: () => surfaceOp((s) => s.readMembers()),
+    readFile: (ref, pick) => surfaceOp((s) => s.readFile(ref, pick)),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),

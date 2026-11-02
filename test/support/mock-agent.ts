@@ -52,6 +52,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!whats_new",
   "!search ",
   "!read_members",
+  "!read_file ",
   "!set_standing_order ",
   "!get_standing_order",
 ];
@@ -846,6 +847,29 @@ export function createMockAgent(): Agent {
         reply = r.ok
           ? `members: ${(r.members ?? []).map((m) => m.displayName).join(", ")}`
           : `[couldn't read members] ${r.message ?? "unavailable"}`;
+      } else if (command0.startsWith("!read_file ")) {
+        const [refArg = "", nameArg] = cmd
+          .slice(cmd.indexOf("!read_file ") + "!read_file ".length)
+          .trim()
+          .split(/\s+/);
+        let pick: { name?: string; index?: number } | undefined;
+        if (nameArg) pick = /^\d+$/.test(nameArg) ? { index: Number(nameArg) } : { name: nameArg };
+        const r = pick ? await turn.tools.readFile(refArg, pick) : await turn.tools.readFile(refArg);
+        await turn.emit({
+          type: "tool_result",
+          payload: { tool: "read_file", ok: r.ok },
+          scopeLabel: turn.scopeLabel,
+        });
+        usedTool = true;
+        if (!r.ok) {
+          reply = `[couldn't read file] ${r.message ?? "unavailable"}`;
+        } else if (r.image) {
+          reply = `file-image: ${r.name ?? "?"} ${r.image.mimeType} ${r.image.data.length}`;
+        } else if (r.content !== undefined) {
+          reply = `file: ${r.content}`;
+        } else {
+          reply = `file-pointer: ${r.sizeBytes ?? 0}B ${r.contentType ?? "binary"}`;
+        }
       } else if (command0.startsWith("!set_standing_order ")) {
         const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
         const r = await turn.tools.setStandingOrder(orders);
