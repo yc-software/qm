@@ -28,6 +28,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 
 const CONDENSED_LINES = 2;
 const NEAR_TOP = 400;
+const AWAY_FROM_BOTTOM = 160;
 
 export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
   let scroller: HTMLElement | null = null;
@@ -57,6 +58,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function setFollowing(value: boolean): void {
     following = value;
     if (scroller) scroller.style.overflowAnchor = value ? "none" : "";
+    syncAway();
   }
 
   function cancelFollow(): void {
@@ -108,8 +110,15 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     syncSticky();
   }
 
+  function syncAway(): void {
+    if (!scroller) return;
+    const away = !following && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > AWAY_FROM_BOTTOM;
+    scroller.toggleAttribute("data-away-from-bottom", away);
+  }
+
   function syncSticky(): void {
     if (!scroller) return;
+    syncAway();
     syncPrompt();
     const top = pins?.getBoundingClientRect().height ?? 0;
     scroller.style.setProperty("--chat-sticky-top", `${top}px`);
@@ -318,6 +327,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
     scroller?.style.removeProperty("overflow-anchor");
+    scroller?.removeAttribute("data-away-from-bottom");
     clearPrompt();
     scroller = pins = prompt = stack = content = null;
     lastTop = 0;
