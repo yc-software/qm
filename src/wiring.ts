@@ -2047,6 +2047,7 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const surfaces = createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] });
   const orchestratorDeps: OrchestratorDeps = {
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
@@ -2072,7 +2073,7 @@ export function buildApp(
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    surfaces: createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] }),
+    surfaces,
     sessions,
     workspace,
     files,
@@ -2201,7 +2202,7 @@ export function buildApp(
   };
   const liveFallback = async (
     container: string,
-    opts?: { limit?: number },
+    opts?: { limit?: number; surface?: string },
   ): Promise<Array<{
     container: string;
     ts: string;
@@ -2211,7 +2212,7 @@ export function buildApp(
     createdAt: number;
   }> | null> => {
     const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
+    if (!puller || (opts?.surface ?? "slack") !== "slack") return null;
     const result = await puller.pull("slack", {
       conversationTarget: container,
       ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
@@ -2242,6 +2243,7 @@ export function buildApp(
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
+    surfaces,
     runs,
     leaseTtlMs,
     maxAttempts,
