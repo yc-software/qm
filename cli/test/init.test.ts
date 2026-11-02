@@ -173,7 +173,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
-    assert.equal(config.env.portal?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
+    assert.equal(config.env.core?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS=", "PORTAL_SESSION_SECRET=", "ANTHROPIC_API_KEY="]) {
       assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);

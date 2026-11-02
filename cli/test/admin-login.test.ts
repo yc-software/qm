@@ -68,9 +68,9 @@ test("the command uses deployment config and local secrets without contacting a 
         orgId: "acme",
         publicUrl: settings.publicUrl,
         target: "docker",
-        services: ["core", "web-ui", "portal", "auth"],
+        services: ["core", "auth"],
         env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } },
-        secretEnv: { core: { ADMIN_GRANTS: "OPERATOR_ADMINS" }, portal: { PORTAL_SESSION_SECRET: "SESSION_KEY" } },
+        secretEnv: { core: { ADMIN_GRANTS: "OPERATOR_ADMINS", PORTAL_SESSION_SECRET: "SESSION_KEY" } },
       }),
     );
     writeFileSync(join(dir, ".env"), `OPERATOR_ADMINS=${settings.adminGrants}\nSESSION_KEY=${settings.secret}\n`);

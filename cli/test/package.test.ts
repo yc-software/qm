@@ -24,6 +24,16 @@ import { test } from "node:test";
 const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
 
+interface PackResult {
+  filename: string;
+  files: Array<{ path: string }>;
+}
+
+function packResults(output: string): PackResult[] {
+  const parsed = JSON.parse(output) as PackResult[] | Record<string, PackResult>;
+  return Array.isArray(parsed) ? parsed : Object.values(parsed);
+}
+
 test("the package uses the organization scope while keeping the qm command", () => {
   const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as {
     name?: string;
@@ -41,9 +51,9 @@ test(
     let registry: Server | undefined;
     try {
       const env = { ...process.env, NPM_CONFIG_CACHE: join(dir, "npm-cache") };
-      const packed = JSON.parse(
+      const packed = packResults(
         execFileSync("npm", ["pack", "--json", "--pack-destination", dir], { cwd: cliDir, encoding: "utf8", env }),
-      ) as Array<{ filename: string; files: Array<{ path: string }> }>;
+      );
       const deployment = join(dir, "deployment");
       const awsDeployment = join(dir, "aws-deployment");
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
@@ -53,13 +63,13 @@ test(
       ]);
       for (const name of Object.keys(packageManifest["dependencies"] as Record<string, string>)) {
         const source = join(cliDir, "node_modules", name);
-        const [dependency] = JSON.parse(
+        const [dependency] = packResults(
           execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
             cwd: source,
             encoding: "utf8",
             env,
           }),
-        ) as Array<{ filename: string }>;
+        );
         published.set(name, {
           manifest: JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>,
           bytes: readFileSync(join(dir, dependency!.filename)),
