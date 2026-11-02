@@ -72,9 +72,7 @@ test("slack adapter post enqueues provenance, attachments and account routing", 
   assert.deepEqual(queued?.destination, {
     type: "slack",
     target: "C1:1700.0001",
-    slackAccountId: "partner",
-    slackTeamId: "T1",
-    slackPolicyNamespace: "ns",
+    account: { id: "partner", workspace: "T1", policyNamespace: "ns" },
   });
   assert.equal(queued?.text, "in thread");
   assert.deepEqual(queued?.attachments, attachments);

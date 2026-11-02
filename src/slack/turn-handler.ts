@@ -71,6 +71,7 @@ import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
 import type { SlackReactionEvent } from "./payloads.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
+import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
@@ -499,25 +500,16 @@ export function createTurnHandler(deps: {
       actor,
       ...(inc.userId
         ? {
-            slackSource: {
+            surfaceOrigin: slackSurfaceOrigin({
               accountId: deps.accountId ?? "default",
               teamId: ids.ownTeamId,
               userId: inc.userId,
               ...(deps.externalAccess
-                ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
               ...(replyThreadTs ? { replyThreadTs } : {}),
-            },
-          }
-        : {}),
-      ...(deps.externalAccess && inc.kind === "channel" && inc.userId
-        ? {
-            externalSlack: {
-              accountId: deps.accountId ?? "default",
-              teamId: ids.ownTeamId,
-              userId: inc.userId,
-              ...deps.externalAccess,
-            },
+              ...(deps.externalAccess && inc.kind === "channel" ? { external: deps.externalAccess } : {}),
+            }),
           }
         : {}),
       conversation: {
