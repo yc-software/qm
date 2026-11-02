@@ -187,6 +187,7 @@ test("a registered surface supplies its own label, prompt hints and mention synt
     post: async () => {},
     principalFor: () => ({ externalId: "u" }),
     mention: (user) => `@${user.id}`,
+    readableText: (text) => text,
     native: () => null,
   };
   const capture = turnCapture([acme]);
