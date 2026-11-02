@@ -34,17 +34,21 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   const surface = run.request.surface;
   if (!target || !surface) return null;
   const origin = resolveTurnOrigin(run.request);
+  const surfaceOrigin = run.request.surfaceOrigin;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
     type: surface,
     target,
-    ...(run.request.slackSource
-      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
-      : {}),
-    ...(run.request.slackSource?.externalPolicyNamespace
-      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
+    ...(surfaceOrigin
+      ? {
+          account: {
+            id: surfaceOrigin.author.account,
+            workspace: surfaceOrigin.workspace,
+            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+          },
+        }
       : {}),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),

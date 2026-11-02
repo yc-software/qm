@@ -202,8 +202,8 @@ export function createDeliveryPoller(deps: {
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
     if (deps.clientForAccount)
-      return deps.clientForAccount(destination.slackAccountId ?? "default", destination.slackTeamId);
-    return destination.slackAccountId ? undefined : defaultClient;
+      return deps.clientForAccount(destination.account?.id ?? "default", destination.account?.workspace);
+    return destination.account ? undefined : defaultClient;
   }
 
   async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
@@ -214,11 +214,11 @@ export function createDeliveryPoller(deps: {
         if (!destinationClient) return;
         const client = destinationClient;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
-        const namespace = deps.externalNamespace?.(d.destination.slackAccountId ?? "default");
+        const namespace = deps.externalNamespace?.(d.destination.account?.id ?? "default");
         if (
           namespace &&
           (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
-            ? runId && d.destination.slackPolicyNamespace !== namespace
+            ? runId && d.destination.account?.policyNamespace !== namespace
             : !d.provenance?.sourceThreadRef.startsWith(`${namespace}:`))
         ) {
           await ackDelivery(d.id);

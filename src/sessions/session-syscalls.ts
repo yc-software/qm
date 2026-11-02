@@ -208,8 +208,7 @@ interface SessionSyscallBinding {
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
-    | "slackSource"
-    | "externalSlack"
+    | "surfaceOrigin"
   > & { origin?: OrchestratorInput["origin"] };
 }
 
@@ -357,8 +356,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
-    ...(meta.slackSource ? { slackSource: meta.slackSource } : {}),
-    ...(meta.externalSlack ? { externalSlack: meta.externalSlack } : {}),
+    ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
@@ -689,8 +687,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   : {}),
                 ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
                 openFingerprint: fingerprint,
-                ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
-                ...(binding.request.externalSlack ? { externalSlack: binding.request.externalSlack } : {}),
+                ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
                 ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
                 ...(binding.request.sessionParticipantIds
                   ? { sessionParticipantIds: binding.request.sessionParticipantIds }

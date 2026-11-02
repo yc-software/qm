@@ -1,5 +1,6 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -83,8 +84,7 @@ export interface SurfaceBriefing {
 }
 
 export interface SpawnMeta {
-  slackSource?: TurnRequest["slackSource"];
-  externalSlack?: TurnRequest["externalSlack"];
+  surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
@@ -197,9 +197,7 @@ export interface GrantedHandle {
 }
 
 export interface Destination {
-  slackAccountId?: string;
-  slackTeamId?: string;
-  slackPolicyNamespace?: string;
+  account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -357,21 +355,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
-  slackSource?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    externalPolicyNamespace?: string;
-    replyThreadTs?: string;
-  };
-  externalSlack?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    companyDomains: string[];
-    companyTeamIds: string[];
-    serviceCredentials: string[];
-  };
+  surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
   delegatingRunId?: string;
   privateSessionMessage?: true;

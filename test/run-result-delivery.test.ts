@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   runResultDelivery,
   wireRunResultDeliveries,
@@ -76,19 +77,17 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
 test("runResultDelivery retains the Slack policy used for private admission", () => {
   const request = {
     ...turn("hi", "DPRIVATE"),
-    slackSource: {
+    surfaceOrigin: slackSurfaceOrigin({
       accountId: "partner",
       teamId: "TPARTNER",
       userId: "U1",
-      externalPolicyNamespace: "external-slack:TPARTNER:policy",
-    },
+      policyNamespace: "external-slack:TPARTNER:policy",
+    }),
   };
   assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
     type: "slack",
     target: "DPRIVATE",
-    slackAccountId: "partner",
-    slackTeamId: "TPARTNER",
-    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+    account: { id: "partner", workspace: "TPARTNER", policyNamespace: "external-slack:TPARTNER:policy" },
   });
 });
 

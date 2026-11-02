@@ -164,7 +164,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     );
   };
   const openScoped = async (slot: Slot, eager: boolean): Promise<SandboxHandle> => {
-    if (input.externalSlack) {
+    if (input.surfaceOrigin?.audience === "external") {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }

@@ -18,6 +18,25 @@ export interface SurfaceUser {
   timezone?: string;
 }
 
+export interface SurfaceAccount {
+  id: string;
+  workspace?: string;
+  policyNamespace?: string;
+}
+
+export interface ExternalAudienceAccess {
+  companyDomains: string[];
+  companyTeamIds: string[];
+  serviceCredentials: string[];
+}
+
+export type TurnSurfaceOrigin = {
+  author: Pick<SurfaceUser, "surface" | "account" | "id">;
+  workspace: string;
+  policyNamespace?: string;
+  replyThread?: string;
+} & ({ audience: "internal" } | { audience: "external"; access: ExternalAudienceAccess });
+
 interface OutboundMessage {
   text: string;
   attachments?: OutgoingAttachment[];

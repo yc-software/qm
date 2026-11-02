@@ -2,13 +2,39 @@ import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue, withThread } from "../../reach/reach.ts";
 import { classifyUser, slackUserTimezone, type SlackIdentityMode, type SlackUser } from "../../slack/identity.ts";
 import type { Destination } from "../../types.ts";
-import type { Surface, SurfaceUser } from "../contract.ts";
+import type { ExternalAudienceAccess, Surface, SurfaceUser, TurnSurfaceOrigin } from "../contract.ts";
 
 interface SlackNative {
   userFrom(
     user: SlackUser | undefined,
     account: { id: string; ownTeamId: string; identityMode: SlackIdentityMode },
   ): SurfaceUser;
+}
+
+export function slackSurfaceOrigin(source: {
+  accountId: string;
+  teamId: string;
+  userId: string;
+  policyNamespace?: string;
+  replyThreadTs?: string;
+  external?: ExternalAudienceAccess;
+}): TurnSurfaceOrigin {
+  return {
+    author: { surface: "slack", account: source.accountId, id: source.userId },
+    workspace: source.teamId,
+    ...(source.policyNamespace ? { policyNamespace: source.policyNamespace } : {}),
+    ...(source.replyThreadTs ? { replyThread: source.replyThreadTs } : {}),
+    ...(source.external
+      ? {
+          audience: "external",
+          access: {
+            companyDomains: source.external.companyDomains,
+            companyTeamIds: source.external.companyTeamIds,
+            serviceCredentials: source.external.serviceCredentials,
+          },
+        }
+      : { audience: "internal" }),
+  };
 }
 
 export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface<SlackNative> {
@@ -32,9 +58,11 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
       const destination: Destination = {
         type: "slack",
         target: ref.container,
-        slackAccountId: ref.account,
-        ...(ref.workspace ? { slackTeamId: ref.workspace } : {}),
-        ...(ref.policyNamespace ? { slackPolicyNamespace: ref.policyNamespace } : {}),
+        account: {
+          id: ref.account,
+          ...(ref.workspace ? { workspace: ref.workspace } : {}),
+          ...(ref.policyNamespace ? { policyNamespace: ref.policyNamespace } : {}),
+        },
       };
       await reachEnqueue({
         deliveries: deps.deliveries,
