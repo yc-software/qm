@@ -353,3 +353,56 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   await deliverKeychainCard(core, client, { ...sync!, destination: sync!.destination }, "D1", "9.9");
   assert.deepEqual(calls, [{ method: "update", ts: "5.5" }], "the original card is updated in place, not reposted");
 });
+
+test("a click without its source message (a shared copy of the card) still decides and reports back", async () => {
+  const f = await fixture();
+  let handler: (args: any) => Promise<void> = async () => {};
+  registerKeychainApprovalActions(
+    {
+      action: (_pattern, fn) => {
+        handler = fn;
+      },
+    },
+    {
+      core: { keychainApprovals: f.approvals } as SlackCoreClient,
+      directory: {
+        classifyActor: async (_client, id) => ({
+          externalId: id === "UOWNER" ? "alice@example.com" : "other@example.com",
+        }),
+      } as Directory,
+    },
+  );
+  const updates: unknown[] = [];
+  const dms: Array<{ channel: string; text: string }> = [];
+  const client = {
+    chat: {
+      update: async (body: unknown) => {
+        updates.push(body);
+      },
+      postEphemeral: async () => {
+        throw new Error("no ephemeral without a channel");
+      },
+      postMessage: async (body: { channel: string; text: string }) => {
+        dms.push(body);
+      },
+    },
+  };
+  const args = {
+    ack: async () => {},
+    body: { user: { id: "UOTHER" } },
+    action: { action_id: "keychain_allow_always", value: f.ask.id },
+    client,
+  };
+  await handler(args);
+  assert.equal(dms.length, 1);
+  assert.equal(dms[0]!.channel, "UOTHER");
+  assert.match(dms[0]!.text, /Couldn't complete this approval/);
+  assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "pending");
+
+  await handler({ ...args, body: { user: { id: "UOWNER" } } });
+  assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "approved");
+  assert.equal(updates.length, 0);
+  assert.equal(dms.length, 2);
+  assert.equal(dms[1]!.channel, "UOWNER");
+  assert.match(dms[1]!.text, /Approved/);
+});

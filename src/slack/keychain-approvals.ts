@@ -119,7 +119,24 @@ export function registerKeychainApprovalActions(
     await ack();
     const parsed = parseBlockAction(action, ACTIONS);
     const { clickerId, channel, messageTs } = parseInteractionBody(body);
-    if (!parsed || !clickerId || !channel || !messageTs || !deps.core.keychainApprovals) return;
+    if (!parsed || !clickerId) return;
+    const tell = async (text: string) => {
+      const sent = channel
+        ? await client.chat
+            .postEphemeral({ channel, user: clickerId, text })
+            .then(() => true)
+            .catch(swallowAs("slack: credential approval notice", false))
+        : false;
+      if (!sent) {
+        await client.chat
+          .postMessage({ channel: clickerId, text })
+          .catch(swallowAs("slack: credential approval notice dm", undefined));
+      }
+    };
+    if (!deps.core.keychainApprovals) {
+      await tell("Couldn't complete this approval: approvals aren't available right now. Try again shortly.");
+      return;
+    }
     try {
       const actor = await deps.directory.classifyActor(client, clickerId);
       const decisions = {
@@ -131,15 +148,13 @@ export function registerKeychainApprovalActions(
       const view = await deps.core.keychainApprovals.decide(parsed.value, actor, decision);
       const origin = await keychainApprovalOrigin(view, client, deps.webUiPublicUrl);
       const card = keychainApprovalMessage(view, origin);
-      await updateSlackMessage(client, channel, messageTs, card.text, card.blocks);
+      if (channel && messageTs) {
+        await updateSlackMessage(client, channel, messageTs, card.text, card.blocks);
+      } else {
+        await tell(card.text);
+      }
     } catch (error) {
-      await client.chat
-        .postEphemeral({
-          channel,
-          user: clickerId,
-          text: `Couldn't complete this approval: ${errMessage(error)} You can try the button again.`,
-        })
-        .catch(swallowAs("slack: credential approval failure", undefined));
+      await tell(`Couldn't complete this approval: ${errMessage(error)} You can try the button again.`);
     }
   });
 }
