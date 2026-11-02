@@ -158,7 +158,7 @@ import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
-import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
+import { createScheduler, noteRefusedCronDelivery, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -315,7 +315,7 @@ import {
   DEPLOYMENT_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
-import { createControlService } from "./api/control-service.ts";
+import { CRON_FIRE_NOTE_MAX_CHARS, createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
@@ -2849,9 +2849,12 @@ export function buildApp(
       runResultSweeper.start();
       approvalDeliverySweeper.start();
       if (databaseUrl && !outboundQueue) {
-        outboundQueue = createOutboundQueue(databaseUrl, { outbox, deliveries }, [
-          webhookChannel(config.signingSecret),
-        ]);
+        outboundQueue = createOutboundQueue(
+          databaseUrl,
+          { outbox, deliveries },
+          [webhookChannel(config.signingSecret)],
+          (d, reason) => noteRefusedCronDelivery(crons, d, reason, CRON_FIRE_NOTE_MAX_CHARS),
+        );
         outboundQueue.start();
       }
     };

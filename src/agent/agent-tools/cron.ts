@@ -101,7 +101,7 @@ export function cronTools(kit: ToolKit) {
       "Before a grant-carrying cron posts anywhere but its owner's DM (create or retarget), tell the owner who will see its unattended admin output and act only on their explicit yes.\n" +
       "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
-      "patch: edit in place. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
+      "patch: edit in place; the cron keeps its destination (shown after →), which may be another conversation, so to serve a request made here, retarget it or create a new one. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
       "delete: remove for good. run: fire once now (refused while a fire is running). disable: pause.\n" +
       `note (inside a fire): a one- or two-sentence shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; overwrites the previous one; never credentials.`,
     parameters: Type.Object({

@@ -1,7 +1,7 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
+import { type Delivery, type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -139,6 +139,26 @@ function fireNoteLine(note: CronFireNote | undefined): string[] {
 
 function cronFireThreadRef(cronId: string, fireKey: string): string {
   return `cron:${cronId}:fire:${hashId([fireKey], 12)}`;
+}
+
+export async function noteRefusedCronDelivery(
+  crons: Pick<CronStore, "get" | "setFireNote">,
+  d: Delivery,
+  reason: string,
+  maxChars: number,
+): Promise<void> {
+  const cronId = /^cron:([^:]+):fire:/.exec(d.provenance?.sourceThreadRef ?? "")?.[1];
+  if (!cronId) return;
+  const prev = (await crons.get(cronId))?.lastFireNote;
+  const kept = prev && prev.by !== "core" ? ` Earlier note: ${prev.text}` : "";
+  await crons.setFireNote(cronId, {
+    text: `The receiver refused this cron's last delivery (${reason}). Fires keep running and their output is dropped until you pause or retarget this cron.${kept}`.slice(
+      0,
+      maxChars,
+    ),
+    at: Date.now(),
+    by: "core",
+  });
 }
 
 const CRON_MENTION_ROSTER_MAX = 40;
