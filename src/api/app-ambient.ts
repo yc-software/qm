@@ -147,7 +147,8 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         ...(backdrop.length ? { backdrop } : {}),
         ...(scheduled ? { scheduled: true } : {}),
       };
-      const readable = deps.surfaces?.get(surface)?.readableText ?? ((text: string) => text);
+      const readable = deps.surfaces.get(surface)?.readableText;
+      if (!readable) throw new Error(`ambient: no registered surface ${surface}`);
       const prompt = renderAmbientPrompt(judgeBatch, readable);
       const startedAt = Date.now();
       const judgeModel = deps.judgeModelId?.();

@@ -30,9 +30,6 @@ export function toEvent(raw: unknown): IngestEvent | null {
   return {
     container: raw.container,
     ts: raw.ts,
-    ...(typeof raw.sentAt === "number" && Number.isSafeInteger(raw.sentAt) && raw.sentAt > 0
-      ? { sentAt: raw.sentAt }
-      : {}),
     ...(raw.sub === null || (typeof raw.sub === "string" && raw.sub) ? { sub: raw.sub } : {}),
     ...(typeof raw.subtype === "string" ? { subtype: raw.subtype } : {}),
     ...(typeof raw.broadcast === "boolean" ? { broadcast: raw.broadcast } : {}),

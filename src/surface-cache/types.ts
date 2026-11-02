@@ -45,7 +45,6 @@ export interface ActiveThread {
 
 export interface IngestEvent extends SurfaceKey {
   container: string;
-  sentAt?: number;
   ts: string;
   sub?: string | null;
   broadcast?: boolean;

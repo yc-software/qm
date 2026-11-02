@@ -27,7 +27,6 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
     for (const table of ["channel_messages", "channel_state", "channel_files"]) {
       await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account`);
     }
-    await pool.query("ALTER TABLE channel_messages DROP COLUMN sent_at, DROP COLUMN role");
     await pool.query("ALTER TABLE channel_messages ADD PRIMARY KEY (org_id, container, ts)");
     await pool.query("ALTER TABLE channel_state ADD PRIMARY KEY (org_id, container)");
     await pool.query("ALTER TABLE channel_files ADD PRIMARY KEY (org_id, container, ts, file_id)");
@@ -144,7 +143,6 @@ test("two surfaces with the same container id do not collide", async () => {
         authorId: "P1",
         self: true,
         text: "bookface launch",
-        sentAt: 1_000,
         members: ["P1"],
         files: [{ fileId: "F9", name: "deck.pdf" }],
         createdAt: 1,
@@ -186,22 +184,6 @@ test("two surfaces with the same container id do not collide", async () => {
       (await cache.listContainers()).map((c) => [c.container, c.messageCount]),
       [["C1", 2]],
     );
-
-    const pool = new pg.Pool({ connectionString: url });
-    try {
-      const rows = await pool.query(
-        "SELECT ts, role, sent_at FROM channel_messages WHERE surface = 'bookface' ORDER BY ts",
-      );
-      assert.deepEqual(
-        rows.rows.map((r) => [r.ts, r.role, r.sent_at]),
-        [
-          ["1.0", "assistant", "1000"],
-          ["3.0", "bot", null],
-        ],
-      );
-    } finally {
-      await pool.end();
-    }
   } finally {
     await cache.close();
   }

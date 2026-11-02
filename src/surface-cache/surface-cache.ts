@@ -30,8 +30,10 @@ function clampLimit(limit: number | undefined, fallback: number): number {
 
 const REVISION_SCAN_LIMIT = 500;
 
+const DEFAULT_SURFACE = "slack";
+
 function keyOf(key: SurfaceKey | undefined): [string, string] {
-  return [key?.surface ?? "slack", key?.account ?? ""];
+  return [key?.surface ?? DEFAULT_SURFACE, key?.account ?? ""];
 }
 
 export function createPostgresSurfaceCache(
@@ -122,8 +124,6 @@ export function createPostgresSurfaceCache(
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
         `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''`,
-        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS sent_at BIGINT`,
-        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS role TEXT`,
         `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
         `ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT ''`,
         `ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS surface TEXT NOT NULL DEFAULT 'slack'`,
@@ -159,7 +159,7 @@ export function createPostgresSurfaceCache(
 
   function rowToMessage(r: Record<string, unknown>): CachedMessage {
     return {
-      ...(r.surface !== "slack" ? { surface: r.surface as string } : {}),
+      ...(r.surface !== DEFAULT_SURFACE ? { surface: r.surface as string } : {}),
       ...(r.account ? { account: r.account as string } : {}),
       container: r.container as string,
       ts: r.ts as string,
@@ -195,9 +195,8 @@ export function createPostgresSurfaceCache(
           if (!e.container || !e.ts) continue;
           const [surface, account] = keyOf(e);
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, surface, account, sent_at, role)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21,$22,$23,
-                     CASE WHEN $9 THEN 'assistant' WHEN $10 THEN 'bot' ELSE 'user' END)
+            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, surface, account)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21,$22)
              ON CONFLICT (org_id, surface, account, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
                subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
@@ -213,12 +212,7 @@ export function createPostgresSurfaceCache(
                edited_at = CASE WHEN channel_messages.deleted OR EXCLUDED.deleted THEN channel_messages.edited_at ELSE GREATEST(COALESCE(EXCLUDED.edited_at, 0), COALESCE(channel_messages.edited_at, 0)) END,
                deleted = channel_messages.deleted OR EXCLUDED.deleted,
                deleted_at = COALESCE(channel_messages.deleted_at, EXCLUDED.deleted_at),
-               handled = channel_messages.handled OR EXCLUDED.handled,
-               sent_at = COALESCE(channel_messages.sent_at, EXCLUDED.sent_at),
-               role = CASE
-                 WHEN channel_messages.self OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.self) THEN 'assistant'
-                 WHEN channel_messages.bot OR (NOT (EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0)) AND EXCLUDED.bot) THEN 'bot'
-                 ELSE 'user' END
+               handled = channel_messages.handled OR EXCLUDED.handled
              WHERE EXCLUDED.deleted
                 OR COALESCE(EXCLUDED.edited_at, 0) >= COALESCE(channel_messages.edited_at, 0)
                 OR EXCLUDED.handled
@@ -246,7 +240,6 @@ export function createPostgresSurfaceCache(
               e.botId ?? null,
               surface,
               account,
-              e.sentAt ?? null,
             ],
           );
           upserted += res.rowCount ?? 0;
