@@ -102,3 +102,30 @@ test("a failed pointer refresh keeps serving the last release and reports why", 
   const empty = createWebReleaseReader(createLocalWebReleaseStore(join(root, "empty")));
   await assert.rejects(empty.document("index.html"), /no web UI release is live in .*empty/);
 });
+
+test("a core from another deploy line keeps serving its own bundled release", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-web-releases-"));
+  const store = createLocalWebReleaseStore(join(root, "store"));
+  const old = bundle(root, "old", "old-core");
+  const next = bundle(root, "next", "next-core");
+  const oldId = (await deployBundledRelease(store, old)).id;
+  const nextId = (await deployBundledRelease(store, next)).id;
+  assert.deepEqual(await readLivePointer(store), { release: nextId, deployed: nextId });
+
+  const oldCore = createWebReleaseReader(store, { bundled: () => oldId });
+  const nextCore = createWebReleaseReader(store, { bundled: () => nextId });
+  assert.equal(await oldCore.document("index.html"), "<title>old-core</title>");
+  assert.equal(await nextCore.document("index.html"), "<title>next-core</title>");
+
+  const hotfixId = (await readWebBundle(bundle(root, "hotfix", "hotfix"))).id;
+  for (const file of ["index.html", "brand-mark.svg"])
+    await store.put(
+      `releases/${hotfixId}/${file}`,
+      Buffer.from(file === "index.html" ? "<title>hotfix</title>" : "<svg/>"),
+    );
+  await store.put("live.json", Buffer.from(JSON.stringify({ release: hotfixId, deployed: nextId })));
+  const later = createWebReleaseReader(store, { bundled: () => nextId });
+  assert.equal(await later.document("index.html"), "<title>hotfix</title>");
+  const stale = createWebReleaseReader(store, { bundled: () => oldId });
+  assert.equal(await stale.document("index.html"), "<title>old-core</title>");
+});

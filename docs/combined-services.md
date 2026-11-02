@@ -14,7 +14,7 @@ The browser application is a static, content-hashed release. A release id is the
 
 Core serves `index.html`, `shared.html` and unhashed files from the live release and serves `/assets/*` from the shared directory, so a tab opened on an older release keeps loading its chunks after a newer release goes live. Each core re-reads `live.json` at most every two seconds. If a read fails, core keeps serving the release it already has and logs the failure with its cause; a core that has never read a release answers `503` and logs why.
 
-Every core image carries the bundle built from its source. At boot core uploads that bundle if the store lacks it, then makes it live only when `live.json` names a different `deployed` release. A core deploy therefore ships its web UI, while restarting the same image keeps any release published since.
+Every core image carries the bundle built from its source. At boot core uploads that bundle if the store lacks it, then makes it live only when `live.json` names a different `deployed` release. A core deploy therefore ships its web UI, while restarting the same image keeps any release published since. A core whose bundled release is not the `deployed` one, such as an old instance during a rolling deploy or after a failed rollout, keeps serving its own bundled release, so the browser code always matches the core API it talks to.
 
 Publish a web UI change without deploying core:
 

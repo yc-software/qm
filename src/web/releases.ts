@@ -204,7 +204,12 @@ export interface WebReleases {
 
 export function createWebReleaseReader(
   store: WebReleaseStore,
-  opts: { pointerTtlMs?: number; now?: () => number; log?: (line: string) => void } = {},
+  opts: {
+    bundled?: () => string | undefined;
+    pointerTtlMs?: number;
+    now?: () => number;
+    log?: (line: string) => void;
+  } = {},
 ): WebReleases & { live(): Promise<string> } {
   const ttl = opts.pointerTtlMs ?? 2_000;
   const now = opts.now ?? Date.now;
@@ -218,7 +223,9 @@ export function createWebReleaseReader(
     try {
       const pointer = await readLivePointer(store);
       if (!pointer) throw new Error(`no web UI release is live in ${store.describe()} yet`);
-      current = { release: pointer.release, readAt: now() };
+      const bundled = opts.bundled?.();
+      const release = bundled && pointer.deployed !== bundled ? bundled : pointer.release;
+      current = { release, readAt: now() };
     } catch (error) {
       if (!current) throw error;
       log(`[web] live release pointer unreadable, still serving ${current.release}: ${errMessage(error)}`);

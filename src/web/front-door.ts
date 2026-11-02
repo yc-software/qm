@@ -47,11 +47,14 @@ export async function startFrontDoor(
   env: NodeJS.ProcessEnv,
 ): Promise<{ close(): Promise<void> }> {
   const store = webReleaseStore(config);
+  let bundled: string | undefined;
   void deployBundledRelease(store, BUNDLED_WEB_UI).then(
-    (result) =>
+    (result) => {
+      bundled = result.id;
       console.log(
         `[web] bundled web UI release ${result.id} ${result.uploaded ? "uploaded to" : "already in"} ${store.describe()}; live release ${result.live}`,
-      ),
+      );
+    },
     (error: unknown) => console.error(`[web] publishing the bundled web UI release failed: ${errMessage(error)}`),
   );
   env.CORE_API_URL = `http://127.0.0.1:${config.port}`;
@@ -59,7 +62,11 @@ export async function startFrontDoor(
   env.PORTAL_PUBLIC_URL ||= config.publicWebUrl ?? `http://localhost:${config.publicPort}`;
   env.WEB_UI_PUBLIC_URL ||= env.PORTAL_PUBLIC_URL;
   const web = (await import("../../plugins/web-ui/server/index.ts")) as WebSurface;
-  const webServer = await web.startServer({ port: 0, host: "127.0.0.1", releases: createWebReleaseReader(store) });
+  const webServer = await web.startServer({
+    port: 0,
+    host: "127.0.0.1",
+    releases: createWebReleaseReader(store, { bundled: () => bundled }),
+  });
   env.WEB_UI_UPSTREAM = `http://127.0.0.1:${(webServer.address() as AddressInfo).port}`;
   const portal = (await import("../../plugins/portal/src/index.ts")) as PortalSurface;
   try {
