@@ -67,6 +67,19 @@ export function createUltimateHarness(options: UltimateHarnessOptions): Harness 
   }
 
   async function runTurn(input: HarnessTurnInput) {
+    const continueTurn = !!input.continueTurn && input.history.some((entry) => entry.seq === input.resumeUserSeq);
+    if (!continueTurn)
+      await input.emit({
+        type: "user",
+        payload: {
+          text: input.input,
+          ...(input.environment ? { environment: input.environment } : {}),
+          ...((input.triggerTs ?? input.entryTs) ? { ts: input.triggerTs ?? input.entryTs } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        },
+        scopeLabel: input.scopeLabel,
+        ...(input.runtimeActorId ? { author: input.runtimeActorId } : {}),
+      });
     const model = typeof options.model === "function" ? options.model(input.runtime?.modelId ?? "") : options.model;
     const modelBroker = await options.modelBroker?.(input);
     const toolBroker = await options.toolBroker?.(input);
@@ -97,7 +110,11 @@ export function createUltimateHarness(options: UltimateHarnessOptions): Harness 
         });
       await call(`/api/conversations/${id}/submit`, {
         method: "POST",
-        body: JSON.stringify({ text: `${replayPreamble(input.history)}\n\n${input.input}`.trim() }),
+        body: JSON.stringify({
+          text: continueTurn
+            ? replayPreamble(input.history).trim()
+            : `${replayPreamble(input.history)}\n\n${input.input}`.trim(),
+        }),
         signal: input.cancel,
       });
       for (;;) {
