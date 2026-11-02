@@ -22,7 +22,7 @@ const ENV = [
   "",
 ].join("\n");
 
-function fakeDocker(dir: string, logs: string, retired: string[]): string {
+function fakeDocker(dir: string, logs: string): string {
   const argvLog = join(dir, "docker-argv.log");
   writeFileSync(argvLog, "");
   const bin = join(dir, "docker");
@@ -33,7 +33,6 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
 if (args[0] === "version") { console.log("25.0"); process.exit(0); }
-if (args[0] === "ps") { console.log(${JSON.stringify(retired.join("\n"))}); process.exit(0); }
 if (args[0] === "logs") { console.log(${JSON.stringify(logs)}); process.exit(0); }
 if (args[0] === "inspect") { console.log(${JSON.stringify(logs.includes("front door") ? "true" : "false")}); process.exit(0); }
 process.exit(0);
@@ -43,7 +42,7 @@ process.exit(0);
   return argvLog;
 }
 
-async function up(logs: string, retired: string[]): Promise<{ calls: string[][]; error?: unknown }> {
+async function up(logs: string): Promise<{ calls: string[][]; error?: unknown }> {
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-front-door-"));
   const priorPath = process.env.PATH;
   const priorDb = process.env.DATABASE_URL;
@@ -63,7 +62,7 @@ async function up(logs: string, retired: string[]): Promise<{ calls: string[][];
       }),
     );
     writeFileSync(join(dir, ".env"), ENV);
-    const argvLog = fakeDocker(dir, logs, retired);
+    const argvLog = fakeDocker(dir, logs);
     process.env.PATH = `${dir}:${priorPath}`;
     process.env.DATABASE_URL = "postgres://external/db";
     console.log = () => {};
@@ -89,35 +88,23 @@ async function up(logs: string, retired: string[]): Promise<{ calls: string[][];
   }
 }
 
-test(
-  "docker up publishes core's front door, wires its sign-in, and replaces the retired containers",
-  { timeout: 60_000 },
-  async () => {
-    const { calls, error } = await up("[qm] listening on :8080\n[portal] public front door on http://localhost:8000", [
-      "qm-acme-pg",
-      "qm-acme-web-ui",
-      "qm-acme-portal",
-      "qm-acme-auth",
-    ]);
-    assert.equal(error, undefined);
-    const removed = calls.filter((args) => args[0] === "rm").map((args) => args.at(-1));
-    assert.deepEqual(removed, ["qm-acme-web-ui", "qm-acme-portal", "qm-acme-auth", "qm-acme-core"]);
-    const run = calls.find((args) => args[0] === "run" && args.includes("qm-acme-core"))!;
-    assert.ok(run.includes("8080:8080"), run.join(" "));
-    assert.ok(run.includes("127.0.0.1:8082:8000"), run.join(" "));
-    for (const env of [
-      "PUBLIC_PORT=8000",
-      "PUBLIC_WEB_URL=http://localhost:8082",
-      "AUTH_EMBEDDED=1",
-      "AUTH_ISSUER=http://localhost:8082/idp",
-      "OIDC_AUTH_ENDPOINT=http://localhost:8082/idp/authorize",
-    ])
-      assert.ok(run.includes(env), env);
-    assert.ok(!calls.some((args) => args.includes("qm-acme-web-ui") && args[0] === "run"));
-  },
-);
+test("docker up publishes core's front door on loopback and wires its sign-in", { timeout: 60_000 }, async () => {
+  const { calls, error } = await up("[qm] listening on :8080\n[portal] public front door on http://localhost:8000");
+  assert.equal(error, undefined);
+  const run = calls.find((args) => args[0] === "run" && args.includes("qm-acme-core"))!;
+  assert.ok(run.includes("8080:8080"), run.join(" "));
+  assert.ok(run.includes("127.0.0.1:8082:8000"), run.join(" "));
+  for (const env of [
+    "PUBLIC_PORT=8000",
+    "PUBLIC_WEB_URL=http://localhost:8082",
+    "AUTH_EMBEDDED=1",
+    "AUTH_ISSUER=http://localhost:8082/idp",
+    "OIDC_AUTH_ENDPOINT=http://localhost:8082/idp/authorize",
+  ])
+    assert.ok(run.includes(env), env);
+});
 
 test("docker up does not report core ready until its front door listens", { timeout: 60_000 }, async () => {
-  const { error } = await up("[qm] listening on :8080", []);
+  const { error } = await up("[qm] listening on :8080");
   assert.match(String(error), /core exited before becoming ready/);
 });

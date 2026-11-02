@@ -11,8 +11,6 @@ export const isVirtualService = (s: string): s is VirtualServiceName =>
   (VIRTUAL_SERVICE_NAMES as readonly string[]).includes(s);
 export const isDeclaredService = (s: string): s is DeclaredServiceName => isServiceName(s) || isVirtualService(s);
 
-export const RETIRED_SERVICE_NAMES = ["web-ui", "portal"] as const;
-
 export const PUBLIC_PORT = 8000;
 
 export function serviceHost(name: string): string {

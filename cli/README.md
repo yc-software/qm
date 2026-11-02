@@ -47,9 +47,18 @@ sign-in at `http://localhost:8082` and its API at `http://localhost:8080`, with
 the built-in sign-in broker. Put the first administrator in `ADMIN_GRANTS`
 (`qm setup` asks for it and derives `AUTH_ALLOWED_EMAILS`), run `qm up`, then
 `qm admin-login` for a sign-in link; no email transport is needed. Sign-in
-accepts plain HTTP only when `publicUrl` is a loopback address. A deployment
-that listed `web-ui` or `portal` must drop them from `services` (add `"auth"` to
-keep built-in sign-in); the next `qm up` removes their containers.
+accepts plain HTTP only when `publicUrl` is a loopback address.
+
+To upgrade a deployment that ran separate `web-ui`, `portal` or `auth`
+containers, once:
+
+1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`, keep
+   or add `"auth"`, set `env.auth.AUTH_EMAIL_TRANSPORT` to `"resend"` or
+   `"smtp"`, and add `"secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`.
+2. Run `qm setup`. It asks for `ADMIN_GRANTS` and generates the sign-in secrets.
+3. Run `qm down`. It removes every container of the deployment, including the
+   old ones, and keeps the database and data volumes.
+4. Run `qm up`, then `qm admin-login`.
 
 ## Render
 

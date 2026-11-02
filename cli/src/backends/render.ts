@@ -62,7 +62,7 @@ import {
   runtimeSecretNames,
 } from "../secrets.ts";
 import { githubRepoUrl } from "../render-source.ts";
-import { RETIRED_SERVICE_NAMES, runnableServices, serviceDef, serviceHost } from "../services.ts";
+import { runnableServices, serviceDef, serviceHost } from "../services.ts";
 import { capture, deploymentSecretValue, isInvalidSecret, sleep } from "../util.ts";
 import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
 import type { DeployContext } from "./registry.ts";
@@ -817,14 +817,6 @@ export function createRenderBackend(ctx: DeployContext): Backend {
         recordRelease(state, commit, release);
         delete state.updateInProgress;
         saveState(ctx, state);
-        for (const name of RETIRED_SERVICE_NAMES) {
-          const saved = state.services[name];
-          if (!saved) continue;
-          if (bound.services.has(name)) await request(`/services/${saved.id}`, "DELETE");
-          delete state.services[name];
-          saveState(ctx, state);
-          ok(`${name}: deleted; core serves the web UI and sign-in at ${urls.publicUrl}`);
-        }
         for (const url of new Set([urls.apiUrl, urls.publicUrl])) await bindUrl(request, services.get("core")!, url);
         const retained = Object.keys(state.services).filter((name) => !desired.some((item) => item.name === name));
         if (retained.length)

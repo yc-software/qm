@@ -94,13 +94,22 @@ when storage settings change, when a service resumes, and when a deployment
 is retried. The first deployment builds MinIO from the selected QM source.
 `check --live` proves service health and durable object storage.
 
-Deployments created before core served the web UI also have `web-ui` and
-`portal` services. `qm up` deletes them once core's new build is healthy, then
-binds custom domains to core. A custom `publicUrl` is unreachable until its DNS
-record points at core's `onrender.com` host, as `qm up` prints, and Render
-verifies it. An assigned `onrender.com` `publicUrl` changes to core's URL, so
-run `qm slack render` and update OAuth redirect URLs afterwards.
-A rollback to a release from before this change fails because those services
+To upgrade a deployment that has separate `web-ui` and `portal` services, once:
+
+1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`.
+2. If `publicUrl` is a custom domain, remove it from the portal service in the
+   Render dashboard (Settings, Custom Domains). The site is down from here
+   until step 4 finishes.
+3. Run `qm up`. Core takes over `publicUrl`; an assigned `onrender.com` URL in
+   the config changes to core's. `qm up` lists `web-ui` and `portal` as
+   retained services.
+4. For a custom domain, point its DNS record at the host `qm up` prints and
+   wait for Render to verify it.
+5. Delete the `web-ui` and `portal` services in the Render dashboard. The next
+   `qm up` drops them from `render.resources.json`.
+6. Run `qm slack render` and update OAuth redirect URLs if `publicUrl` changed.
+
+A rollback to a release from before the upgrade fails because those services
 are gone. Web UI changes ship with `qm up`, which rebuilds core;
 `qm ui publish` does not support Render.
 

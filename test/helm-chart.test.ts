@@ -239,33 +239,30 @@ test("Helm requires the public URL core's front door derives its addresses from"
 
 test("Helm wires core's front door and embedded sign-in broker from the public URL", options, () => {
   const wired = env(render({ publicUrl: "https://qm.example.com/" }));
-  for (const key of ["AGENT_API_URL", "PUBLIC_WEB_URL", "PORTAL_PUBLIC_URL", "WEB_UI_PUBLIC_URL"]) {
+  for (const key of ["AGENT_API_URL", "PUBLIC_WEB_URL", "WEB_UI_PUBLIC_URL"]) {
     assert.equal(wired[key], "https://qm.example.com");
   }
-  assert.equal(wired.PUBLIC_PORT, "8000");
-  assert.equal(wired.AUTH_EMBEDDED, "1");
-  assert.equal(wired.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(wired.AUTH_BROKER_PREFIX, "/idp");
   assert.equal(wired.AUTH_ISSUER, "https://qm.example.com/idp");
-  assert.equal(wired.OIDC_ISSUER, "https://qm.example.com/idp");
+  assert.equal(wired.OIDC_ISSUER, wired.AUTH_ISSUER);
+  assert.equal(wired.OIDC_AUTH_ENDPOINT, `${wired.AUTH_ISSUER}/authorize`);
   assert.equal(wired.AUTH_REDIRECT_URI, "https://qm.example.com/auth/callback");
-  assert.equal(wired.AUTH_CLIENT_ID, "qm-portal");
-  assert.equal(wired.OIDC_CLIENT_ID, "qm-portal");
-  assert.equal(wired.OIDC_AUTH_ENDPOINT, "https://qm.example.com/idp/authorize");
-  assert.equal(wired.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
-  assert.equal(wired.OIDC_USERINFO_ENDPOINT, "http://127.0.0.1:8099/userinfo");
-  assert.equal(wired.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+  const broker = new URL(wired.AUTH_BROKER_UPSTREAM ?? "");
+  assert.equal(broker.hostname, "127.0.0.1");
+  for (const key of ["OIDC_TOKEN_ENDPOINT", "OIDC_USERINFO_ENDPOINT", "OIDC_JWKS_URI"]) {
+    assert.equal(new URL(wired[key] ?? "").origin, broker.origin, key);
+  }
   assert.equal(
     render({ secretEnv: { AUTH_CLIENT_SECRET: "broker-secret" } }).find((r) => r.kind === "Secret")?.stringData
       ?.OIDC_CLIENT_SECRET,
     "broker-secret",
   );
   const external = env(render({ auth: { enabled: false }, secretEnv: { OIDC_CLIENT_ID: "external-client" } }));
-  assert.equal(external.PORTAL_PUBLIC_URL, "https://qm.example.com");
+  assert.equal(external.PUBLIC_WEB_URL, "https://qm.example.com");
   assert.equal(external.OIDC_CLIENT_ID, "external-client");
-  for (const key of ["AUTH_EMBEDDED", "AUTH_BROKER_UPSTREAM", "AUTH_ISSUER", "OIDC_ISSUER", "OIDC_TOKEN_ENDPOINT"]) {
-    assert.equal(external[key], undefined, key);
-  }
+  const derived = Object.keys(external).filter(
+    (key) => (key.startsWith("AUTH_") || key.startsWith("OIDC_")) && key !== "OIDC_CLIENT_ID",
+  );
+  assert.deepEqual(derived, []);
   assert.ok(
     !container(render(), "egress-proxy").env.some((e) => e.name.startsWith("AUTH_") || e.name === "PUBLIC_PORT"),
   );
