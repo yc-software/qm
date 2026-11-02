@@ -13,6 +13,7 @@ FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c
 WORKDIR /app/plugins/web-ui
 ARG WEB_UI_BASE=/
 ENV WEB_UI_BASE=$WEB_UI_BASE
+ENV NODE_OPTIONS=--max-old-space-size=4096
 COPY plugins/web-ui/package.json plugins/web-ui/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY plugins/web-ui/index.html plugins/web-ui/shared.html plugins/web-ui/vite.config.ts plugins/web-ui/tsconfig.json ./
