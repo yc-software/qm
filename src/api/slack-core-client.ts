@@ -274,7 +274,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async privateContinuationSource(runId) {
       const run = await deps.runs.get(runId);
       if (
-        !run?.request.externalSlack ||
+        run?.request.surfaceOrigin?.audience !== "external" ||
         run.request.origin.kind !== "human" ||
         isSessionTurn(run.request) ||
         run.request.actor.type !== "internal"

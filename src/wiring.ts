@@ -134,6 +134,7 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { SURFACE_ORIGIN_MIGRATION } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -1889,6 +1890,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(SURFACE_ORIGIN_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -2494,11 +2496,14 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
-    const slackSource =
-      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
+    const latest =
+      !req.surfaceOrigin && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
+        ? (await runs.latestForThread(req.conversation.threadRef))?.request.surfaceOrigin
         : undefined;
-    return app.turn(slackSource ? { ...req, slackSource } : req);
+    if (!latest) return app.turn(req);
+    if (latest.audience === "internal") return app.turn({ ...req, surfaceOrigin: latest });
+    const { access: _access, ...internal } = latest;
+    return app.turn({ ...req, surfaceOrigin: { ...internal, audience: "internal" } });
   };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>

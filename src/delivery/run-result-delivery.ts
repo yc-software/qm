@@ -9,6 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { originAccount } from "../surfaces/origin.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -40,12 +41,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   const destination: Destination = {
     type: surface,
     target,
-    ...(run.request.slackSource
-      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
-      : {}),
-    ...(run.request.slackSource?.externalPolicyNamespace
-      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
-      : {}),
+    ...(run.request.surfaceOrigin ? { account: originAccount(run.request.surfaceOrigin) } : {}),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };

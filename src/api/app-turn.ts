@@ -206,7 +206,10 @@ export function createTurnMethods(
         (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
 
       const modelAccount =
-        !req.externalSlack && deps.userModelCredentials && origin.kind === "human" && !sessionTurn
+        req.surfaceOrigin?.audience !== "external" &&
+        deps.userModelCredentials &&
+        origin.kind === "human" &&
+        !sessionTurn
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
@@ -341,8 +344,7 @@ export function createTurnMethods(
 
       const input = {
         surface: req.surface,
-        ...(req.slackSource ? { slackSource: req.slackSource } : {}),
-        ...(req.externalSlack ? { externalSlack: req.externalSlack } : {}),
+        ...(req.surfaceOrigin ? { surfaceOrigin: req.surfaceOrigin } : {}),
         ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),
         ...(req.spawned && req.delegatingRunId ? { delegatingRunId: req.delegatingRunId } : {}),
         ...(sameApprovedMessage && approvedRequest?.sessionSenderId
@@ -544,7 +546,8 @@ export function createTurnMethods(
         }
       }
 
-      const spineRouted = !req.externalSlack && !req.approval && shouldRouteToSpine(request as OrchestratorInput);
+      const spineRouted =
+        req.surfaceOrigin?.audience !== "external" && !req.approval && shouldRouteToSpine(request as OrchestratorInput);
       if (spineRouted) {
         request = { ...input, surfaceTools: true };
         if (origin.kind !== "ambient")

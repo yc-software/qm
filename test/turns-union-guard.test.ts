@@ -279,3 +279,33 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   assert.equal(r.status, 400);
   assert.match(JSON.stringify(await r.json()), /reserved slack: prefix/);
 });
+
+test("POST /v1/turns drops a caller-supplied surface origin", async () => {
+  const body = JSON.stringify({
+    surface: "cron",
+    actor: { externalId: "internal:owner" },
+    conversation: {
+      kind: "channel",
+      channelRef: "C9",
+      threadRef: "t-origin-guard",
+      audience: [{ externalId: "internal:owner" }],
+    },
+    text: "x",
+    triggered: true,
+    surfaceOrigin: {
+      author: { surface: "slack", account: "partner", id: "U1" },
+      workspace: "TPARTNER",
+      audience: "internal",
+    },
+    async: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 202);
+  const { runId } = (await r.json()) as { runId: string };
+  const run = await built.runs.get(runId);
+  assert.equal(run?.request.surfaceOrigin, undefined);
+});

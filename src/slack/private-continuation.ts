@@ -6,6 +6,7 @@ import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { ExternalSlackAccess } from "./external-access.ts";
 import { companySlackActor, externalSlackNamespace } from "./external-access.ts";
 import { dmThreadRef } from "./message-gating.ts";
+import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { encodeDeliveryTarget, parseDeliveryTarget, postWithVerify, slackReplyArgs } from "./delivery.ts";
 
 export const PRIVATE_CONTINUATION_ACK = "I'll continue this in your DM, where I can use your private context.";
@@ -24,18 +25,18 @@ export async function continueInPrivate(
     | undefined,
 ): Promise<void> {
   const source = await core.privateContinuationSource?.(runId);
-  const origin = source?.externalSlack;
-  if (!source || !origin || !source.deliveryTarget)
+  const origin = source?.surfaceOrigin;
+  if (!source || origin?.audience !== "external" || !source.deliveryTarget)
     throw new Error("Private continuation requires a verified employee request");
-  const current = account(origin.accountId);
-  if (!current?.policy || current.teamId !== origin.teamId) throw new Error("Source Slack workspace is unavailable");
+  const current = account(origin.author.account);
+  if (!current?.policy || current.teamId !== origin.workspace) throw new Error("Source Slack workspace is unavailable");
   const { client, policy } = current;
-  const user = (await client.users.info({ user: origin.userId })).user;
-  if (user?.id !== origin.userId) throw new Error("Slack requester identity could not be verified");
+  const user = (await client.users.info({ user: origin.author.id })).user;
+  if (user?.id !== origin.author.id) throw new Error("Slack requester identity could not be verified");
   const actor = companySlackActor(user, policy);
   if (actor.isExternalGuest || actor.externalId !== source.actor.externalId)
     throw new Error("Private continuation requester is no longer a verified employee");
-  const opened = await client.conversations.open({ users: origin.userId });
+  const opened = await client.conversations.open({ users: origin.author.id });
   const dm = opened.channel?.id;
   if (typeof dm !== "string" || !dm.startsWith("D")) throw new Error("Could not open the requester's private DM");
   const { channel, threadTs } = parseDeliveryTarget(source.deliveryTarget);
@@ -48,15 +49,15 @@ export async function continueInPrivate(
   );
   const result = await core.submitTurn({
     actor,
-    slackSource: {
-      accountId: origin.accountId,
-      teamId: origin.teamId,
-      userId: origin.userId,
-      externalPolicyNamespace: externalSlackNamespace(origin.teamId, policy),
-    },
+    surfaceOrigin: slackSurfaceOrigin({
+      accountId: origin.author.account,
+      teamId: origin.workspace,
+      userId: origin.author.id,
+      policyNamespace: externalSlackNamespace(origin.workspace, policy),
+    }),
     conversation: {
       kind: "dm",
-      threadRef: `slack-account:${origin.teamId}:${dmThreadRef(dm)}`,
+      threadRef: `slack-account:${origin.workspace}:${dmThreadRef(dm)}`,
       audience: [actor],
     },
     deliveryTarget: encodeDeliveryTarget(dm),
