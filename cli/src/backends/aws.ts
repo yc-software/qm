@@ -2315,7 +2315,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (coreServesFrontDoor(config)) assertAwsPublicFrontDoor(config);
   else
     warn(
-      "the running core predates its built-in front door, so the ALB routing is not checked before this deploy; once core is stable, apply infra/ to route the public URL to core and retire the web-ui and portal services",
+      "the running core predates its built-in front door, so the ALB routing is not checked before this deploy; once core is stable, follow the AWS upgrade steps in the deployment guide to route the public URL to core and retire the web-ui and portal services",
     );
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);

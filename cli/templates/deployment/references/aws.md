@@ -75,7 +75,9 @@ Preserve local Terraform and tfvars customizations, then replace
 
 A stack created before core served the web UI and sign-in itself runs separate
 `web-ui` and `portal` ECS services, with portal behind the ALB's `/*` rule.
-Move the public URL to core without a gap in service:
+Terraform drains a service before it deletes that service's listener rule, so a
+plain apply leaves the public URL without a healthy target for minutes. Move
+the public URL to core without that gap:
 
 1. Remove `"web-ui"` and `"portal"` from `services` and `aws.services`, move
    their `env` and `secretEnv` settings into `core`, and run
@@ -83,28 +85,51 @@ Move the public URL to core without a gap in service:
 2. Run `npm exec qm -- secrets push` and `npm exec qm -- up --yes`. Core now
    also serves the front door on port 8000 while portal keeps answering the
    public URL.
-3. Attach core to its front-door target group while portal still routes
-   traffic, then wait until `npm exec qm -- status` reports core stable:
+3. Record portal's listener rule ARN and target group ARNs with
+   `terraform -chdir=infra state show` for the addresses below, then remove
+   portal's serving resources from Terraform state so the next apply leaves
+   portal running:
 
    ```bash
-   terraform -chdir=infra apply -target='aws_ecs_service.service["core"]'
+   terraform -chdir=infra state rm \
+     'aws_ecs_service.service["portal"]' \
+     'aws_lb_listener_rule.production["portal"]' \
+     'aws_lb_target_group.service["portal"]' \
+     'aws_lb_target_group.alternate["portal"]' \
+     'aws_cloudwatch_log_group.service["portal"]' \
+     'aws_ecr_repository.service["portal"]'
    ```
 
-4. Delete the retired image repositories, which Terraform cannot remove while
-   they hold images, then apply the full plan. It removes the `web-ui` and
-   `portal` services and their target groups, rule, and log groups, and the
-   public URL falls through to core:
+4. Delete the web-ui image repository, which Terraform cannot remove while it
+   holds images, then apply the full plan. It attaches core to its front-door
+   target group and removes the `web-ui` service. Wait until
+   `npm exec qm -- status` reports core stable:
 
    ```bash
    aws --profile <profile> --region <region> ecr delete-repository --force \
      --repository-name <web-ui-ecr-repository>
-   aws --profile <profile> --region <region> ecr delete-repository --force \
-     --repository-name <portal-ecr-repository>
    terraform -chdir=infra plan -out=qm.tfplan
    terraform -chdir=infra apply qm.tfplan
    ```
 
-5. Run `npm exec qm -- doctor` and `npm exec qm -- check --live`.
+5. Delete portal's listener rule. The public URL falls through to core's `/*`
+   rule at once. Then delete the rest of portal:
+
+   ```bash
+   aws --profile <profile> --region <region> elbv2 delete-rule --rule-arn <portal-rule-arn>
+   aws --profile <profile> --region <region> ecs delete-service --force \
+     --cluster <cluster> --service <portal-ecs-service>
+   aws --profile <profile> --region <region> ecs wait services-inactive \
+     --cluster <cluster> --services <portal-ecs-service>
+   aws --profile <profile> --region <region> elbv2 delete-target-group --target-group-arn <portal-target-group-arn>
+   aws --profile <profile> --region <region> elbv2 delete-target-group --target-group-arn <portal-alternate-target-group-arn>
+   aws --profile <profile> --region <region> logs delete-log-group --log-group-name /ecs/<portal-ecs-service>
+   aws --profile <profile> --region <region> ecr delete-repository --force \
+     --repository-name <portal-ecr-repository>
+   ```
+
+6. Confirm `terraform -chdir=infra plan` reports no changes, then run
+   `npm exec qm -- doctor` and `npm exec qm -- check --live`.
 
 ## Agent-computer proof
 
