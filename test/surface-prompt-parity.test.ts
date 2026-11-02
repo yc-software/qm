@@ -168,17 +168,23 @@ test("Slack-registered prompts and surface tool text match the pre-registry rend
         await (shape === "external" ? external : plain)(input(surface, shape, n)),
       );
     }
-  const commonLines = (turn: AgentTurnInput) => turn.systemPrompt.split("\n").filter((line) => /slack/i.test(line));
+  const slackLines = (turn: AgentTurnInput) => turn.systemPrompt.split("\n").filter((line) => /slack/i.test(line));
   const everywhere = [...turns.values()]
-    .map((turn) => new Set(commonLines(turn)))
+    .map((turn) => new Set(slackLines(turn)))
     .reduce((acc, lines) => new Set([...acc].filter((line) => lines.has(line))));
+  const surfaceWindows = (turn: AgentTurnInput) => {
+    const lines = turn.systemPrompt.split("\n");
+    return lines.flatMap((line, i) =>
+      /slack/i.test(line) && !everywhere.has(line) ? [lines.slice(Math.max(0, i - 2), i + 3).join("\n")] : [],
+    );
+  };
   assert.deepEqual([...turns.keys()].sort(), Object.keys(fixture.cases).sort());
   for (const [key, turn] of turns) {
     const expected = fixture.cases[key]!;
     const tool = renderedTool(turn);
     assert.equal(turn.surfaceName, expected.surfaceName, key);
     assert.deepEqual(
-      commonLines(turn).filter((line) => !everywhere.has(line)),
+      surfaceWindows(turn),
       expected.prompt.map((i) => fixture.strings[i]),
       key,
     );

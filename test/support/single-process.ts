@@ -7,11 +7,14 @@ import { createDeliveryStore } from "../../src/delivery/delivery-store.ts";
 import { createSurfaceRegistry } from "../../src/surfaces/registry.ts";
 import { createSlackSurface } from "../../src/surfaces/slack/adapter.ts";
 
+export const testSurfaces = () =>
+  createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries: createDeliveryStore() })] });
+
 export const singleProcessDeps = () => ({
   advisoryLock: createNoopAdvisoryLock(),
   leaderLease: createNoopLeaderLease(),
   approvals: testMap<PendingApprovalRecord>(),
   approvalGrants: testMap<CommandApprovalGrant>(),
   blobTransfer: createMemoryBlobTransferStore(),
-  surfaces: createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries: createDeliveryStore() })] }),
+  surfaces: testSurfaces(),
 });

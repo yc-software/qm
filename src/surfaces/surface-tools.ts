@@ -412,7 +412,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
       if (deps.surfaceCache && destinationSurface?.mirrored && container) {
-        const channel = container.split(":")[0]!;
+        const channel = destinationSurface.threads ? container.split(":")[0]! : container;
         const hits = await deps.surfaceCache.search(q, { container: channel, limit });
         return withCoverage({
           ok: true,

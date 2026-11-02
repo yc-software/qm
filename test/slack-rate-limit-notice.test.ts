@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSlackRateLimitNotice } from "../src/slack/rate-limit-notice.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv } from "../src/slack/config.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 const rateLimit = { code: "slack_webapi_rate_limited_error", retryAfter: 59.1 };
 const setupUrl = "https://qm.example/admin/?setup=slack";
@@ -108,6 +109,7 @@ test("explicit read tools notify only for human Slack turns, using their origina
     const queries: any[] = [];
     const tools = createSurfaceToolDeps({
       deps: {
+        surfaces: testSurfaces(),
         deliveries: {},
         surfaceContext: {
           pull: async (_source: string, query: any) => {
