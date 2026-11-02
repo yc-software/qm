@@ -1,4 +1,10 @@
-import type { Surface } from "./contract.ts";
+import type { Surface, SurfacePromptHints } from "./contract.ts";
+
+export type SurfaceToolPrompt = Pick<Surface, "label"> & Pick<SurfacePromptHints, "mentionSyntax">;
+
+export function surfaceToolPrompt(surface: Surface): SurfaceToolPrompt {
+  return { label: surface.label, mentionSyntax: surface.promptHints.mentionSyntax };
+}
 
 export interface SurfaceRegistry {
   get(kind: string): Surface | undefined;

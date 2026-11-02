@@ -26,8 +26,7 @@ interface OutboundMessage {
 
 interface SurfaceCapabilities {
   mirrored: boolean;
-  firstBlockAck: boolean;
-  replyEngagement: boolean;
+  liveReplies: boolean;
   nativeActor: boolean;
   externalParticipants: boolean;
 }

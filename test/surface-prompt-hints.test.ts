@@ -174,8 +174,7 @@ test("a registered surface supplies its own label, prompt hints and mention synt
     label: "Acme",
     capabilities: {
       mirrored: false,
-      firstBlockAck: false,
-      replyEngagement: false,
+      liveReplies: false,
       nativeActor: false,
       externalParticipants: false,
     },

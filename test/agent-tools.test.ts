@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
@@ -3200,9 +3201,7 @@ test("surface messages use Markdown and teach only the mention syntax their regi
     const tool = createAgentTools(ref, {
       surfaceTools: true,
       surfaceName: name,
-      ...(registered
-        ? { surfacePrompt: { label: registered.label, mentionSyntax: registered.promptHints.mentionSyntax } }
-        : {}),
+      ...(registered ? { surfacePrompt: surfaceToolPrompt(registered) } : {}),
     }).find((t) => t.name === name)!;
     const text = (tool.parameters as { properties: { text: { description: string } } }).properties.text.description;
     assert.match(text, /Use Markdown, including \[label\]\(url\) links/);

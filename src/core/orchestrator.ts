@@ -232,6 +232,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
+import { surfaceToolPrompt } from "../surfaces/registry.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1054,6 +1055,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
+      const surfaceName =
+        input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
+      const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
@@ -1069,7 +1073,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const frameVars: PromptVars = {
         botName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : (deps.surfaces.get(surfaceTool)?.label ?? "Slack"),
+        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -1080,9 +1084,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
-      const surfaceName =
-        input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-      const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
@@ -2383,7 +2384,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((surface?.capabilities.replyEngagement || input.surface === "monitor") && input.runLeaseToken) {
+          if ((surface?.capabilities.liveReplies || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -2515,7 +2516,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sourceSessionId: session.id,
           });
         const earlyTaskAck =
-          surface?.capabilities.firstBlockAck === true &&
+          surface?.capabilities.liveReplies === true &&
           humanInput &&
           conversation.kind === "dm" &&
           !input.approval &&
@@ -3401,9 +3402,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
-            ...(toolSurface
-              ? { surfacePrompt: { label: toolSurface.label, mentionSyntax: toolSurface.promptHints.mentionSyntax } }
-              : {}),
+            ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface) } : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }
@@ -3706,7 +3705,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (!surface?.capabilities.firstBlockAck || input.surfaceTools || !input.runId) return undefined;
+          if (!surface?.capabilities.liveReplies || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream?.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

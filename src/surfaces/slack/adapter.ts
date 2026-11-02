@@ -39,8 +39,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
     label: "Slack",
     capabilities: {
       mirrored: true,
-      firstBlockAck: true,
-      replyEngagement: true,
+      liveReplies: true,
       nativeActor: true,
       externalParticipants: true,
     },
