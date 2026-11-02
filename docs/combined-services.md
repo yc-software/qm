@@ -27,14 +27,15 @@ The command uploads the assets, then the documents, then switches `live.json`, a
 
 ## Configuration
 
-`services` declares `core`, the optional `egress-proxy`, and the core-hosted capabilities `slack` and `auth`. The former `web-ui` and `portal` services no longer exist. A configuration that still names them in `services`, `env`, `secretEnv`, `vms` or `imageOverrides` is rejected with the edits to make: drop them from `services`, move their `env` and `secretEnv` settings into `core`, and drop their `vms` and `imageOverrides` entries. Keep `auth` to enable email sign-in; its settings stay under `env.auth`. Omitting `auth` keeps external OIDC sign-in, configured in `env.core`.
+`services` declares `core`, the optional `egress-proxy`, and the core-hosted capabilities `slack` and `auth`. The former `web-ui` and `portal` services no longer exist: drop them from `services`, move their `env` and `secretEnv` settings into `core`, and drop their `vms` and `imageOverrides` entries. Keep `auth` to enable email sign-in; its settings stay under `env.auth`. Omitting `auth` keeps external OIDC sign-in, configured in `env.core`.
 
 ## Upgrade an existing deployment
 
 1. Record the existing release's source, image digests, configuration and secret versions.
 2. Make the configuration edits above and update `publicUrl` if it named the retired portal host (for example `https://<prefix>-portal.fly.dev`); register the new callback URL with an external identity provider.
-3. Deploy with `qm up`. Core starts serving the front door and publishes its bundled web UI. The CLI then removes the retired web-ui, portal and auth workloads.
+3. Deploy with `qm up`. Core starts serving the front door and publishes its bundled web UI.
 4. Verify signed-in chat, `/settings`, login, logout, and a `qm ui publish` round trip.
+5. Remove the retired web-ui, portal and auth workloads by hand, following the target's upgrade steps in its deployment reference. The CLI does not remove them.
 
 There is no database migration. Session keys, the auth broker's signing key and the token secret keep their values and move to core.
 
