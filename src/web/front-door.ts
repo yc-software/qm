@@ -49,7 +49,8 @@ export async function startFrontDoor(
   let bundled: string | undefined;
   let publishing: Promise<void> | undefined;
   const hasBundle = existsSync(join(BUNDLED_WEB_UI, "index.html"));
-  if (!hasBundle) console.log(`[web] this build carries no web UI bundle at ${BUNDLED_WEB_UI}; serving the live release`);
+  if (!hasBundle)
+    console.log(`[web] this build carries no web UI bundle at ${BUNDLED_WEB_UI}; serving the live release`);
   const publishBundled = (): string | undefined => {
     if (!hasBundle) return undefined;
     publishing ??= deployBundledRelease(store, BUNDLED_WEB_UI)

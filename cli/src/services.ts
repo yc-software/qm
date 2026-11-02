@@ -48,12 +48,7 @@ export function virtualServiceEnv(
   return Object.assign({}, ...services.filter(isVirtualService).map((s) => env[s] ?? {}));
 }
 
-const RESERVED_CONTAINER_NAMES: readonly string[] = [
-  ...SERVICE_NAMES,
-  ...VIRTUAL_SERVICE_NAMES,
-  "pg",
-  "sandbox",
-];
+const RESERVED_CONTAINER_NAMES: readonly string[] = [...SERVICE_NAMES, ...VIRTUAL_SERVICE_NAMES, "pg", "sandbox"];
 export const isReservedContainerName = (name: string): boolean => RESERVED_CONTAINER_NAMES.includes(name);
 
 export function pluginNameError(name: string): string | null {
