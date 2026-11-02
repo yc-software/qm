@@ -28,7 +28,6 @@ import {
   type ToolDefinition,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { ATTACHMENTS_REMOVED_KIND, imageCountSince, replaceImagesSince } from "./turn-images.ts";
 import {
   type Api,
   type AssistantMessage,
@@ -545,8 +544,8 @@ function documentsDroppedNote(documents: readonly DocumentInput[]): string {
   );
 }
 
-const ATTACHMENTS_DROPPED_RETRY_NOTE =
-  "[system] The previous request failed while it carried inline attachments; they have been replaced with notes (documents say how to read them from saved files). Continue with the request, and tell the person if an image they asked about couldn't be read.";
+const DOCUMENTS_DROPPED_RETRY_NOTE =
+  "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
 
 function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;
@@ -1380,17 +1379,15 @@ export function createAgent(opts?: AgentOptions): Agent {
         let documentRejection: ProviderTurnError | undefined;
         let documentRetried = false;
         const noteDocumentRejection = (message: unknown): void => {
-          const documents = entry.ref.documents?.length ?? 0;
-          const images = imageCountSince(entry.agentSession, messagesBefore);
-          if (documentRejection || (!documents && !images)) return;
+          if (documentRejection || !entry.ref.documents?.length) return;
           const failed = message as AssistantMessage | undefined;
           if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
           const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
           if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
           documentRejection = failure;
-          if (documents) entry.ref.documentsStubbed = true;
+          entry.ref.documentsStubbed = true;
           console.error(
-            `[pi] request with ${documents} inline document(s) and ${images} image(s) from this turn rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with notes session=${turn.session.id}`,
+            `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
           );
         };
         const retryWithoutDocuments = async (): Promise<boolean> => {
@@ -1402,25 +1399,11 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const images = imageCountSince(entry.agentSession, messagesBefore);
-          replaceImagesSince(entry.agentSession, messagesBefore);
-          if (images)
-            await turn.emit({
-              type: "system",
-              payload: {
-                kind: ATTACHMENTS_REMOVED_KIND,
-                images,
-                documents: entry.ref.documents?.length ?? 0,
-                code: documentRejection.code,
-                error: documentRejection.raw || documentRejection.message,
-              },
-              scopeLabel: turn.scopeLabel,
-            });
-          const outcome = await reprompt(ATTACHMENTS_DROPPED_RETRY_NOTE);
+          const outcome = await reprompt(DOCUMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")
             throw new NonRetryableTurnError(
-              `${documentRejection.message} (retry without inline attachments was ${outcome})`,
+              `${documentRejection.message} (retry without inline documents was ${outcome})`,
             );
           return true;
         };

@@ -114,14 +114,13 @@ export function createSurfaceContextFulfiller(deps: {
     threadTs: string | undefined,
   ): Promise<SlackHistoryMessage | undefined> {
     client = deps.historyClient ?? client;
-    const inThread = async (root: string) =>
-      parseMessageList(
-        await client.conversations.replies({ channel, ts: root, oldest: ts, inclusive: true, limit: 2 }),
-      ).messages.find((m) => m?.ts === ts);
-    const hit = threadTs ? await inThread(threadTs) : undefined;
-    if (hit) return hit;
+    if (threadTs) {
+      const res = await client.conversations.replies({ channel, ts: threadTs, oldest: ts, inclusive: true, limit: 2 });
+      const hit = parseMessageList(res).messages.find((m) => m?.ts === ts);
+      if (hit) return hit;
+    }
     const res = await client.conversations.history({ channel, latest: ts, inclusive: true, limit: 1 });
-    return parseMessageList(res).messages.find((m) => m?.ts === ts) ?? (ts !== threadTs ? inThread(ts) : undefined);
+    return parseMessageList(res).messages.find((m) => m?.ts === ts);
   }
 
   async function fetchSurfaceFile(

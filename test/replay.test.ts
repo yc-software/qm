@@ -696,30 +696,3 @@ test("replayed context marks each Pacific calendar day once, dating overheard Sl
     "── Monday, October 19, 2026 ──\nhas the deadline passed?",
   );
 });
-
-test("a prompt's images stay out of replay once the provider rejected them", () => {
-  const prompt = {
-    ...entry("user", "what does this say?"),
-    payload: { text: "what does this say?", images: [{ mimeType: "image/png", artifactId: "art-bad" }] },
-  };
-  const removed = { ...entry("system", ""), payload: { kind: "attachments_removed", images: 1, code: "bad_request" } };
-  const later = {
-    ...entry("user", "and this one?"),
-    payload: { text: "and this one?", images: [{ mimeType: "image/png", artifactId: "art-good" }] },
-  };
-  const [first, , second] = reconstructMessagesFromHistory([
-    prompt,
-    removed,
-    entry("assistant", "couldn't read it"),
-    later,
-  ]) as Array<{ content: Array<{ type: string; text?: string }> }>;
-  assert.deepEqual(
-    first!.content.map((b) => b.type),
-    ["text"],
-  );
-  assert.match(first!.content[0]!.text!, /1 image\(s\) removed/);
-  assert.deepEqual(
-    second!.content.map((b) => b.type),
-    ["text", "image"],
-  );
-});

@@ -224,57 +224,6 @@ describe("the Slack surface fetching a file from a message", () => {
   });
 });
 
-test("a file on a reply in a neighbouring thread is found by asking Slack for the thread around it", async () => {
-  const fulfilled: Array<{ outcome: any }> = [];
-  const repliesAsked: string[] = [];
-  const core = {
-    fulfillContextRequest: async (_id: string, outcome: unknown) => void fulfilled.push({ outcome }),
-    stageBlob: async () => ({ blobId: "blob-x" }),
-  };
-  const client = {
-    conversations: {
-      replies: async ({ ts }: { ts: string }) => {
-        repliesAsked.push(ts);
-        return ts === "200.000002"
-          ? {
-              messages: [
-                { ts: "200.000001" },
-                {
-                  ts: "200.000002",
-                  files: [
-                    { id: "F9", name: "shot.png", mimetype: "image/png", url_private: "https://files.slack.com/n" },
-                  ],
-                },
-              ],
-            }
-          : { messages: [{ ts }] };
-      },
-      history: async () => ({ messages: [] }),
-    },
-  };
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(new Uint8Array(4))) as unknown as typeof fetch;
-  try {
-    await createSurfaceContextFulfiller({
-      core: core as never,
-      directory: {} as never,
-      serializer: {} as never,
-      botToken: "xoxb-test",
-      clientOptions: {},
-    }).fulfillSurfaceContext(client, {
-      id: "r",
-      source: "slack",
-      createdAt: Date.now(),
-      status: "pending",
-      query: { count: 1, conversationTarget: "C1:100.000001", file: { ts: "200.000002" } },
-    } as never);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-  assert.deepEqual(repliesAsked, ["100.000001", "200.000002"]);
-  assert.equal(fulfilled[0]!.outcome.result.file.name, "shot.png");
-});
-
 test("only real images in a supported format are shown to the model, and refusals say why", async () => {
   const png = await visionImage(TINY_PNG);
   assert.equal(png.ok && png.mimeType, "image/png");
