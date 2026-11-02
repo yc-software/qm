@@ -1271,7 +1271,8 @@ class PaneTab implements ITabRenderer {
                     void openSession(parent);
                   }}
                 >
-                  ${sessionTitle(parent)}</button
+                  <span class="split-pane-parent-icon">${icon(ArrowUpLeft, 13)}</span
+                  ><span class="split-pane-parent-label">${sessionTitle(parent)}</span></button
                 ><span class="split-pane-crumb-sep">/</span>`
             : nothing
         }

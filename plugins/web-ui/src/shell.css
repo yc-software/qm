@@ -7625,11 +7625,13 @@ h3.ambient-field-label {
   display: inline-flex;
 }
 
+/* Tabs size to their title (110–240px) and shrink toward the minimum only when the strip is crowded. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: var(--split-tab-h);
-  flex: 0 0 auto;
-  width: 150px;
-  min-width: 0;
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 110px;
+  max-width: 240px;
   padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
@@ -12468,6 +12470,37 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   white-space: nowrap;
   cursor: pointer;
 }
+.split-pane-parent-icon {
+  display: none;
+}
+
+/* In a multi-tab strip the title gets the room: scope crumbs are dropped, a parent collapses to a
+   back-arrow (its name stays in the tooltip), and background-work icons lose their chip fill. */
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) :is(.split-pane-crumb, .split-pane-crumb-sep) {
+  display: none;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-parent {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: none;
+  margin-right: 4px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-parent-icon {
+  display: inline-flex;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-parent-label {
+  display: none;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .bg-chip {
+  padding: 0;
+  background: transparent;
+}
+
 .split-pane-parent:hover {
   color: var(--foreground);
   text-decoration: underline;
