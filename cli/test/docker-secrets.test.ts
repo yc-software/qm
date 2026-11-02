@@ -20,7 +20,13 @@ const SECRETS = {
   PUBLIC_API_URL: "https://core.example.test",
   EXTRA_API_KEY: "config-declared-extra-supersecret",
   EXAMPLE_SCREEN_TOKEN: "security-screen-supersecret",
+  OIDC_CLIENT_ID: "oidc-client",
+  OIDC_CLIENT_SECRET: "oidc-client-supersecret",
+  PORTAL_EXPECTED_TEAM_ID: "T123",
+  PORTAL_SESSION_SECRET: "portal-session-supersecret".repeat(2),
 };
+
+const PORTAL_SIGN_IN = `OIDC_CLIENT_ID=oidc-client\nOIDC_CLIENT_SECRET=oidc-secret\nPORTAL_EXPECTED_TEAM_ID=T123\nPORTAL_SESSION_SECRET=${"session".repeat(6)}\n`;
 
 function fakeDocker(dir: string): { argvLog: string; envCopy: string } {
   const argvLog = join(dir, "docker-argv.log");
@@ -45,7 +51,7 @@ if (args[0] === "run") {
   console.log("cid");
   process.exit(0);
 }
-if (args[0] === "logs") { console.log("listening on :8080"); process.exit(0); }
+if (args[0] === "logs") { console.log("listening on :8080\\n[portal] public front door on http://localhost:8000"); process.exit(0); }
 if (args[0] === "volume") { console.error("No such volume"); process.exit(1); }
 if (args[0] === "inspect") {
   if (String(args[args.length - 1]).endsWith("-pg")) { console.error("No such object"); process.exit(1); }
@@ -263,7 +269,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n${PORTAL_SIGN_IN}`,
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
@@ -376,7 +382,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n${PORTAL_SIGN_IN}`,
       );
       fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;

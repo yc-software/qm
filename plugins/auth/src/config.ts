@@ -1,4 +1,5 @@
 import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
+import { isSecureOrLoopbackUrl } from "../../chassis/src/http.ts";
 import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";
@@ -181,7 +182,8 @@ function httpsUrlProblem(label: string, value: string, requireHttps: boolean): s
   } catch {
     return `${label} must be an absolute URL`;
   }
-  if (requireHttps && url.protocol !== "https:") return `${label} must be https in production`;
+  if (requireHttps && !isSecureOrLoopbackUrl(url.href))
+    return `${label} must be https in production unless it is a loopback address`;
   if (url.search || url.hash) return `${label} must not carry a query string or fragment`;
   return null;
 }

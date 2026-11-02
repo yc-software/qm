@@ -22,7 +22,7 @@ type Resource = {
     accessModes?: string[];
     storageClassName?: string;
     resources?: { requests: { storage: string } };
-    ports?: { port: number; targetPort: number }[];
+    ports?: { name: string; port: number; targetPort: number }[];
     rules?: { http: { paths: { backend: { service: { name: string; port: { number: number } } } }[] } }[];
     template: {
       spec: {
@@ -45,11 +45,22 @@ type Resource = {
 function render(values: object = {}, explicitImages = true): Resource[] {
   const dir = mkdtempSync(join(tmpdir(), "qm-helm-test-"));
   try {
+    const baseFile = join(dir, "base.json");
+    writeFileSync(baseFile, JSON.stringify({ publicUrl: "https://qm.example.com" }));
     const valuesFile = join(dir, "values.json");
     writeFileSync(valuesFile, JSON.stringify(values));
     const result = spawnSync(
       helm,
-      ["template", "test", chart, ...(explicitImages ? ["--set", "image.tag=fixture"] : []), "-f", valuesFile],
+      [
+        "template",
+        "test",
+        chart,
+        ...(explicitImages ? ["--set", "image.tag=fixture"] : []),
+        "-f",
+        baseFile,
+        "-f",
+        valuesFile,
+      ],
       { encoding: "utf8" },
     );
     assert.equal(result.status, 0, result.stderr);
@@ -84,7 +95,7 @@ function container(resources: Resource[], name = "core") {
   return result;
 }
 
-function env(resources: Resource[], name = "portal") {
+function env(resources: Resource[], name = "core") {
   return {
     ...resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env")?.stringData,
     ...Object.fromEntries((container(resources, name).env ?? []).map((e) => [e.name, e.value])),
@@ -94,16 +105,15 @@ function env(resources: Resource[], name = "portal") {
 test("Helm requires an explicit compatible image and supports full digest references", options, () => {
   assert.throws(() => render({}, false), /imageRef.*image.tag/);
   const ref = `registry.example.com/qm/core@sha256:${"a".repeat(64)}`;
-  const resources = render({ services: { core: { imageRef: ref }, portal: { tag: "portal-fixture" } } });
+  const resources = render({ services: { core: { imageRef: ref }, "egress-proxy": { tag: "proxy-fixture" } } });
   assert.equal(container(resources).image, ref);
-  assert.equal(container(resources, "portal").image, "ghcr.io/yc-software/qm/portal:portal-fixture");
-  assert.equal(resources.filter((r) => r.kind === "Deployment").length, 4);
+  assert.equal(container(resources, "egress-proxy").image, "ghcr.io/yc-software/qm/egress-proxy:proxy-fixture");
+  assert.deepEqual(
+    resources.filter((r) => r.kind === "Deployment").map((r) => r.metadata.name),
+    ["test-qm-core", "test-qm-egress-proxy"],
+  );
   const byReference = render(
-    {
-      services: Object.fromEntries(
-        ["core", "portal", "web-ui", "egress-proxy"].map((name) => [name, { imageRef: ref }]),
-      ),
-    },
+    { services: Object.fromEntries(["core", "egress-proxy"].map((name) => [name, { imageRef: ref }])) },
     false,
   );
   assert.ok(
@@ -129,7 +139,7 @@ test("Helm mounts a retained core PVC with node group permissions and no overlap
   assert.equal(core.spec.template.spec.securityContext?.fsGroup, 1000);
   assert.equal(core.spec.template.spec.volumes?.[0]?.persistentVolumeClaim.claimName, pvc.metadata.name);
   assert.deepEqual(container(resources).volumeMounts, [{ name: "data", mountPath: "/data" }]);
-  assert.equal(env(resources, "core").DATA_DIR, "/data");
+  assert.equal(env(resources).DATA_DIR, "/data");
   assert.throws(
     () => render({ services: { core: { replicas: 2, persistence: { enabled: true } } } }),
     /at most one replica/,
@@ -158,29 +168,36 @@ test("Helm supports existing claims, default or empty storage class, and opting 
 
 test("Helm preserves zero replicas including a stopped persistent core", options, () => {
   const resources = render({
-    services: { core: { replicas: 0, persistence: { enabled: true } }, portal: { replicas: 0 } },
+    services: { core: { replicas: 0, persistence: { enabled: true } }, "egress-proxy": { replicas: 0 } },
   });
   assert.equal(deployment(resources).spec.replicas, 0);
-  assert.equal(deployment(resources, "portal").spec.replicas, 0);
+  assert.equal(deployment(resources, "egress-proxy").spec.replicas, 0);
 });
 
-test("Helm keeps process ports, probes, Services and upstreams consistent", options, () => {
-  const resources = render({ services: { core: { port: 9090 }, portal: { port: 9091 }, "web-ui": { port: 9092 } } });
-  for (const [name, port] of [
-    ["core", 9090],
-    ["portal", 9091],
-    ["web-ui", 9092],
-  ] as const) {
-    assert.equal(env(resources, name).PORT, String(port));
-    assert.equal(container(resources, name).ports[0]?.containerPort, port);
-    const service = resources.find((r) => r.kind === "Service" && r.metadata.name === `test-qm-${name}`);
-    assert.equal(service?.spec.ports?.[0]?.targetPort, port);
-    assert.equal(service?.spec.ports?.[0]?.port, port);
-  }
+test("Helm serves core's API and public front door on consistent ports", options, () => {
+  const resources = render({ services: { core: { port: 9090, publicPort: 9091 } } });
+  assert.equal(env(resources).PORT, "9090");
+  assert.equal(env(resources).PUBLIC_PORT, "9091");
+  assert.deepEqual(
+    container(resources).ports.map((p) => [p.name, p.containerPort]),
+    [
+      ["http", 9090],
+      ["public", 9091],
+    ],
+  );
+  const service = resources.find((r) => r.kind === "Service" && r.metadata.name === "test-qm-core");
+  assert.deepEqual(
+    service?.spec.ports?.map((p) => [p.name, p.port, p.targetPort]),
+    [
+      ["http", 9090, 9090],
+      ["public", 9091, 9091],
+    ],
+  );
   assert.equal(container(resources).readinessProbe.httpGet.port, 9090);
-  assert.equal(env(resources).CORE_API_URL, "http://test-qm-core.default.svc.cluster.local:9090");
-  assert.equal(env(resources).WEB_UI_UPSTREAM, "http://test-qm-web-ui.default.svc.cluster.local:9092");
+  assert.equal(env(resources, "egress-proxy").CORE_API_URL, "http://test-qm-core.default.svc.cluster.local:9090");
   assert.throws(() => render({ services: { core: { env: { PORT: "9999" } } } }), /PORT conflicts/);
+  assert.throws(() => render({ env: { PUBLIC_PORT: "9999" } }), /PUBLIC_PORT conflicts/);
+  assert.throws(() => render({ services: { core: { publicPort: 8080 } } }), /must differ/);
   assert.throws(() => render({ services: { "egress-proxy": { port: 49000 } } }), /Envoy listener is fixed/);
 });
 
@@ -197,44 +214,84 @@ test("Helm separates core startup/readiness from liveness and allows probe overr
   assert.equal(custom.startupProbe, undefined);
 });
 
-test("Helm ingress rejects embedded, missing, worker and disabled targets", options, () => {
-  for (const service of ["auth", "egress-proxy", "missing"]) {
-    assert.throws(() => render({ ingress: { enabled: true, service } }), /ingress.service must name/);
-  }
-  assert.throws(
-    () => render({ ingress: { enabled: true }, services: { portal: { enabled: false }, auth: { enabled: false } } }),
-    /portal is disabled/,
-  );
+test("Helm ingress routes the public hosts to core's front door", options, () => {
   const ingress = render({ ingress: { enabled: true, hosts: ["qm.example.com"] } }).find((r) => r.kind === "Ingress");
-  assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
+  const backend = ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service;
+  assert.deepEqual(backend, { name: "test-qm-core", port: { number: 8000 } });
+  assert.throws(
+    () => render({ ingress: { enabled: true }, services: { core: { enabled: false } } }),
+    /enable services.core or disable ingress/,
+  );
 });
 
-test("Helm rejects services it does not know", options, () => {
-  assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
-});
-
-test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {
-  const auth = { AUTH_ALLOWED_EMAILS: "member@example.com", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" };
-  for (const values of [{ env: auth }, { services: { auth: { env: auth } } }, { secretEnv: auth }]) {
-    const portal = env(render(values));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, auth.AUTH_ALLOWED_EMAIL_DOMAIN);
+test("Helm rejects services it does not run, including the retired surface workloads", options, () => {
+  for (const name of ["unknown", "web-ui", "portal", "auth"]) {
+    assert.throws(
+      () => render({ services: { [name]: { enabled: true } } }),
+      new RegExp(`unknown service "${name}" in services`),
+    );
   }
-  const secretBacked = render({ secretEnv: auth });
-  assert.ok(!container(secretBacked, "portal").env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
-  const values = { env: { AUTH_ALLOWED_EMAILS: "global@example.com" }, services: { auth: { env: auth } } };
+});
+
+test("Helm requires the public URL core's front door derives its addresses from", options, () => {
+  assert.throws(() => render({ publicUrl: "" }), /Set publicUrl/);
+});
+
+test("Helm wires core's front door and embedded sign-in broker from the public URL", options, () => {
+  const wired = env(render({ publicUrl: "https://qm.example.com/" }));
+  for (const key of ["AGENT_API_URL", "PUBLIC_WEB_URL", "PORTAL_PUBLIC_URL", "WEB_UI_PUBLIC_URL"]) {
+    assert.equal(wired[key], "https://qm.example.com");
+  }
+  assert.equal(wired.PUBLIC_PORT, "8000");
+  assert.equal(wired.AUTH_EMBEDDED, "1");
+  assert.equal(wired.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(wired.AUTH_BROKER_PREFIX, "/idp");
+  assert.equal(wired.AUTH_ISSUER, "https://qm.example.com/idp");
+  assert.equal(wired.OIDC_ISSUER, "https://qm.example.com/idp");
+  assert.equal(wired.AUTH_REDIRECT_URI, "https://qm.example.com/auth/callback");
+  assert.equal(wired.AUTH_CLIENT_ID, "qm-portal");
+  assert.equal(wired.OIDC_CLIENT_ID, "qm-portal");
+  assert.equal(wired.OIDC_AUTH_ENDPOINT, "https://qm.example.com/idp/authorize");
+  assert.equal(wired.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(wired.OIDC_USERINFO_ENDPOINT, "http://127.0.0.1:8099/userinfo");
+  assert.equal(wired.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
+  assert.equal(
+    render({ secretEnv: { AUTH_CLIENT_SECRET: "broker-secret" } }).find((r) => r.kind === "Secret")?.stringData
+      ?.OIDC_CLIENT_SECRET,
+    "broker-secret",
+  );
+  const external = env(render({ auth: { enabled: false }, secretEnv: { OIDC_CLIENT_ID: "external-client" } }));
+  assert.equal(external.PORTAL_PUBLIC_URL, "https://qm.example.com");
+  assert.equal(external.OIDC_CLIENT_ID, "external-client");
+  for (const key of ["AUTH_EMBEDDED", "AUTH_BROKER_UPSTREAM", "AUTH_ISSUER", "OIDC_ISSUER", "OIDC_TOKEN_ENDPOINT"]) {
+    assert.equal(external[key], undefined, key);
+  }
+  assert.ok(
+    !container(render(), "egress-proxy").env.some((e) => e.name.startsWith("AUTH_") || e.name === "PUBLIC_PORT"),
+  );
+});
+
+test("Helm propagates the effective embedded auth allowlist without overriding explicit policy", options, () => {
+  const auth = { AUTH_ALLOWED_EMAILS: "member@example.com", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" };
+  for (const values of [{ env: auth }, { services: { core: { env: auth } } }, { secretEnv: auth }]) {
+    const core = env(render(values));
+    assert.equal(core.OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
+    assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, auth.AUTH_ALLOWED_EMAIL_DOMAIN);
+  }
+  assert.ok(!container(render({ secretEnv: auth })).env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
+  const values = { env: { AUTH_ALLOWED_EMAILS: "global@example.com" }, services: { core: { env: auth } } };
   assert.equal(env(render(values)).OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
   const explicit = { OIDC_ALLOWED_EMAILS: "other@example.org", OIDC_ALLOWED_EMAIL_DOMAIN: "example.org" };
   for (const overrides of [
-    { env: explicit },
-    { secretEnv: explicit },
-    { services: { auth: { env: auth }, portal: { env: explicit } } },
+    { env: { ...auth, ...explicit } },
+    { env: auth, secretEnv: explicit },
+    { env: auth, services: { core: { env: explicit } } },
   ]) {
-    const portal = env(render({ services: { auth: { env: auth } }, ...overrides }));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, explicit.OIDC_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, explicit.OIDC_ALLOWED_EMAIL_DOMAIN);
+    const core = env(render(overrides));
+    assert.equal(core.OIDC_ALLOWED_EMAILS, explicit.OIDC_ALLOWED_EMAILS);
+    assert.equal(core.OIDC_ALLOWED_EMAIL_DOMAIN, explicit.OIDC_ALLOWED_EMAIL_DOMAIN);
   }
-  assert.equal(env(render({ services: { auth: { enabled: false } }, env: auth })).OIDC_ALLOWED_EMAILS, undefined);
+  assert.equal(env(render({ auth: { enabled: false }, env: auth })).OIDC_ALLOWED_EMAILS, undefined);
 });
 
 test("Helm does not shadow an external OIDC allowlist with a derived value", options, () => {
@@ -243,22 +300,15 @@ test("Helm does not shadow an external OIDC allowlist with a derived value", opt
     ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS", "alice@example.com,bob@example.com", "alice@example.com"],
     ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN", "example.com", "staff.example.com"],
   ] as const) {
-    for (const source of [{ env: { [authKey]: broad } }, { services: { auth: { env: { [authKey]: broad } } } }]) {
-      assert.ok(!container(render({ ...source, envFrom }), "portal").env.some((entry) => entry.name === oidcKey));
+    for (const source of [{ env: { [authKey]: broad } }, { services: { core: { env: { [authKey]: broad } } } }]) {
+      assert.ok(!container(render({ ...source, envFrom })).env.some((entry) => entry.name === oidcKey));
       assert.equal(env(render({ ...source, envFrom, secretEnv: { [oidcKey]: narrow } }))[oidcKey], narrow);
-      assert.equal(
-        env(
-          render({
-            ...source,
-            envFrom,
-            services: { auth: { env: { [authKey]: broad } }, portal: { env: { [oidcKey]: narrow } } },
-          }),
-        )[oidcKey],
-        narrow,
-      );
     }
+    assert.equal(
+      env(render({ envFrom, services: { core: { env: { [authKey]: broad, [oidcKey]: narrow } } } }))[oidcKey],
+      narrow,
+    );
     assert.equal(env(render({ envFrom, env: { [authKey]: broad, [oidcKey]: narrow } }))[oidcKey], narrow);
   }
-  const externalOnly = container(render({ envFrom }), "portal").env;
-  assert.ok(!externalOnly.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
+  assert.ok(!container(render({ envFrom })).env.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
 });

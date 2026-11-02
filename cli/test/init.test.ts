@@ -60,6 +60,9 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.sandbox, undefined);
+    assert.deepEqual(config.services, ["core", "auth"]);
+    assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
+    assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
     assert.equal(env, renderEnvExample(config), ".env.example is exactly renderEnvExample output");
@@ -78,6 +81,10 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.ok(coreSecret, "init generates a strong core signing key");
     assert.ok(skillSecret, "init generates a strong skill signing key");
     assert.notEqual(coreSecret, skillSecret, "generated keys are independent");
+    for (const name of ["PORTAL_SESSION_SECRET", "AUTH_TOKEN_SECRET", "AUTH_CLIENT_SECRET"])
+      assert.match(localEnv, new RegExp(`^${name}=[a-f0-9]{64}$`, "m"), `init generates ${name} for docker sign-in`);
+    for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS="])
+      assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for docker sign-in`);
     assert.equal(statSync(join(dir, ".env")).mode & 0o777, 0o600, ".env is owner-readable only");
     for (const stale of ["HARNESS=", "ORG_ID=", "PORT="]) {
       assert.ok(!env.includes(stale), `.env.example should not offer ${stale} as a value to fill in`);

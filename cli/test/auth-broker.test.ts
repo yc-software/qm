@@ -29,7 +29,7 @@ function configWith(body: string): QmConfig {
 function configText(over: { services?: string; env?: string } = {}): string {
   return `{
     "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
-    "services": ${over.services ?? '["core", "web-ui", "portal", "auth"]'},
+    "services": ${over.services ?? '["core", "auth"]'},
     "plugins": [], "skills": [],
     "env": ${over.env ?? '{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } }'}
   }`;
@@ -84,27 +84,34 @@ test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wi
   assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
 });
 
-test("a configured botName brands the docker service env for core and auth", () => {
+test("a configured botName brands the docker core env, including the sign-in pages", () => {
   const config = configWith(
     configText().replace('"plugins": [],', '"botName": "straylight", "orgName": "Acme Corp", "plugins": [],'),
   );
   const core = dockerServiceEnv(config, "core");
   assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
   assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
-  assert.equal(dockerServiceEnv(config, "auth").AUTH_BRAND_NAME, "straylight");
-  const bare = configWith(configText());
-  assert.equal(dockerServiceEnv(bare, "core").ORG_BRAND_SELF_LABEL, undefined);
-  assert.equal(dockerServiceEnv(bare, "auth").AUTH_BRAND_NAME, undefined);
+  assert.equal(core.AUTH_BRAND_NAME, "straylight");
+  const bare = dockerServiceEnv(configWith(configText()), "core");
+  assert.equal(bare.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(bare.AUTH_BRAND_NAME, undefined);
 });
 
 test("docker and AWS wire the broker with parity", () => {
   const docker = configWith(configText());
-  const dockerPortal = dockerServiceEnv(docker, "portal");
-  assert.equal(dockerPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
-  assert.equal(dockerPortal.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
-  assert.equal(dockerPortal.OIDC_ISSUER, "https://agent.example.com/idp");
-  assert.equal(dockerServiceEnv(docker, "auth").AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
-  assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
+  const dockerCore = dockerServiceEnv(docker, "core");
+  assert.equal(dockerCore.PUBLIC_PORT, "8000");
+  assert.equal(dockerCore.PORTAL_PUBLIC_URL, "https://agent.example.com");
+  assert.equal(dockerCore.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(dockerCore.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(dockerCore.OIDC_ISSUER, "https://agent.example.com/idp");
+  assert.equal(dockerCore.AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
+  assert.equal(dockerCore.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(dockerServiceEnv(docker, "egress-proxy").AUTH_BROKER_UPSTREAM, undefined);
+  assert.equal(
+    dockerServiceEnv(configWith(configText({ services: '["core"]', env: "{}" })), "core").AUTH_EMBEDDED,
+    undefined,
+  );
 
   const aws = configWith(`{
     "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
@@ -146,7 +153,7 @@ test("docker local wires the host daemon coordinates only into core", () => {
   );
   assert.equal(dockerServiceEnv(local, "core").DOCKER_HOST, "unix:///var/run/docker.sock");
   assert.equal(dockerServiceEnv(local, "core").QM_CORE_CONTAINER, "qm-acme-core");
-  assert.equal(dockerServiceEnv(local, "portal").DOCKER_HOST, undefined);
+  assert.equal(dockerServiceEnv(local, "egress-proxy").DOCKER_HOST, undefined);
 });
 
 test("the broker's generated secrets reach both sides under the right names", () => {
