@@ -52,7 +52,8 @@ Bring these before installing:
 - DNS and an ingress controller. For TLS, provision the referenced certificate or
   install cert-manager with the configured ClusterIssuer.
 - `publicUrl`, the public HTTPS origin core's front door derives its sign-in and web
-  URLs from; rendering fails without it.
+  URLs from; rendering fails without it. Plain HTTP works only for a loopback
+  address such as `http://localhost:8000`.
 - The signing/encryption secrets, portal session secret, first administrator grant,
   sign-in allowlist, auth client/signing configuration and email transport described
   in [the deployment reference](../../docs/porter.md) and
@@ -175,6 +176,29 @@ to disable. Helm merges probe maps, so set `startupProbe.httpGet: null` when
 switching to an `exec` or `tcpSocket` handler. When overriding endpoint paths,
 update the startup probe too. Database unavailability should remove core from
 endpoints, not restart it through liveness.
+
+## Upgrading from chart 0.3
+
+Chart 0.4 runs the web UI, the sign-in portal and the sign-in broker inside
+core. Before the first `helm upgrade` to 0.4:
+
+1. Delete the `services.web-ui`, `services.portal` and `services.auth` blocks
+   from your values; rendering fails while any of them remains. Move settings
+   from `services.portal.env` and `services.auth.env` to `services.core.env`.
+2. Replace `services.auth.enabled` with the top-level `auth.enabled`.
+3. Delete `ingress.service`. The ingress always routes to core's front door
+   (`services.core.publicPort`); core's API port stays inside the cluster.
+4. With `auth.enabled: true` the chart sets `AUTH_CLIENT_ID` and
+   `OIDC_CLIENT_ID` itself and overrides any other value. With
+   `auth.enabled: false`, set `OIDC_CLIENT_ID`; `AUTH_CLIENT_ID` is no longer
+   copied into it.
+5. Build and push the core image from the new source. The web-ui and portal
+   images are no longer used.
+
+The upgrade signs every user out once. The public URL can fail for a few
+seconds while the ingress moves to core's front door before the new core pod is
+ready. `helm rollback` to the 0.3 revision restores the old workloads and signs
+users out again.
 
 ## Regression tests
 
