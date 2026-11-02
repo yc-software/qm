@@ -1,6 +1,7 @@
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
+import { attestableScope } from "../directory/person.ts";
 
 const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
 const ID = /^[a-z][a-z0-9-]{0,62}$/;
@@ -191,5 +192,13 @@ export function parseMemoryProviderConfig(
       ...(typeof raw.failOpen === "boolean" ? { failOpen: raw.failOpen } : {}),
     };
   });
+  for (const [i, route] of routes.entries()) {
+    const target = providerById.get(route.provider);
+    const shared = route.scopes.filter((scope) => !attestableScope(scope));
+    if (target?.type === "mcp" && target.attestActor && shared.length)
+      throw new Error(
+        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+      );
+  }
   return { providers, routes };
 }

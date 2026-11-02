@@ -67,6 +67,16 @@ principal with non-ASCII characters, or any id over 256 characters, is not
 attested. QM makes no call for such a member and reports `invalid_actor`;
 link them to a conforming canonical id.
 
+An attested call reads as that person, so its answer can hold what only they may
+see. QM therefore attests a person only in their own personal scope, never where
+others read the answer. A memory route to an `attestActor` provider may list only
+`personal` or `personal:<id>` selectors, and QM refuses any other at startup.
+Attested MCP connectors are offered only in the person's direct conversation with
+QM, not in channels, group conversations or projects. The credential broker
+refuses an actor-attested credential outside the caller's personal scope with
+`shared_scope`; a published app's token belongs to its publisher's personal scope,
+so apps keep attesting their publisher as before.
+
 ## Self-service Slack linking
 
 The dedicated Connect Slack flow preserves the signed-in web principal as canonical, keeping its existing connector ownership. Completion verifies a short-lived signed ticket, Composio account ownership, Slack user identity, and the installed company workspace before linking the directory member. Existing credentials or Composio accounts on the Slack principal require support instead of being silently stranded. Email similarity is not proof of identity.

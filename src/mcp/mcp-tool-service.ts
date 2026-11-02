@@ -14,8 +14,9 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestedPerson } from "../directory/person.ts";
+import { attestableScope, attestedPerson } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
+import type { ScopeId } from "../types.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -82,7 +83,7 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
-  toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
+  toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
@@ -180,6 +181,7 @@ export function createMcpToolService(opts: {
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let perUserServers = new Map<string, McpServer>();
+  let attestedServers = new Set<string>();
   const catalogs = new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
 
   function signInMessage(server: McpServer): string {
@@ -341,6 +343,7 @@ export function createMcpToolService(opts: {
     const seen = new Set<string>();
     snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     perUserServers = nextPerUser;
+    attestedServers = new Set(servers.filter((s) => s.attestActor).map((s) => s.id));
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -351,8 +354,9 @@ export function createMcpToolService(opts: {
     return Boolean(status?.connected && !status.needsReconnect);
   }
 
-  async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const current = snapshot;
+  async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
+    const mayAttest = scopeId !== undefined && attestableScope(scopeId);
+    const current = mayAttest ? snapshot : snapshot.filter((t) => !attestedServers.has(t.serverId));
     const gated = perUserServers;
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));

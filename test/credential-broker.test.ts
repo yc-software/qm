@@ -423,6 +423,38 @@ test("actor attestation rejects alternate ports before sending credentials", asy
   assert.equal(cap.calls.length, 0);
 });
 
+test("an actor-attested credential answers only in its actor's personal scope, never a shared one", async () => {
+  const call = async (scopeId: string, extra: Partial<CapabilityClaims> = {}) => {
+    const cap = captureFetch();
+    const result = await brokerCredentialCall(
+      base({
+        claims: { ...claims(["x-firehose"]), scopeId, ...extra },
+        reader: reader({ slug: "x-firehose", injection: { actor: true } }),
+        fetchImpl: cap.fetch,
+      }),
+    );
+    return { result, calls: cap.calls };
+  };
+  for (const shared of ["channel:C1", "group:G1", "team:T1", "org:default-org"]) {
+    const { result, calls } = await call(shared);
+    assert.equal(result.status, 403);
+    assert.equal((result.json as { error: string }).error, "shared_scope");
+    assert.equal(calls.length, 0, "nothing reaches the upstream");
+  }
+  const own = await call("personal:U1");
+  assert.equal(own.result.status, 200);
+  assert.equal(own.calls[0]!.headers["x-qm-actor"], "U1");
+  const app = await call("personal:publisher", { actorId: "publisher", deployment: "dpl-1" });
+  assert.equal(app.result.status, 200);
+  assert.equal(app.calls[0]!.headers["x-qm-actor"], "publisher");
+  const unattested = captureFetch();
+  const plain = await brokerCredentialCall(
+    base({ claims: { ...claims(["x-firehose"]), scopeId: "channel:C1" }, fetchImpl: unattested.fetch }),
+  );
+  assert.equal(plain.status, 200);
+  assert.equal(unattested.calls[0]!.headers["x-qm-actor"], undefined);
+});
+
 test("a deployment token is refused when the credential is switched off for published apps, and audited with the app id when it is on", async () => {
   const cap = captureFetch();
   const audits: Array<{ action: string; detail?: string }> = [];

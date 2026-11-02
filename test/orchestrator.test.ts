@@ -26,6 +26,8 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
+import type { Agent } from "../src/agent/agent.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -470,6 +472,57 @@ test("a channel with a non-internal audience member is refused (internal-only, o
   assert.equal(res.status, "refused");
   assert.equal(res.refusalKind, "internal_only");
   assert.match(res.reason ?? "", /internal-only/);
+});
+
+test("an attested connector is offered only in the speaker's own DM, never where others read the answer", async () => {
+  const offered: Record<string, string[]> = {};
+  const mock = createMockAgent();
+  const agent: Agent = {
+    ...mock,
+    runTurn: (input) => {
+      offered[input.scopeLabel] = (input.mcpTools ?? []).map((tool) => tool.name);
+      return mock.runTurn(input);
+    },
+  };
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-")) });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const built = buildApp(config, { agent });
+  for (const [id, attestActor] of [
+    ["records", true],
+    ["wiki", false],
+  ] as const) {
+    await built.mcpServers.put({
+      id,
+      name: id,
+      url: `https://${id}.example/mcp`,
+      auth: "bearer",
+      bearerToken: "discovery-token",
+      credentialScope: "shared",
+      catalog: true,
+      ...(attestActor ? { attestActor } : {}),
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
+  }
+  await built.mcpToolService.refresh();
+  for (const request of [
+    dm("hello"),
+    channel("hello"),
+    {
+      surface: "test",
+      actor: internalActor,
+      conversation: { kind: "group" as const, threadRef: "grp:G1:t1", channelRef: "G1", audience: [internalActor] },
+      text: "hello",
+    },
+  ])
+    assert.equal((await built.app.turn(request)).status, "ok");
+  assert.deepEqual(offered, {
+    "personal:U1": ["records", "wiki"],
+    "channel:C1": ["wiki"],
+    "group:G1": ["wiki"],
+  });
 });
 
 test("execute runs in the sandbox via the primitive", async () => {
