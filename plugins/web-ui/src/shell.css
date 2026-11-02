@@ -2101,7 +2101,7 @@ button.subagent-chip:hover {
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 0.2em;
 }
-:is(markdown-block, qm-markdown) a .github-pr-mark {
+.github-pr-mark {
   display: inline-block;
   width: 1em;
   height: 1em;
