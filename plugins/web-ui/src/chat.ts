@@ -378,7 +378,7 @@ export function createChatSurface(
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     const member = project?.members.find((m) => m.principalId === speakerId);
-    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    if (member?.avatarUrl) return member;
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
