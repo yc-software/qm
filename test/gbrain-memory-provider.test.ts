@@ -23,7 +23,7 @@ const contract = JSON.parse(
   memory_recall: { limits: { max_chars: { min: number; max: number } } };
   unlinked_recall: CallToolResult;
   memory_write: {
-    limits: { facts: { min: number; max: number }; provenance_chars: number; idempotency_key: string };
+    limits: { facts: { min: number; max: number }; provenance_chars: number; idempotency_key: { pattern: string } };
     committed: { content: string };
     pending: { content: string };
   };
@@ -197,7 +197,7 @@ test("QM's gbrain requests satisfy the vendored contract's tools and actor rules
 
   const { limits } = contract.memory_write;
   const keys = writes.map(({ args }) => String(args.idempotency_key));
-  for (const key of keys) assert.match(key, new RegExp(limits.idempotency_key));
+  for (const key of keys) assert.match(key, new RegExp(limits.idempotency_key.pattern));
   assert.equal(keys[1], keys[0]);
   assert.notEqual(keys[2], keys[0]);
   for (const { args } of writes) {

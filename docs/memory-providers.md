@@ -137,7 +137,7 @@ Post-turn capture waits for a conversation to go quiet. QM buffers consecutive t
 
 Pinned versions:
 
-- **gbrain:** the `qm-memory-provider` v1 contract, still a **candidate** from branch `capy/gbra218-qm-memory-tools` at `bc27793b`, not a tagged release. QM vendors it at [`test/fixtures/gbrain/qm-memory-provider-v1.json`](../test/fixtures/gbrain/README.md).
+- **gbrain:** the `qm-memory-provider` v1 contract from release `v0.60.555.0` (`a3f46d35`) or later. QM vendors it at [`test/fixtures/gbrain/qm-memory-provider-v1.json`](../test/fixtures/gbrain/README.md).
 - **QM:** the commit that added `factsArg` or later.
 
 The examples follow one invented member, Jordan. Jordan's Slack user id is `U0JORDAN`, and their web sign-in `jordan@acme.example` is linked to it with `POST /v1/admin/principal-links`, so QM sends `U0JORDAN` from both surfaces. On the brain host, register a recall client and a write client, grant both the attest right for QM, and link Jordan's canonical id to their member:
