@@ -58,6 +58,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   production: boolean;
   allowUnauthenticatedCore: boolean;
   port: number;
+  publicPort?: number;
   dataDir: string;
   orgId: string;
   databaseUrl?: string;
@@ -498,6 +499,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     production: env.NODE_ENV === "production",
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
+    ...optNum(env, "PUBLIC_PORT", "publicPort"),
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     ...(env.POSTHOG_API_KEY?.trim()

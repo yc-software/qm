@@ -11,7 +11,6 @@ import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
-import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
@@ -75,11 +74,9 @@ import {
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
-  portFromEnv,
 } from "../../chassis/src/env.ts";
 
-const PORT = portFromEnv(8097);
-const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
@@ -1851,7 +1848,7 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(options: { port: number; host?: string }): Promise<void> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
@@ -1868,10 +1865,10 @@ export async function startServer(): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(options.port, options.host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${options.port} (org ${ORG})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
       if (!SECURE_COOKIES)
@@ -1893,11 +1890,3 @@ export async function startServer(): Promise<void> {
 }
 
 export { handle, server };
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer().catch((error: unknown) => {
-    reportBackendError(error);
-    console.error("[portal] failed to start:", errMessage(error));
-    process.exitCode = 1;
-  });
-}

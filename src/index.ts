@@ -12,6 +12,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { startFrontDoor } from "./web/front-door.ts";
 
 const config = loadConfig();
 
@@ -48,12 +49,13 @@ await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
-server.listen(config.port, () => {
-  console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
-      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
-  );
-});
+await new Promise<void>((resolve) => server.listen(config.port, resolve));
+console.log(
+  `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+    `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+);
+const frontDoor =
+  config.publicPort === undefined ? undefined : await startFrontDoor({ ...config, publicPort: config.publicPort });
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;
@@ -185,6 +187,7 @@ function shutdown(signal: string): void {
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
+  void frontDoor?.close().catch((e: unknown) => console.error("[qm] front door stop failed:", errMessage(e)));
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(

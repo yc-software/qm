@@ -176,9 +176,9 @@ test("`node src/index.ts` refuses to boot on a placeholder configuration and ser
       [
         "--input-type=module",
         "-e",
-        `import('./src/index.ts').then(async (m) => { await m.startServer(); const r = await fetch('http://127.0.0.1:${PORT}/healthz'); console.log(r.status); process.exit(0); })`,
+        `import('./src/index.ts').then(async (m) => { await m.startServer({ port: ${PORT}, host: '127.0.0.1' }); const r = await fetch('http://127.0.0.1:${PORT}/healthz'); console.log(r.status); process.exit(0); })`,
       ],
-      { cwd: process.cwd(), env: { ...base, ...email, PORT }, encoding: "utf8" },
+      { cwd: process.cwd(), env: { ...base, ...email }, encoding: "utf8" },
     );
     assert.equal(child.status, 0, child.stderr);
     assert.match(child.stdout, /200/);
