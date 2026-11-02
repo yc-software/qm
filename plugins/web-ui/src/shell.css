@@ -8269,9 +8269,6 @@ h3.ambient-field-label {
   border-radius: 16px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
 }
-/* A wide pane centres the conversation in a --content-w column; the composer follows that
-   column instead of stretching edge to edge. Below 861px the column is already full-width
-   (--content-w: 100%), so the 8px side margins above still apply. */
 @container chat (min-width: 861px) {
   .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
     width: var(--content-w);
