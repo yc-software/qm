@@ -121,6 +121,10 @@ test("Ultimate harness creates an instructed conversation and persists its answe
       token: "turn-capability",
       modelId: "gpt-6.1-sol",
     }),
+    toolBroker: async () => ({
+      baseUrl: "http://qm.test/v1/tools",
+      token: "tool-capability",
+    }),
     pollIntervalMs: 1,
   });
 
@@ -143,6 +147,10 @@ test("Ultimate harness creates an instructed conversation and persists its answe
           baseUrl: "http://qm.test/v1/ultimate-model",
           token: "turn-capability",
           modelId: "gpt-6.1-sol",
+        },
+        toolBroker: {
+          baseUrl: "http://qm.test/v1/tools",
+          token: "tool-capability",
         },
       },
     },

@@ -28,6 +28,7 @@ export const SANDBOX_MODEL_AUD = "sandbox-model";
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
 export const CREDENTIAL_BROKER_AUD = "credential-broker";
+export const TOOL_BROKER_AUD = "tool-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
@@ -166,7 +167,7 @@ export async function verifyCapabilityToken(
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
   if (claims.exp === 0) {
     if (
-      ![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD, SANDBOX_MODEL_AUD].includes(
+      ![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, TOOL_BROKER_AUD, EGRESS_PROXY_AUD, SANDBOX_MODEL_AUD].includes(
         claims.aud ?? "",
       )
     )

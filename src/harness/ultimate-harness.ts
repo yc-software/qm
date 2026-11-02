@@ -12,6 +12,7 @@ interface UltimateHarnessOptions {
   projectRoot?: string;
   model?: UltimateModel | ((modelId: string) => UltimateModel | undefined);
   modelBroker?: (input: HarnessTurnInput) => Promise<{ baseUrl: string; token: string; modelId: string }>;
+  toolBroker?: (input: HarnessTurnInput) => Promise<{ baseUrl: string; token: string }>;
   pollIntervalMs?: number;
   fetch?: typeof globalThis.fetch;
 }
@@ -68,6 +69,7 @@ export function createUltimateHarness(options: UltimateHarnessOptions): Harness 
   async function runTurn(input: HarnessTurnInput) {
     const model = typeof options.model === "function" ? options.model(input.runtime?.modelId ?? "") : options.model;
     const modelBroker = await options.modelBroker?.(input);
+    const toolBroker = await options.toolBroker?.(input);
     const created = (await call("/api/conversations", {
       method: "POST",
       body: JSON.stringify({
@@ -75,6 +77,7 @@ export function createUltimateHarness(options: UltimateHarnessOptions): Harness 
         title: `QM ${input.session.id}`,
         instructions: input.systemPrompt,
         ...(modelBroker ? { modelBroker } : {}),
+        ...(toolBroker ? { toolBroker } : {}),
       }),
       signal: input.cancel,
     })) as { id?: unknown };

@@ -117,12 +117,13 @@ async function verifyCapability(
   { app, deps, secret }: Wiring,
   method: string,
   pathname: string,
-  required: { aud: string; bearer?: true } | null,
+  required: { aud: string | string[]; bearer?: true } | null,
 ): Promise<CapabilityClaims | null> {
   const requiredAud = required?.aud ?? null;
   const capToken = capabilityFromHeaders(req) ?? (required?.bearer ? bearerFromHeaders(req) : null);
   if (!capToken) {
-    sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
+    const audMsg = Array.isArray(requiredAud) ? requiredAud.join(" or ") : (requiredAud ?? "capability");
+    sendJson(res, 401, { error: "unauthorized", message: `${audMsg} capability token required` });
     return null;
   }
   const capSecret = deps.capabilitySecret ?? secret;
@@ -179,12 +180,15 @@ async function verifyCapability(
     });
     return null;
   }
-  if (requiredAud && capability.aud !== requiredAud) {
-    sendJson(res, 403, {
-      error: "forbidden",
-      message: `this route requires a capability token with audience "${requiredAud}"`,
-    });
-    return null;
+  if (requiredAud) {
+    const allowedAuds = Array.isArray(requiredAud) ? requiredAud : [requiredAud];
+    if (!capability.aud || !allowedAuds.includes(capability.aud)) {
+      sendJson(res, 403, {
+        error: "forbidden",
+        message: `this route requires a capability token with audience ${JSON.stringify(requiredAud)}`,
+      });
+      return null;
+    }
   }
   return capability;
 }
