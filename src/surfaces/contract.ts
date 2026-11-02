@@ -1,6 +1,6 @@
 import type { ActorAssertion, ConversationKind, DeliveryProvenance, OutgoingAttachment } from "../types.ts";
 
-export interface SurfaceRef {
+interface SurfaceRef {
   surface: string;
   account: string;
   workspace?: string;
@@ -24,14 +24,10 @@ interface OutboundMessage {
   provenance: DeliveryProvenance;
 }
 
-export interface SurfaceNatives {
-  [kind: string]: unknown;
-}
-
-export interface Surface {
+export interface Surface<Native = unknown> {
   readonly kind: string;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
-  native<K extends keyof SurfaceNatives>(kind: K): SurfaceNatives[K] | null;
+  native(kind: string): Native | null;
 }

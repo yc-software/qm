@@ -4,20 +4,14 @@ import { classifyUser, slackUserTimezone, type SlackIdentityMode, type SlackUser
 import type { Destination } from "../../types.ts";
 import type { Surface, SurfaceUser } from "../contract.ts";
 
-export interface SlackNative {
+interface SlackNative {
   userFrom(
     user: SlackUser | undefined,
     account: { id: string; ownTeamId: string; identityMode: SlackIdentityMode },
   ): SurfaceUser;
 }
 
-declare module "../contract.ts" {
-  interface SurfaceNatives {
-    slack: SlackNative;
-  }
-}
-
-export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface {
+export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface<SlackNative> {
   const slack: SlackNative = {
     userFrom(user, account) {
       const timezone = slackUserTimezone(user);
