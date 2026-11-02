@@ -28,7 +28,7 @@ import {
   type ToolDefinition,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { imageCountSince, replaceImagesSince } from "./turn-images.ts";
+import { ATTACHMENTS_REMOVED_KIND, imageCountSince, replaceImagesSince } from "./turn-images.ts";
 import {
   type Api,
   type AssistantMessage,
@@ -1408,7 +1408,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             await turn.emit({
               type: "system",
               payload: {
-                kind: "attachments_removed",
+                kind: ATTACHMENTS_REMOVED_KIND,
                 images,
                 documents: entry.ref.documents?.length ?? 0,
                 code: documentRejection.code,

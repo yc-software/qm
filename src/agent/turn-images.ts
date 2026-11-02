@@ -1,5 +1,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
+export const ATTACHMENTS_REMOVED_KIND = "attachments_removed";
+
 export function imageCountSince(session: AgentSession, from: number): number {
   return session.agent.state.messages
     .slice(from)

@@ -19,6 +19,7 @@ import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { zeroUsage } from "../model/model-runtime.ts";
+import { ATTACHMENTS_REMOVED_KIND } from "./turn-images.ts";
 
 export const TURN_STOPPED_KIND = "turn_stopped";
 
@@ -333,6 +334,17 @@ export function reconstructMessagesFromHistory(
     if (typeof cid === "string" && cid) (e.type === "tool_call" ? callById : resultByCallId).set(cid, e);
   }
   const stopped = stoppedToolCalls(history, resultByCallId);
+  const imagesRemoved = new Set<SessionEntry>();
+  let lastPrompt: SessionEntry | undefined;
+  for (const e of history) {
+    if (e.type === "user" && !overheardPayload(e)) lastPrompt = e;
+    else if (
+      e.type === "system" &&
+      (e.payload as { kind?: unknown } | null)?.kind === ATTACHMENTS_REMOVED_KIND &&
+      lastPrompt
+    )
+      imagesRemoved.add(lastPrompt);
+  }
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
   const steps = new Map<string, AssistantMessage>();
@@ -392,11 +404,19 @@ export function reconstructMessagesFromHistory(
       } else {
         const p = (e.payload ?? {}) as Record<string, unknown>;
         const t = userPromptText(p);
-        const images = Array.isArray(p.images) ? (p.images as ReplayImageRef[]) : [];
-        if (t || images.length)
+        const stored = Array.isArray(p.images) ? (p.images as ReplayImageRef[]) : [];
+        const images = imagesRemoved.has(e) ? [] : stored;
+        const removedNote =
+          stored.length > images.length
+            ? `\n[${stored.length} image(s) removed: the model provider rejected a request that carried them]`
+            : "";
+        if (t || stored.length)
           raw.push({
             role: "user",
-            content: [{ type: "text", text: day + t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
+            content: [
+              { type: "text", text: day + t + removedNote },
+              ...images.map((ref) => ({ type: "image" as const, ref })),
+            ],
             timestamp: e.createdAt,
           });
       }
