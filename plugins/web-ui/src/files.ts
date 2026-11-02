@@ -56,6 +56,7 @@ let filesHost: HTMLElement | null = null;
 let filesRequestSeq = 0;
 let filesLoadAllQueued = false;
 const FILES_LAYOUT_KEY = "qm.files.layout";
+const MAX_THUMBNAIL_BYTES = 2_000_000;
 type FilesLayout = "list" | "grid";
 let filesLayout: FilesLayout = readFilesLayout();
 
@@ -302,7 +303,7 @@ function fileRow(f: FileRow) {
 function fileCard(f: FileRow) {
   const visual = fileVisual(f);
   const thumb =
-    f.openable && visual.kind === "image"
+    f.openable && visual.kind === "image" && f.sizeBytes <= MAX_THUMBNAIL_BYTES
       ? html`<img src=${fileContentUrl(f.id, f.name)} alt="" loading="lazy" decoding="async" />`
       : html`<span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 40)}</span>`;
   return fileLink(
