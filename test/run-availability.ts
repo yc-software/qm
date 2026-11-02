@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { reservePg } from "../src/persistence/pg-pool.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -24,8 +25,8 @@ async function until(predicate: () => boolean): Promise<void> {
   }
 }
 
-async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanup(): Promise<void> }> {
-  const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL! });
+async function isolatedPostgres(): Promise<{ url: string; admin: RawPg; cleanup(): Promise<void> }> {
+  const admin = rawPg(process.env.DATABASE_URL!);
   const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new URL(process.env.DATABASE_URL!);
@@ -36,7 +37,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
     admin,
     async cleanup() {
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
+      await admin.close();
     },
   };
 }
@@ -179,7 +180,7 @@ test(
       assert.equal((await writer.runs.reapExpired()).requeued, 1);
       await until(() => notifications > before);
       await admin.query(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN qm_run_available' AND application_name=$1",
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='listen \"qm_run_available\"' AND application_name=$1",
         [new URL(url).searchParams.get("application_name")],
       );
       ids.push((await writer.runs.enqueue({ sessionId, request })).run.id);
@@ -266,7 +267,7 @@ test(
     const { url, cleanup } = await isolatedPostgres();
     const writer = createPostgresRunStore(url);
     const reader = createPostgresRunStore(url);
-    const direct = new pg.Pool({ connectionString: url });
+    const direct = rawPg(url);
     const observed: Array<{ id: string; at: number }> = [];
     const workers = Array.from({ length: 16 }, () =>
       createWorker({
@@ -311,7 +312,7 @@ test(
       await Promise.all(workers.map((worker) => worker.stop()));
       await reader.close();
       await writer.close();
-      await direct.end();
+      await direct.close();
       await cleanup();
     }
   },
@@ -323,8 +324,8 @@ test(
   async () => {
     const { url, cleanup } = await isolatedPostgres();
     const runtime = createPostgresRunStore(url);
-    const pool = new pg.Pool({ connectionString: url });
-    const holder = await pool.connect();
+    const pool = rawPg(url);
+    const holder = await reservePg(await pool.sessionPool());
     try {
       const first = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
       const second = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
@@ -348,7 +349,7 @@ test(
       await holder.query("ROLLBACK");
       holder.release();
       await runtime.close();
-      await pool.end();
+      await pool.close();
       await cleanup();
     }
   },

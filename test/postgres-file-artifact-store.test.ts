@@ -5,6 +5,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres file-artifact-store tests";
@@ -15,12 +16,11 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 
 beforeEach(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
   await p.query("DROP TABLE IF EXISTS file_artifact_deletions CASCADE");
-  await p.end();
+  await p.close();
 });
 
 function put(over: Partial<PutFileInput> = {}): PutFileInput {
@@ -137,8 +137,7 @@ test("pg listOwnedByScopes: nameQuery is case-insensitive and treats wildcards a
 test("pg scoped file pages have a matching enabled recency index", { skip }, async () => {
   const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
   await store.listOwnedByScopes([owner], { createdInScope: owner });
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
+  const raw = rawPg(URL);
   try {
     const result = await raw.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'file_artifacts_scope_created'");
     assert.match(
@@ -146,7 +145,7 @@ test("pg scoped file pages have a matching enabled recency index", { skip }, asy
       /\(created_in_scope, created_at DESC, id DESC\).*WHERE \(enabled = true\)/,
     );
   } finally {
-    await raw.end();
+    await raw.close();
   }
 });
 
@@ -196,8 +195,7 @@ test(
   async () => {
     const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
     for (const id of ["b", "a", "unknown-1", "unknown-2"]) await store.put(put({ id, path: id, createdAt: 100 }));
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
+    const raw = rawPg(URL);
     try {
       await raw.query("UPDATE file_artifacts SET sha256 = NULL WHERE id = ANY($1::text[])", [
         ["unknown-1", "unknown-2"],
@@ -207,7 +205,7 @@ test(
         ["unknown-2", "unknown-1", "a"],
       );
     } finally {
-      await raw.end();
+      await raw.close();
     }
   },
 );

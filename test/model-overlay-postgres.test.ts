@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { test } from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -45,13 +45,13 @@ test(
     );
     const upstream = await verificationUpstream();
     t.after(() => upstream.close());
-    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const pool = rawPg(databaseUrl);
     const schema = `model_overlay_${randomUUID().replaceAll("-", "")}`;
     t.after(async () => {
       try {
         await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       } finally {
-        await pool.end();
+        await pool.close();
       }
     });
     await pool.query(`CREATE SCHEMA ${schema}`);

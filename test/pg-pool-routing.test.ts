@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
+import { createPgPool, configurePgPooling, reservePg } from "../src/persistence/pg-pool.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -44,7 +44,7 @@ test("pooled query timeout rolls back without contaminating the next borrower", 
 
 test("session operations remain direct while ordinary queries use another backend", { skip }, async () => {
   const a = createPgPool(direct!);
-  const client = await (await a.sessionPool()).connect();
+  const client = await reservePg(await a.sessionPool());
   try {
     const directPid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
     await client.query("LISTEN qm_pool_routing_test");
@@ -152,7 +152,7 @@ test(
       const deadline = Date.now() + 10_000;
       while (!fired && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
       assert.ok(fired);
-      const observer = await (await store.sessionPool()).connect();
+      const observer = await reservePg(await store.sessionPool());
       try {
         const result = await observer.query(
           "SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND application_name='pgboss'",

@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { PgPool } from "../src/persistence/pg-pool.ts";
 
 export function makeRewriter(mapping: Record<string, string>): {
   rewriteString: (s: string) => string;
@@ -8,7 +8,7 @@ export function makeRewriter(mapping: Record<string, string>): {
 export function mergeDirs(src: string, dst: string): string[];
 
 export function runMigration(opts: {
-  pool: Pool;
+  pool: PgPool;
   mapping: Record<string, string>;
   apply: boolean;
   rewriteHistory?: boolean;

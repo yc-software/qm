@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);
@@ -132,7 +132,7 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
   );
 });
 
-const storedVectors = async (client: pg.Client, scope: string, model: string) =>
+const storedVectors = async (client: RawPg, scope: string, model: string) =>
   (
     await client.query(
       `SELECT fact_id, fact_hash, dimensions, embedding::text AS embedding FROM memory_fact_vectors
@@ -146,10 +146,9 @@ test("put waits on in-flight edits and never writes stale or deleted fact vector
   const model = `race-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = new pg.Client({ connectionString: url! });
-  await client.connect();
+  const client = rawPg(url!);
   t.after(async () => {
-    await client.end();
+    await client.close();
     await index.close();
   });
   await base.capture(scope, ["race alpha", "race beta"], 1000);
@@ -189,10 +188,9 @@ test("prune deletes stale model, hash, deleted, and dimension rows in bounded ba
   const model = `prune-${randomUUID()}`;
   const base = createPostgresMemoryService(url!);
   const index = createPostgresVectorStore(url!);
-  const client = new pg.Client({ connectionString: url! });
-  await client.connect();
+  const client = rawPg(url!);
   t.after(async () => {
-    await client.end();
+    await client.close();
     await index.close();
   });
   await base.capture(scope, ["prune keep", "prune edit", "prune delete", "prune wide", "prune unknown width"], 1000);
@@ -229,10 +227,9 @@ test(
     const scope = `personal:hash-${randomUUID()}`;
     const base = createPostgresMemoryService(url!);
     const index = createPostgresVectorStore(url!);
-    const client = new pg.Client({ connectionString: url! });
-    await client.connect();
+    const client = rawPg(url!);
     t.after(async () => {
-      await client.end();
+      await client.close();
       await index.close();
     });
     await base.capture(scope, ["café ☃ naïve", "second", "third", "fourth"], 1000);

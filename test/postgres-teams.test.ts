@@ -2,6 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTeamStore } from "../src/teams/teams.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
@@ -10,10 +11,9 @@ const room = scopeId("channel", "C1");
 
 beforeEach(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations, team_rooms, team_members, teams CASCADE");
-  await p.end();
+  await p.close();
 });
 
 const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, org);
@@ -52,12 +52,11 @@ test("pg teams: removing a team removes its members and rooms", { skip }, async 
   await teams.apply({ id: "finance", remove: true }, "a");
   assert.deepEqual(await teams.list(), []);
   assert.deepEqual(await teams.forTurn(room, ["ann@x.com"]), []);
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   const { rows } = await p.query(
     "SELECT (SELECT count(*) FROM team_members)::int + (SELECT count(*) FROM team_rooms)::int AS n",
   );
-  await p.end();
+  await p.close();
   assert.equal(rows[0].n, 0);
 });
 

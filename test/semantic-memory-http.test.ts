@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -14,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -32,15 +32,14 @@ const close = async (server: Server) => {
 const database = process.env.DATABASE_URL;
 const pgTest = database ? test : test.skip;
 async function isolatedDatabase(t: TestContext) {
-  const admin = new pg.Client({ connectionString: database! });
-  await admin.connect();
+  const admin = rawPg(database!);
   const name = `memory_http_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE DATABASE ${name}`);
   const fixture = { url: "", stop: async () => {} };
   t.after(async () => {
     await fixture.stop();
     await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await admin.end();
+    await admin.close();
   });
   const url = new URL(database!);
   url.pathname = `/${name}`;
@@ -112,8 +111,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   await migrateRegisteredPgSchemas(databaseUrl);
   await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
   await built.memory.recall("personal:unconfigured", { query: "no model configured" });
-  const inspector = new pg.Client({ connectionString: databaseUrl });
-  await inspector.connect();
+  const inspector = rawPg(databaseUrl);
   try {
     const { rows } = await inspector.query(
       "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS installed, to_regclass('memory_fact_vectors') AS vectors",
@@ -121,7 +119,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     assert.equal(rows[0].installed, false);
     assert.equal(rows[0].vectors, null);
   } finally {
-    await inspector.end();
+    await inspector.close();
   }
   const embeddingId = "test-model";
   await built.modelRegistry.upsert(

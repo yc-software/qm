@@ -7,18 +7,18 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
 
 async function raw(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   try {
     const res = await p.query(sql, params);
     return res.rows as Record<string, unknown>[];
   } finally {
-    await p.end();
+    await p.close();
   }
 }
 

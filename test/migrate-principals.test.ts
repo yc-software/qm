@@ -4,8 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
-import type { Pool } from "pg";
 import { mergeDirs, runMigration } from "../scripts/migrate-principals-to-email.mjs";
+import { reservePg } from "../src/persistence/pg-pool.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const BASE_URL = process.env.DATABASE_URL;
 const skip = BASE_URL ? false : "set DATABASE_URL (a Postgres) to run the migration tests";
@@ -16,18 +17,17 @@ const silent = () => {};
 const parentDatabase = BASE_URL ? new URL(BASE_URL).pathname.slice(1) : "";
 const database = `${/^qmt_\w+$/.test(parentDatabase) ? parentDatabase : "qm"}_migtest_${randomBytes(4).toString("hex")}`;
 let testUrl = "";
-let pool: Pool | null = null;
+let pool: RawPg | null = null;
 
 before(async () => {
   if (!BASE_URL) return;
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: BASE_URL });
+  const admin = rawPg(BASE_URL);
   await admin.query(`CREATE DATABASE "${database}"`);
-  await admin.end();
+  await admin.close();
   const url = new URL(BASE_URL);
   url.pathname = `/${database}`;
   testUrl = url.toString();
-  pool = new pg.Pool({ connectionString: testUrl });
+  pool = rawPg(testUrl);
   await pool.query(`
     CREATE TABLE participants(session_id TEXT NOT NULL, principal_id TEXT NOT NULL, PRIMARY KEY(session_id, principal_id));
     CREATE TABLE migtest_kv(id TEXT PRIMARY KEY, json JSONB);
@@ -35,12 +35,11 @@ before(async () => {
 });
 
 after(async () => {
-  await pool?.end();
+  await pool?.close();
   if (!BASE_URL) return;
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: BASE_URL });
+  const admin = rawPg(BASE_URL);
   await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
-  await admin.end();
+  await admin.close();
 });
 
 async function reset(): Promise<void> {
@@ -149,9 +148,8 @@ test("kv pass streams in batches — rows beyond one batch are all re-keyed", { 
 
 test("apply refuses while another client is connected; dry run only warns", { skip }, async () => {
   await reset();
-  const pg = (await import("pg")).default;
-  const other = new pg.Pool({ connectionString: testUrl });
-  const held = await other.connect();
+  const other = rawPg(testUrl);
+  const held = await reservePg(await other.sessionPool());
   try {
     await assert.rejects(runMigration({ pool: pool!, mapping: MAPPING, apply: true, log: silent }), /other client/);
     await assert.doesNotReject(runMigration({ pool: pool!, mapping: MAPPING, apply: false, log: silent }));
@@ -165,7 +163,7 @@ test("apply refuses while another client is connected; dry run only warns", { sk
     assert.deepEqual(problems, []);
   } finally {
     held.release();
-    await other.end();
+    await other.close();
   }
 });
 

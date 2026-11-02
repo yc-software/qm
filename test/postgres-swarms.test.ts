@@ -8,6 +8,8 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { reservePg } from "../src/persistence/pg-pool.ts";
+import { connectUnderMockTimers, rawPg } from "./support/raw-pg.ts";
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
@@ -16,22 +18,20 @@ isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
 const databaseUrl = isolatedUrl?.toString();
 before(async () => {
   if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
+  const pool = rawPg(baseUrl);
   try {
     await pool.query(`CREATE SCHEMA ${schema}`);
   } finally {
-    await pool.end();
+    await pool.close();
   }
 });
 after(async () => {
   if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
+  const pool = rawPg(baseUrl);
   try {
     await pool.query(`DROP SCHEMA ${schema} CASCADE`);
   } finally {
-    await pool.end();
+    await pool.close();
   }
 });
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
@@ -70,6 +70,7 @@ test(
       return updated;
     };
     context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+    connectUnderMockTimers(context);
     try {
       const firstSweep = fixture.service.sweep();
       await readyWritten.promise;
@@ -103,9 +104,6 @@ test(
       context.mock.timers.reset();
       await fixture.serviceOptions.lock.withLock(resourceLock, async () => undefined);
       await backing.delete(fixture.root.id);
-      const pool = await factory.pool.pool();
-      const clients = await Promise.all(Array.from({ length: pool.idleCount }, () => pool.connect()));
-      for (const client of clients) client.release(true);
       await runtime.close();
       await factory.pool.close();
     }
@@ -118,9 +116,8 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
   const store = createSwarmStore(backing);
   const { service } = await swarmFixture({ store });
   await backing.select({ limit: 1 });
-  const pool = await factory.pool.sessionPool();
-  const blocker = await pool.connect();
-  const observer = await pool.connect();
+  const blocker = await reservePg(await factory.pool.sessionPool());
+  const observer = await reservePg(await factory.pool.sessionPool());
   const waiting = async (): Promise<number> => {
     const result = await observer.query<{ count: number }>(
       "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1",
@@ -140,6 +137,7 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
     await blocker.query("BEGIN");
     await blocker.query("LOCK TABLE swarms IN ACCESS EXCLUSIVE MODE");
     context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+    connectUnderMockTimers(context);
     for (let iteration = 0; iteration < 6; iteration++) {
       const sweep = assert.rejects(service.sweep(), /swarm pending batch timed out/);
       for (let attempt = 0; attempt < 100 && (await waiting()) === 0; attempt++) await sleep(5);
@@ -328,7 +326,7 @@ test("Postgres rolls back a swarm mutation whose run expires while waiting for t
     runs: runtime.runs,
     lock: createPostgresAdvisoryLock(factory.pool),
   });
-  const client = await (await factory.pool.pool()).connect();
+  const client = await reservePg(await factory.pool.pool());
   try {
     await fixture.service.spawn(fixture.caller, { requestId: "initial", text: "Work" });
     if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
@@ -454,7 +452,7 @@ test("Postgres initial pool expires atomically while waiting for the write lock"
     pg: factory.pool,
   });
   const f = await swarmFixture({ store, sessions, runs: runtime.runs });
-  const client = await (await factory.pool.pool()).connect();
+  const client = await reservePg(await factory.pool.pool());
   const entered = Promise.withResolvers<void>();
   const create = store.create.bind(store);
   store.create = async (...args) => {

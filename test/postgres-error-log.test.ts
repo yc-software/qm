@@ -2,17 +2,17 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres error-log tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS error_events CASCADE");
-  await p.end();
+  await p.close();
 });
 
 test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, async (t) => {
@@ -79,8 +79,7 @@ test("pg error log: flush makes writes visible to another process", { skip }, as
 });
 
 test("pg error log pages equal-timestamp records deterministically beyond 200", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = rawPg(URL);
   try {
     await pool.query(
       "INSERT INTO error_events(ts, scope_label, category, code, message, session_id) SELECT 123, 'personal:pagination', 'turn', n::text, 'failure', 'pagination' FROM generate_series(0,259) n",
@@ -93,6 +92,6 @@ test("pg error log pages equal-timestamp records deterministically beyond 200", 
     assert.equal((await log.list({ scopeId: "personal:pagination", offset: 250, limit: 50 })).length, 10);
     assert.equal(await log.count({ scopeId: "personal:pagination" }), 260);
   } finally {
-    await pool.end();
+    await pool.close();
   }
 });

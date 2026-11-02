@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import pg from "pg";
 import { createPostgresBrokerSessions } from "../src/auth/broker-sessions.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -12,7 +12,7 @@ test(
   async () => {
     const a = createPostgresBrokerSessions(url!);
     const b = createPostgresBrokerSessions(url!);
-    const pool = new pg.Pool({ connectionString: url });
+    const pool = rawPg(url);
     const email = `${randomUUID()}@example.com`;
     try {
       const first = await a.create(email, 30 * 86400, 90 * 86400);
@@ -49,7 +49,7 @@ test(
       assert.equal(await b.use(fourth.token), null);
     } finally {
       await a.revoke(email);
-      await pool.end();
+      await pool.close();
     }
   },
 );

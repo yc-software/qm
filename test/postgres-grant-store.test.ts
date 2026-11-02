@@ -7,18 +7,18 @@ import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
-  await p.end();
+  await p.close();
 });
 
 const owner = scopeId("personal", "U1");
@@ -96,14 +96,12 @@ test("pg grant persistence: a warm cache sees another instance's writes and revo
 test("pg grant persistence: a warm cache sees writes that bypass the store entirely", { skip }, async () => {
   const reader = createPostgresGrantStore(URL!);
   await reader.all();
-
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query(
     "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
     [owner, "out-of-band.md", carol, "read", "U1"],
   );
-  await p.end();
+  await p.close();
 
   assert.equal(
     (await reader.all()).some((g) => g.ref === "out-of-band.md"),
@@ -116,9 +114,7 @@ test("pg grant persistence: the snapshot is served from cache until the version 
   const reader = createPostgresGrantStore(URL!);
   await reader.put(grant({ ref: "cached.md" }));
   await reader.all();
-
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   try {
     await p.query("ALTER TABLE acl_grants DISABLE TRIGGER acl_grants_bump");
     await p.query("DELETE FROM acl_grants WHERE path = $1", ["cached.md"]);
@@ -136,7 +132,7 @@ test("pg grant persistence: the snapshot is served from cache until the version 
     false,
     "the next version bump refreshes the snapshot",
   );
-  await p.end();
+  await p.close();
 });
 
 test("pg grant persistence: a conditional replacement invalidates warm caches", { skip }, async () => {

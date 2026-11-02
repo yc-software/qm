@@ -1,7 +1,7 @@
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { likeContains } from "../persistence/like.ts";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
@@ -404,10 +404,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA]);
 
-  const lockSession = (client: PoolClient, sessionId: string) =>
+  const lockSession = (client: PgClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
 
-  const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+  const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PgClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
       const t = now();
       const held = await client.query(
@@ -419,7 +419,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     });
 
   const insertEntries = async (
-    client: PoolClient,
+    client: PgClient,
     sessionId: string,
     entries: readonly NewEntry[],
     turnId?: string,

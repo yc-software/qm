@@ -5,6 +5,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const BASE = process.env.DATABASE_URL;
 const skip = BASE ? false : "set DATABASE_URL (a Postgres) to run the ACL file-ID migration test";
@@ -12,15 +13,13 @@ const schema = `acl_file_ids_${randomBytes(4).toString("hex")}`;
 
 after(async () => {
   if (!BASE) return;
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: BASE });
+  const admin = rawPg(BASE);
   await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-  await admin.end();
+  await admin.close();
 });
 
 test("file grants move from owner paths to enabled Files record IDs", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: BASE });
+  const admin = rawPg(BASE);
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new URL(BASE!);
   url.searchParams.set("options", `-c search_path=${schema}`);
@@ -28,7 +27,7 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
   const grants = createPostgresGrantStore(db);
   createPostgresFileArtifactStore(db, createMemoryDurableByteStore());
   await migrateRegisteredPgSchemas(db);
-  const pool = new pg.Pool({ connectionString: db });
+  const pool = rawPg(db);
   try {
     await pool.query("DELETE FROM qm_schema_migrations WHERE id = 'acl/grants/0003-file-ids'");
     const file = (id: string, owner: string, path: string, createdAt: number, enabled = true) =>
@@ -78,7 +77,7 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
       ],
     );
   } finally {
-    await pool.end();
-    await admin.end();
+    await pool.close();
+    await admin.close();
   }
 });

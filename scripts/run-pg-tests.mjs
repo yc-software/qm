@@ -5,7 +5,7 @@ import { statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
-import pg from "pg";
+import postgres from "postgres";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -28,7 +28,7 @@ const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const children = new Set();
-const admin = new pg.Pool({ connectionString: baseUrl, max: jobs });
+const admin = postgres(baseUrl, { max: jobs, onnotice: () => {} });
 let stopping = false;
 let ended = null;
 
@@ -53,12 +53,12 @@ function databaseUrl(name) {
 }
 
 async function dropDatabase(name) {
-  const { rows } = await admin.query(
+  const rows = await admin.unsafe(
     "SELECT datname FROM pg_database WHERE datname = $1 OR starts_with(datname, $1 || '_') ORDER BY datname DESC",
     [name],
   );
   for (const { datname } of rows) {
-    await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
   }
 }
 
@@ -97,7 +97,7 @@ function runFile(file, env) {
 async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
-    await admin.query(`CREATE DATABASE ${name}`);
+    await admin.unsafe(`CREATE DATABASE ${name}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {
@@ -122,7 +122,7 @@ function migrateTemplate() {
 }
 
 const started = Date.now();
-await admin.query(`CREATE DATABASE ${templateName}`);
+await admin.unsafe(`CREATE DATABASE ${templateName}`);
 await migrateTemplate().catch(async (error) => {
   try {
     await dropDatabase(templateName);

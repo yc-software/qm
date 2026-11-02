@@ -12,6 +12,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -22,12 +23,11 @@ const IDEM_TABLE = "cron_queue_test_idempotency";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
-  await p.end();
+  await p.close();
 });
 
 async function until(cond: () => boolean, ms: number): Promise<void> {

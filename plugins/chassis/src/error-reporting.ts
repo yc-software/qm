@@ -19,10 +19,8 @@ const KEPT_TRACE_DATA = new Set([
   "url.scheme",
   "network.protocol.name",
   "network.protocol.version",
-  "db.system",
-  "db.name",
-  "db.postgresql.idle.timeout.millis",
-  "db.postgresql.max.client",
+  "db.system.name",
+  "db.namespace",
   "messaging.system",
   "messaging.destination.name",
   "messaging.message.id",
@@ -41,10 +39,7 @@ const SQL_VERBS = new Set(
     " ",
   ),
 );
-const POOL_CHECKOUT = "pg-pool.connect";
-const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
 const MAX_SENT_SPANS = 500;
-const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 let client: typeof Sentry | undefined;
@@ -87,10 +82,7 @@ function scrubDescription(
   statement: unknown,
 ): string | undefined {
   if (op === "http.client") return httpClientDescription(description);
-  if (op === "db") {
-    if (typeof statement !== "string" && description && POOL_SPANS.has(description)) return description;
-    return firstWord(typeof statement === "string" ? statement : undefined, SQL_VERBS) ?? "query";
-  }
+  if (op === "db") return firstWord(typeof statement === "string" ? statement : undefined, SQL_VERBS) ?? "query";
   return op === "step.tool" ? description : op;
 }
 
@@ -114,18 +106,8 @@ function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T
   return event;
 }
 
-function idleCheckout(span: SpanJSON, parents: Set<string | undefined>): boolean {
-  return (
-    span.description === POOL_CHECKOUT &&
-    span.status === "ok" &&
-    (span.timestamp ?? Infinity) - span.start_timestamp < IDLE_CHECKOUT_SECONDS &&
-    !parents.has(span.span_id)
-  );
-}
-
 function orderedSpans(spans: SpanJSON[]): SpanJSON[] {
-  const parents = new Set(spans.map((span) => span.parent_span_id));
-  return spans.filter((span) => !idleCheckout(span, parents)).sort((a, b) => a.start_timestamp - b.start_timestamp);
+  return spans.toSorted((a, b) => a.start_timestamp - b.start_timestamp);
 }
 
 function duration(span: SpanJSON): number {
@@ -227,7 +209,7 @@ export function initializeErrorReporting(
               },
             }),
             sdk.nativeNodeFetchIntegration({ breadcrumbs: false }),
-            sdk.postgresIntegration(),
+            sdk.postgresJsIntegration({ requireParentSpan: true }),
           ]
         : []),
     ],

@@ -1,6 +1,7 @@
 import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import postgres from "postgres";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
@@ -281,26 +282,26 @@ type PostdeployConfig = Pick<
 async function checkDatabase(config: PostdeployConfig): Promise<void> {
   const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
-  const pg = (await import("pg")).default;
-  const client = new pg.Client({
-    ...pgConnectionOptions(
-      databaseUrl,
-      resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }).ssl?.ca,
-    ),
-    connectionTimeoutMillis: 30_000,
-    query_timeout: 30_000,
-    statement_timeout: 30_000,
+  const { url, ssl } = pgConnectionOptions(
+    databaseUrl,
+    resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }).ssl?.ca,
+  );
+  const sql = postgres(url, {
+    ssl,
+    max: 1,
+    connect_timeout: 30,
+    connection: { statement_timeout: 30_000 },
+    onnotice: () => {},
   });
-  await client.connect();
   try {
-    const unsafe = await client.query(PARALLEL_EXCEPTION_QUERY);
-    if (unsafe.rows.length) {
-      throw new Error(`parallel-safe PL/pgSQL exception handlers: ${JSON.stringify(unsafe.rows)}`);
+    const unsafe = await sql.unsafe(PARALLEL_EXCEPTION_QUERY);
+    if (unsafe.length) {
+      throw new Error(`parallel-safe PL/pgSQL exception handlers: ${JSON.stringify([...unsafe])}`);
     }
-    const invalid = await client.query(INVALID_INDEX_QUERY);
-    if (invalid.rows.length) throw new Error(`invalid PostgreSQL indexes: ${JSON.stringify(invalid.rows)}`);
+    const invalid = await sql.unsafe(INVALID_INDEX_QUERY);
+    if (invalid.length) throw new Error(`invalid PostgreSQL indexes: ${JSON.stringify([...invalid])}`);
   } finally {
-    await client.end();
+    await sql.end();
   }
 }
 

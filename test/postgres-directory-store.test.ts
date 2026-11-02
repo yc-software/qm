@@ -1,19 +1,19 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
     "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_groups, directory_group_members, directory_sync, directory_meta CASCADE",
   );
-  await p.end();
+  await p.close();
 });
 
 const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
@@ -72,13 +72,12 @@ test(
 test("pg directory: exact channel-id resolution has a matching expression index", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await seed(store);
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
+  const raw = rawPg(URL);
   try {
     const result = await raw.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'directory_channels_lower_cid'");
     assert.match(result.rows[0]?.indexdef ?? "", /\(org_id, lower\(channel_id\)\)/);
   } finally {
-    await raw.end();
+    await raw.close();
   }
 });
 
@@ -318,8 +317,7 @@ test(
 );
 
 async function freshPg(url: string) {
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: url });
+  const p = rawPg(url);
   return { query: (text: string, params?: unknown[]) => p.query(text, params) };
 }
 
@@ -483,10 +481,9 @@ test("pg live channel observations survive older snapshots but yield to later re
   const { directoryObservationCases } = await import("./support/directory-observation-cases.ts");
   const store = createPostgresDirectoryStore(URL!);
   await store.replaceChannels([], [], Date.now());
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL! });
+  const pool = rawPg(URL!);
   await pool.query("UPDATE directory_sync SET channels_synced_at = NULL, channels_hash = NULL");
-  await pool.end();
+  await pool.close();
   await directoryObservationCases(store);
 });
 

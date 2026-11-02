@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, reservePg } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
 
 const database = process.env.DATABASE_URL;
@@ -77,7 +77,7 @@ test(
           [schema, table],
         );
         assert.equal(indexes.length, 1);
-        const client = await (await pg.pool()).connect();
+        const client = await reservePg(await pg.pool());
         try {
           await client.query("BEGIN");
           await client.query("SET LOCAL enable_seqscan=off");

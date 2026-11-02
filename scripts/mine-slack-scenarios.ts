@@ -1,8 +1,5 @@
-import { createRequire } from "node:module";
 import { writeFileSync } from "node:fs";
-
-const require = createRequire(import.meta.url);
-const { Client } = require("pg") as typeof import("pg");
+import { createPgPool, reservePg } from "../src/persistence/pg-pool.ts";
 
 function arg(name: string, def: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -39,8 +36,8 @@ function readUser(payload: string | null): { author: string; text: string } | nu
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required (run inside the core box)");
-  const client = new Client({ connectionString: url });
-  await client.connect();
+  const pool = createPgPool(url);
+  const client = await reservePg(await pool.pool());
   try {
     const since = Date.now() - DAYS * 86_400_000;
     const { rows: sessions } = await client.query<{
@@ -132,7 +129,8 @@ async function main(): Promise<void> {
       console.log(out);
     }
   } finally {
-    await client.end();
+    client.release();
+    await pool.close();
   }
 }
 

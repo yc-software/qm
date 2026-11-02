@@ -3,7 +3,8 @@ import { upgradeLegacySandboxes, type SandboxResourceUpgradeMarker } from "../sr
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, type Sql } from "../src/persistence/pg-pool.ts";
+import { openPgSql } from "../src/persistence/pg-driver.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 
@@ -235,9 +236,16 @@ test(
   },
 );
 
+async function idle(pool: Sql): Promise<boolean> {
+  const reserving = pool.reserve();
+  const reserved = await Promise.race([reserving, sleep(200).then(() => null)]);
+  if (reserved) reserved.release();
+  else void reserving.then((late) => late.release());
+  return reserved !== null;
+}
+
 test("pg nested locks reuse one connection without bypassing sibling exclusion", { skip, timeout: 10000 }, async () => {
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 200 });
+  const pool = openPgSql(URL!, { max: 1, pinned: true });
   const pg = createPgPool(URL!);
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5, timeoutMs: 100 });
   try {
@@ -286,7 +294,7 @@ test("pg nested locks reuse one connection without bypassing sibling exclusion",
       );
       assert.equal(await lock.withLock("throws", async () => true), true);
     });
-    assert.equal(pool.idleCount, 1);
+    assert.equal(await idle(pool), true);
   } finally {
     await pool.end();
     await pg.close();
@@ -297,8 +305,7 @@ test(
   "pg nested lock leases outlive their parent and late inherited work leases anew",
   { skip, timeout: 10000 },
   async () => {
-    const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: URL, max: 1, connectionTimeoutMillis: 200 });
+    const pool = openPgSql(URL!, { max: 1, pinned: true });
     const pg = createPgPool(URL!);
     const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
     const entered = Promise.withResolvers<void>();
@@ -316,13 +323,13 @@ test(
         delayed = late.promise.then(() => lock.withLock("late", async () => true));
         await entered.promise;
       });
-      assert.equal(pool.idleCount, 0);
+      assert.equal(await idle(pool), false);
       release.resolve();
       await child;
-      assert.equal(pool.idleCount, 1);
+      assert.equal(await idle(pool), true);
       late.resolve();
       assert.equal(await delayed, true);
-      assert.equal(pool.idleCount, 1);
+      assert.equal(await idle(pool), true);
     } finally {
       release.resolve();
       late.resolve();
@@ -333,8 +340,7 @@ test(
 );
 
 test("pg contended polling releases connections for unrelated keys", { skip, timeout: 10000 }, async () => {
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString: URL, max: 2, connectionTimeoutMillis: 100 });
+  const pool = openPgSql(URL!, { max: 2, pinned: true });
   const pg = createPgPool(URL!);
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
   const entered = Promise.withResolvers<void>();

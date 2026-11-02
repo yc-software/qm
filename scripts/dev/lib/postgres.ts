@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Pool } from "pg";
+import { createPgPool } from "../../../src/persistence/pg-pool.ts";
 import { run } from "./proc.ts";
 import { sleep } from "./util.ts";
 
@@ -32,13 +32,11 @@ async function pgQuery(
   sql: string,
   params: unknown[] = [],
 ): Promise<Array<Record<string, unknown>>> {
-  const pg = (await import("pg")).default;
-  const pool: Pool = new pg.Pool({ connectionString: databaseUrl });
-  pool.on("error", () => {});
+  const pool = createPgPool(databaseUrl);
   try {
-    return (await pool.query(sql, params)).rows;
+    return await pool.q(sql, params);
   } finally {
-    await pool.end();
+    await pool.close();
   }
 }
 

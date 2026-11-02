@@ -4,12 +4,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
 import { scopeId, type ScopeId, type SessionEntry } from "../../src/types.ts";
 import { recallText } from "../support/recall-text.ts";
+import { rawPg, type RawPg } from "../support/raw-pg.ts";
 
 /**
  * Extended live suite against the real Memorable extraction service. Deliberately not run in CI:
@@ -140,7 +140,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   const U1 = scopeId("personal", "U1");
   const U2 = scopeId("personal", "U2");
   const U3 = scopeId("personal", "U3");
-  let pool: pg.Pool;
+  let pool: RawPg;
   let memory: ReturnType<typeof createConfiguredMemoryService>;
   let cli: (args: string[]) => string;
   const timings: Record<string, number> = {};
@@ -165,7 +165,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   };
 
   before(async () => {
-    pool = new pg.Pool({ connectionString: DB });
+    pool = rawPg(DB);
     await pool.query("DROP TABLE IF EXISTS memorable_procedures, memorable_mode, memorable_stats");
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
@@ -205,7 +205,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   });
 
   after(async () => {
-    await pool.end();
+    await pool.close();
     console.log("timings (ms):", JSON.stringify(timings));
   });
 

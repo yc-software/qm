@@ -1,4 +1,4 @@
-import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
+import { createPgPool, withPgTransaction, type PgPool, type PgClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
@@ -94,7 +94,7 @@ export function createPostgresMap<T>(
   }
   const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
      ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
-  async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+  async function withBump<R>(fn: (client: PgClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
       await client.query(bumpSql);

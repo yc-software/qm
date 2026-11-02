@@ -8,12 +8,12 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import pg from "pg";
 import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
+import { rawPg, type RawPg } from "../support/raw-pg.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 const DB = process.env.MEMORABLE_E2E_DB_URL;
@@ -31,12 +31,12 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
   let stub: Awaited<ReturnType<typeof startExtractionStub>>;
   let server: Server;
   let base: string;
-  let pool: pg.Pool;
+  let pool: RawPg;
   let cliEnv: NodeJS.ProcessEnv;
 
   before(async () => {
     stub = await startExtractionStub();
-    pool = new pg.Pool({ connectionString: DB });
+    pool = rawPg(DB);
     await pool.query("DROP TABLE IF EXISTS memorable_procedures, memorable_mode, memorable_stats");
     cliEnv = {
       PATH: process.env.PATH,
@@ -80,7 +80,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
   after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     await new Promise<void>((r) => stub.server.close(() => r()));
-    await pool.end();
+    await pool.close();
   });
 
   async function turn(text: string, threadRef: string): Promise<{ http: number; json: any }> {

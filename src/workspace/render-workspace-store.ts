@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, type PgClient, type PgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createLocalWorkspaceStore, safeJoin, type WorkspaceStore } from "./workspace-store.ts";
@@ -59,7 +59,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     if (!path || input.includes("\0")) throw new Error(`path escapes workspace: ${input}`);
     return path;
   };
-  async function transaction<T>(scope: ScopeId, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  async function transaction<T>(scope: ScopeId, fn: (client: PgClient) => Promise<T>): Promise<T> {
     return withPgTransaction(await db.pool(), async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`render-workspace:${scope}`]);
       return fn(client);
@@ -102,13 +102,13 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     const info = await lstat(abs).catch(absent);
     if (info && !info.isDirectory()) await rm(abs, { force: true });
   }
-  async function revisionOf(client: Pick<PoolClient, "query">, scope: ScopeId): Promise<number> {
+  async function revisionOf(client: Pick<PgPool, "query">, scope: ScopeId): Promise<number> {
     const rows = await client.query("SELECT revision FROM render_workspace_scopes WHERE scope_id=$1", [scope]);
     return Number(rows.rows[0]?.revision ?? 0);
   }
   async function mutate(
     scope: ScopeId,
-    fn: (client: PoolClient) => Promise<number>,
+    fn: (client: PgClient) => Promise<number>,
   ): Promise<{ before: number; after: number; changed: number }> {
     return transaction(scope, async (client) => {
       const before = await revisionOf(client, scope);
@@ -143,7 +143,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     return queue(scope, async () => {
       const limit = opts ? Math.max(0, Math.floor(opts.limit)) : null;
       if (limit !== null && !Number.isFinite(limit)) throw new Error("workspace list limit must be finite");
-      const revision = await revisionOf(await db.pool(), scope);
+      const revision = await revisionOf(db, scope);
       await local.ensureScope(scope);
       if (synced.get(scope) === revision) {
         const rows = await db.q("SELECT path FROM render_workspace_files WHERE scope_id=$1 ORDER BY path LIMIT $2", [

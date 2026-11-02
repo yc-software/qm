@@ -1,4 +1,4 @@
-import type { PoolClient } from "pg";
+import type { PgClient } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
@@ -108,7 +108,7 @@ export const MEMORY_FACTS_MIGRATIONS = [
 export function createPostgresMemoryService(connectionString: string): MemoryService {
   const { q, pool } = createPgPool(connectionString, MEMORY_FACTS_MIGRATIONS);
 
-  function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
+  function tx(client: PgClient, scopeId: ScopeId): FactStoreTx {
     return {
       list: async () => (await client.query(LIVE, [scopeId])).rows.map(fact),
       async insert(f) {

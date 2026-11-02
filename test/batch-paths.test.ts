@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;
@@ -93,7 +93,7 @@ for (const backend of ["memory", "postgres"] as const) {
         scopeLabel: scope,
       }));
       if (backend === "postgres") {
-        const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+        const pool = rawPg(process.env.DATABASE_URL);
         try {
           const constraint = `items_batch_${randomUUID().replaceAll("-", "")}`;
           await pool.query(
@@ -106,7 +106,7 @@ for (const backend of ["memory", "postgres"] as const) {
             await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
         } finally {
-          await pool.end();
+          await pool.close();
         }
       }
       await store.releaseLease(lease);

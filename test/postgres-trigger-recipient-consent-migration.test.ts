@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "../src/triggers/trigger-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the recipient-consent migration test";
@@ -9,8 +10,7 @@ test(
   "dropping recipient consent strips the field from crons, webhooks and loops and keeps the rest",
   { skip },
   async () => {
-    const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: URL });
+    const pool = rawPg(URL);
     const tables = ["crons", "webhooks", "loops"];
     try {
       await pool.query(`DROP TABLE IF EXISTS ${tables.join(", ")}`);
@@ -42,7 +42,7 @@ test(
         }
       }
     } finally {
-      await pool.end();
+      await pool.close();
     }
   },
 );

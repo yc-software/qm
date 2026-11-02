@@ -5,17 +5,17 @@ import {
   type AmbientJudgmentStore,
 } from "../src/surface-cache/ambient-judgment-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ambient-judgment tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS ambient_judgments CASCADE");
-  await p.end();
+  await p.close();
 });
 
 async function contract(store: AmbientJudgmentStore): Promise<void> {

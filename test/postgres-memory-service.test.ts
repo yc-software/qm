@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres memory tests";
 const at = Date.UTC(2026, 4, 31);
 
 async function sql(text: string, params: unknown[] = []) {
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = rawPg(URL);
   try {
     return (await pool.query(text, params)).rows;
   } finally {
-    await pool.end();
+    await pool.close();
   }
 }
 

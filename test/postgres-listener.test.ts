@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import pg from "pg";
 import { subscribePostgresChannel } from "../src/persistence/postgres-listener.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const url = process.env.DATABASE_URL;
 const skip = !url;
@@ -16,15 +16,14 @@ async function until(check: () => boolean | Promise<boolean>) {
 }
 
 test("channels share a backend, recover after termination, and release it after unsubscribe", { skip }, async () => {
-  const observer = new pg.Client({ connectionString: url });
-  await observer.connect();
+  const observer = rawPg(url);
   const seen: string[] = [];
   let resyncs = 0;
   const stops: (() => Promise<void>)[] = [];
   const pids = async () =>
     (
       await observer.query(
-        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN consolidation_%' AND pid<>pg_backend_pid()",
+        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query ILIKE 'listen _consolidation_%' AND pid<>pg_backend_pid()",
       )
     ).rows.map((r) => r.pid);
   try {
@@ -60,7 +59,7 @@ test("channels share a backend, recover after termination, and release it after 
     await until(async () => (await pids()).length === 0);
   } finally {
     await Promise.all(stops.map((stop) => stop()));
-    await observer.end();
+    await observer.close();
   }
 });
 
@@ -68,8 +67,7 @@ test("notification buses and run signals share a listener without closing their 
   const a = createPostgresNotifyBus<string>(url!, "consolidation_bus", "test");
   const b = createPostgresNotifyBus<string>(url!, "consolidation_bus", "test");
   const signals = createPostgresRunSignalStore(url!);
-  const observer = new pg.Client({ connectionString: url });
-  await observer.connect();
+  const observer = rawPg(url);
   let ready = 0;
   let messages = 0;
   let signalsSeen = 0;
@@ -96,7 +94,7 @@ test("notification buses and run signals share a listener without closing their 
     offB();
     offSignal();
     await Promise.all([a.close!(), b.close!(), signals.close!()]);
-    await observer.end();
+    await observer.close();
   }
 });
 

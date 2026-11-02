@@ -2,19 +2,19 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres surface-cache tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
     "DROP TABLE IF EXISTS channel_messages, channel_state, channel_files, channel_policy, channel_policy_history CASCADE",
   );
-  await p.end();
+  await p.close();
 });
 
 test("pg surface-cache: upsert idempotency + last-writer-wins on change-time", { skip }, async () => {

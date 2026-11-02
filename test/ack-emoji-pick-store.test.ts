@@ -2,17 +2,17 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "../src/surface-cache/ack-emoji-pick-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ack-emoji-pick tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS ack_emoji_picks CASCADE");
-  await p.end();
+  await p.close();
 });
 
 async function contract(store: AckEmojiPickStore): Promise<void> {

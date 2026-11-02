@@ -7,17 +7,17 @@ import {
   exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
-  await p.end();
+  await p.close();
 });
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {

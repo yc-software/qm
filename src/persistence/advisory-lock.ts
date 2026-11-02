@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { PgPool, PoolClient } from "./pg-pool.ts";
+import { reservePg, type PgClient, type PgPool } from "./pg-pool.ts";
 import { sleep } from "../util/async.ts";
 
 export interface AdvisoryLock {
@@ -72,7 +72,7 @@ export function createPostgresAdvisoryLock(
   const pollMs = opts.pollMs ?? DEFAULT_ADVISORY_LOCK_POLL_MS;
 
   type Context = {
-    client: PoolClient;
+    client: PgClient & { release(): void };
     references: number;
     keys: Map<string, { shared: boolean; count: number }>;
   };
@@ -81,7 +81,7 @@ export function createPostgresAdvisoryLock(
     const parent = sessions.getStore();
     const context = parent?.active
       ? parent.context
-      : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
+      : { client: await reservePg(await pg.sessionPool()), references: 0, keys: new Map() };
     context.references++;
     const lease = { context, active: true };
     try {

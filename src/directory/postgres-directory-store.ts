@@ -1,7 +1,7 @@
 import { likeEscape } from "../persistence/like.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
-import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { PrincipalType } from "../types.ts";
 import { foldPrincipalId, rosterIds } from "./person.ts";
 import {
@@ -234,7 +234,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     hashCol: string,
     hash: string,
     syncedAt: number | undefined,
-    write: (client: PoolClient) => Promise<boolean | void>,
+    write: (client: PgClient) => Promise<boolean | void>,
     partial = false,
   ): Promise<boolean> {
     const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");

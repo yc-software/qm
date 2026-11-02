@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
+import { createPgPool, reservePg, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
+import { sleep } from "../src/util/async.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -23,6 +24,7 @@ function flakyPgPool(failures: number): PgPool {
   return {
     sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
     pool: () => Promise.reject(new Error("not backed by a real pool")),
+    dedicated: () => Promise.reject(new Error("not backed by a real pool")),
     query,
     q: async (text, params) => (await query(text, params ?? [])).rows,
     registerMigration: () => {},
@@ -76,10 +78,13 @@ test("pg pool: a failed init is retried with a fresh attempt (rejection not cach
   await pg.close();
 });
 
-test("pg pool: an idle-client 'error' is logged, not fatal", { skip }, async () => {
+test("pg pool: a terminated idle connection is replaced, not fatal", { skip }, async () => {
   const pg = createPgPool(URL!, [{ id: "test/retry/live/0001", statements: ["SELECT 1"] }]);
-  const pool = await pg.pool();
-  assert.doesNotThrow(() => pool.emit("error", new Error("backend died")));
+  const [idle] = await pg.q("SELECT pg_backend_pid() AS pid");
+  const killer = await reservePg(await pg.sessionPool());
+  await killer.query("SELECT pg_terminate_backend($1)", [idle!.pid]);
+  killer.release();
+  await sleep(100);
   assert.deepEqual((await pg.query("SELECT 1 AS one")).rows, [{ one: 1 }], "pool keeps serving queries");
   await pg.close();
 });

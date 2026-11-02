@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DROP_RUN_AS_MIGRATION } from "../src/cron/cron-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron run-mode migration test";
 
 test("dropping run modes hands floor crons to their conversation and strips mode fields", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = rawPg(URL);
   try {
     await pool.query("DROP TABLE IF EXISTS crons, loops");
     for (const sql of DROP_RUN_AS_MIGRATION.statements.slice(0, 2)) await pool.query(sql);
@@ -48,6 +48,6 @@ test("dropping run modes hands floor crons to their conversation and strips mode
       assert.deepEqual((await pool.query("SELECT json FROM loops")).rows[0].json, { id: "L1" });
     }
   } finally {
-    await pool.end();
+    await pool.close();
   }
 });

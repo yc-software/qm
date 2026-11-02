@@ -8,20 +8,15 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { testPgPool } from "./support/test-database.ts";
+import { connectUnderMockTimers } from "./support/raw-pg.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-
-const sharedPool = testPgPool();
 
 async function enableMockTimers(
   context: TestContext,
   options: Parameters<TestContext["mock"]["timers"]["enable"]>[0],
 ): Promise<void> {
-  for (const pool of [await sharedPool.pool(), await sharedPool.sessionPool()]) {
-    const idle = await Promise.all(Array.from({ length: pool.idleCount }, () => pool.connect()));
-    for (const client of idle) client.release(true);
-  }
   context.mock.timers.enable(options);
+  connectUnderMockTimers(context);
 }
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {

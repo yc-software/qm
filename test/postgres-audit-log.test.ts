@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";
 
 async function reset(dropOldMap: boolean): Promise<void> {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS audit_log CASCADE");
   if (dropOldMap) await p.query("DROP TABLE IF EXISTS audit_events CASCADE");
-  await p.end();
+  await p.close();
 }
 
 function ev(at: number, action: string, scope = scopeId("personal", "U1")): AuditEvent {
@@ -64,13 +64,12 @@ test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", 
 
 test("pg audit log: migrates rows once from the legacy audit_events JSONB map", { skip }, async () => {
   await reset(true);
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("CREATE TABLE audit_events (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
   const rows: AuditEvent[] = [ev(10, "old-a"), ev(30, "old-c"), ev(20, "old-b")];
   for (const r of rows)
     await p.query("INSERT INTO audit_events (id, json) VALUES ($1,$2)", [`${r.at}-${r.action}`, JSON.stringify(r)]);
-  await p.end();
+  await p.close();
 
   const log = createPostgresAuditLog(URL!);
   const migrated = await log.events();

@@ -1,4 +1,4 @@
-import type { PoolClient } from "pg";
+import type { PgClient } from "../persistence/pg-pool.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
 
@@ -58,7 +58,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
   const { q, pool } = createPgPool(connectionString, [{ id: "decisions/0001", statements: SCHEMA }]);
   const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
   let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
-  const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
+  const write = async (fn: (db: PgClient) => Promise<unknown>) => {
     await withPgTransaction(await pool(), async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
       await fn(db);

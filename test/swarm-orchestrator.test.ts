@@ -16,6 +16,7 @@ import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -193,8 +194,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
 
 test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
   const databaseUrl = testDatabaseUrl();
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = rawPg(databaseUrl);
   const config = testConfig({
     databaseUrl,
     modalSandbox: { tokenId: "test", tokenSecret: "test" },
@@ -411,7 +411,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     try {
       errorsAfterStop = Number((await pool.query("SELECT COUNT(*) AS n FROM error_events")).rows[0].n);
     } finally {
-      await pool.end();
+      await pool.close();
     }
   }
   assert.ok(errorsAfterStop > 0);

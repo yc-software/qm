@@ -1,27 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
-async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
+async function withDatabase(run: (url: string, admin: RawPg) => Promise<void>): Promise<void> {
+  const parent = rawPg(databaseUrl);
   const name = `base_schema_${randomUUID().replaceAll("-", "")}`;
   await parent.query(`CREATE DATABASE ${name}`);
   const url = new URL(databaseUrl!);
   url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const admin = rawPg(url.toString());
   try {
     await run(url.toString(), admin);
   } finally {
-    await admin.end();
+    await admin.close();
     await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
+    await parent.close();
   }
 }
 
@@ -35,7 +35,7 @@ async function migrate(url: string): Promise<void> {
   }
 }
 
-const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
+const present = async (admin: RawPg, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
 
 test("a fresh database gets the base schema without items.target_seq", { skip }, async () => {
   await withDatabase(async (url, admin) => {

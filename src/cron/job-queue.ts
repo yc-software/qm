@@ -1,5 +1,5 @@
 import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, reservePg, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
@@ -35,7 +35,15 @@ export function createPgBossCronQueue(
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");
-        return (await pg.pool()).query(text, values);
+        const client = await reservePg(await pg.pool());
+        try {
+          return await client.query(text, values ?? []);
+        } catch (error) {
+          await client.query("ROLLBACK").catch(swallowAs("cron queue: reset failed statement", undefined));
+          throw error;
+        } finally {
+          client.release();
+        }
       },
     },
   });

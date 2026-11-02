@@ -2,16 +2,16 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDecisionStore } from "../src/decisions/store.ts";
 import type { DecisionRule } from "../src/decisions/decisions.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres decision tests";
 
 beforeEach(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations, decision_rules, decision_providers CASCADE");
-  await p.end();
+  await p.close();
 });
 
 const rule = (id: string, over: Partial<DecisionRule> = {}): DecisionRule => ({

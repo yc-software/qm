@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { reservePg } from "../src/persistence/pg-pool.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -21,11 +22,10 @@ for (const backend of ["memory", "postgres"] as const) {
     },
     async (t) => {
       let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
+      let admin: RawPg | undefined;
       const schema = `retry_${randomUUID().replaceAll("-", "")}`;
       if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
+        admin = rawPg(connectionString);
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
@@ -73,7 +73,7 @@ for (const backend of ["memory", "postgres"] as const) {
           try {
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
-            await admin.end();
+            await admin.close();
           }
         }
       }
@@ -85,11 +85,10 @@ for (const backend of ["memory", "postgres"] as const) {
     { skip: backend === "postgres" && !process.env.DATABASE_URL },
     async (t) => {
       let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
+      let admin: RawPg | undefined;
       const schema = `return_retry_${randomUUID().replaceAll("-", "")}`;
       if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
+        admin = rawPg(connectionString);
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
@@ -143,7 +142,7 @@ for (const backend of ["memory", "postgres"] as const) {
           try {
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
-            await admin.end();
+            await admin.close();
           }
         }
       }
@@ -157,14 +156,13 @@ test(
     skip: !process.env.DATABASE_URL,
   },
   async () => {
-    const pg = (await import("pg")).default;
-    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    const admin = rawPg(process.env.DATABASE_URL);
     const schema = `run_history_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
     const runtime = createPostgresRunStore(url.toString());
-    const pool = new pg.Pool({ connectionString: url.toString() });
+    const pool = rawPg(url.toString());
     try {
       const sessionId = randomUUID();
       const publicRun = (await runtime.runs.enqueue({ sessionId, request })).run;
@@ -174,7 +172,7 @@ test(
       await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = $1", [sessionId]);
       assert.equal((await runtime.runs.latestForThread(sessionId))?.id, privateRun.id);
       assert.equal((await runtime.runs.latestForThread(sessionId, { excludePrivateMessages: true }))?.id, publicRun.id);
-      const client = await pool.connect();
+      const client = await reservePg(await pool.sessionPool());
       try {
         await client.query("SET enable_seqscan = off");
         const { rows } = await client.query(
@@ -194,11 +192,11 @@ test(
       }
     } finally {
       await runtime.close();
-      await pool.end();
+      await pool.close();
       try {
         await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       } finally {
-        await admin.end();
+        await admin.close();
       }
     }
   },

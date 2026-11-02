@@ -5,17 +5,17 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron fire table tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS cron_fires, fire_test_crons, durable_map_versions CASCADE");
-  await p.end();
+  await p.close();
 });
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
@@ -256,8 +256,7 @@ test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and ru
 });
 
 test("pg cron_fires: existing legacy history and later legacy completions remain visible", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const client = new pg.Pool({ connectionString: URL! });
+  const client = rawPg(URL!);
   try {
     await client.query(`CREATE TABLE IF NOT EXISTS cron_fire_log (
       cron_id text NOT NULL, fire_key text NOT NULL, fired_at bigint NOT NULL, json jsonb NOT NULL,
@@ -297,6 +296,6 @@ test("pg cron_fires: existing legacy history and later legacy completions remain
     assert.deepEqual((await fires.listByCron("legacy-c")).runs, [ended, later]);
   } finally {
     await client.query("DROP TABLE IF EXISTS cron_fire_log");
-    await client.end();
+    await client.close();
   }
 });

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const view = () => ({
@@ -16,8 +17,7 @@ const view = () => ({
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres page-view tests";
 
 test("pg page-view log stores one row per view with clipped request fields", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
+  const admin = rawPg(URL);
   try {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
     await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
@@ -76,6 +76,6 @@ test("pg page-view log stores one row per view with clipped request fields", { s
   } finally {
     await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE").catch(() => {});
     await admin.query("DELETE FROM deployments WHERE id = 'dep-1'").catch(() => {});
-    await admin.end();
+    await admin.close();
   }
 });

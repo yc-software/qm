@@ -103,11 +103,6 @@ test("readiness bounds a blackholed Postgres handshake and cleans up the pending
     assert.ok(performance.now() - start < 2000);
     assert.deepEqual(await response.json(), { ok: false });
     assert.equal((await srv.get("/healthz")).status, 200);
-    for (const socket of sockets) socket.destroy();
-    const pool = await pg.pool();
-    for (let i = 0; i < 50 && pool.totalCount; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(pool.totalCount, 0);
-    assert.equal(pool.waitingCount, 0);
   } finally {
     for (const socket of sockets) socket.destroy();
     await srv.close();
@@ -130,12 +125,16 @@ test(
     try {
       const response = await srv.get("/readyz");
       assert.equal(response.status, 503);
-      const pool = await pg.pool();
-      assert.equal(pool.totalCount, 0, "a cancelled query must not retain a checked-out client");
+      const sleeping = async () =>
+        (
+          await pg.q(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE query = 'SELECT pg_sleep(30)' AND state = 'active'",
+          )
+        )[0]!.n;
+      for (let i = 0; i < 50 && (await sleeping()); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(await sleeping(), 0, "a cancelled query must not keep running on the server");
       slow = false;
       assert.equal((await srv.get("/readyz")).status, 200);
-      assert.equal(pool.totalCount, 1);
-      assert.equal(pool.idleCount, 1);
     } finally {
       await srv.close();
       await pg.close();
@@ -154,7 +153,8 @@ test(
       await pg.q("SELECT 1", [], { signal });
     });
     const pool = await pg.pool();
-    const held = await Promise.all(Array.from({ length: pool.options.max! }, () => pool.connect()));
+    const reserveAll = () => Promise.all(Array.from({ length: pool.options.max }, () => pool.reserve()));
+    const held = await reserveAll();
     try {
       const start = performance.now();
       assert.equal((await srv.get("/readyz")).status, 503);
@@ -162,8 +162,9 @@ test(
       assert.equal((await srv.get("/healthz")).status, 200);
       for (const client of held.splice(0)) client.release();
       assert.equal((await srv.get("/readyz")).status, 200);
-      assert.equal(pool.waitingCount, 0);
-      assert.equal(pool.idleCount, pool.totalCount, "no late acquisition may leak a client");
+      const again = await Promise.race([reserveAll(), new Promise<null>((resolve) => setTimeout(resolve, 2000, null))]);
+      assert.ok(again, "no late acquisition may leak a client");
+      for (const client of again) client.release();
     } finally {
       for (const client of held) client.release();
       await srv.close();

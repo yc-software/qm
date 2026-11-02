@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { reservePg } from "../src/persistence/pg-pool.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 test(
@@ -49,8 +51,7 @@ test(
         members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
       });
     } finally {
-      const pool = await factories[0]!.pool.pool();
-      await pool.query(`DROP TABLE IF EXISTS ${table}`);
+      await factories[0]!.pool.query(`DROP TABLE IF EXISTS ${table}`);
       await Promise.all(factories.map((factory) => factory.pool.close()));
     }
   },
@@ -93,10 +94,9 @@ test(
     } finally {
       oldFinish.resolve();
       await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
+      const pool = rawPg(databaseUrl!);
       await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
+      await pool.close();
     }
   },
 );
@@ -109,8 +109,8 @@ test(
     const table = `background_test_${randomUUID().replaceAll("-", "")}`;
     const factory = createPostgresMapFactory(databaseUrl!);
     const store = createBackgroundOwnershipStore(factory.map<BackgroundOwnership>(table));
-    const pool = await factory.pool.pool();
-    const blocker = await pool.connect();
+    const pool = factory.pool;
+    const blocker = await reservePg(await pool.sessionPool());
     let first: Promise<BackgroundOwnership> | undefined;
     const status = (state: BackgroundOwnership) =>
       JSON.stringify({ ...state, protocol: 2, deploymentId: "b", instanceId: "b-1", active: false });

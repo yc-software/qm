@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { readdirSync, renameSync, existsSync, lstatSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createPgPool, reservePg } from "../src/persistence/pg-pool.ts";
 
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
@@ -135,7 +136,7 @@ export async function runMigration({
     ).length > 0;
 
   async function forEachRow(sql, fn) {
-    const client = await pool.connect();
+    const client = await reservePg(await pool.pool());
     try {
       await client.query("BEGIN");
       await client.query(`DECLARE migrate_cur NO SCROLL CURSOR FOR ${sql}`);
@@ -312,13 +313,7 @@ async function main() {
   console.log(`${APPLY ? "APPLY" : "DRY RUN"}: ${n} principal id(s) to re-key`);
   if (FROM_SLACK) console.log(JSON.stringify(mapping, null, 2));
 
-  const pg = await import("pg")
-    .then((m) => m.default)
-    .catch(async () => {
-      const { createRequire } = await import("node:module");
-      return createRequire(join(process.cwd(), "package.json"))("pg");
-    });
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = createPgPool(process.env.DATABASE_URL);
   let problems;
   try {
     ({ problems } = await runMigration({
@@ -330,7 +325,7 @@ async function main() {
       allowLive: ALLOW_LIVE,
     }));
   } finally {
-    await pool.end();
+    await pool.close();
   }
   if (problems.length) process.exitCode = 1;
   console.log(APPLY ? "done" : "dry run complete — re-run with --apply to write");

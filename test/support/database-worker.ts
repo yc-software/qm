@@ -1,20 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { parentPort, workerData, type MessagePort } from "node:worker_threads";
-import pg from "pg";
+import { rawPg } from "./raw-pg.ts";
 
 const { base, signal, port } = workerData as { base: string; signal: Int32Array; port: MessagePort };
 const baseUrl = new URL(base);
 const prefix = baseUrl.pathname.slice(1);
 const prepared = new Map<string, Promise<string>>();
-let client: Promise<pg.Client> | undefined;
-
-function admin(): Promise<pg.Client> {
-  return (client ??= (async () => {
-    const connected = new pg.Client({ connectionString: base });
-    await connected.connect();
-    return connected;
-  })());
-}
+const admin = rawPg(base);
 
 function quoted(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
@@ -22,7 +14,7 @@ function quoted(name: string): string {
 
 async function createDatabase(template: string): Promise<string> {
   const name = `${prefix}_${randomBytes(6).toString("hex")}`;
-  await (await admin()).query(`CREATE DATABASE ${quoted(name)}${template ? ` TEMPLATE ${quoted(template)}` : ""}`);
+  await admin.query(`CREATE DATABASE ${quoted(name)}${template ? ` TEMPLATE ${quoted(template)}` : ""}`);
   return name;
 }
 

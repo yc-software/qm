@@ -14,24 +14,24 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration, reservePg } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { rawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
 
 before(async () => {
   if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = rawPg(URL);
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
     "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_owned_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
-  await p.end();
+  await p.close();
 });
 
 interface Widget {
@@ -552,14 +552,13 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
     assert.ok(select, "the select ran through the pool");
     pg.q = original;
     for (const mode of ["force_custom_plan", "force_generic_plan"]) {
-      const client = await (await pg.pool()).connect();
+      const client = await reservePg(await pg.pool());
       try {
         await client.query(`SET plan_cache_mode = ${mode}`);
         await client.query(`PREPARE scoped_select AS ${select.sql}`);
+        const literal = (v: string) => `'${v.replaceAll("'", "''")}'`;
         const args = select.params.map((value) =>
-          Array.isArray(value)
-            ? `ARRAY[${value.map((v: string) => client.escapeLiteral(v)).join(", ")}]::text[]`
-            : client.escapeLiteral(String(value)),
+          Array.isArray(value) ? `ARRAY[${value.map(literal).join(", ")}]::text[]` : literal(String(value)),
         );
         const [{ "QUERY PLAN": plan }] = (
           await client.query(`EXPLAIN (FORMAT JSON) EXECUTE scoped_select(${args.join(", ")})`)

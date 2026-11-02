@@ -15,31 +15,27 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
+import { rawPg, type RawPg } from "./support/raw-pg.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
 
 async function withSchema(
   prefix: string,
-  fn: (ctx: {
-    raw: import("pg").Pool;
-    url: string;
-    store: ReturnType<typeof createPostgresSessionStore>;
-  }) => Promise<void>,
+  fn: (ctx: { raw: RawPg; url: string; store: ReturnType<typeof createPostgresSessionStore> }) => Promise<void>,
 ): Promise<void> {
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
+  const admin = rawPg(URL);
   const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const raw = rawPg(url.toString());
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
   } finally {
-    await raw.end();
+    await raw.close();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
+    await admin.close();
   }
 }
 

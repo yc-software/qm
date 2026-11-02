@@ -4,13 +4,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
 import { scopeId, type SessionEntry } from "../../src/types.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
+import { rawPg, type RawPg } from "../support/raw-pg.ts";
 
 const DB = process.env.MEMORABLE_E2E_DB_URL;
 const CLI = process.env.MEMORABLE_E2E_BIN;
@@ -44,12 +44,12 @@ describe(
   () => {
     const personal = scopeId("personal", "U1");
     let stub: Awaited<ReturnType<typeof startExtractionStub>> | undefined;
-    let pool: pg.Pool;
+    let pool: RawPg;
     let memory: ReturnType<typeof createConfiguredMemoryService>;
 
     before(async () => {
       stub = REAL ? undefined : await startExtractionStub();
-      pool = new pg.Pool({ connectionString: DB });
+      pool = rawPg(DB);
       await pool.query("DROP TABLE IF EXISTS memorable_procedures, memorable_mode, memorable_stats");
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
@@ -84,7 +84,7 @@ describe(
 
     after(async () => {
       if (stub) await new Promise<void>((r) => stub!.server.close(() => r()));
-      await pool.end();
+      await pool.close();
     });
 
     it("automatic capture records a redacted procedure into the qm backend", { timeout: 120_000 }, async () => {
