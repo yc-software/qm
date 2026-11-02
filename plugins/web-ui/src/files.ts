@@ -1,5 +1,5 @@
 import { previewFile } from "./file-open.ts";
-import { html, nothing, render } from "lit";
+import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
   FileArchive,
@@ -55,6 +55,29 @@ let filesNextCursor: string | null = null;
 let filesHost: HTMLElement | null = null;
 let filesRequestSeq = 0;
 let filesLoadAllQueued = false;
+const FILES_LAYOUT_KEY = "qm.files.layout";
+const MAX_THUMBNAIL_BYTES = 2_000_000;
+type FilesLayout = "list" | "grid";
+let filesLayout: FilesLayout = readFilesLayout();
+
+function readFilesLayout(): FilesLayout {
+  try {
+    return localStorage.getItem(FILES_LAYOUT_KEY) === "grid" ? "grid" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function setFilesLayout(layout: FilesLayout): void {
+  if (filesLayout === layout) return;
+  filesLayout = layout;
+  try {
+    localStorage.setItem(FILES_LAYOUT_KEY, layout);
+  } catch {
+    void 0;
+  }
+  drawFiles();
+}
 
 function fileScope(f: FileItem): string | null {
   return f.createdInScope ?? (f.ownerScopeId?.startsWith("personal:") ? f.ownerScopeId : null) ?? personalScopeId();
@@ -196,6 +219,15 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
+        ${selectControl(
+          "View",
+          filesLayout,
+          [
+            ["list", "List"],
+            ["grid", "Grid"],
+          ],
+          (v) => setFilesLayout(v as FilesLayout),
+        )}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button
@@ -217,7 +249,11 @@ function drawFiles(loading = false): void {
                 (group) =>
                   html`<section class="file-scope-group">
                     <h2>${scopeTitle(group.scope)}</h2>
-                    ${listRowsTpl(group.files.map(fileRow), "file-list")}
+                    ${
+                      filesLayout === "grid"
+                        ? html`<div class="file-grid">${group.files.map(fileCard)}</div>`
+                        : listRowsTpl(group.files.map(fileRow), "file-list")
+                    }
                   </section>`,
               )}
             </div>`
@@ -229,28 +265,59 @@ function drawFiles(loading = false): void {
   );
 }
 
-function fileRow(f: FileRow) {
+function fileMeta(f: FileRow) {
+  return html`<span class="list-row-meta"
+    ><span>${formatBytes(f.sizeBytes)}</span><span>${relTime(f.createdAt)}</span>${
+      f.openable ? nothing : html`<span>Unavailable</span>`
+    }</span
+  >`;
+}
+
+function fileLink(f: FileRow, className: string, content: TemplateResult) {
   const contentUrl = fileContentUrl(f.id, f.name);
-  const visual = fileVisual(f);
-  const content = html`
-    <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 18)}</span>
-    <span class="list-row-title" dir="auto">${f.name}</span>
-    <span class="list-row-meta"
-      ><span>${formatBytes(f.sizeBytes)}</span><span>${relTime(f.createdAt)}</span>${
-        f.openable ? nothing : html`<span>Unavailable</span>`
-      }</span
-    >
-  `;
   return f.openable
     ? html`<a
-        class="list-row file-row"
+        class=${className}
         href=${contentUrl}
         target="_blank"
         rel="noreferrer"
         @click=${(event: MouseEvent) => previewFile(event, f.name, contentUrl, f.mimetype)}
         >${content}</a
       >`
-    : html`<article class="list-row file-row">${content}</article>`;
+    : html`<article class="${className} unavailable">${content}</article>`;
+}
+
+function fileRow(f: FileRow) {
+  const visual = fileVisual(f);
+  return fileLink(
+    f,
+    "list-row file-row",
+    html`
+      <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 18)}</span>
+      <span class="list-row-title" dir="auto">${f.name}</span>
+      ${fileMeta(f)}
+    `,
+  );
+}
+
+function fileCard(f: FileRow) {
+  const visual = fileVisual(f);
+  const thumb =
+    f.openable && visual.kind === "image" && f.sizeBytes <= MAX_THUMBNAIL_BYTES
+      ? html`<img src=${fileContentUrl(f.id, f.name)} alt="" loading="lazy" decoding="async" />`
+      : html`<span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 40)}</span>`;
+  return fileLink(
+    f,
+    "file-card",
+    html`
+      <span class="file-card-thumb ${visual.kind}">${thumb}</span>
+      <span class="file-card-body">
+        <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 14)}</span>
+        <span class="list-row-title" dir="auto" title=${f.name}>${f.name}</span>
+      </span>
+      ${fileMeta(f)}
+    `,
+  );
 }
 
 async function fileSha256(file: globalThis.File): Promise<string> {
