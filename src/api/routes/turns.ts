@@ -122,9 +122,13 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
   return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
 }
 
-function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
+function sanitizedTurnRequest(
+  body: TurnRequest & { slackSource?: unknown; externalSlack?: unknown },
+): { request: TurnRequest } | { error: string } {
   const {
     surfaceOrigin: _surfaceOrigin,
+    slackSource: _slackSource,
+    externalSlack: _externalSlack,
     ownerKeychainUnion: _ownerKeychainUnion,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,

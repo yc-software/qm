@@ -9,7 +9,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import { originAccount } from "../surfaces/origin.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -35,13 +34,22 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   const surface = run.request.surface;
   if (!target || !surface) return null;
   const origin = resolveTurnOrigin(run.request);
+  const surfaceOrigin = run.request.surfaceOrigin;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
     type: surface,
     target,
-    ...(run.request.surfaceOrigin ? { account: originAccount(run.request.surfaceOrigin) } : {}),
+    ...(surfaceOrigin
+      ? {
+          account: {
+            id: surfaceOrigin.author.account,
+            workspace: surfaceOrigin.workspace,
+            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+          },
+        }
+      : {}),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };
