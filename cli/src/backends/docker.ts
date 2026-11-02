@@ -24,7 +24,6 @@ import {
   brandEnvOf,
   orgEnv,
   PUBLIC_PORT,
-  RETIRED_SERVICE_NAMES,
   runnableServices,
   hostedServiceEnv,
   serviceHost,
@@ -59,7 +58,6 @@ const publicHostPort = (ctx: DockerCtx): number => baseHostPort(ctx) + 2;
 const FRONT_DOOR_READY = /public front door on/;
 const publicBindAddress = (config: QmConfig): string =>
   ["localhost", "127.0.0.1", "[::1]"].includes(new URL(config.publicUrl).hostname) ? "127.0.0.1:" : "";
-const RETIRED_CONTAINERS = [...RETIRED_SERVICE_NAMES, "auth"];
 
 interface DockerCtx {
   config: QmConfig;
@@ -647,9 +645,6 @@ export async function dockerUp(
     ctx.databaseUrl = await ensurePostgres(ctx, true);
     step(`network: ${ctx.network}`);
     if (resolvedLocalImage) step(`sandbox: local image ${resolvedLocalImage}`);
-    step(
-      `retired containers: would remove ${RETIRED_CONTAINERS.map((name) => cname(ctx, name)).join(", ")} if present`,
-    );
     for (const def of ordered(runnableServices(config.services))) {
       const ports =
         def.docker.hostPortOffset !== undefined
@@ -691,7 +686,6 @@ export async function dockerUp(
 
   for (const def of ordered(runnableServices(config.services))) {
     const image = resolveImage(ctx, def.name);
-    if (def.name === "core") removeRetiredContainers(ctx);
     docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
     step(`starting ${def.name}`);
     const run = runArgs(ctx, def.name, image);
@@ -744,14 +738,6 @@ export async function dockerUp(
   }
 
   printUrls(ctx);
-}
-
-function removeRetiredContainers(ctx: DockerCtx): void {
-  const present = new Set(listDeploymentContainers(ctx.config.orgId));
-  for (const name of RETIRED_CONTAINERS.map((service) => cname(ctx, service)).filter((n) => present.has(n))) {
-    step(`removing ${name}: core now serves the web UI and sign-in`);
-    docker(["rm", "-f", name], /No such container/);
-  }
 }
 
 function printUrls(ctx: DockerCtx): void {

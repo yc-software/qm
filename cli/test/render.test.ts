@@ -1648,9 +1648,8 @@ test("Render serves the web UI and sign-in from core's public service and wires 
   assert.equal(c.envs.get("srv-acme-minio")!.MINIO_BROWSER, "off");
 });
 
-test("Render deletes the retired web UI and portal once core is healthy, then moves the public domain to core", async (t) => {
+test("Render leaves the old web UI and portal services for the operator to delete and then forgets them", async (t) => {
   const d = deployment(t, true);
-  mkdirSync(d.ctx.sandboxDir);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
   const core = c.services.get("srv-acme-core")!;
@@ -1667,31 +1666,25 @@ test("Render deletes the retired web UI and portal once core is healthy, then mo
     saved.services[name] = { id, name: `acme-${name}`, type: "web_service" };
   }
   writeFileSync(join(d.ctx.configDir, "render.resources.json"), JSON.stringify(saved));
-  d.ctx.config.publicUrl = "https://acme.example";
-  c.intercept = ({ path, method }) =>
-    path === "/services/srv-acme-core/custom-domains" && method === "POST" && c.services.has("srv-acme-portal")
-      ? Response.json({ message: "acme.example is in use by another service" }, { status: 409 })
-      : undefined;
+  d.ctx.config.publicUrl = "https://acme-portal-assigned.onrender.com";
+  const lines: string[] = [];
+  const log = t.mock.method(console, "log", (message: string) => void lines.push(String(message)));
   const mark = c.calls.length;
   await d.backend.up({ dryRun: false });
-  const calls = c.calls.slice(mark);
-  const at = (match: (call: Call) => boolean) => calls.findIndex(match);
-  const deployed = at((call) => call.path === "/services/srv-acme-core/deploys" && call.method === "POST");
-  const healthy = at((call) => call.path === "/healthz");
-  const retired = ["web-ui", "portal"].map((name) =>
-    at((call) => call.path === `/services/srv-acme-${name}` && call.method === "DELETE"),
+  log.mock.restore();
+  assert.equal(
+    c.calls.slice(mark).some((call) => call.method !== "GET" && /srv-acme-(web-ui|portal)/.test(call.path)),
+    false,
   );
-  const bound = at((call) => call.path === "/services/srv-acme-core/custom-domains" && call.method === "POST");
-  assert.ok(deployed >= 0 && deployed < healthy, "core deploys before its readiness probe");
-  for (const index of retired) assert.ok(healthy < index && index < bound, "retired services go after core is healthy");
-  assert.equal(c.services.has("srv-acme-web-ui"), false);
-  assert.equal(c.services.has("srv-acme-portal"), false);
+  assert.ok(
+    lines.some((line) => line.includes("Retained services outside the current config: web-ui, portal")),
+    lines.join("\n"),
+  );
+  assert.equal(d.ctx.config.publicUrl, "https://acme-core-assigned.onrender.com");
+  c.services.delete("srv-acme-web-ui");
+  c.services.delete("srv-acme-portal");
+  await d.backend.up({ dryRun: false });
   assert.deepEqual(Object.keys(d.saved().services).sort(), ["core", "minio"]);
-  assert.deepEqual(
-    c.customDomains.get("srv-acme-core")!.map((domain) => domain.name),
-    ["acme.example", "www.acme.example"],
-  );
-  assert.equal(c.envs.get("srv-acme-core")!.PUBLIC_WEB_URL, "https://acme.example");
 });
 
 test("Render restores remote drift and grows storage without replacing resources", async (t) => {

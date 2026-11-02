@@ -71,19 +71,7 @@ test(
       runCli(["up", "--build-from", checkout], { cwd: dep, env: { CORE_SIGNING_SECRET: undefined } });
 
     try {
-      await t.test("up builds + starts core, the source plugin, and Postgres, replacing retired containers", () => {
-        for (const retired of ["web-ui", "portal", "auth"])
-          execFileSync("docker", [
-            "run",
-            "-d",
-            "--name",
-            `qm-${org}-${retired}`,
-            "--label",
-            `qm.org=${org}`,
-            "alpine:latest",
-            "sleep",
-            "3600",
-          ]);
+      await t.test("up builds + starts core, the source plugin, and Postgres", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
         assert.match(r.out, /stack up/);
@@ -95,8 +83,6 @@ test(
         for (const svc of [...SERVICES, "widget", "pg"]) {
           assert.ok(suffix(names, svc), `expected a running container for ${svc}; got ${names.join(", ")}`);
         }
-        for (const retired of ["web-ui", "portal", "auth"])
-          assert.equal(suffix(names, retired), undefined, `the retired ${retired} container is removed`);
       });
 
       await t.test("local sandbox mode gives only core the host Docker socket", () => {
