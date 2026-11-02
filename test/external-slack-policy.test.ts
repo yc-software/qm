@@ -287,70 +287,64 @@ test("handoff fails closed on revoked identity, wrong workspace, and missing DM"
 });
 
 test("delivery recovery routes private result only through its originating account", async () => {
-  const namespace = externalSlackNamespace("TPARTNER", policy);
-  for (const account of [
-    { account: { id: "partner", policyNamespace: namespace } },
-    { slackAccountId: "partner", slackPolicyNamespace: namespace },
-  ]) {
-    const posts: unknown[] = [];
-    const acks: string[] = [];
-    let pending = true;
-    const client = {
-      conversations: { history: async () => ({ messages: [] }) },
-      chat: {
-        postMessage: async (args: unknown) => {
-          posts.push(args);
-          return { ts: "3" };
-        },
+  const posts: unknown[] = [];
+  const acks: string[] = [];
+  let pending = true;
+  const client = {
+    conversations: { history: async () => ({ messages: [] }) },
+    chat: {
+      postMessage: async (args: unknown) => {
+        posts.push(args);
+        return { ts: "3" };
       },
-    };
-    const core = {
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-      claimDeliveries: async (type: string) => {
-        if (type !== "slack" || !pending) return [];
-        pending = false;
-        return [
-          {
-            id: "delivery",
-            idempotencyKey: "run:dm-run",
-            text: "Synthetic private result",
-            createdAt: Date.now() - 30_000,
-            destination: {
-              type: "slack",
-              target: "DPRIVATE",
-              ...account,
-            },
+    },
+  };
+  const core = {
+    holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
+    claimDeliveries: async (type: string) => {
+      if (type !== "slack" || !pending) return [];
+      pending = false;
+      return [
+        {
+          id: "delivery",
+          idempotencyKey: "run:dm-run",
+          text: "Synthetic private result",
+          createdAt: Date.now() - 30_000,
+          destination: {
+            type: "slack",
+            target: "DPRIVATE",
+            account: { id: "partner", policyNamespace: externalSlackNamespace("TPARTNER", policy) },
           },
-        ];
-      },
-      ackDelivery: async (id: string) => {
-        acks.push(id);
-      },
-    };
-    const poller = createDeliveryPoller({
-      core: core as never,
-      flow: { inFlightRuns: new Set() } as never,
-      threads: { mark: () => {} } as never,
-      clientForIdentity: () => {
-        throw new Error("wrong identity route");
-      },
-      clientForAccount: (id) => {
-        assert.equal(id, "partner");
-        return client;
-      },
-      externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
-    });
-    await poller.pollDeliveries({
-      chat: {
-        postMessage: () => {
-          throw new Error("default account used");
         },
+      ];
+    },
+    ackDelivery: async (id: string) => {
+      acks.push(id);
+    },
+  };
+  const poller = createDeliveryPoller({
+    core: core as never,
+    flow: { inFlightRuns: new Set() } as never,
+    threads: { mark: () => {} } as never,
+    clientForIdentity: () => {
+      throw new Error("wrong identity route");
+    },
+    clientForAccount: (id) => {
+      assert.equal(id, "partner");
+      return client;
+    },
+    externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
+  });
+  await poller.pollDeliveries({
+    chat: {
+      postMessage: () => {
+        throw new Error("default account used");
       },
-    });
-    assert.equal(posts.length, 1);
-    assert.equal((posts[0] as { channel: string }).channel, "DPRIVATE");
-    assert.deepEqual(acks, ["delivery"]);
-  }
+    },
+  });
+  assert.equal(posts.length, 1);
+  assert.equal((posts[0] as { channel: string }).channel, "DPRIVATE");
+  assert.deepEqual(acks, ["delivery"]);
 });
 
 test("external account poller neither claims default identity nor releases pre-policy answers", async () => {

@@ -134,7 +134,7 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { SURFACE_ORIGIN_MIGRATIONS } from "./surfaces/origin-migration.ts";
+import { SURFACE_ORIGIN_MIGRATIONS, rewriteSurfaceOrigins } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -439,6 +439,7 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
+  rewriteSurfaceOrigins: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -2952,6 +2953,7 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
+    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
     sessions,
     runs,
     signals: runSignals,

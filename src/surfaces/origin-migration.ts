@@ -1,3 +1,5 @@
+import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
+
 const DESTINATION_FIELDS: [table: string, field: string][] = [
   ["crons", "destination"],
   ["loops", "destination"],
@@ -140,3 +142,11 @@ export const SURFACE_ORIGIN_MIGRATIONS = [
     ),
   ]),
 ];
+
+export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
+  const pool = await pg.pool();
+  for (const migration of SURFACE_ORIGIN_MIGRATIONS.slice(0, 2))
+    await withPgTransaction(pool, async (client) => {
+      for (const statement of migration.statements) await client.query(statement);
+    });
+}

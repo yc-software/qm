@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SURFACE_ORIGIN_MIGRATIONS } from "../src/surfaces/origin-migration.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { SURFACE_ORIGIN_MIGRATIONS, rewriteSurfaceOrigins } from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -236,3 +237,33 @@ test("stored Slack origins and destination accounts are rewritten once to the ne
     assert.deepEqual(await snapshot(admin), migrated);
   });
 });
+
+test(
+  "old-shape rows written after the boot migration are rewritten when the process takes background ownership",
+  { skip },
+  async () => {
+    await withDatabase(async (url, admin) => {
+      await migrate(url);
+      await admin.query(
+        "INSERT INTO runs (id, session_id, status, request, created_at) VALUES ('late', 'late', 'pending', $1, 1)",
+        [JSON.stringify(request({ slackSource: internalSource }))],
+      );
+      await admin.query(
+        "INSERT INTO deliveries (id, idempotency_key, destination, text, created_at) VALUES ('late', 'late', $1, 'x', 1)",
+        [JSON.stringify(oldDestination)],
+      );
+      const pg = createPgPool(url);
+      try {
+        await rewriteSurfaceOrigins(pg);
+      } finally {
+        await pg.close();
+      }
+      const [run] = (await admin.query("SELECT request FROM runs WHERE id = 'late'")).rows;
+      const stored = JSON.parse(run.request);
+      assert.deepEqual(stored.surfaceOrigin, internalOrigin);
+      assert.equal("slackSource" in stored, false);
+      const [delivery] = (await admin.query("SELECT destination FROM deliveries WHERE id = 'late'")).rows;
+      assert.deepEqual(delivery.destination, newDestination);
+    });
+  },
+);
