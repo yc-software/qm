@@ -288,3 +288,11 @@ END $base_schema$`,
     `DROP FUNCTION IF EXISTS safe_json(text)`,
   ],
 };
+
+export const DROP_ITEMS_TARGET_SEQ: PgMigrationDefinition = {
+  id: "sessions/store/0048-drop-items-target-seq",
+  statements: [
+    `SET LOCAL lock_timeout = '3s'`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_target_seq_kind, DROP COLUMN IF EXISTS target_seq`,
+  ],
+};
