@@ -55,8 +55,9 @@ Deployments created before core served the web UI also have `<app-prefix>-web-ui
 `<app-prefix>-portal` and `<app-prefix>-auth` apps. Remove `"web-ui"` and
 `"portal"` from `services`, move their `env` entries into `env.core`, and change a
 `publicUrl` of `https://<app-prefix>-portal.fly.dev` to
-`https://<app-prefix>-core.fly.dev` (and the redirect URI registered with an
-external OIDC provider to `<publicUrl>/auth/callback`). `qm up` then deploys core
+`https://<app-prefix>-core.fly.dev` (and a `PUBLIC_API_URL` on the old host, then
+run `qm secrets push`; and the redirect URI registered with an external OIDC
+provider to `<publicUrl>/auth/callback`). `qm up` then deploys core
 with the public front door and, once `https://<app-prefix>-core.fly.dev/healthz`
 answers, destroys the three old apps. A custom domain whose certificate is on the
 portal app keeps them running until the certificate moves to the core app; `qm up`

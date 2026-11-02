@@ -876,7 +876,7 @@ function buildCtx(config: QmConfig, configDir: string, opts: Pick<FlyUpOpts, "bu
   if (new URL(config.publicUrl).hostname === `${appPrefix}-portal.fly.dev`) {
     throw new CliError(
       `"publicUrl" ${config.publicUrl} is the retired ${appPrefix}-portal app; core now serves this deployment at https://${appPrefix}-core.fly.dev. ` +
-        `Set "publicUrl" to that, and if sign-in goes through an external OIDC provider, register https://${appPrefix}-core.fly.dev/auth/callback as its redirect URI; then rerun the command.`,
+        `Set "publicUrl" to that, point PUBLIC_API_URL at it too if it names the old host (then \`qm secrets push\`), and if sign-in goes through an external OIDC provider, register https://${appPrefix}-core.fly.dev/auth/callback as its redirect URI; then rerun the command.`,
     );
   }
   if (!config.flyOrg)
