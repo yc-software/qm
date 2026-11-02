@@ -10,6 +10,7 @@ import {
   createS3WebReleaseStore,
   createWebReleaseReader,
   deployBundledRelease,
+  withLocalAssetCache,
   type WebReleases,
   type WebReleaseStore,
 } from "./releases.ts";
@@ -27,25 +28,22 @@ const BUNDLED_WEB_UI = fileURLToPath(new URL("../../plugins/web-ui/dist-web", im
 
 function webReleaseStore(config: Config): WebReleaseStore {
   return config.snapshotStore === "s3" && config.s3Bucket
-    ? createS3WebReleaseStore({
-        bucket: config.s3Bucket,
-        ...(config.s3Endpoint ? { _client: s3Client(config.s3Region, { endpoint: config.s3Endpoint }) } : {}),
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-      })
+    ? withLocalAssetCache(
+        createS3WebReleaseStore({
+          bucket: config.s3Bucket,
+          ...(config.s3Endpoint ? { _client: s3Client(config.s3Region, { endpoint: config.s3Endpoint }) } : {}),
+          ...(config.s3Region ? { region: config.s3Region } : {}),
+          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+        }),
+        join(config.dataDir, "web-ui-assets"),
+      )
     : createLocalWebReleaseStore(join(config.dataDir, "web-ui"));
-}
-
-async function closeServer(server: Server): Promise<void> {
-  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-  server.closeAllConnections();
-  await closed;
 }
 
 export async function startFrontDoor(
   config: Config & { publicPort: number },
   env: NodeJS.ProcessEnv,
-): Promise<{ close(): Promise<void> }> {
+): Promise<{ close(): void; terminate(): void }> {
   const store = webReleaseStore(config);
   let bundled: string | undefined;
   void deployBundledRelease(store, BUNDLED_WEB_UI).then(
@@ -72,12 +70,20 @@ export async function startFrontDoor(
   try {
     await portal.startServer({ port: config.publicPort });
   } catch (error) {
-    await closeServer(webServer);
+    webServer.close();
+    webServer.closeAllConnections();
     throw error;
   }
+  const servers = [portal.server, webServer];
   return {
-    async close() {
-      await Promise.all([closeServer(portal.server), closeServer(webServer)]);
+    close() {
+      for (const server of servers) {
+        server.close();
+        server.closeIdleConnections();
+      }
+    },
+    terminate() {
+      for (const server of servers) server.closeAllConnections();
     },
   };
 }

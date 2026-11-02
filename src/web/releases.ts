@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import type { Readable } from "node:stream";
+import { Readable } from "node:stream";
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 import { errMessage } from "../util/errors.ts";
@@ -92,11 +92,28 @@ export function createLocalWebReleaseStore(dir: string): WebReleaseStore {
     async put(key, body) {
       const path = pathOf(key);
       await mkdir(dirname(path), { recursive: true });
-      const staging = `${path}.${process.pid}.tmp`;
+      const staging = `${path}.${randomUUID()}.tmp`;
       await writeFile(staging, body);
       await rename(staging, path);
     },
     describe: () => `${dir}${sep}`,
+  };
+}
+
+export function withLocalAssetCache(store: WebReleaseStore, dir: string): WebReleaseStore {
+  const local = createLocalWebReleaseStore(dir);
+  return {
+    ...store,
+    async open(key) {
+      if (!key.startsWith("assets/")) return store.open(key);
+      const cached = await local.open(key);
+      if (cached) return cached;
+      const remote = await store.open(key);
+      if (!remote) return null;
+      const body = await readAll(remote);
+      await local.put(key, body);
+      return Readable.from(body);
+    },
   };
 }
 

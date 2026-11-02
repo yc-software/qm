@@ -10,6 +10,7 @@ import {
   deployBundledRelease,
   readLivePointer,
   readWebBundle,
+  withLocalAssetCache,
   type WebReleaseStore,
 } from "../src/web/releases.ts";
 
@@ -128,4 +129,25 @@ test("a core from another deploy line keeps serving its own bundled release", as
   assert.equal(await later.document("index.html"), "<title>hotfix</title>");
   const stale = createWebReleaseReader(store, { bundled: () => oldId });
   assert.equal(await stale.document("index.html"), "<title>old-core</title>");
+});
+
+test("assets are fetched from the release store once, then served from the local cache", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-web-releases-"));
+  const real = createLocalWebReleaseStore(join(root, "store"));
+  await deployBundledRelease(real, bundle(root, "one", "first"));
+  const opened: string[] = [];
+  const counted: WebReleaseStore = {
+    ...real,
+    open: (key) => {
+      opened.push(key);
+      return real.open(key);
+    },
+  };
+  const cached = withLocalAssetCache(counted, join(root, "cache"));
+  for (let i = 0; i < 3; i++) assert.equal(await text((await cached.open("assets/app-one.js"))!), "first");
+  assert.equal(await cached.open("assets/missing.js"), null);
+  assert.deepEqual(opened, ["assets/app-one.js", "assets/missing.js"]);
+  await cached.open("live.json");
+  await cached.open("live.json");
+  assert.equal(opened.filter((key) => key === "live.json").length, 2);
 });

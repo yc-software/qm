@@ -46,18 +46,17 @@ await built.config.hydrate?.();
 await built.refreshCustomProviders();
 await built.identity.refresh();
 await built.deploymentLayerReady;
-built.deploymentLayerRefresh.start();
-built.runtime.start();
-
 await new Promise<void>((resolve) => server.listen(config.port, resolve));
-console.log(
-  `[qm] listening on :${config.port} (org=${config.orgId}, ` +
-    `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
-);
 const frontDoor =
   config.publicPort === undefined
     ? undefined
     : await startFrontDoor({ ...config, publicPort: config.publicPort }, process.env);
+built.deploymentLayerRefresh.start();
+built.runtime.start();
+console.log(
+  `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+    `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+);
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;
@@ -189,7 +188,7 @@ function shutdown(signal: string): void {
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
-  void frontDoor?.close().catch((e: unknown) => console.error("[qm] front door stop failed:", errMessage(e)));
+  frontDoor?.close();
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(
@@ -202,7 +201,10 @@ function shutdown(signal: string): void {
     },
     config.shutdownDrainMs,
     "qm",
-    () => server.closeAllConnections(),
+    () => {
+      server.closeAllConnections();
+      frontDoor?.terminate();
+    },
   );
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
