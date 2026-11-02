@@ -231,7 +231,7 @@ test("configs written for the separate web-ui and portal services are refused wi
   withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /Remove "web-ui", "portal" from "services"/),
   );
-  for (const field of ["env", "secretEnv", "vms", "imageOverrides"]) {
+  for (const field of ["env", "secretEnv"]) {
     withConfig({ [field]: { portal: {} } }, ({ path }) =>
       assert.throws(
         () => loadConfigAt(path),
@@ -239,6 +239,14 @@ test("configs written for the separate web-ui and portal services are refused wi
       ),
     );
   }
+  for (const field of ["vms", "imageOverrides"]) {
+    withConfig({ [field]: { "web-ui": {} } }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`Delete ${field}\\.web-ui\\.`)),
+    );
+  }
+  withConfig({ target: "aws", aws: { services: { core: {}, portal: {} } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /Delete aws\.services\.portal\./),
+  );
   withConfig(
     { env: { core: { OIDC_ALLOWED_EMAIL_DOMAIN: "acme.example", PORTAL_EXPECTED_TEAM_ID: "T1" } } },
     ({ path }) => assert.equal(loadConfigAt(path).config.env.core?.OIDC_ALLOWED_EMAIL_DOMAIN, "acme.example"),
@@ -409,7 +417,7 @@ test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
   );
 });
 
-test("AWS config rejects public surfaces without the HTTPS portal and real harnesses over HTTP", () => {
+test("AWS config rejects unsafe sign-in settings and real harnesses over HTTP", () => {
   const service = (name: string) => ({
     ecrRepository: `qm-${name}`,
     ecsService: `acme-${name}`,
@@ -428,34 +436,13 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
   });
   const cases: Array<{ label: string; config: Record<string, unknown>; error: RegExp }> = [
     {
-      label: "web-ui without portal",
+      label: "a placeholder Slack team gate",
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui"],
-        aws: aws(["core", "web-ui"]),
-      },
-      error: /web-ui requires the authenticated portal/,
-    },
-    {
-      label: "portal over HTTP",
-      config: {
-        target: "aws",
-        publicUrl: "http://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
-        env: { core: {} },
-        aws: aws(["core", "web-ui", "portal"]),
-      },
-      error: /portal requires an HTTPS publicUrl/,
-    },
-    {
-      label: "portal without a tenant gate",
-      config: {
-        target: "aws",
-        publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
-        env: { core: {}, portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
-        aws: aws(["core", "web-ui", "portal"]),
+        services: ["core"],
+        env: { core: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
+        aws: aws(["core"]),
       },
       error: /PORTAL_EXPECTED_TEAM_ID/,
     },
@@ -464,16 +451,15 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
+        services: ["core"],
         env: {
-          core: {},
-          portal: {
+          core: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(["core"]),
       },
       error: /OIDC_JWKS_URI/,
     },
@@ -482,17 +468,16 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
-        services: ["core", "web-ui", "portal"],
+        services: ["core"],
         env: {
-          core: {},
-          portal: {
+          core: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
             OIDC_JWKS_URI: "http://auth.example.com/jwks.json",
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(["core"]),
       },
       error: /non-placeholder HTTPS URL/,
     },
@@ -582,38 +567,38 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
+      services: ["core"],
       env: {
-        portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
+        core: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
       },
-      aws: aws(["core", "web-ui", "portal"]),
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.services.includes("portal"), true);
+      assert.equal(loadConfigAt(path).config.env.core?.PORTAL_EXPECTED_TEAM_ID, "T123");
     },
   );
   withConfig(
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
-      env: { portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      services: ["core"],
+      env: { core: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.env.portal?.OIDC_ALLOWED_EMAILS, "admin@example.com");
+      assert.equal(loadConfigAt(path).config.env.core?.OIDC_ALLOWED_EMAILS, "admin@example.com");
     },
   );
   withConfig(
     {
       target: "aws",
       publicUrl: "https://agent.acme.example",
-      services: ["core", "web-ui", "portal"],
-      env: { portal: { OIDC_PRINCIPAL_CLAIM: "email" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      services: ["core"],
+      env: { core: { OIDC_PRINCIPAL_CLAIM: "email" } },
+      aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.env.portal?.OIDC_CLIENT_ID, undefined);
+      assert.equal(loadConfigAt(path).config.env.core?.OIDC_CLIENT_ID, undefined);
     },
   );
 });

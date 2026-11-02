@@ -253,7 +253,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "aws");
     assert.equal(config.publicUrl, "https://acme.example.com");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
+    assert.deepEqual(config.services, ["core", "slack", "auth"]);
     assert.equal(config.env.core?.AWS_DEPLOY_IMAGE, "acme-qm-sandbox");
     assert.equal(config.env.core?.AWS_PUBLIC_ORIGIN_URL, "http://replace-with-alb-hostname");
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");
@@ -266,7 +266,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core"]);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }
