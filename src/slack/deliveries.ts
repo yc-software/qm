@@ -201,9 +201,9 @@ export function createDeliveryPoller(deps: {
     };
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
-    if (deps.clientForAccount)
-      return deps.clientForAccount(destination.account?.id ?? "default", destination.account?.workspace);
-    return destination.account ? undefined : defaultClient;
+    const account = destinationAccount(destination);
+    if (deps.clientForAccount) return deps.clientForAccount(account?.id ?? "default", account?.workspace);
+    return account ? undefined : defaultClient;
   }
 
   async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
@@ -214,11 +214,12 @@ export function createDeliveryPoller(deps: {
         if (!destinationClient) return;
         const client = destinationClient;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
-        const namespace = deps.externalNamespace?.(d.destination.account?.id ?? "default");
+        const account = destinationAccount(d.destination);
+        const namespace = deps.externalNamespace?.(account?.id ?? "default");
         if (
           namespace &&
           (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
-            ? runId && d.destination.account?.policyNamespace !== namespace
+            ? runId && account?.policyNamespace !== namespace
             : !d.provenance?.sourceThreadRef.startsWith(`${namespace}:`))
         ) {
           await ackDelivery(d.id);
@@ -525,4 +526,18 @@ export function createDeliveryPoller(deps: {
   }
 
   return { pollDeliveries };
+}
+
+// The previous release keeps enqueueing `slackAccountId`/`slackTeamId`/`slackPolicyNamespace`
+// destinations during a blue-green overlap, after the surfaces/0001 migration has run.
+// Remove together with the follow-up sweep migration, once no deployed release writes them.
+function destinationAccount(destination: Delivery["destination"]): Delivery["destination"]["account"] {
+  if (destination.account) return destination.account;
+  const legacy = destination as { slackAccountId?: string; slackTeamId?: string; slackPolicyNamespace?: string };
+  if (!legacy.slackAccountId && !legacy.slackTeamId) return undefined;
+  return {
+    id: legacy.slackAccountId || "default",
+    ...(legacy.slackTeamId ? { workspace: legacy.slackTeamId } : {}),
+    ...(legacy.slackPolicyNamespace ? { policyNamespace: legacy.slackPolicyNamespace } : {}),
+  };
 }
