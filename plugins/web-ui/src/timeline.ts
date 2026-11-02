@@ -57,7 +57,7 @@ export type TimelineItem =
 export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
   const segments: TimelineItem[][] = [[]];
   for (const item of items) {
-    if (item.kind === "steer") segments.push([item], []);
+    if (item.kind === "steer" || item.kind === "text") segments.push([item], []);
     else segments.at(-1)!.push(item);
   }
   return segments;

@@ -163,3 +163,74 @@ test("a step-less live turn draws one Thinking line that redraws of earlier work
     await h.close();
   }
 });
+
+test("text the agent says mid-turn stays visible between work folds while the live fold is closed", async () => {
+  const startedAt = Date.now() - 12_000;
+  const activity: unknown[] = [
+    {
+      seq: 2,
+      parentSeq: null,
+      type: "tool_call",
+      createdAt: startedAt,
+      payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md" },
+    },
+    {
+      seq: 3,
+      parentSeq: null,
+      type: "tool_result",
+      createdAt: startedAt + 1000,
+      payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md", bytes: 10 },
+    },
+    {
+      seq: 4,
+      parentSeq: null,
+      type: "text",
+      createdAt: startedAt + 1500,
+      payload: { text: "Understood, fanning out.", phase: "commentary" },
+    },
+    {
+      seq: 5,
+      parentSeq: null,
+      type: "tool_call",
+      createdAt: startedAt + 2000,
+      payload: { tool: "execute", callId: "c2", command: "npm test", purpose: "Run the test suite" },
+    },
+  ];
+  const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity, result: null });
+  const h = await harness({
+    path: `/s/${SESSION.id}`,
+    listSessions: [SESSION],
+    entries: [{ seq: 1, type: "user", createdAt: startedAt - 1000, payload: { text: "find bugs" } }],
+    api: (path) => {
+      if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
+      if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
+      if (path === "/api/runs/r1") return Response.json(run());
+      return undefined;
+    },
+  });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const folds = () => [...document.querySelectorAll<HTMLDetailsElement>("details.work")];
+    await until(() =>
+      folds().some((fold) => /Run the test suite/.test(fold.querySelector("summary")?.textContent ?? "")),
+    );
+    const said = [...document.querySelectorAll<HTMLElement>(".streaming-text")].find((el) =>
+      /Understood, fanning out\./.test(
+        el.querySelector<HTMLElement & { content: string }>("qm-markdown")?.content ?? "",
+      ),
+    );
+    assert.ok(said, "the mid-turn text is drawn");
+    assert.equal(said.closest("details"), null, "the mid-turn text sits outside every fold");
+    const live = folds().at(-1)!;
+    assert.equal(live.open, false, "the live fold stays closed");
+    assert.equal(live.querySelector("qm-markdown, .work-message"), null, "the live fold does not repeat the text");
+    assert.ok(
+      said.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the text sits above the step that came after it",
+    );
+  } finally {
+    await h.close();
+  }
+});
