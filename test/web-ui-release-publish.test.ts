@@ -104,7 +104,7 @@ async function waitFor(what: string, check: () => boolean | Promise<boolean>, ms
   assert.fail(`timed out after ${ms} ms waiting for ${what}:\n${log}`);
 }
 
-test("a running core serves each published web UI release without restarting", async () => {
+test("a running core serves each published web UI release without restarting", async (t) => {
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL is required");
   const [apiPort, publicPort] = [await freePort(), await freePort()];
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -147,6 +147,7 @@ test("a running core serves each published web UI release without restarting", a
   assert.notEqual(idB, idA);
   const tookB = await waitFor("release B", async () => (await page()).includes("release-bravo"), 10_000);
   assert.ok(tookB <= 10_000);
+  t.diagnostic(`release B served ${tookB} ms after qm ui publish returned`);
 
   const oldAsset = await fetch(`http://127.0.0.1:${publicPort}/${a.asset}`);
   assert.equal(oldAsset.status, 200);

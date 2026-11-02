@@ -1,0 +1,104 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Readable } from "node:stream";
+import {
+  createLocalWebReleaseStore,
+  createWebReleaseReader,
+  deployBundledRelease,
+  readLivePointer,
+  readWebBundle,
+  type WebReleaseStore,
+} from "../src/web/releases.ts";
+
+function bundle(root: string, name: string, marker: string): string {
+  const dir = join(root, name);
+  mkdirSync(join(dir, "assets"), { recursive: true });
+  writeFileSync(join(dir, "index.html"), `<title>${marker}</title>`);
+  writeFileSync(join(dir, "brand-mark.svg"), `<svg>${marker}</svg>`);
+  writeFileSync(join(dir, "assets", `app-${name}.js`), marker);
+  writeFileSync(join(dir, "assets", `app-${name}.js.gz`), `gz:${marker}`);
+  return dir;
+}
+
+async function text(stream: Readable): Promise<string> {
+  let out = "";
+  for await (const chunk of stream) out += String(chunk);
+  return out;
+}
+
+test("each deploy makes its bundled release live once, and restarts keep a later publish", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-web-releases-"));
+  const store = createLocalWebReleaseStore(join(root, "store"));
+  const one = bundle(root, "one", "first");
+  const two = bundle(root, "two", "second");
+  const idOne = (await readWebBundle(one)).id;
+  const idTwo = (await readWebBundle(two)).id;
+
+  assert.deepEqual(await deployBundledRelease(store, one), { id: idOne, uploaded: true, live: idOne });
+  assert.deepEqual(await readLivePointer(store), { release: idOne, deployed: idOne });
+
+  await deployBundledRelease(store, two);
+  await store.put("live.json", Buffer.from(JSON.stringify({ release: idTwo, deployed: idOne })));
+  assert.deepEqual(await deployBundledRelease(store, one), { id: idOne, uploaded: false, live: idTwo });
+  assert.deepEqual(await readLivePointer(store), { release: idTwo, deployed: idOne });
+
+  assert.deepEqual(await deployBundledRelease(store, two), { id: idTwo, uploaded: false, live: idTwo });
+  assert.deepEqual(await readLivePointer(store), { release: idTwo, deployed: idTwo });
+});
+
+test("the reader switches releases within one pointer refresh and keeps old assets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-web-releases-"));
+  const store = createLocalWebReleaseStore(join(root, "store"));
+  const one = bundle(root, "one", "first");
+  const two = bundle(root, "two", "second");
+  const idTwo = (await readWebBundle(two)).id;
+  await deployBundledRelease(store, one);
+  await deployBundledRelease(store, two);
+  await store.put("live.json", Buffer.from(JSON.stringify({ release: (await readWebBundle(one)).id, deployed: "" })));
+
+  let now = 0;
+  const reader = createWebReleaseReader(store, { pointerTtlMs: 2_000, now: () => now });
+  assert.equal(await reader.document("index.html"), "<title>first</title>");
+  await store.put("live.json", Buffer.from(JSON.stringify({ release: idTwo, deployed: "" })));
+  now = 1_999;
+  assert.equal(await reader.document("index.html"), "<title>first</title>");
+  now = 2_000;
+  assert.equal(await reader.document("index.html"), "<title>second</title>");
+
+  const brand = await reader.file("brand-mark.svg", false);
+  assert.equal(await text(brand!.body), "<svg>second</svg>");
+  const oldAsset = await reader.file("assets/app-one.js", true);
+  assert.equal(oldAsset!.gzip, true);
+  assert.equal(await text(oldAsset!.body), "gz:first");
+  const plain = await reader.file("assets/app-one.js", false);
+  assert.equal(await text(plain!.body), "first");
+  assert.equal(await reader.file("assets/missing.js", true), null);
+});
+
+test("a failed pointer refresh keeps serving the last release and reports why", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qm-web-releases-"));
+  const real = createLocalWebReleaseStore(join(root, "store"));
+  await deployBundledRelease(real, bundle(root, "one", "first"));
+  let broken = false;
+  const store: WebReleaseStore = {
+    ...real,
+    open: (key) => (broken && key === "live.json" ? Promise.reject(new Error("AccessDenied (403)")) : real.open(key)),
+  };
+  const lines: string[] = [];
+  let now = 0;
+  const reader = createWebReleaseReader(store, { now: () => now, log: (line) => lines.push(line) });
+  assert.equal(await reader.document("index.html"), "<title>first</title>");
+  broken = true;
+  now = 10_000;
+  assert.equal(await reader.document("index.html"), "<title>first</title>");
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /still serving [0-9a-f]{64}: AccessDenied \(403\)/);
+
+  const cold = createWebReleaseReader(store, { log: () => assert.fail("a cold reader has nothing to keep serving") });
+  await assert.rejects(cold.document("index.html"), /AccessDenied \(403\)/);
+  const empty = createWebReleaseReader(createLocalWebReleaseStore(join(root, "empty")));
+  await assert.rejects(empty.document("index.html"), /no web UI release is live in .*empty/);
+});

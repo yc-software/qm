@@ -39,6 +39,7 @@ docker run -d --name "$container" --network "$network" -p 127.0.0.1::8000 \
   -e CONNECTOR_SECRET_KEY="$(secret)" \
   -e CORE_SIGNING_SECRET="$(secret)" \
   -e CAPABILITY_SECRET="$(secret)" \
+  -e SKILL_SIGNING_SECRET="$(secret)" \
   -e PORTAL_IDENTITY_SECRET="$(secret)" \
   -e PORTAL_SESSION_SECRET="$(secret)" \
   -e AUTH_EMBEDDED=1 \
@@ -77,7 +78,7 @@ for _ in {1..90}; do
     docker exec "$container" node -e "fetch('http://127.0.0.1:8099/.well-known/jwks.json').then(async r=>{const j=await r.json();process.exit(r.ok&&j.keys?.length===1?0:1)}).catch(()=>process.exit(1))"
     status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/idp/.well-known/jwks.json")"
     [[ "$status" != 200 ]]
-    status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")"
+    status="$(curl -s -o /dev/null -w '%{http_code}' -H 'accept: text/html' "http://127.0.0.1:$port/")"
     [[ "$status" == 302 ]] || { echo "the front door answered / with HTTP $status instead of a sign-in redirect" >&2; exit 1; }
     echo "ok: core image serves the front door, embedded sign-in broker, and its web UI release $release"
     exit 0

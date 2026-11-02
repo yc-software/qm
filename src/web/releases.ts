@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
@@ -69,7 +69,12 @@ export function createS3WebReleaseStore(options: {
 }
 
 export function createLocalWebReleaseStore(dir: string): WebReleaseStore {
-  const pathOf = (key: string): string => join(dir, ...key.split("/"));
+  const base = resolve(dir);
+  const pathOf = (key: string): string => {
+    const path = resolve(base, ...key.split("/"));
+    if (!path.startsWith(base + sep)) throw new Error(`${key} is outside the web UI release store ${base}`);
+    return path;
+  };
   return {
     async open(key) {
       const stream = createReadStream(pathOf(key));
