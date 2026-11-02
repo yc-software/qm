@@ -20,6 +20,7 @@ const newerRun = (extra = "") =>
 export const SURFACE_ORIGIN_MIGRATION = {
   id: "surfaces/0001-neutral-origin-and-account",
   statements: [
+    `SET LOCAL lock_timeout = '3s'`,
     `CREATE FUNCTION pg_temp.qm_surface_account(d jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $f$
       SELECT CASE
         WHEN jsonb_typeof(d) IS DISTINCT FROM 'object' OR NOT d ?| ${OLD_DESTINATION_KEYS} THEN d
@@ -63,17 +64,15 @@ export const SURFACE_ORIGIN_MIGRATION = {
         END IF;
         RETURN out;
       END $f$`,
-    `CREATE FUNCTION pg_temp.qm_surface_request_text(t text) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $f$
-      DECLARE
-        parsed jsonb;
+    `CREATE FUNCTION pg_temp.qm_jsonb_or_null(t text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
       BEGIN
-        BEGIN
-          parsed := t::jsonb;
-        EXCEPTION WHEN others THEN
-          RETURN t;
-        END;
-        RETURN pg_temp.qm_surface_request(parsed)::text;
+        RETURN t::jsonb;
+      EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+        RETURN NULL;
       END $f$`,
+    `CREATE FUNCTION pg_temp.qm_surface_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+      SELECT COALESCE(pg_temp.qm_surface_request(pg_temp.qm_jsonb_or_null(t))::text, t)
+    $f$`,
     ifTable(
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
@@ -82,7 +81,7 @@ export const SURFACE_ORIGIN_MIGRATION = {
            OR r.request LIKE '%"externalSlack"%'
            OR r.finished_at >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint - ${RECENTLY_FINISHED_MS}
            OR ${newerRun()}
-           OR ${newerRun(` AND n.request !~ '(^|[^\\\\])"privateSessionMessage":\\s*true'`)})`,
+           OR ${newerRun(` AND COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true'`)})`,
     ),
     ifTable(
       "sessions",
@@ -113,6 +112,7 @@ export const SURFACE_ORIGIN_MIGRATION = {
       ),
     ),
     "DROP FUNCTION pg_temp.qm_surface_request_text(text)",
+    "DROP FUNCTION pg_temp.qm_jsonb_or_null(text)",
     "DROP FUNCTION pg_temp.qm_surface_request(jsonb)",
     "DROP FUNCTION pg_temp.qm_surface_account(jsonb)",
   ],
