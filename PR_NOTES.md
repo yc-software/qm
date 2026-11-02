@@ -124,22 +124,22 @@ No other model-, user- or UI-visible string changed.
 **Setup:**
 
 - `bash scripts/dev-instance.sh up --surface both --sandbox e2b`, slot pool2, bot `@rbot2`.
-- Sandbox backend: real E2B, with the key read from Labs SSM `/work-claw/prod/E2B_API_KEY`.
+- Sandbox backend: real E2B, with its key read from the org secret store.
 - Postgres: native PostgreSQL 16 (`DATABASE_URL` in the worktree `.env`).
-- Slack: the dev workspace through the `slack-dev-pool` credential.
+- Slack: the dev workspace through a dev Slack app pool.
 - Model: Claude subscription token.
 - Slack messages were sent as the dev workspace user through the Slack Web API, using that user's saved browser session.
 
 **Two key failures before the turns ran:**
 
-- Regan's `anthropic` keychain key returned `401 invalid x-api-key` on the first DM turn.
-- Labs SSM `/work-claw/labs/ANTHROPIC_API_KEY` also returned 401 when called directly.
+- The first Anthropic API key tried returned `401 invalid x-api-key` on the first DM turn.
+- A second Anthropic key from the org secret store also returned 401 when called directly.
 - Effect: the first two DM attempts failed with "I hit an error". The instance was then restarted on the Claude subscription token.
 
 **Results on this branch:**
 
 1. **DM turn:** "what is the capital of France?" → "The capital of France is Paris."
-2. **Channel @-mention** in fresh channel `#qa-ws8-pr4-1102` → threaded reply "Hey <@U06QWCEQFCH>, this is your ping — QA ws8-pr4 confirmed.", with a real `<@U…>` mention.
+2. **Channel @-mention** in fresh channel `#qa-ws8-pr4-1102` → threaded reply "Hey <@U…>, this is your ping — QA ws8-pr4 confirmed." (the requester's real member id), with a real `<@U…>` mention.
 3. **Ambient, unprompted reply:**
    - A standing order set by mention ("answer quick arithmetic questions even if not mentioned") was stored through the `guidance` tool.
    - The unmentioned question "what is 48 divided by 6?" was judged `act` and answered "8" in thread.
