@@ -75,61 +75,87 @@ Preserve local Terraform and tfvars customizations, then replace
 
 A stack created before core served the web UI and sign-in itself runs separate
 `web-ui` and `portal` ECS services, with portal behind the ALB's `/*` rule.
-Terraform drains a service before it deletes that service's listener rule, so a
-plain apply leaves the public URL without a healthy target for minutes. Move
-the public URL to core without that gap:
+`qm up` deploys only once the ALB already sends `/*` to core, and Terraform
+drains a service before it deletes that service's listener rule. Move the
+public URL to core once, by hand, without a gap:
 
-1. Remove `"web-ui"` and `"portal"` from `services` and `aws.services`, move
-   their `env` and `secretEnv` settings into `core`, and run
-   `npm exec qm -- infra render`.
-2. Run `npm exec qm -- secrets push` and `npm exec qm -- up --yes`. Core now
-   also serves the front door on port 8000 while portal keeps answering the
-   public URL.
-3. Record portal's listener rule ARN and target group ARNs with
-   `terraform -chdir=infra state show` for the addresses below, then remove
-   portal's serving resources from Terraform state so the next apply leaves
-   portal running:
+1. Install the current CLI. Remove `"web-ui"` and `"portal"` from `services`
+   and `aws.services`, move their `env` and `secretEnv` settings into `core`,
+   and run `npm exec qm -- infra render`.
+2. Run `npm exec qm -- secrets push`. It restarts core on its current image
+   with the new configuration while portal keeps answering the public URL.
+3. Build core's new image and apply its migrations:
+
+   ```bash
+   npm exec qm -- up --build-only --image-label <label> --candidate-out candidate.json
+   npm exec qm -- migrate --candidate candidate.json --yes
+   ```
+
+4. Register core's task definition for that image and roll core onto it:
+
+   ```bash
+   node --input-type=module -e '
+   import { readFileSync, writeFileSync } from "node:fs";
+   import { loadConfigAt, renderTaskDefinition } from "@yc-software/qm/contract";
+   const { config } = loadConfigAt("qm.config.jsonc");
+   const { images } = JSON.parse(readFileSync("candidate.json", "utf8"));
+   writeFileSync("core-task.json", JSON.stringify(renderTaskDefinition(config, "core", images.core)));
+   '
+   aws --profile <profile> --region <region> ecs register-task-definition \
+     --cli-input-json file://core-task.json \
+     --tags key=ManagedBy,value=qm-cli key=Deployment,value=<orgId> \
+     --query taskDefinition.taskDefinitionArn --output text
+   aws --profile <profile> --region <region> ecs update-service \
+     --cluster <cluster> --service <core-ecs-service> --task-definition <task-definition-arn>
+   aws --profile <profile> --region <region> ecs wait services-stable \
+     --cluster <cluster> --services <core-ecs-service>
+   ```
+
+5. Record the ARNs of portal's listener rule and both portal target groups with
+   `terraform -chdir=infra state show`, then remove the retired services from
+   Terraform state so the next apply leaves them running:
 
    ```bash
    terraform -chdir=infra state rm \
-     'aws_ecs_service.service["portal"]' \
+     'aws_ecs_service.service["portal"]' 'aws_ecs_service.service["web-ui"]' \
      'aws_lb_listener_rule.production["portal"]' \
-     'aws_lb_target_group.service["portal"]' \
-     'aws_lb_target_group.alternate["portal"]' \
-     'aws_cloudwatch_log_group.service["portal"]' \
-     'aws_ecr_repository.service["portal"]'
+     'aws_lb_target_group.service["portal"]' 'aws_lb_target_group.alternate["portal"]' \
+     'aws_cloudwatch_log_group.service["portal"]' 'aws_cloudwatch_log_group.service["web-ui"]' \
+     'aws_ecr_repository.service["portal"]' 'aws_ecr_repository.service["web-ui"]'
    ```
 
-4. Delete the web-ui image repository, which Terraform cannot remove while it
-   holds images, then apply the full plan. It attaches core to its front-door
-   target group and removes the `web-ui` service. Wait until
-   `npm exec qm -- status` reports core stable:
+6. Apply the full plan. It attaches core to its front-door target group behind
+   the lowest-precedence `/*` rule. Wait until core is stable again:
 
    ```bash
-   aws --profile <profile> --region <region> ecr delete-repository --force \
-     --repository-name <web-ui-ecr-repository>
    terraform -chdir=infra plan -out=qm.tfplan
    terraform -chdir=infra apply qm.tfplan
+   aws --profile <profile> --region <region> ecs wait services-stable \
+     --cluster <cluster> --services <core-ecs-service>
    ```
 
-5. Delete portal's listener rule. The public URL falls through to core's `/*`
-   rule at once. Then delete the rest of portal:
+7. Delete portal's listener rule. The public URL falls through to core's `/*`
+   rule at once. Then delete the retired services and their resources:
 
    ```bash
    aws --profile <profile> --region <region> elbv2 delete-rule --rule-arn <portal-rule-arn>
    aws --profile <profile> --region <region> ecs delete-service --force \
      --cluster <cluster> --service <portal-ecs-service>
+   aws --profile <profile> --region <region> ecs delete-service --force \
+     --cluster <cluster> --service <web-ui-ecs-service>
    aws --profile <profile> --region <region> ecs wait services-inactive \
-     --cluster <cluster> --services <portal-ecs-service>
+     --cluster <cluster> --services <portal-ecs-service> <web-ui-ecs-service>
    aws --profile <profile> --region <region> elbv2 delete-target-group --target-group-arn <portal-target-group-arn>
    aws --profile <profile> --region <region> elbv2 delete-target-group --target-group-arn <portal-alternate-target-group-arn>
    aws --profile <profile> --region <region> logs delete-log-group --log-group-name /ecs/<portal-ecs-service>
-   aws --profile <profile> --region <region> ecr delete-repository --force \
-     --repository-name <portal-ecr-repository>
+   aws --profile <profile> --region <region> logs delete-log-group --log-group-name /ecs/<web-ui-ecs-service>
+   aws --profile <profile> --region <region> ecr delete-repository --force --repository-name <portal-ecr-repository>
+   aws --profile <profile> --region <region> ecr delete-repository --force --repository-name <web-ui-ecr-repository>
    ```
 
-6. Confirm `terraform -chdir=infra plan` reports no changes, then run
-   `npm exec qm -- doctor` and `npm exec qm -- check --live`.
+8. Confirm `terraform -chdir=infra plan` reports no changes, then run
+   `npm exec qm -- up --candidate candidate.json --yes` and
+   `npm exec qm -- check --live`. Deploy with `qm up` from then on.
 
 ## Agent-computer proof
 
