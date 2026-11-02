@@ -97,17 +97,18 @@ is retried. The first deployment builds MinIO from the selected QM source.
 To upgrade a deployment that has separate `web-ui` and `portal` services, once:
 
 1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`.
-2. If `publicUrl` is a custom domain, remove it from the portal service in the
-   Render dashboard (Settings, Custom Domains). The site is down from here
-   until step 4 finishes.
-3. Run `qm up`. Core takes over `publicUrl`; an assigned `onrender.com` URL in
-   the config changes to core's. `qm up` lists `web-ui` and `portal` as
-   retained services.
-4. For a custom domain, point its DNS record at the host `qm up` prints and
-   wait for Render to verify it.
-5. Delete the `web-ui` and `portal` services in the Render dashboard. The next
-   `qm up` drops them from `render.resources.json`.
-6. Run `qm slack render` and update OAuth redirect URLs if `publicUrl` changed.
+2. Run `qm up`. Core takes over `publicUrl`; an assigned `onrender.com` URL in
+   the config changes to core's. For a custom domain, `qm up` adds it to core
+   and prints the DNS record. If Render reports that the portal still holds the
+   domain, remove it from the portal service in the Render dashboard (Settings,
+   Custom Domains) and run `qm up` again; the site is down until the next step
+   finishes.
+3. For a custom domain, point its DNS record at core's host and wait until
+   `qm check --live` passes.
+4. Delete the `web-ui` and `portal` services in the Render dashboard. Until
+   then `qm up` lists them as retained services; afterwards it drops them from
+   `render.resources.json`.
+5. Run `qm slack render` and update OAuth redirect URLs if `publicUrl` changed.
 
 A rollback to a release from before the upgrade fails because those services
 are gone. Web UI changes ship with `qm up`, which rebuilds core;

@@ -59,6 +59,15 @@ const FRONT_DOOR_READY = /public front door on/;
 const publicBindAddress = (config: QmConfig): string =>
   ["localhost", "127.0.0.1", "[::1]"].includes(new URL(config.publicUrl).hostname) ? "127.0.0.1:" : "";
 
+function requireFrontDoorPort(config: QmConfig): void {
+  const url = new URL(config.publicUrl);
+  const port = dockerBasePort(config) + 2;
+  if (publicBindAddress(config) && Number(url.port || 80) !== port)
+    throw new CliError(
+      `publicUrl ${url.origin} must use port ${port}, where qm up publishes core's front door (QM_BASE_PORT or basePort + 2)`,
+    );
+}
+
 interface DockerCtx {
   config: QmConfig;
   configDir: string;
@@ -605,6 +614,7 @@ function missingRequiredOperatorSecrets(config: QmConfig, values: ReadonlyMap<st
 
 export async function dockerDoctor(config: QmConfig, configDir: string, envFile?: string): Promise<void> {
   const values = localDoctorSecrets(configDir, envFile);
+  requireFrontDoorPort(config);
   const missing = missingRequiredOperatorSecrets(config, values);
   if (missing.length) throw new CliError(`required secrets are missing or placeholders: ${missing.join(", ")}`);
   step("required operator secret values: ok");
@@ -616,6 +626,7 @@ export async function dockerUp(
   configDir: string,
   opts: { sandboxDir?: string; buildFrom?: boolean; buildFromPath?: string; envFile?: string; dryRun?: boolean } = {},
 ): Promise<void> {
+  requireFrontDoorPort(config);
   if (!opts.dryRun) requireDocker();
   const resolvedLocalImage = localSandboxActive(config) ? localSandboxImage(config) : undefined;
   const ctx = buildCtx(config, configDir, {

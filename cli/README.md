@@ -52,9 +52,10 @@ accepts plain HTTP only when `publicUrl` is a loopback address.
 To upgrade a deployment that ran separate `web-ui`, `portal` or `auth`
 containers, once:
 
-1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`, keep
-   or add `"auth"`, set `env.auth.AUTH_EMAIL_TRANSPORT` to `"resend"` or
-   `"smtp"`, and add `"secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`.
+1. In `qm.config.jsonc`, remove `"web-ui"` and `"portal"` from `services`, set
+   `publicUrl` to `http://localhost:8082` (base port + 2), keep or add
+   `"auth"`, set `env.auth.AUTH_EMAIL_TRANSPORT` to `"resend"` or `"smtp"`, and
+   add `"secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`.
 2. Run `qm setup`. It asks for `ADMIN_GRANTS` and generates the sign-in secrets.
 3. Run `qm down`. It removes every container of the deployment, including the
    old ones, and keeps the database and data volumes.

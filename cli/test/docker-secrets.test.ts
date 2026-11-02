@@ -80,7 +80,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       JSON.stringify({
         contract: 1,
         orgId: "sekrit",
-        publicUrl: "http://localhost:8080",
+        publicUrl: "http://localhost:8082",
         target: "docker",
         services: ["core", "slack"],
         plugins: [
@@ -262,7 +262,7 @@ test(
         JSON.stringify({
           contract: 1,
           orgId: "sekritpg",
-          publicUrl: "http://localhost:8080",
+          publicUrl: "http://localhost:8082",
           target: "docker",
           services: ["core"],
         }),
@@ -326,7 +326,7 @@ test(
         JSON.stringify({
           contract: 1,
           orgId: "sekritgate",
-          publicUrl: "http://localhost:8080",
+          publicUrl: "http://localhost:8082",
           target: "docker",
           services: ["core", "slack"],
         }),
@@ -375,7 +375,7 @@ test(
         JSON.stringify({
           contract: 1,
           orgId: "sekritnl",
-          publicUrl: "http://localhost:8080",
+          publicUrl: "http://localhost:8082",
           target: "docker",
           services: ["core"],
         }),

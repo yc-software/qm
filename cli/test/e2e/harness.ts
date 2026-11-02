@@ -74,7 +74,7 @@ export function writeConfig(
 ): string {
   const full = {
     contract: 1,
-    publicUrl: "http://localhost:8080",
+    publicUrl: `http://localhost:${(config.basePort ?? 8080) + 2}`,
     plugins: [],
     skills: [],
     env: {},

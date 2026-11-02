@@ -12,6 +12,9 @@ services:
     cpuCores: 1
     ramMegabytes: 2048
     port: 8000
-    healthCheck:
+    livenessCheck:
       enabled: true
       httpPath: /healthz
+    readinessCheck:
+      enabled: true
+      httpPath: /readyz
