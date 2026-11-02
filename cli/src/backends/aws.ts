@@ -429,6 +429,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     }
   }
   if (service === "core") {
+    env.PUBLIC_PORT = String(PUBLIC_PORT);
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
     if (config.services.includes("auth"))
       Object.assign(

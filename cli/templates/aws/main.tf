@@ -126,7 +126,7 @@ resource "aws_security_group" "services" {
   name   = "${var.cluster_name}-services"
   vpc_id = local.vpc_id
   dynamic "ingress" {
-    for_each = toset([for route in values(local.ingress) : tostring(route.port)])
+    for_each = toset(concat([for route in values(local.ingress) : tostring(route.port)], [tostring(var.services["core"].internal_port)]))
     content {
       from_port       = tonumber(ingress.value)
       to_port         = tonumber(ingress.value)
