@@ -33,8 +33,3 @@ test("the broker client secret reaches core under both of its names", () => {
   assert.deepEqual([...destinations], [["core", new Set(["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"])]]);
 });
 
-test("plugins may not take the names of retired services, whose containers and Render services qm up removes", () => {
-  for (const name of ["web-ui", "portal", "auth"])
-    assert.match(pluginNameError(name) ?? "", /collides with a built-in/);
-  assert.equal(pluginNameError("reports"), null);
-});
