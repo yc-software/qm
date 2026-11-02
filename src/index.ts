@@ -55,7 +55,9 @@ console.log(
     `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
 );
 const frontDoor =
-  config.publicPort === undefined ? undefined : await startFrontDoor({ ...config, publicPort: config.publicPort });
+  config.publicPort === undefined
+    ? undefined
+    : await startFrontDoor({ ...config, publicPort: config.publicPort }, process.env);
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;

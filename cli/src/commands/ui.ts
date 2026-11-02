@@ -24,7 +24,7 @@ interface LivePointer {
 const RELEASE_ID = /^[0-9a-f]{64}$/;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
-export function webReleaseStore(config: QmConfig): ReleaseStore {
+function webReleaseStore(config: QmConfig): ReleaseStore {
   const core = config.env.core ?? {};
   const prefix = core.S3_PREFIX?.trim() ?? "";
   if (config.target === "aws" && config.aws) {
@@ -95,7 +95,7 @@ function bundleFiles(dir: string, rel = ""): string[] {
   });
 }
 
-export function webBundleId(dir: string): { id: string; files: string[] } {
+function webBundleId(dir: string): { id: string; files: string[] } {
   let files: string[];
   try {
     files = bundleFiles(dir).sort();

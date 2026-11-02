@@ -192,7 +192,7 @@ export async function deployBundledRelease(
   return { id: bundle.id, uploaded, live: bundle.id };
 }
 
-export interface WebReleaseFile {
+interface WebReleaseFile {
   body: Readable;
   gzip: boolean;
 }

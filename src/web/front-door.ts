@@ -25,7 +25,7 @@ interface PortalSurface {
 
 const BUNDLED_WEB_UI = fileURLToPath(new URL("../../plugins/web-ui/dist-web", import.meta.url));
 
-export function webReleaseStore(config: Config): WebReleaseStore {
+function webReleaseStore(config: Config): WebReleaseStore {
   return config.snapshotStore === "s3" && config.s3Bucket
     ? createS3WebReleaseStore({
         bucket: config.s3Bucket,
@@ -44,7 +44,7 @@ async function closeServer(server: Server): Promise<void> {
 
 export async function startFrontDoor(
   config: Config & { publicPort: number },
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ close(): Promise<void> }> {
   const store = webReleaseStore(config);
   void deployBundledRelease(store, BUNDLED_WEB_UI).then(
