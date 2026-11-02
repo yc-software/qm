@@ -1,6 +1,6 @@
-// The reference Fly deployment that signs people in with qm's own broker: the
-// portal still speaks plain OIDC, but the identity provider is the "auth" service
-// qm deploys, and the CLI generates its keys and the portal's client credentials.
+// The reference Fly deployment that signs people in with qm's own broker: core's
+// sign-in front door still speaks plain OIDC, but the identity provider is the
+// "auth" broker core hosts, and the CLI generates its keys and client credentials.
 // deploy/stacks/acme is the same stack wired to an external identity provider.
 {
   "contract": 1,
@@ -14,7 +14,7 @@
   "sandbox": {
     "app": "acme-sandboxes",
   },
-  "services": ["core", "slack", "web-ui", "portal", "auth"],
+  "services": ["core", "slack", "auth"],
   "env": {
     "core": {
       "PI_DETECT_MODEL": "claude-opus-4-8",

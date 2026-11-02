@@ -58,11 +58,11 @@ test("required fields: orgId, target, services (must include core), valid servic
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );
-  withConfig({ services: ["web-ui"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /must include "core"/));
+  withConfig({ services: ["slack"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /must include "core"/));
   withConfig({ services: ["core", "nope"] }, ({ path }) => assert.throws(() => loadConfigAt(path), /unknown service/));
-  withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) => {
+  withConfig({ services: ["core", "slack", "egress-proxy"] }, ({ path }) => {
     const { config } = loadConfigAt(path);
-    assert.deepEqual(config.services, ["core", "web-ui", "portal"]);
+    assert.deepEqual(config.services, ["core", "slack", "egress-proxy"]);
   });
   withConfig({ unknownField: "bad" }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /unknown top-level field "unknownField"/),
@@ -220,10 +220,58 @@ test("custom portal issuers require an HTTPS JWKS URI on Fly", () => {
   withConfig(
     {
       target: "fly",
-      services: ["core", "portal"],
-      env: { portal: { OIDC_ISSUER: "https://auth.example.com" } },
+      services: ["core"],
+      env: { core: { OIDC_ISSUER: "https://auth.example.com" } },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /OIDC_JWKS_URI/),
+    ({ path }) => assert.throws(() => loadConfigAt(path), /env\.core\.OIDC_JWKS_URI/),
+  );
+});
+
+test("configs written for the separate web-ui and portal services are refused with a migration path", () => {
+  withConfig({ services: ["core", "web-ui", "portal"] }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /Remove "web-ui", "portal" from "services"/),
+  );
+  for (const field of ["env", "secretEnv", "vms", "imageOverrides"]) {
+    withConfig({ [field]: { portal: {} } }, ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        new RegExp(`Move the settings in ${field}\\.portal into the matching "core" entry`),
+      ),
+    );
+  }
+  withConfig(
+    { env: { core: { OIDC_ALLOWED_EMAIL_DOMAIN: "acme.example", PORTAL_EXPECTED_TEAM_ID: "T1" } } },
+    ({ path }) => assert.equal(loadConfigAt(path).config.env.core?.OIDC_ALLOWED_EMAIL_DOMAIN, "acme.example"),
+  );
+});
+
+test("core's front door port is managed, and core-hosted services may not disagree with core's env", () => {
+  for (const [field, value] of [
+    ["env", "9000"],
+    ["secretEnv", "SOME_SECRET"],
+  ] as const) {
+    for (const service of ["core", "auth", "slack"]) {
+      for (const name of ["PORT", "PUBLIC_PORT"]) {
+        withConfig(
+          {
+            services: ["core", "auth", "slack"],
+            env: { auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "acme.example" } },
+            [field]: { [service]: { [name]: value } },
+          },
+          ({ path }) =>
+            assert.throws(
+              () => loadConfigAt(path),
+              new RegExp(`"${field}\\.${service}\\.${name}" is managed by the deployment target`),
+            ),
+        );
+      }
+    }
+  }
+  withConfig({ services: ["core", "slack"], env: { core: { SHARED: "a" }, slack: { SHARED: "b" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /env\.slack\.SHARED and env\.core\.SHARED set different values/),
+  );
+  withConfig({ services: ["core", "slack"], env: { core: { SHARED: "a" }, slack: { SHARED: "a" } } }, ({ path }) =>
+    assert.equal(loadConfigAt(path).config.env.slack?.SHARED, "a"),
   );
 });
 

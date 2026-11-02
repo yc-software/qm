@@ -10,7 +10,7 @@ import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
 import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
-import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
+import { isReservedContainerName, isVirtualService, SERVICE_NAMES, serviceDef, serviceHost } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const brokerStack = join(repoRoot, "deploy", "stacks", "broker", "qm.config.jsonc");
@@ -35,23 +35,15 @@ function configText(over: { services?: string; env?: string } = {}): string {
   }`;
 }
 
-test("the auth service is a first-class, privately addressed service with its own ports", () => {
-  assert.ok(SERVICE_NAMES.includes("auth"));
+test("the auth broker is hosted inside core, never deployed as a service of its own", () => {
+  assert.ok(!SERVICE_NAMES.includes("auth" as never));
+  assert.ok(isVirtualService("auth"));
+  assert.equal(serviceHost("auth"), "core");
   assert.ok(isReservedContainerName("auth"), "a third-party plugin may not shadow the broker");
-  const def = serviceDef("auth");
-  assert.equal(def.docker.internalPort, 8080);
-  assert.equal(def.docker.hostPortOffset, undefined, "docker must not publish the broker on a host port");
   const offsets = SERVICE_NAMES.map((name) => serviceDef(name).docker.hostPortOffset);
   assert.equal(new Set(offsets).size, offsets.length, "host port offsets stay unique");
   const slots = SERVICE_NAMES.map((name) => serviceDef(name).dev?.portSlotOffset);
   assert.equal(new Set(slots).size, slots.length, "dev port slots stay unique");
-  assert.ok(def.order < serviceDef("portal").order, "the broker comes up before the portal that publishes it");
-  assert.deepEqual(
-    def.fly?.deployFlags,
-    ["--ha=false", "--flycast", "--no-public-ips"],
-    "the broker never gets a public IP",
-  );
-  assert.equal(def.fly?.flycast, true);
 });
 
 test("fly derives the portal's whole OIDC block from the broker, over the private network", () => {
@@ -156,17 +148,17 @@ test("docker local wires the host daemon coordinates only into core", () => {
   assert.equal(dockerServiceEnv(local, "egress-proxy").DOCKER_HOST, undefined);
 });
 
-test("the broker's generated secrets reach both sides under the right names", () => {
+test("the broker's generated secrets reach core under the names both the broker and the sign-in client read", () => {
   const config = brokerConfig();
   const secrets = computedSecrets(config);
   const clientSecret = secrets.find((secret) => secret.name === "AUTH_CLIENT_SECRET")!;
   assert.deepEqual(runtimeSecretNames("auth", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("core", clientSecret), ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"]);
   assert.ok(clientSecret.generate, "the CLI mints it rather than asking the operator");
 
   const jwk = secrets.find((secret) => secret.name === "AUTH_SIGNING_JWK")!;
   assert.deepEqual(runtimeSecretNames("auth", jwk), ["AUTH_SIGNING_JWK"]);
-  assert.deepEqual(runtimeSecretNames("portal", jwk), ["AUTH_SIGNING_JWK"]);
+  assert.deepEqual(runtimeSecretNames("core", jwk), ["AUTH_SIGNING_JWK"]);
   assert.match(jwk.generate ?? "", /P-256/);
 
   const names = new Set(secrets.map((secret) => secret.name));
@@ -185,26 +177,24 @@ test("the broker's generated secrets reach both sides under the right names", ()
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
 });
 
-test("without a configured domain the allowlist becomes a required secret on both services", () => {
+test("without a configured domain the allowlist becomes a required secret under both the broker's and the sign-in client's names", () => {
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
   const allowed = computedSecrets(config).find((secret) => secret.name === "AUTH_ALLOWED_EMAILS")!;
   assert.ok(allowed.required);
   assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
   const resend = computedSecrets(config).find((secret) => secret.name === "RESEND_API_KEY")!;
   assert.equal(resend.required, false, "the unselected transport's key stays optional");
-  assert.deepEqual(runtimeSecretNames("auth", resend), []);
-  assert.deepEqual(runtimeSecretNames("core", resend), ["RESEND_API_KEY"], "core alone keeps it for invitations");
+  assert.deepEqual(resend.services, ["core"], "only core's invitation mail claims it, not the broker's transport");
+  assert.deepEqual(runtimeSecretNames("core", resend), ["RESEND_API_KEY"]);
 });
 
-test("the config refuses a broker without a portal, a bad transport, and hand-set derived env", () => {
+test("the config refuses a bad transport and hand-set derived env", () => {
   const refuses = (body: string, pattern: RegExp): void => {
     assert.throws(() => configWith(body), pattern);
   };
-  refuses(configText({ services: '["core", "auth"]' }), /"auth" sign-in broker requires "portal"/);
   refuses(
     configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "sendmail" } }` }),
     /AUTH_EMAIL_TRANSPORT must be "resend" or "smtp"/,
@@ -216,9 +206,9 @@ test("the config refuses a broker without a portal, a bad transport, and hand-se
   );
   refuses(
     configText({
-      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" }, "portal": { "OIDC_ISSUER": "https://evil.test" } }`,
+      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" }, "core": { "OIDC_ISSUER": "https://evil.test" } }`,
     }),
-    /env\.portal\.OIDC_ISSUER is derived from the built-in auth broker/,
+    /env\.core\.OIDC_ISSUER is derived from the built-in auth broker/,
   );
   refuses(
     configText({
@@ -228,7 +218,7 @@ test("the config refuses a broker without a portal, a bad transport, and hand-se
   );
   refuses(
     configText({
-      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" }, "portal": { "PORTAL_EXPECTED_TEAM_ID": "T1" } }`,
+      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" }, "core": { "PORTAL_EXPECTED_TEAM_ID": "T1" } }`,
     }),
     /PORTAL_EXPECTED_TEAM_ID belongs to Slack sign-in/,
   );
