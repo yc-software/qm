@@ -335,7 +335,7 @@ test("fly up destroys the retired web-ui, portal and auth apps once core's publi
 });
 
 test("fly up keeps the retired apps while the portal app still holds a custom-domain certificate", async () => {
-  const { calls, warnings } = await upWithFoldedApps([{ Hostname: "agent.example.com" }]);
+  const { calls, warnings } = await upWithFoldedApps([{ hostname: "agent.example.com", status: "Ready" }]);
   assert.doesNotMatch(calls, /apps destroy/);
   assert.match(warnings, /acme-portal still holds the certificate for agent\.example\.com/);
   assert.match(warnings, /fly certs add <hostname> -a acme-core/);

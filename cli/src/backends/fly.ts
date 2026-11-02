@@ -783,8 +783,8 @@ function certificateHostnames(app: string): string[] {
     throw new CliError(`fly certs list returned invalid JSON for ${app}: ${raw}`);
   }
   if (!Array.isArray(parsed)) throw new CliError(`fly certs list returned a non-array for ${app}: ${raw}`);
-  return parsed.flatMap((entry: { Hostname?: unknown } | null) =>
-    typeof entry?.Hostname === "string" && entry.Hostname ? [entry.Hostname] : [],
+  return parsed.flatMap((entry: { hostname?: unknown } | null) =>
+    typeof entry?.hostname === "string" && entry.hostname ? [entry.hostname] : [],
   );
 }
 
@@ -799,8 +799,8 @@ async function retireFoldedApps(ctx: FlyCtx, timing: ReturnType<typeof createTim
   if (hostnames.length) {
     warn(
       `${portal} still holds the certificate for ${hostnames.join(", ")}, so ${apps.join(", ")} keep running. ` +
-        `For each hostname: \`fly certs remove <hostname> -a ${portal}\`, \`fly certs add <hostname> -a ${core}\`, ` +
-        `point its DNS at the addresses \`fly ips list -a ${core}\` shows, then rerun \`qm up\` to remove the old apps.`,
+        `For each hostname: \`fly certs add <hostname> -a ${core}\`, point its DNS at the addresses \`fly ips list -a ${core}\` shows, ` +
+        `then \`fly certs remove <hostname> -a ${portal}\`; rerun \`qm up\` to remove the old apps.`,
     );
     return;
   }
