@@ -1,0 +1,24 @@
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+
+export function imageCountSince(session: AgentSession, from: number): number {
+  return session.agent.state.messages
+    .slice(from)
+    .flatMap((m) => ((m as { content?: unknown }).content as Array<{ type?: string }> | undefined) ?? [])
+    .filter((block) => block?.type === "image").length;
+}
+
+export function replaceImagesSince(session: AgentSession, from: number): void {
+  const state = session.agent.state;
+  state.messages = state.messages.map((m, i) => {
+    const content = (m as { content?: unknown }).content;
+    if (i < from || !Array.isArray(content)) return m;
+    return {
+      ...m,
+      content: content.map((block: { type?: string }) =>
+        block?.type === "image"
+          ? { type: "text", text: "[image removed: the model provider rejected a request that carried it]" }
+          : block,
+      ),
+    } as typeof m;
+  });
+}

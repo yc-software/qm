@@ -28,6 +28,7 @@ import {
   type ToolDefinition,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { imageCountSince, replaceImagesSince } from "./turn-images.ts";
 import {
   type Api,
   type AssistantMessage,
@@ -546,29 +547,6 @@ function documentsDroppedNote(documents: readonly DocumentInput[]): string {
 
 const ATTACHMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes (documents say how to read them from saved files). Continue with the request, and tell the person if an image they asked about couldn't be read.";
-
-function imageCountSince(session: AgentSession, from: number): number {
-  return session.agent.state.messages
-    .slice(from)
-    .flatMap((m) => ((m as { content?: unknown }).content as Array<{ type?: string }> | undefined) ?? [])
-    .filter((block) => block?.type === "image").length;
-}
-
-function replaceImagesSince(session: AgentSession, from: number): void {
-  const state = session.agent.state;
-  state.messages = state.messages.map((m, i) => {
-    const content = (m as { content?: unknown }).content;
-    if (i < from || !Array.isArray(content)) return m;
-    return {
-      ...m,
-      content: content.map((block: { type?: string }) =>
-        block?.type === "image"
-          ? { type: "text", text: "[image removed: the model provider rejected a request that carried it]" }
-          : block,
-      ),
-    } as typeof m;
-  });
-}
 
 function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;

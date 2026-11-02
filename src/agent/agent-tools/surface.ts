@@ -39,8 +39,8 @@ export function surfaceTool(kit: ToolKit) {
             "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
             "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
             "OWN message), read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster), read_file (open a file posted in this " +
-            "conversation — text comes back as text, images as an image you can see).",
+            "changed), search (find messages), read_members (the roster), read_file (see an image posted on any message in this " +
+            "conversation; other files come back as a pointer for your computer).",
         },
       ),
       text: Type.Optional(
@@ -416,13 +416,12 @@ export function surfaceTool(kit: ToolKit) {
             ...(typeof params.name === "string" && params.name.trim() ? { name: params.name.trim() } : {}),
             ...(params.index !== undefined ? { index: params.index } : {}),
           };
-          const picked = Object.keys(pick).length > 0;
           await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref, ...pick });
-          const r = picked ? await tc.readFile(params.ref, pick) : await tc.readFile(params.ref);
+          const r = await tc.readFile(params.ref, pick);
           if (!r.ok)
             return recordResult(
               callId,
-              { tool: surfaceName, action: "read_file", ok: false },
+              { tool: surfaceName, action: "read_file", ok: false, ...(r.message ? { error: r.message } : {}) },
               text(`[couldn't read that file] ${r.message ?? "unavailable"}`),
               true,
             );
@@ -445,16 +444,17 @@ export function surfaceTool(kit: ToolKit) {
               "surface file",
             );
           }
-          if (r.content !== undefined) {
-            return recordExternalResult(callId, summary, text(r.content), "surface file");
-          }
           const kind = r.contentType ?? "binary";
           const size = r.sizeBytes !== undefined ? ` (${r.sizeBytes} bytes)` : "";
           return recordResult(
             callId,
-            { ...summary, binary: true, ...(r.contentType ? { contentType: r.contentType } : {}) },
+            {
+              ...summary,
+              notShown: r.message ?? "not an image",
+              ...(r.contentType ? { contentType: r.contentType } : {}),
+            },
             text(
-              `[${r.name ?? "file"}${size} — ${kind}; ${r.message ?? "not text"}. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with the same ts and name or index, and follow the returned download note.]`,
+              `[${r.name ?? "file"}${size} — ${kind}; ${r.message ?? "not an image"}. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with the same ts and name or index, and follow the returned download note.]`,
             ),
           );
         }

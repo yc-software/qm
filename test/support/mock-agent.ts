@@ -865,8 +865,6 @@ export function createMockAgent(): Agent {
           reply = `[couldn't read file] ${r.message ?? "unavailable"}`;
         } else if (r.image) {
           reply = `file-image: ${r.name ?? "?"} ${r.image.mimeType} ${r.image.data.length}`;
-        } else if (r.content !== undefined) {
-          reply = `file: ${r.content}`;
         } else {
           reply = `file-pointer: ${r.sizeBytes ?? 0}B ${r.contentType ?? "binary"}`;
         }

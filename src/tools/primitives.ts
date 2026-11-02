@@ -431,7 +431,6 @@ interface SurfaceMembersResult {
 
 interface SurfaceFileResult {
   ok: boolean;
-  content?: string;
   name?: string;
   sizeBytes?: number;
   contentType?: string;

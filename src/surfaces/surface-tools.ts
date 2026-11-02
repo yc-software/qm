@@ -40,13 +40,12 @@ import { isoFromTs } from "../util/message-tag.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { MAX_VISION_IMAGE_BYTES, visionImage } from "../core/attachments.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import { replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
-const SURFACE_FILE_MAX_CHARS = 100_000;
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -494,22 +493,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           contentType: image.mimeType,
           image: { data: image.data, mimeType: image.mimeType },
         };
-      const declared = result.file.mimetype ?? "application/octet-stream";
-      if (image.reason !== "not an image" || declared.startsWith("image/"))
-        return {
-          ok: true,
-          ...meta,
-          contentType: declared,
-          message:
-            image.reason === "too large"
-              ? `image can't be shown inline (over ${MAX_VISION_IMAGE_BYTES} bytes after downscaling)`
-              : `can't be shown inline: ${image.reason}`,
-        };
-      if (!headLooksLikeText(bytes.subarray(0, 8000))) return { ok: true, ...meta, contentType: declared };
-      const decoded = bytes.toString("utf8");
-      const content =
-        decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
-      return { ok: true, content, ...meta };
+      return {
+        ok: true,
+        ...meta,
+        contentType: result.file.mimetype ?? "application/octet-stream",
+        message:
+          image.reason === "too large"
+            ? `an image over ${MAX_VISION_IMAGE_BYTES} bytes after downscaling, so it can't be shown inline`
+            : image.reason,
+      };
     },
     getStandingOrder: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
