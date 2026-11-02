@@ -141,6 +141,7 @@ export function turnToolOptions(opts: ToolPlumbing, turn?: AgentTurnInput): Agen
           surfaceTools: turn.surfaceTools,
           delegateWork: turn.delegateWork,
           surfaceName: turn.surfaceName,
+          ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
           ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
         }
       : { surfaceTools: true, surfaceName: "slack" }),

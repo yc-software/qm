@@ -24,8 +24,25 @@ interface OutboundMessage {
   provenance: DeliveryProvenance;
 }
 
+interface SurfaceCapabilities {
+  mirrored: boolean;
+  liveReplies: boolean;
+  nativeActor: boolean;
+  externalParticipants: boolean;
+}
+
+export interface SurfacePromptHints {
+  mentionSyntax: string;
+  linkSyntax: string;
+  autonomousStyle: string;
+  conversationStyle: string;
+}
+
 export interface Surface<Native = unknown> {
   readonly kind: string;
+  readonly label: string;
+  readonly capabilities: SurfaceCapabilities;
+  readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;

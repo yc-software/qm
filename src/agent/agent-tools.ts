@@ -22,6 +22,7 @@ import { goalTools } from "./agent-tools/goal.ts";
 import { pageClientTools } from "./agent-tools/client.ts";
 import { mcpTools } from "./agent-tools/mcp.ts";
 import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan } from "./agent-tools/wrappers.ts";
+import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 
 export interface ToolContextRef {
   documents?: DocumentInput[];
@@ -93,12 +94,13 @@ export interface AgentToolsOptions {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
+  "readOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {

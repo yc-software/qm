@@ -17,6 +17,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testSurfaces } from "./support/single-process.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {
@@ -74,6 +75,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
   const calls = { provision: 0, read: 0, put: 0, grant: 0 };
   const tools = createSurfaceToolDeps({
     deps: {
+      surfaces: testSurfaces(),
       deliveries: {},
       sandbox: {
         async readFileBytes() {
@@ -111,7 +113,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
 test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
   const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const tools = createSurfaceToolDeps({
-    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    deps: { surfaces: testSurfaces(), deliveries: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
     actor: { id: "U1" },
     conversation: { kind: "channel", channelRef: "C1" },
@@ -186,6 +188,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
   const enqueued: unknown[] = [];
   const tools = createSurfaceToolDeps({
     deps: {
+      surfaces: testSurfaces(),
       deliveries: {
         async enqueue(input: unknown) {
           enqueued.push(input);

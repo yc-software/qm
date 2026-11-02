@@ -99,10 +99,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
+  const destinationSurface = deps.surfaces.get(currentDestination.type)?.capabilities;
   const rateLimitRecipient =
     input.origin?.kind === "human" &&
     !isSessionTurn(input) &&
-    currentDestination.type === "slack" &&
+    destinationSurface?.nativeActor &&
     currentDestination.target
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
@@ -194,7 +195,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     coverageChecked = true;
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
     if (!deps.surfaceCache || !container) return coverageSince;
-    const cacheContainer = currentDestination.type === "slack" ? container.split(":")[0]! : container;
+    const cacheContainer = destinationSurface?.mirrored ? container.split(":")[0]! : container;
     const st = await deps.surfaceCache
       .containerState(cacheContainer)
       .catch(swallowAs("surface cache: container coverage", null));
@@ -410,7 +411,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         });
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
-      if (deps.surfaceCache && dest.type === "slack" && container) {
+      if (deps.surfaceCache && destinationSurface?.mirrored && container) {
         const channel = container.split(":")[0]!;
         const hits = await deps.surfaceCache.search(q, { container: channel, limit });
         return withCoverage({

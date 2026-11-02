@@ -19,6 +19,7 @@ import type { GrindMeter } from "./goal.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "../model/model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
+import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
 
 export interface RuntimeChoice {
@@ -86,6 +87,7 @@ export interface AgentTurnInput {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
   pollFire?: boolean;
   turnWallClockMs?: number;
