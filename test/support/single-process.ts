@@ -3,6 +3,9 @@ import { createNoopLeaderLease } from "../../src/persistence/leader-lease.ts";
 import { createMemoryBlobTransferStore } from "../../src/persistence/blob-transfer.ts";
 import type { CommandApprovalGrant, PendingApprovalRecord } from "../../src/types.ts";
 import { testMap } from "./test-database.ts";
+import { createDeliveryStore } from "../../src/delivery/delivery-store.ts";
+import { createSurfaceRegistry } from "../../src/surfaces/registry.ts";
+import { createSlackSurface } from "../../src/surfaces/slack/adapter.ts";
 
 export const singleProcessDeps = () => ({
   advisoryLock: createNoopAdvisoryLock(),
@@ -10,4 +13,5 @@ export const singleProcessDeps = () => ({
   approvals: testMap<PendingApprovalRecord>(),
   approvalGrants: testMap<CommandApprovalGrant>(),
   blobTransfer: createMemoryBlobTransferStore(),
+  surfaces: createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries: createDeliveryStore() })] }),
 });

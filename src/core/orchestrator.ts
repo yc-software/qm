@@ -695,10 +695,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         reason: "project membership changed; retry from the current project",
       });
       if (!(await managedRosterIsCurrent())) return rosterChanged();
+      const surface = input.surface ? deps.surfaces.get(input.surface) : undefined;
       if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
         const externalAllowed =
           external ||
-          (input.surface === "slack" &&
+          (surface?.capabilities.externalParticipants &&
             (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
         if (!externalAllowed) {
           return {
@@ -1051,8 +1052,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const isWeb = input.surface === "web";
-      const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
+      const surfaceHints = surface?.promptHints();
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
@@ -1068,12 +1069,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const frameVars: PromptVars = {
         botName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
+        surfaceLabel: isWeb ? `the ${botName} web app` : (deps.surfaces.get(surfaceTool)?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
         web: isWeb,
-        slack: isSlack,
+        surfaceStyle: surfaceHints?.[modeName === "mode-conversation" ? "conversationStyle" : "autonomousStyle"] ?? "",
       };
       if (modeName === "mode-conversation") {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
@@ -1081,6 +1082,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const surfaceName =
         input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
+      const toolSurface = deps.surfaces.get(surfaceName);
       const sessionSyscalls =
         !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
           ? deps.sessionSyscalls
@@ -1098,7 +1100,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botHandle,
         orgName,
         web: isWeb,
-        slack: isSlack,
+        surfaceLinks: surfaceHints?.linkSyntax ?? "",
         sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
       });
       let systemPrompt = `${modeFrame}\n\n${resolution.systemPrompt}\n\n${sharedCore}`;
@@ -1960,7 +1962,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
       if (!ambientTurn) assignSessionTitle();
-      const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
+      const trackRevisions = Boolean(surface?.capabilities.mirrored && deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
       const catchUpMessageRevisions = async (): Promise<void> => {
         if (!trackRevisions || !deps.surfaceCache) return;
@@ -2381,7 +2383,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (ambientTurn) assignSessionTitle();
 
         if (input.runId) {
-          if ((input.surface === "slack" || input.surface === "monitor") && input.runLeaseToken) {
+          if ((surface?.capabilities.replyEngagement || input.surface === "monitor") && input.runLeaseToken) {
             await deps.runs
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
@@ -2513,7 +2515,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sourceSessionId: session.id,
           });
         const earlyTaskAck =
-          input.surface === "slack" &&
+          surface?.capabilities.firstBlockAck === true &&
           humanInput &&
           conversation.kind === "dm" &&
           !input.approval &&
@@ -2706,7 +2708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
-          ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
+          ...(surface?.capabilities.actingUser ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
                 layerAuth: {
@@ -3399,6 +3401,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
+            ...(toolSurface
+              ? { surfacePrompt: { label: toolSurface.label, mentionSyntax: toolSurface.promptHints().mentionSyntax } }
+              : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }
@@ -3701,7 +3706,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
-          if (input.surface !== "slack" || input.surfaceTools || !input.runId) return undefined;
+          if (!surface?.capabilities.firstBlockAck || input.surfaceTools || !input.runId) return undefined;
           const fb = deps.turnStream?.firstBlock(input.runId);
           const text = fb?.text.trim();
           return fb?.closed && text ? text : undefined;

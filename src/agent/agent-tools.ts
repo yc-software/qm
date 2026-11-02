@@ -93,12 +93,18 @@ export interface AgentToolsOptions {
   surfaceTools?: boolean;
   delegateWork?: boolean;
   surfaceName?: string;
+  surfacePrompt?: SurfaceToolPrompt;
   clientTools?: readonly ClientToolDeclaration[];
+}
+
+export interface SurfaceToolPrompt {
+  label: string;
+  mentionSyntax: string;
 }
 
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
-  "readOnly" | "surfaceTools" | "surfaceName" | "delegateWork" | "clientTools"
+  "readOnly" | "surfaceTools" | "surfaceName" | "surfacePrompt" | "delegateWork" | "clientTools"
 >;
 
 export function coreToolOptions(config: Config): CoreToolOptions {
