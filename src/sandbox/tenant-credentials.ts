@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import {
   requireTenantSetting,
   TenantSettingMissingError,
@@ -79,17 +80,14 @@ export function tenantCredential(
   return async () => requireTenantSetting(await settings(), key);
 }
 
-export function clientPerCredential<C>(
+export function clientPerCredential<C extends object>(
   make: (...credential: string[]) => C,
-  limit = 32,
 ): (...credential: string[]) => C {
-  const clients = new Map<string, C>();
+  const clients = new LRUCache<string, C>({ max: 32 });
   return (...credential) => {
     const id = JSON.stringify(credential);
     const client = clients.get(id) ?? make(...credential);
-    clients.delete(id);
     clients.set(id, client);
-    if (clients.size > limit) clients.delete(clients.keys().next().value!);
     return client;
   };
 }
