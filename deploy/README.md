@@ -26,16 +26,15 @@ Do not deploy the example names in these templates directly.
 
 ## Topology
 
-The public portal is the only Internet-facing service. It authenticates users
-over OIDC and proxies the private Web UI, including its administrator settings. Core, Postgres, and
+Core's public port is the only Internet-facing endpoint. Core's front door authenticates users
+over OIDC and serves the Web UI, including its administrator settings; core's API port, Postgres, and
 agent computers stay private. The optional Slack surface runs inside core over
 outbound Socket Mode.
 
 By default the OIDC provider is the `auth` service qm deploys for itself: a
-sign-in broker that emails a one-time link. It is private like every other
-non-portal service — the portal republishes only its two browser-facing routes
-under `/idp/`, so the issuer and the sign-in pages live on the portal's own
-origin while the token, userinfo, and JWKS calls stay on the private network.
+sign-in broker that emails a one-time link. It runs inside core on loopback — the front door republishes only its browser-facing routes
+under `/idp/`, so the issuer and the sign-in pages live on the public
+origin while the token, userinfo, and JWKS calls stay inside core.
 The self-hoster supplies an admin address, a verified sender, and a Resend key
 or SMTP credentials; the CLI generates the broker's signing key and the portal's
 client credentials and wires both sides. Core receives the same `RESEND_API_KEY`

@@ -1,33 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-
-test("`node src/index.ts` (relative entry, like Docker) binds the port and serves /healthz", async () => {
-  const PORT = "18097";
-  const child = spawn(process.execPath, ["src/index.ts"], {
-    cwd: process.cwd(),
-    env: { ...process.env, PORT, PORTAL_PUBLIC_URL: `http://localhost:${PORT}`, NODE_ENV: "test" },
-    stdio: "ignore",
-  });
-  try {
-    const deadline = Date.now() + 8000;
-    let ok = false;
-    while (Date.now() < deadline) {
-      try {
-        const r = await fetch(`http://localhost:${PORT}/healthz`);
-        if (r.status === 200) {
-          ok = true;
-          break;
-        }
-      } catch {
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    }
-    assert.ok(ok, "portal entry should bind the port and answer /healthz");
-  } finally {
-    child.kill("SIGKILL");
-  }
-});
+import { spawnSync } from "node:child_process";
 
 test("boot refuses an own-origin OIDC endpoint when no broker upstream is wired", () => {
   const command = "import('./src/index.ts').then(m => m.bootChecks())";

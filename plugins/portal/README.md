@@ -1,15 +1,14 @@
 # Portal — the public SSO front door
 
-The portal is the **one** publicly-reachable app in the stack. It replaces the per-surface
-`fly proxy` tunnels (one per app, each on its own local port) with a single signed-in URL that
-fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspace
-is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
-surfaces, which all stay **private** (no public `[http_service]` of their own):
+The portal is the public front door of a QM deployment. Core runs it in-process on its public port
+(`PUBLIC_PORT`, see `src/web/front-door.ts`); it does provider-neutral **OIDC** sign-in (Google
+Workspace is the email-first deployment default) and reverse-proxies signed-in requests to the web UI
+server, which core runs on a loopback port:
 
-| Path        | → upstream        | Notes                                                                         |
-| ----------- | ----------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/settings` | `<prefix>-web-ui` | Administrator settings; core checks admin                                     |
+| Path        | → upstream    | Notes                                                                         |
+| ----------- | ------------- | ----------------------------------------------------------------------------- |
+| `/*` (root) | web UI server | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
+| `/settings` | web UI server | Administrator settings; core checks admin                                     |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -25,7 +24,7 @@ For companies using the additional trusted OIDC entry, set core
 provider. The default remains `/auth/login`.
 
 It is a thin `node:http` server (native TS type-stripping), like the other
-surfaces, and it does **not** import the core.
+surfaces. Core imports it; it does **not** import the core and talks to core only over core's HTTP API.
 
 ## How a request flows
 
