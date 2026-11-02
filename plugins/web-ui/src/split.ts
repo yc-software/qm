@@ -207,7 +207,6 @@ function buildDock(): DockviewApi {
   host.appendChild(toastEl);
   const api = createDockview(dockEl, {
     theme: splitTheme,
-    disableTabsOverflowList: true,
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),
