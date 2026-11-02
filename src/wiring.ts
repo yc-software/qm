@@ -1837,7 +1837,7 @@ export function buildApp(
         }
       : {}),
   });
-  const environments = createPostgresEnvironmentStore(databaseUrl);
+  const environments = createPostgresEnvironmentStore(databaseUrl, { mayShare: canWriteScope });
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);

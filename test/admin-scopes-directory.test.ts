@@ -165,6 +165,13 @@ test("the admin scope directory exposes named environments and attached scopes",
       { channelId: "A", name: "source" },
       { channelId: "B", name: "attached" },
     ]);
+    await s.built.directory.replaceChannels(
+      [
+        { channelId: "A", name: "source" },
+        { channelId: "B", name: "attached" },
+      ],
+      [{ channelId: "A", principalId: "U1" }],
+    );
     await s.built.app.createEnvironment({ scopeId: "channel:A", name: "A-permanent", actorId: "U1" });
     await s.built.app.attachScope({ scopeId: "channel:B", environmentId: "channel:A", actorId: "U1" });
 

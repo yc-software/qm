@@ -3852,14 +3852,25 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(before.status, "ok");
   assert.equal(rwScope, scopeId("personal", "U1"), "no attachment ⇒ provision through the scope itself");
 
-  await selectComputer(built, "U-shared", scopeId("personal", "U-shared"));
-  const env = await app.createEnvironment({ scopeId: scopeId("personal", "U-shared"), name: "prod", actorId: "U1" });
+  const room = scopeId("channel", "C-room");
+  await built.directory.replaceChannels(
+    [{ channelId: "C-room", name: "room", isPrivate: true }],
+    [{ channelId: "C-room", principalId: "U1" }],
+  );
+  await selectComputer(built, "U1", room);
+  const env = await app.createEnvironment({ scopeId: room, name: "prod", actorId: "U1" });
   await app.attachScope({ scopeId: scopeId("personal", "U1"), environmentId: env.id, actorId: "U1" });
 
   rwScope = undefined;
   const after = await app.turn(dm("!run echo go2", { conversation: { kind: "dm", threadRef: "dm:U1:t2" } }));
   assert.equal(after.status, "ok");
   assert.equal(rwScope, env.id, "the attachment redirects the rw layer (machine/volume/backup) to the environment id");
+
+  await built.directory.replaceChannels([{ channelId: "C-room", name: "room", isPrivate: true }], []);
+  rwScope = undefined;
+  const left = await app.turn(dm("!run echo go3", { conversation: { kind: "dm", threadRef: "dm:U1:t3" } }));
+  assert.equal(left.status, "ok");
+  assert.equal(rwScope, scopeId("personal", "U1"), "after leaving the room the DM no longer reaches its computer");
 });
 
 test("eager provisioning warms the box on a tool-using session's next turn and still reclaims it", async () => {
