@@ -615,6 +615,9 @@ a.chat-row-open {
 .session:hover {
   background: var(--conversation-hover);
 }
+.drag-snapshot {
+  transform: translateZ(0);
+}
 .session.active {
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }

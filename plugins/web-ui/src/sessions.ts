@@ -1142,6 +1142,15 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 
 let draggingChildId: string | null = null;
 
+/* Chromium snapshots a drag image from the row's enclosing paint layer, so the sidebar behind the
+   rounded corners comes along as hard square corners. Lifting the row onto its own layer for the
+   snapshot leaves the corners transparent; the class is dropped again on the next frame. */
+function liftForDragSnapshot(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  target.classList.add("drag-snapshot");
+  requestAnimationFrame(() => target.classList.remove("drag-snapshot"));
+}
+
 export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
@@ -1149,6 +1158,7 @@ export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  liftForDragSnapshot(e.currentTarget);
   draggingChildId = s.parentSessionId ? s.id : null;
   appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
   if (!draggingChildId) beginSessionDrag(s);
