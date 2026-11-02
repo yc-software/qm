@@ -1,26 +1,27 @@
-import { EventEmitter } from "node:events";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 
-class FakeClient extends EventEmitter {
-  queries: string[] = [];
-  releases = 0;
-  afterQuery?: () => void;
+class FakeSql {
+  listens: string[] = [];
+  ends = 0;
+  notify = new Map<string, (payload: string) => void>();
+  relisten = new Map<string, () => void>();
 
-  query(sql: string) {
-    this.queries.push(sql);
-    const result = Promise.resolve({ rows: [] });
-    this.afterQuery?.();
-    return result;
+  async listen(channel: string, onnotify: (payload: string) => void, onlisten: () => void) {
+    this.listens.push(channel);
+    this.notify.set(channel, onnotify);
+    this.relisten.set(channel, onlisten);
+    onlisten();
+    return { unlisten: async () => {} };
   }
 
-  release() {
-    this.releases++;
+  async end() {
+    this.ends++;
   }
 }
 
 interface FakePool {
-  connect(): Promise<FakeClient>;
+  dedicated(): Promise<FakeSql>;
   closes: number;
 }
 
@@ -30,7 +31,7 @@ mock.module("../src/persistence/pg-pool.ts", {
     createPgPool(url: string) {
       const pool = pools.get(url)!;
       return {
-        sessionPool: async () => pool,
+        dedicated: () => pool.dedicated(),
         close: async () => {
           pool.closes++;
         },
@@ -48,11 +49,9 @@ async function until(check: () => boolean) {
   }
 }
 
-test("reconnect repeats LISTEN when the old client disconnects before its query continuation", async () => {
-  const clients = [new FakeClient(), new FakeClient()];
-  clients[0]!.afterQuery = () => clients[0]!.emit("error", new Error("connection lost"));
-  let attempts = 0;
-  const pool = { closes: 0, connect: async () => clients[attempts++]! };
+test("a reconnect that repeats LISTEN resyncs subscribers and keeps delivering", async () => {
+  const sql = new FakeSql();
+  const pool = { closes: 0, dedicated: async () => sql };
   pools.set("listen-race", pool);
   let resyncs = 0;
   const payloads: string[] = [];
@@ -64,31 +63,26 @@ test("reconnect repeats LISTEN when the old client disconnects before its query 
   );
   try {
     await until(() => resyncs === 1);
-    assert.equal(attempts, 2);
-    assert.deepEqual(
-      clients.map((client) => client.queries),
-      [["LISTEN events"], ["LISTEN events"]],
-    );
-    clients[1]!.emit("notification", { channel: "events", payload: "recovered" });
+    sql.relisten.get("events")!();
+    assert.equal(resyncs, 2);
+    sql.notify.get("events")!("recovered");
     assert.deepEqual(payloads, ["recovered"]);
+    assert.deepEqual(sql.listens, ["events"]);
   } finally {
     await stop();
   }
-  assert.deepEqual(
-    clients.map((client) => client.releases),
-    [1, 1],
-  );
+  assert.equal(sql.ends, 1);
   assert.equal(pool.closes, 1);
 });
 
 test("failed acquisition retries and closes the recovered connection", async () => {
-  const client = new FakeClient();
+  const sql = new FakeSql();
   let attempts = 0;
   const pool = {
     closes: 0,
-    async connect() {
+    async dedicated() {
       if (++attempts === 1) throw new Error("database unavailable");
-      return client;
+      return sql;
     },
   };
   pools.set("acquire-retry", pool);
@@ -102,22 +96,22 @@ test("failed acquisition retries and closes the recovered connection", async () 
   try {
     await until(() => resyncs === 1);
     assert.equal(attempts, 2);
-    assert.deepEqual(client.queries, ["LISTEN events"]);
+    assert.deepEqual(sql.listens, ["events"]);
   } finally {
     await stop();
   }
-  assert.equal(client.releases, 1);
+  assert.equal(sql.ends, 1);
   assert.equal(pool.closes, 1);
 });
 
 for (const fails of [false, true]) {
   test(`unsubscribe during acquisition closes resources when acquisition ${fails ? "fails" : "succeeds"}`, async () => {
-    const acquired = Promise.withResolvers<FakeClient>();
-    const client = new FakeClient();
+    const acquired = Promise.withResolvers<FakeSql>();
+    const sql = new FakeSql();
     let attempts = 0;
     const pool = {
       closes: 0,
-      connect() {
+      dedicated() {
         attempts++;
         return acquired.promise;
       },
@@ -134,11 +128,11 @@ for (const fails of [false, true]) {
     await until(() => attempts === 1);
     const closing = stop();
     if (fails) acquired.reject(new Error("database unavailable"));
-    else acquired.resolve(client);
+    else acquired.resolve(sql);
     await closing;
+    await until(() => sql.ends === (fails ? 0 : 1));
     assert.equal(resyncs, 0);
-    assert.deepEqual(client.queries, []);
-    assert.equal(client.releases, fails ? 0 : 1);
+    assert.deepEqual(sql.listens, []);
     assert.equal(pool.closes, 1);
     await stop();
     assert.equal(pool.closes, 1);
