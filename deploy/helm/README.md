@@ -195,7 +195,7 @@ core. Before the first `helm upgrade` to 0.4:
 5. Build and push the core image from the new source. The web-ui and portal
    images are no longer used.
 
-The upgrade signs every user out once. The public URL can fail for a few
+The upgrade signs every user out once. The public URL can fail for about ten
 seconds while the ingress moves to core's front door before the new core pod is
 ready. `helm rollback` to the 0.3 revision restores the old workloads and signs
 users out again.
