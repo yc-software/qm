@@ -5,7 +5,7 @@ import { createPostgresCronRows } from "../src/cron/cron-table.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
-import { ownerUrl, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 import { testCronFires } from "./support/typed-stores.ts";
 
 const skip = skipWithoutPg;
@@ -99,9 +99,9 @@ test("cron rows round-trip through typed columns and the indexed lookups", { ski
 test("due crons are claimed across tenants and each slot is claimed once", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresCronRows(url),
-    async ({ store: rows, url, tenant, otherTenant }) => {
+    async ({ store: rows, ownerUrl, tenant, otherTenant }) => {
       const crons = createCronStore(rows, { fires: testCronFires() });
-      const ownerRows = createPostgresCronRows(ownerUrl(url));
+      const ownerRows = createPostgresCronRows(ownerUrl);
       const claims = createCronStore(ownerRows, { fires: testCronFires() });
       const first = Date.now() - HOUR;
       const a = await withTenant(tenant, () =>

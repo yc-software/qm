@@ -12,7 +12,7 @@ import { createPostgresIngressDeliveryRows, createPostgresIngressSourceRows } fr
 import type { IngressDelivery, LoopIngress } from "../src/loops/ingress.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { ownerUrl, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 const ALICE = "alice@example.com";
@@ -334,8 +334,8 @@ const delivery = (id: string, overrides: Partial<IngressDelivery> = {}): Ingress
 });
 
 test("ingress sources and deliveries queue per tenant and background claims span tenants", { skip }, async () => {
-  await withTypedTableDb(loopTables, async ({ store, url, tenant, otherTenant }) => {
-    const owner = loopTables(ownerUrl(url));
+  await withTypedTableDb(loopTables, async ({ store, ownerUrl, tenant, otherTenant }) => {
+    const owner = loopTables(ownerUrl);
     try {
       const gmail = { email: "a@example.com", historyId: "1", expiresAt: 1 };
       await withTenant(tenant, async () => {

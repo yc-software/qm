@@ -6,7 +6,7 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createPostgresWebhookRows } from "../src/webhooks/webhook-table.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { ownerUrl, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
 const ALICE = "alice@example.com";
@@ -32,9 +32,9 @@ const hook = (action = "triage the event") => ({
 test("monitors are watched per thread, claimed across tenants and swept only when defunct", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresMonitorRows(url),
-    async ({ store: rows, url, tenant, otherTenant }) => {
+    async ({ store: rows, ownerUrl, tenant, otherTenant }) => {
       const monitors = createMonitorStore(rows);
-      const ownerRows = createPostgresMonitorRows(ownerUrl(url));
+      const ownerRows = createPostgresMonitorRows(ownerUrl);
       const claims = createMonitorStore(ownerRows);
       try {
         const a = await withTenant(tenant, () => monitors.create(watch({ pattern: "FAIL" })));

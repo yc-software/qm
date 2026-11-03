@@ -15,14 +15,9 @@ export interface TypedTableDb<S> {
   store: S;
   admin: pg.Pool;
   url: string;
+  ownerUrl: string;
   tenant: string;
   otherTenant: string;
-}
-
-export function ownerUrl(databaseUrl: string): string {
-  const url = new URL(databaseUrl);
-  url.searchParams.delete("options");
-  return url.toString();
 }
 
 export async function withTypedTableDb<S extends Closable>(
@@ -45,7 +40,7 @@ export async function withTypedTableDb<S extends Closable>(
     await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
     login = await createAppLogin(url);
     store = make(login.url);
-    await fn({ store, admin, url: login.url, tenant, otherTenant });
+    await fn({ store, admin, url: login.url, ownerUrl: url, tenant, otherTenant });
   } finally {
     await store?.close?.();
     await login?.drop();
