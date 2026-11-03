@@ -1,6 +1,7 @@
 import pg from "pg";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
+import { createAppLogin, type AppLogin } from "./app-login.ts";
 import { testBareDatabaseUrl } from "./test-database.ts";
 import { testTenants } from "./test-tenants.ts";
 
@@ -18,12 +19,6 @@ export interface TypedTableDb<S> {
   otherTenant: string;
 }
 
-export function appUrl(databaseUrl: string): string {
-  const url = new URL(databaseUrl);
-  url.searchParams.set("options", "-c role=qm_app");
-  return url.toString();
-}
-
 export function ownerUrl(databaseUrl: string): string {
   const url = new URL(databaseUrl);
   url.searchParams.delete("options");
@@ -39,6 +34,7 @@ export async function withTypedTableDb<S extends Closable>(
   const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
   let store: S | undefined;
+  let login: AppLogin | undefined;
   try {
     await seed?.(admin);
     await applyPgMigrations(admin, [definePgMigration(TENANCY_BASE)]);
@@ -47,11 +43,12 @@ export async function withTypedTableDb<S extends Closable>(
     await migrateRegisteredPgSchemas(url);
     await owner.close?.();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
-    await admin.query(`GRANT CREATE ON SCHEMA public TO qm_app`);
-    store = make(appUrl(url));
-    await fn({ store, admin, url: appUrl(url), tenant, otherTenant });
+    login = await createAppLogin(url);
+    store = make(login.url);
+    await fn({ store, admin, url: login.url, tenant, otherTenant });
   } finally {
     await store?.close?.();
+    await login?.drop();
     await admin.end();
   }
 }

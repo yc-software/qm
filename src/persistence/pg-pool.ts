@@ -256,13 +256,17 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
-    await client.query(
-      `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
+    const existing = await client.query<{ present: boolean }>("SELECT to_regclass($1) IS NOT NULL AS present", [
+      PG_MIGRATIONS_TABLE,
+    ]);
+    if (!existing.rows[0]?.present)
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
         checksum TEXT NOT NULL,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
-    );
+      );
     for (const migration of migrations) {
       const applied = await client.query<{ checksum: string }>(
         `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
