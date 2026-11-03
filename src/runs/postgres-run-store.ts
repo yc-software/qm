@@ -242,11 +242,28 @@ END $base_schema$`,
     return { requeued: false, applied: rowCount > 0 };
   }
 
-  const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
+  const parked = (run: string) => `(${run}.claim_priority > 0 AND ${run}.last_stop::jsonb->>'kind' = 'parked')`;
+
+  const turnOrder = (run: string) => `(CASE WHEN ${run}.claim_priority <> 0 THEN 1
+      WHEN EXISTS (
+        SELECT 1 FROM runs ahead WHERE ahead.session_id=${run}.session_id AND ahead.status='pending'
+          AND ahead.claim_priority > 0 AND ${parked("ahead")} IS NOT TRUE
+          AND (ahead.created_at, ahead.seq) < (${run}.created_at, ${run}.seq)
+      ) THEN 1 ELSE 0 END), ${run}.created_at, ${run}.seq`;
+
+  const before = (a: string, b: string) => `(CASE
+      WHEN ${parked(a)} IS NOT TRUE AND ${parked(b)} IS NOT TRUE
+        THEN (${a}.created_at, ${a}.seq) < (${b}.created_at, ${b}.seq)
+      ELSE (${turnOrder(a)}) < (${turnOrder(b)}) END)`;
+
+  const claimable = (
+    now: string,
+    behindRunning = false,
+  ) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
       SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
-        AND (sibling.status='running' OR (sibling.status='pending'
-          AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
+        AND (${behindRunning ? "false" : "sibling.status='running'"} OR (sibling.status='pending'
+          AND (sibling.retry_after > ${now} OR ${before("sibling", "candidate")})))
       OFFSET 0
     )`;
 
@@ -337,6 +354,14 @@ END $base_schema$`,
       );
       return rows[0]?.waiting === true;
     },
+    async personWaitingIn(sessionIds, createdBefore) {
+      const { rows } = await q(
+        `SELECT DISTINCT candidate.session_id FROM runs candidate WHERE candidate.session_id = ANY($1::text[])
+           AND candidate.claim_priority=0 AND candidate.created_at <= $2 AND ${claimable("$3", true)}`,
+        [sessionIds, createdBefore, Date.now()],
+      );
+      return new Set(rows.map((row) => row.session_id as string));
+    },
 
     async heartbeat(runId, leaseToken, ttlMs): Promise<boolean> {
       const { rowCount } = await q(
@@ -409,7 +434,7 @@ END $base_schema$`,
         `SELECT current.* FROM unnest($1::text[]) AS threads(id)
          CROSS JOIN LATERAL (
            SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
-           ORDER BY status = 'running' DESC, created_at ASC, seq ASC LIMIT 1
+           ORDER BY status = 'running' DESC, ${turnOrder("runs")} LIMIT 1
          ) current`,
         [[...new Set(threadRefs)]],
       );
@@ -467,7 +492,7 @@ END $base_schema$`,
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        `SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, ${turnOrder("runs")}`,
         [sessionId],
       );
       return rows.map(rowToRun);

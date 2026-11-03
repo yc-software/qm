@@ -22,6 +22,7 @@ import type { ProviderKeys } from "../model/model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
+import type { TurnPark } from "../runs/run-store.ts";
 
 export interface RuntimeChoice {
   modelId: string;
@@ -60,6 +61,7 @@ export interface AgentTurnInput {
   continueTurn?: boolean;
   resumeUserSeq?: number;
   shutdown?: AbortSignal;
+  park?: TurnPark;
   input: string;
   triggerTs?: string;
   entryTs?: string;
@@ -78,6 +80,8 @@ export interface AgentTurnInput {
     images?: TurnImage[];
     documents?: DocumentInput[];
     author?: string;
+    authorName?: string;
+    withheld?: boolean;
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;

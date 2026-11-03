@@ -1118,7 +1118,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
-        entry.ref.onModelRequest = turn.onModelRequest;
+        entry.ref.onModelRequest = () => {
+          turn.onModelRequest?.();
+          if (turn.park?.requested()) turn.park.now();
+        };
         turn.recordModelCall({
           model: effectiveModel,
           inputTokens:
@@ -1269,6 +1272,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                 {
                   onSteer: async (text, ts, request, acknowledge) => {
                     if (ts && steeredSeen.has(ts)) return;
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
@@ -1279,6 +1283,8 @@ export function createAgent(opts?: AgentOptions): Agent {
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
+                      authorName: prepared?.authorName,
+                      withheld: prepared?.withheld,
                       acknowledge,
                     };
                     pendingSteers.push(steer);

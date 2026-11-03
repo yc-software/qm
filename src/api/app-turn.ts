@@ -9,6 +9,7 @@ import { scopeId } from "../types.ts";
 import { conversationWriteAccess } from "./conversation-write-access.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import { RETIRED_ORIGIN_KEYS, desktopClientForTurn, isPersonAuthored, isSessionTurn } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
@@ -26,7 +27,6 @@ import {
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
-import { steerWithheldItem } from "../core/turn-error.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
@@ -35,20 +35,10 @@ import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
-import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
 const USER_STOP = "by user";
-
-export function attributedSteerText(
-  steerer: { id: string; displayName?: string | undefined },
-  runOwnerId: string | null,
-  text: string,
-): string {
-  if (runOwnerId !== null && samePerson(steerer.id, runOwnerId)) return text;
-  return `${steerer.displayName?.trim() || steerer.id}: ${text}`;
-}
 
 export function createTurnMethods(
   deps: AppDeps,
@@ -86,6 +76,23 @@ export function createTurnMethods(
     replayOrphanedRunSignals,
   } = h;
   const { shouldRouteToSpine, markTriggerHandled, addressedWakeText } = ambient;
+  async function viewerSteerRequest(run: Run, viewer: string, text: string): Promise<TurnRequest> {
+    const displayName = (await deps.directory.get(viewer).catch(swallowAs("signal: steer author display name", null)))
+      ?.displayName;
+    const { surface, scopeVersion, deliveryTarget, deliveryCandidates, surfaceOrigin, conversation } =
+      replayableRequest(run.request);
+    return {
+      surface,
+      ...(scopeVersion ? { scopeVersion } : {}),
+      ...(deliveryTarget ? { deliveryTarget } : {}),
+      ...(deliveryCandidates ? { deliveryCandidates } : {}),
+      ...(surfaceOrigin ? { surfaceOrigin } : {}),
+      actor: { externalId: viewer, ...(displayName ? { displayName } : {}) },
+      conversation,
+      text,
+      origin: { kind: "human" },
+    };
+  }
   async function stopRunTree(run: Run): Promise<boolean> {
     if (!deps.signals) return false;
     const signals = deps.signals;
@@ -435,40 +442,12 @@ export function createTurnMethods(
         const cancel = origin.kind === "human" && isHalt(req.text);
         if (live && !isTerminal(live.status) && !personIntoAutomation && (cancel || sameAccount)) {
           const targetRun = live;
-          const steerText = attributedSteerText(
-            actor,
-            origin.kind === "ambient" ? null : targetRun.request.actor.id,
-            req.text,
-          );
-          let injectedText = steerText;
-          if (origin.kind === "ambient") {
-            const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
-              payload: steerText,
-              actor,
-              conversation,
-              ...(session ? { sessionId: session.id } : {}),
-            });
-            if (decision === "block") {
-              if (session)
-                await deps.sessions
-                  .append({ sessionId: session.id }, steerWithheldItem(actor.displayName?.trim() || actor.id))
-                  .catch((error) => swallow("turn: withheld steer note", error));
-              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : awaitRun(targetRun.id);
-            }
-            if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
-          }
-          const fileNames = (req.attachments ?? []).map((a) =>
-            a.sourceId
-              ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
-              : a.name,
-          );
-          if (!req.text.trim() && !fileNames.length) return { status: "refused", reason: "empty message" };
+          if (!req.text.trim() && !req.attachments?.length) return { status: "refused", reason: "empty message" };
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            text: injectedText,
+            text: req.text,
             halt: origin.kind === "human" && isHalt(req.text),
-            ...(fileNames.length ? { fileNames } : {}),
+            hasFiles: Boolean(req.attachments?.length),
           };
           const route = routeWake(wake, targetRun.request.origin.kind === "ambient");
           if (route.kind === "steer") {
@@ -838,20 +817,16 @@ export function createTurnMethods(
           return { accepted: false, reason: "account_changed: send a new message to use your selected AI account" };
         }
       }
-      let outbound = signal;
-      if (signal.kind === "steer") {
-        const requestActor = signal.request?.actor;
-        let steerer: { id: string; displayName?: string | undefined } | undefined;
-        if (requestActor) steerer = { id: requestActor.externalId, displayName: requestActor.displayName };
-        else if (viewer) {
-          steerer = { id: viewer, displayName: (await deps.directory.get(viewer).catch(() => null))?.displayName };
-        }
-        outbound = {
-          ...signal,
-          ts: signal.ts ?? `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`,
-          ...(steerer ? { text: attributedSteerText(steerer, run.request.actor.id, signal.text ?? "") } : {}),
-        };
-      }
+      const outbound =
+        signal.kind === "steer"
+          ? {
+              ...signal,
+              ts: signal.ts ?? `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`,
+              ...(!signal.request && viewer && !samePerson(viewer, run.request.actor.id)
+                ? { request: await viewerSteerRequest(run, viewer, signal.text ?? "") }
+                : {}),
+            }
+          : signal;
       if (signal.queuedRunId) {
         if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
           if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };

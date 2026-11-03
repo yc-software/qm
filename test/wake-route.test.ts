@@ -47,18 +47,9 @@ test("isHalt matches a bare stop (any case, optional . or !) and nothing wordier
   for (const s of ["stop the build", "please stop", "stopwatch", ""]) assert.ok(!isHalt(s), s);
 });
 
-test("a captionless file mid-run steers (names the file) instead of dropping", () => {
-  const route = routeWake({ situation: "ambientUpdate", fileNames: ["screenshot.png"] });
+test("a captionless file mid-run steers instead of dropping", () => {
+  const route = routeWake({ situation: "ambientUpdate", hasFiles: true });
   assert.equal(route.kind, "steer");
-  assert.match((route as { text?: string }).text ?? "", /screenshot\.png/);
-});
-
-test("text plus files steers with both", () => {
-  const route = routeWake({ situation: "ambientUpdate", text: "here you go", fileNames: ["a.pdf"] });
-  assert.equal(route.kind, "steer");
-  const text = (route as { text?: string }).text ?? "";
-  assert.match(text, /here you go/);
-  assert.match(text, /a\.pdf/);
 });
 
 test("no text and no files throws", () => {
