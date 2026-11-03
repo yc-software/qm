@@ -10,6 +10,7 @@ import type { TurnRequest } from "../src/types.ts";
 import type { SurfaceContextResult } from "../src/reach/reach.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -35,13 +36,13 @@ function mention(text: string, channel: string, root: string): TurnRequest {
 
 function startFulfiller(app: any, messages: unknown[], extra: Partial<SurfaceContextResult> = {}) {
   let running = true;
-  const loop = (async () => {
+  const loop = inTestTenant(async () => {
     while (running) {
       const pending = await app.pendingContextRequests("slack");
       for (const r of pending) await app.fulfillContextRequest(r.id, { result: { messages, ...extra } });
       await sleep(20);
     }
-  })();
+  });
   return async () => {
     running = false;
     await loop;
@@ -51,11 +52,11 @@ function startFulfiller(app: any, messages: unknown[], extra: Partial<SurfaceCon
 async function subToolResult(built: any, root: string, tool: string, deadlineMs = 6_000): Promise<any> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
-    const sub = await built.sessions.getByThread(`ch:${root}`);
+    const sub = await inTestTenant(() => built.sessions.getByThread(`ch:${root}`));
     if (sub) {
-      const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const items = await inTestTenant(() => built.sessions.getItems(sub.id));
+      const hit = items.find((item: any) => item.kind === "AgentMessage" && item.variant === null && item.text);
+      if (hit) return hit.text as string;
     }
     await sleep(50);
   }
@@ -67,7 +68,7 @@ test("read_thread leaves an omitted limit to the surface provider", async () => 
   built.runtime.start();
   let running = true;
   const queries: any[] = [];
-  const loop = (async () => {
+  const loop = inTestTenant(async () => {
     while (running) {
       for (const request of await built.app.pendingContextRequests("slack")) {
         queries.push(request.query);
@@ -75,9 +76,9 @@ test("read_thread leaves an omitted limit to the surface provider", async () => 
       }
       await sleep(20);
     }
-  })();
+  });
   try {
-    await built.app.turn(mention("!read_thread", "C10", "1000.1"));
+    await inTestTenant(() => built.app.turn(mention("!read_thread", "C10", "1000.1")));
     assert.match(await subToolResult(built, "C10:1000.1", "read_thread"), /read 0 message/);
     assert.equal(queries.length, 1);
     assert.equal(queries[0].count, undefined);
@@ -106,7 +107,7 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
     { selfTs: ["1000.4"] },
   );
   try {
-    await built.app.turn(mention("!whats_new", "C10", "1000.1"));
+    await inTestTenant(() => built.app.turn(mention("!whats_new", "C10", "1000.1")));
     const reply = await subToolResult(built, root, "whats_new");
     assert.match(reply, /whats_new here=3 others=1/);
   } finally {
@@ -119,16 +120,18 @@ test("enabled mirror search uses the current channel and returns author/snippet 
   const built = freshApp();
   built.runtime.start();
   const root = "C11:1100.1";
-  await built.surfaceCache.ingest([
-    { container: "C11", ts: "1100.2", authorName: "Bob", text: "the budget doc is in shared/q2.md" },
-    { container: "C11", ts: "1100.3", authorName: "Cat", text: "unrelated chatter" },
-    { container: "CSECRET", ts: "1100.4", authorName: "Eve", text: "the secret budget" },
-  ]);
+  await inTestTenant(() =>
+    built.surfaceCache.ingest([
+      { container: "C11", ts: "1100.2", authorName: "Bob", text: "the budget doc is in shared/q2.md" },
+      { container: "C11", ts: "1100.3", authorName: "Cat", text: "unrelated chatter" },
+      { container: "CSECRET", ts: "1100.4", authorName: "Eve", text: "the secret budget" },
+    ]),
+  );
   try {
-    await built.app.turn(mention("!search budget", "C11", "1100.1"));
+    await inTestTenant(() => built.app.turn(mention("!search budget", "C11", "1100.1")));
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /search\(cache\) 1 hit/);
-    assert.deepEqual(await built.app.pendingContextRequests("slack"), []);
+    assert.deepEqual(await inTestTenant(() => built.app.pendingContextRequests("slack")), []);
     assert.match(reply, /first=Bob:the budget doc/);
   } finally {
     await built.runtime.stop();
@@ -140,7 +143,7 @@ test("read_members lists the current container's roster (its resolved audience),
   built.runtime.start();
   const root = "C12:1200.1";
   try {
-    await built.app.turn(mention("!read_members", "C12", "1200.1"));
+    await inTestTenant(() => built.app.turn(mention("!read_members", "C12", "1200.1")));
     const reply = await subToolResult(built, root, "read_members");
     assert.match(reply, /members: /);
     assert.match(reply, /Ada/);
@@ -222,25 +225,27 @@ test("search/whats_new surface the mirror coverage window end-to-end once the mi
   const built = freshApp();
   built.runtime.start();
   const root = "C30:3000.1";
-  await built.app.ingestSurfaceEvents(
-    [
-      {
-        container: "C30",
-        ts: "3000.1",
-        authorId: "U2",
-        authorName: "Bob",
-        text: "an old budget note",
-        createdAt: 1,
-      },
-    ],
-    "slack",
+  await inTestTenant(() =>
+    built.app.ingestSurfaceEvents(
+      [
+        {
+          container: "C30",
+          ts: "3000.1",
+          authorId: "U2",
+          authorName: "Bob",
+          text: "an old budget note",
+          createdAt: 1,
+        },
+      ],
+      "slack",
+    ),
   );
   const stop = startFulfiller(built.app, [{ ts: "3000.1", author: "Bob", text: "the budget doc" }]);
   try {
-    await built.app.turn(mention("!search budget", "C30", "3000.1"));
+    await inTestTenant(() => built.app.turn(mention("!search budget", "C30", "3000.1")));
     const searchReply = await subToolResult(built, root, "search");
     assert.match(searchReply, /coverage=\d{4}-\d\d-\d\d/, "the search reply carries the mirror coverage floor");
-    await built.app.turn(mention("!whats_new", "C30", "3000.2"));
+    await inTestTenant(() => built.app.turn(mention("!whats_new", "C30", "3000.2")));
     const wnReply = await subToolResult(built, "C30:3000.2", "whats_new");
     assert.match(wnReply, /coverage=\d{4}-\d\d-\d\d/, "whats_new carries the mirror coverage floor");
   } finally {
@@ -254,7 +259,7 @@ test("search source=slack routes through the live-search seam; an unconfigured p
   built.runtime.start();
   const root = "C31:3100.1";
   let running = true;
-  const loop = (async () => {
+  const loop = inTestTenant(async () => {
     while (running) {
       for (const r of await built.app.pendingContextRequests("slack")) {
         const body = (r as any).query?.searchAll
@@ -264,9 +269,9 @@ test("search source=slack routes through the live-search seam; an unconfigured p
       }
       await sleep(20);
     }
-  })();
+  });
   try {
-    await built.app.turn(mention("!search source=slack budget", "C31", "3100.1"));
+    await inTestTenant(() => built.app.turn(mention("!search source=slack budget", "C31", "3100.1")));
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /live search isn't configured/);
   } finally {
@@ -281,7 +286,7 @@ test("search source=slack with no connected login for the asker tells the agent 
   built.runtime.start();
   const root = "C32:3200.1";
   let running = true;
-  const loop = (async () => {
+  const loop = inTestTenant(async () => {
     while (running) {
       for (const r of await built.app.pendingContextRequests("slack")) {
         const q = (r as any).query ?? {};
@@ -291,9 +296,9 @@ test("search source=slack with no connected login for the asker tells the agent 
       }
       await sleep(20);
     }
-  })();
+  });
   try {
-    await built.app.turn(mention("!search source=slack budget", "C32", "3200.1"));
+    await inTestTenant(() => built.app.turn(mention("!search source=slack budget", "C32", "3200.1")));
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /no connected one/, "the miss explains the missing login");
     assert.match(reply, /self-connect|Connectors page/, "and points at the session-gated self-connect page");
@@ -308,15 +313,17 @@ test("set_standing_order writes the channel policy the ambient judge reads (reco
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.turn(
-      mention("!set_standing_order when someone posts a tweet link, reply with a piratey line", "C20", "2000.1"),
+    await inTestTenant(() =>
+      built.app.turn(
+        mention("!set_standing_order when someone posts a tweet link, reply with a piratey line", "C20", "2000.1"),
+      ),
     );
     const reply = await subToolResult(built, "C20:2000.1", "set_standing_order");
     assert.match(reply, /standing order set/);
-    const policy = await built.app.getChannelPolicy("C20");
+    const policy = await inTestTenant(() => built.app.getChannelPolicy("C20"));
     assert.ok(policy && /piratey/.test(policy.orders), "the policy store holds what the tool wrote");
 
-    await built.app.turn(mention("!get_standing_order", "C20", "2000.2"));
+    await inTestTenant(() => built.app.turn(mention("!get_standing_order", "C20", "2000.2")));
     const got = await subToolResult(built, "C20:2000.2", "get_standing_order");
     assert.match(got, /piratey/);
   } finally {

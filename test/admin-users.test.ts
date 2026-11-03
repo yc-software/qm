@@ -13,6 +13,7 @@ import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -88,9 +89,11 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
-    const r = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    const r = await fetch(`${s.base}/v1/admin/users`, {
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+    });
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.ok(
@@ -102,10 +105,12 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
       "authoritative grants present",
     );
 
-    const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "user-uma@default-org" } });
+    const denied = await fetch(`${s.base}/v1/admin/users`, {
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+    });
     assert.equal(denied.status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "users.read"));
+    assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "users.read"));
   } finally {
     await s.close();
   }
@@ -122,17 +127,19 @@ test("/v1/admin/users: each person carries the pseudonym the model gateway recei
       conversation: { kind: "dm", threadRef: "dm:U1:pseudonym" },
       text: "hello",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
     const roster = async (base: string) =>
       (
         (await (
-          await fetch(`${base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
+          await fetch(`${base}/v1/admin/users`, {
+            headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+          })
         ).json()) as {
           users: Array<{ principalId: string; gatewayActor?: string }>;
         }
       ).users.find((u) => u.principalId === "U1");
     assert.equal((await roster(s.base))?.gatewayActor, gatewayActorId("U1", "gateway-actor-key"));
-    assert.equal((await unkeyed.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => unkeyed.built.app.turn(dm))).status, "ok");
     assert.equal((await roster(unkeyed.base))?.gatewayActor, undefined);
   } finally {
     await s.close();
@@ -149,10 +156,14 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
-    await s.built.app.turn({ ...dm, actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "dm:U2:t1" } });
-    await s.built.app.turn({ ...dm, conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:t1" } });
+    await inTestTenant(() =>
+      s.built.app.turn({ ...dm, actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "dm:U2:t1" } }),
+    );
+    await inTestTenant(() =>
+      s.built.app.turn({ ...dm, conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:t1" } }),
+    );
     const fail = () => {
       throw new Error("User detail must not load org history or artifact lists");
     };
@@ -163,7 +174,9 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     t.mock.method(s.built.app, "listCrons", fail);
     t.mock.method(s.built.app, "listDeployments", fail);
 
-    const r = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    const r = await fetch(`${s.base}/v1/admin/users/U1`, {
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+    });
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.equal(d.principalId, "U1");
@@ -171,10 +184,12 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     assert.equal(d.stats.sessions, 1);
     for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
-    const denied = await fetch(`${s.base}/v1/admin/users/U1`, { headers: { "x-admin-actor": "user-uma@default-org" } });
+    const denied = await fetch(`${s.base}/v1/admin/users/U1`, {
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+    });
     assert.equal(denied.status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.read"));
+    assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "user.read"));
   } finally {
     await s.close();
   }
@@ -189,14 +204,16 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
+      (await (
+        await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...adminHdr } })
+      ).json()) as any;
     const setOb = (status: string, actor = "admin-alice@default-org") =>
       fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
         method: "PUT",
-        headers: { "x-admin-actor": actor, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), "x-admin-actor": actor, "content-type": "application/json" },
         body: JSON.stringify({ status }),
       });
 
@@ -211,7 +228,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
     assert.equal((await setOb("nope")).status, 400);
     assert.equal((await setOb("completed", "user-uma@default-org")).status, 403);
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.onboarding.set"));
+    assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "user.onboarding.set"));
   } finally {
     await s.close();
   }
@@ -226,14 +243,16 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hi",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
     const adminHdr = { "x-admin-actor": "admin-alice@default-org" };
     const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
+      (await (
+        await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...adminHdr } })
+      ).json()) as any;
 
     await fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
       method: "PUT",
-      headers: { ...adminHdr, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...adminHdr, "content-type": "application/json" },
       body: JSON.stringify({ status: "completed" }),
     });
     let d = await detail();
@@ -242,11 +261,14 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
       method: "POST",
-      headers: { "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(denied.status, 403);
 
-    const reset = await fetch(`${s.base}/v1/admin/users/U1/reset`, { method: "POST", headers: adminHdr });
+    const reset = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
+      method: "POST",
+      headers: { ...testTenantHeaders(), ...adminHdr },
+    });
     assert.equal(reset.status, 200);
     assert.equal(((await reset.json()) as any).deletedSessions, 1);
 
@@ -255,7 +277,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     assert.equal("conversations" in d, false);
     assert.equal(d.onboarding, "not_started", "onboarding marker cleared");
 
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.reset"));
+    assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "user.reset"));
   } finally {
     await s.close();
   }
@@ -266,7 +288,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
   try {
     const d: any = await (
       await fetch(`${s.base}/v1/admin/users/${encodeURIComponent("admin-alice")}`, {
-        headers: { "x-admin-actor": "admin-alice@default-org" },
+        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
       })
     ).json();
     assert.equal(d.principalId, "admin-alice");
@@ -292,13 +314,15 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    await built.directory.replace([
-      { principalId: "dana@example.com", displayName: "Dana Example", type: "internal" },
-      { principalId: "jane@example.com", displayName: "Jane Doe", type: "internal" },
-    ]);
+    await inTestTenant(() =>
+      built.directory.replace([
+        { principalId: "dana@example.com", displayName: "Dana Example", type: "internal" },
+        { principalId: "jane@example.com", displayName: "Jane Doe", type: "internal" },
+      ]),
+    );
 
     const r = await fetch(`${base}/v1/admin/directory?q=${encodeURIComponent("dana")}`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
     });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -309,7 +333,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     assert.ok(!d.members.some((m: any) => m.principalId === "jane@example.com"), "non-matching member excluded");
 
     const onboarded = await fetch(`${base}/v1/admin/directory?q=${encodeURIComponent("new@example.com")}`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
     });
     assert.equal(onboarded.status, 200);
     assert.deepEqual(((await onboarded.json()) as any).members, [
@@ -317,12 +341,12 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     ]);
 
     const empty = await fetch(`${base}/v1/admin/directory`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
     });
     assert.deepEqual(((await empty.json()) as any).members, [], "no query → no candidates");
 
     const denied = await fetch(`${base}/v1/admin/directory?q=dana`, {
-      headers: { "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(denied.status, 403);
   } finally {
@@ -339,14 +363,20 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
       conversation: { kind: "dm", threadRef: "dm:U9:t1" },
       text: "hi",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
     await fetch(`${s.base}/v1/admin/grants`, {
       method: "POST",
-      headers: { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" },
+      headers: {
+        ...testTenantHeaders(),
+        "x-admin-actor": "admin-alice@default-org",
+        "content-type": "application/json",
+      },
       body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: "org:default-org" }),
     });
     const d: any = await (
-      await fetch(`${s.base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
+      await fetch(`${s.base}/v1/admin/users`, {
+        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      })
     ).json();
     const u9 = d.users.find((u: { principalId: string }) => u.principalId === "U9");
     assert.ok(u9 && u9.admin.role === "org_admin");
@@ -363,7 +393,7 @@ test("user detail resolves mixed-case email links to the canonical personal scop
       return 3;
     });
     const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
-      headers: { "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
     });
     assert.equal(response.status, 200);
     const data = (await response.json()) as any;
@@ -380,31 +410,36 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
     const s = start();
     try {
       if (canonicalPrincipal === "Alice@example.com")
-        await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
+        await inTestTenant(() =>
+          s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]),
+        );
       const scope = "personal:" + canonicalPrincipal;
-      const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
-      await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
-      const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
-      await s.built.sessions.addParticipant(other.id, canonicalPrincipal);
+      const session = await inTestTenant(() => s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope));
+      await inTestTenant(() => s.built.sessions.addParticipant(session.id, canonicalPrincipal));
+      const other = await inTestTenant(() =>
+        s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1"),
+      );
+      await inTestTenant(() => s.built.sessions.addParticipant(other.id, canonicalPrincipal));
       const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
       const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
-      const detail = async () => (await (await fetch(base, { headers })).json()) as any;
+      const detail = async () =>
+        (await (await fetch(base, { headers: { ...testTenantHeaders(), ...headers } })).json()) as any;
       const update = await fetch(base + "/onboarding", {
         method: "PUT",
-        headers,
+        headers: { ...testTenantHeaders(), ...headers },
         body: JSON.stringify({ status: "completed" }),
       });
       assert.equal(update.status, 200);
       assert.equal(((await update.json()) as any).scopeId, scope);
       assert.equal((await detail()).onboarding, "completed");
-      const reset = await fetch(base + "/reset", { method: "POST", headers });
+      const reset = await fetch(base + "/reset", { method: "POST", headers: { ...testTenantHeaders(), ...headers } });
       assert.equal(reset.status, 200);
       assert.equal(((await reset.json()) as any).deletedSessions, 1);
       assert.equal((await detail()).onboarding, "not_started");
       assert.equal((await detail()).stats.sessions, 0);
-      assert.equal(await s.built.sessions.get(session.id), null);
-      assert.ok(await s.built.sessions.get(other.id));
-      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
+      assert.equal(await inTestTenant(() => s.built.sessions.get(session.id)), null);
+      assert.ok(await inTestTenant(() => s.built.sessions.get(other.id)));
+      assert.equal(await inTestTenant(() => s.built.memory.read("personal:ALICE@example.com")), "");
     } finally {
       await s.close();
     }

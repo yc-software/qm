@@ -12,6 +12,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -27,9 +28,11 @@ describe("agent conversations self-API", async () => {
   let theirsId: string;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
+        SECRET,
+      ),
     );
 
   const get = async (path: string, token?: string) =>
@@ -43,7 +46,7 @@ describe("agent conversations self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -54,139 +57,151 @@ describe("agent conversations self-API", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    mineId = (await built.app.turn(dm("U1", "plan the launch", "web:U1:c1"))).sessionId!;
-    theirsId = (await built.app.turn(dm("U2", "someone else's chat", "web:U2:c1"))).sessionId!;
+    mineId = (await inTestTenant(() => built.app.turn(dm("U1", "plan the launch", "web:U1:c1")))).sessionId!;
+    theirsId = (await inTestTenant(() => built.app.turn(dm("U2", "someone else's chat", "web:U2:c1")))).sessionId!;
   });
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("web conversations go unread on an agent reply until read; other threads never do", async () => {
-    const unread = async (id: string) => (await built.app.listSessions("U1")).find((s) => s.id === id)?.unread === true;
-    assert.equal(await unread(mineId), true);
-    await built.app.updateSession(mineId, "U1", { readAt: Date.now() });
-    assert.equal(await unread(mineId), false);
-    await built.app.updateSession(mineId, "U1", { readAt: 0 });
-    assert.equal(await unread(mineId), true);
-    const slackId = (await built.app.turn(dm("U1", "from slack", "dm:D1")))!.sessionId!;
-    assert.equal(await unread(slackId), false);
-  });
+  it("web conversations go unread on an agent reply until read; other threads never do", () =>
+    inTestTenant(async () => {
+      const unread = async (id: string) =>
+        (await built.app.listSessions("U1")).find((s) => s.id === id)?.unread === true;
+      assert.equal(await unread(mineId), true);
+      await built.app.updateSession(mineId, "U1", { readAt: Date.now() });
+      assert.equal(await unread(mineId), false);
+      await built.app.updateSession(mineId, "U1", { readAt: 0 });
+      assert.equal(await unread(mineId), true);
+      const slackId = (await built.app.turn(dm("U1", "from slack", "dm:D1")))!.sessionId!;
+      assert.equal(await unread(slackId), false);
+    }));
 
-  it("new sessions start clean with only the seed text", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      text: "investigate the flaky test",
-      title: "Flaky test hunt",
-    });
-    assert.ok("session" in out);
-    assert.notEqual(out.session.id, mineId);
-    assert.equal(out.session.title, "Flaky test hunt");
-    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-    assert.equal(run?.request.text, "investigate the flaky test");
-    assert.equal(run?.request.surface, "web");
-    const entries = await built.sessions.getEntries(out.session.id);
-    assert.ok(!entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
-    const listed = await built.app.listSessions("U1");
-    assert.ok(listed.some((s) => s.id === out.session.id));
-  });
-
-  it("new sessions and forks seeded by a person's turn keep that person's origin and provenance", async () => {
-    const source = await built.runs.latestForThread("web:U1:c1");
-    const provenance = {
-      origin: { kind: "human" as const, messageTs: "1700000000.000100" },
-      sessionSenderId: mineId,
-      ...(source ? { delegatingRunId: source.id } : {}),
-    };
-    for (const extra of [{}, { forkOf: mineId }]) {
+  it("new sessions start clean with only the seed text", () =>
+    inTestTenant(async () => {
       const out = await startSession(built.app, built.sessions, "U1", {
         scopeId: scopeId("personal", "U1"),
-        text: "follow up on the launch",
-        ...extra,
-        ...provenance,
+        text: "investigate the flaky test",
+        title: "Flaky test hunt",
       });
       assert.ok("session" in out);
+      assert.notEqual(out.session.id, mineId);
+      assert.equal(out.session.title, "Flaky test hunt");
       const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-      assert.deepEqual(run?.request.origin, { kind: "human" });
-      assert.equal(run?.request.sessionSenderId, mineId);
-      assert.equal(run?.request.delegatingRunId, source?.id);
-    }
-  });
+      assert.equal(run?.request.text, "investigate the flaky test");
+      assert.equal(run?.request.surface, "web");
+      const entries = await built.sessions.getItems(out.session.id);
+      assert.ok(!entries.some((e) => e.text?.includes("plan the launch")));
+      const listed = await built.app.listSessions("U1");
+      assert.ok(listed.some((s) => s.id === out.session.id));
+    }));
 
-  it("a blank fork starts no turn", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-      origin: { kind: "human" },
-      sessionSenderId: mineId,
-    });
-    assert.ok("session" in out);
-    assert.deepEqual(await built.runs.inFlightForThread(out.session.threadRef), []);
-  });
+  it("new sessions and forks seeded by a person's turn keep that person's origin and provenance", () =>
+    inTestTenant(async () => {
+      const source = await built.runs.latestForThread("web:U1:c1");
+      const provenance = {
+        origin: { kind: "human" as const, messageTs: "1700000000.000100" },
+        sessionSenderId: mineId,
+        ...(source ? { delegatingRunId: source.id } : {}),
+      };
+      for (const extra of [{}, { forkOf: mineId }]) {
+        const out = await startSession(built.app, built.sessions, "U1", {
+          scopeId: scopeId("personal", "U1"),
+          text: "follow up on the launch",
+          ...extra,
+          ...provenance,
+        });
+        assert.ok("session" in out);
+        const [run] = await built.runs.inFlightForThread(out.session.threadRef);
+        assert.deepEqual(run?.request.origin, { kind: "human" });
+        assert.equal(run?.request.sessionSenderId, mineId);
+        assert.equal(run?.request.delegatingRunId, source?.id);
+      }
+    }));
 
-  it("spawned provenance fields stay out of public turns", async () => {
-    await built.app.turn({
-      ...dm("U1", "pretend", "web:U1:c9"),
-      sessionSenderId: mineId,
-      delegatingRunId: "run-forged",
-      async: true,
-    });
-    const [run] = await built.runs.inFlightForThread("web:U1:c9");
-    assert.ok(run);
-    assert.equal(run.request.sessionSenderId, undefined);
-    assert.equal(run.request.delegatingRunId, undefined);
-  });
+  it("a blank fork starts no turn", () =>
+    inTestTenant(async () => {
+      const out = await startSession(built.app, built.sessions, "U1", {
+        scopeId: scopeId("personal", "U1"),
+        forkOf: mineId,
+        origin: { kind: "human" },
+        sessionSenderId: mineId,
+      });
+      assert.ok("session" in out);
+      assert.deepEqual(await built.runs.inFlightForThread(out.session.threadRef), []);
+    }));
 
-  it("new sessions in a channel seed their turn on that channel", async () => {
-    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
-    await built.app.upsertChannels(
-      [{ channelId: "C1", name: "engineering", isPrivate: true }],
-      [{ channelId: "C1", principalId: "U1" }],
-    );
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("channel", "C1"),
-      text: "investigate the channel deployment",
-    });
-    assert.ok("session" in out);
-    assert.equal(out.session.scopeId, scopeId("channel", "C1"));
-    const [run] = await built.runs.inFlightForThread(out.session.threadRef);
-    assert.equal(run?.request.conversation.channelRef, "C1");
-  });
+  it("spawned provenance fields stay out of public turns", () =>
+    inTestTenant(async () => {
+      await built.app.turn({
+        ...dm("U1", "pretend", "web:U1:c9"),
+        sessionSenderId: mineId,
+        delegatingRunId: "run-forged",
+        async: true,
+      });
+      const [run] = await built.runs.inFlightForThread("web:U1:c9");
+      assert.ok(run);
+      assert.equal(run.request.sessionSenderId, undefined);
+      assert.equal(run.request.delegatingRunId, undefined);
+    }));
 
-  it("a refused seed discards a new session but reports a fork it left", async () => {
-    const raced: typeof built.app = {
-      ...built.app,
-      turn: async (req) =>
-        (req as { spawned?: boolean }).spawned
-          ? { status: "refused", reason: "project membership changed" }
-          : built.app.turn(req),
-    };
-    const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
-    const before = await ids();
-    assert.deepEqual(
-      await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
-      { error: "project membership changed" },
-    );
-    assert.deepEqual(await ids(), before);
-    const forked = await startSession(raced, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-      text: "refused",
-    });
-    assert.ok("session" in forked);
-    assert.equal(forked.refused, "project membership changed");
-  });
+  it("new sessions in a channel seed their turn on that channel", () =>
+    inTestTenant(async () => {
+      await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+      await built.app.upsertChannels(
+        [{ channelId: "C1", name: "engineering", isPrivate: true }],
+        [{ channelId: "C1", principalId: "U1" }],
+      );
+      const out = await startSession(built.app, built.sessions, "U1", {
+        scopeId: scopeId("channel", "C1"),
+        text: "investigate the channel deployment",
+      });
+      assert.ok("session" in out);
+      assert.equal(out.session.scopeId, scopeId("channel", "C1"));
+      const [run] = await built.runs.inFlightForThread(out.session.threadRef);
+      assert.equal(run?.request.conversation.channelRef, "C1");
+    }));
 
-  it("refuses a scope or fork source the actor can't use", async () => {
-    assert.ok(
-      "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
-    );
-    assert.ok(
-      "error" in
-        (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), forkOf: theirsId })),
-    );
-  });
+  it("a refused seed discards a new session but reports a fork it left", () =>
+    inTestTenant(async () => {
+      const raced: typeof built.app = {
+        ...built.app,
+        turn: async (req) =>
+          (req as { spawned?: boolean }).spawned
+            ? { status: "refused", reason: "project membership changed" }
+            : built.app.turn(req),
+      };
+      const ids = async () => (await built.app.listSessions("U1")).map((s) => s.id).sort();
+      const before = await ids();
+      assert.deepEqual(
+        await startSession(raced, built.sessions, "U1", { scopeId: scopeId("personal", "U1"), text: "refused" }),
+        { error: "project membership changed" },
+      );
+      assert.deepEqual(await ids(), before);
+      const forked = await startSession(raced, built.sessions, "U1", {
+        scopeId: scopeId("personal", "U1"),
+        forkOf: mineId,
+        text: "refused",
+      });
+      assert.ok("session" in forked);
+      assert.equal(forked.refused, "project membership changed");
+    }));
+
+  it("refuses a scope or fork source the actor can't use", () =>
+    inTestTenant(async () => {
+      assert.ok(
+        "error" in
+          (await startSession(built.app, built.sessions, "U1", { scopeId: scopeId("personal", "U2"), text: "peek" })),
+      );
+      assert.ok(
+        "error" in
+          (await startSession(built.app, built.sessions, "U1", {
+            scopeId: scopeId("personal", "U1"),
+            forkOf: theirsId,
+          })),
+      );
+    }));
 
   it("requires a capability token", async () => {
     assert.equal((await get("/v1/conversations")).status, 401);
@@ -217,7 +232,7 @@ describe("agent conversations self-API", async () => {
   it("archiving is per-participant view state, not visible to the other viewer's list semantics", async () => {
     const token = await capFor("U1");
     await post(`/v1/conversations/${mineId}`, { archived: true }, token);
-    const other = await built.app.listSessions("U2");
+    const other = await inTestTenant(() => built.app.listSessions("U2"));
     assert.ok(!other.some((s) => s.id === mineId && s.archived), "U1's archive never marks U2's view");
     await post(`/v1/conversations/${mineId}`, { archived: false }, token);
   });
@@ -230,7 +245,7 @@ describe("agent conversations self-API", async () => {
 
   it("reads and tail-pages one of the actor's own conversations", async () => {
     for (let turn = 2; turn <= 21; turn++) {
-      await built.app.turn(dm("U1", `launch question ${turn}`, "web:U1:c1"));
+      await inTestTenant(() => built.app.turn(dm("U1", `launch question ${turn}`, "web:U1:c1")));
     }
     const token = await capFor("U1");
     const bounded = await get(`/v1/conversations/${mineId}`, token);
@@ -255,17 +270,18 @@ describe("agent conversations self-API", async () => {
     assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
   });
 
-  it("forks carry the source transcript into a new sidebar session", async () => {
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: scopeId("personal", "U1"),
-      forkOf: mineId,
-    });
-    assert.ok("session" in out);
-    assert.notEqual(out.session.id, mineId);
-    const entries = await built.sessions.getEntries(out.session.id);
-    assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
-    assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
-  });
+  it("forks carry the source transcript into a new sidebar session", () =>
+    inTestTenant(async () => {
+      const out = await startSession(built.app, built.sessions, "U1", {
+        scopeId: scopeId("personal", "U1"),
+        forkOf: mineId,
+      });
+      assert.ok("session" in out);
+      assert.notEqual(out.session.id, mineId);
+      const entries = await built.sessions.getItems(out.session.id);
+      assert.ok(entries.some((e) => e.text?.includes("plan the launch")));
+      assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
+    }));
 
   it("refuses to color a conversation the actor can't see", async () => {
     const res = await post(`/v1/conversations/${theirsId}`, { color: "#123456" }, await capFor("U1"));

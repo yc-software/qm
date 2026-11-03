@@ -3,12 +3,12 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { useOwnerDatabase } from "../tenants/claim.ts";
-import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { verifyRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
-await migrateRegisteredPgSchemas(config.databaseUrl);
+await verifyRegisteredPgSchemas(config.databaseUrl);
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);

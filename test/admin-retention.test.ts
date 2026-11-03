@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -76,7 +77,8 @@ function start() {
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
-const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
+const get = (base: string, path: string, headers: Record<string, string> = ALICE) =>
+  fetch(base + path, { headers: { ...headers, ...testTenantHeaders() } });
 
 test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rejected", async () => {
   const s = start();
@@ -87,7 +89,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello there",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
     const ok = await get(s.base, "/v1/admin/retention");
     assert.equal(ok.status, 200);
@@ -104,7 +106,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
     assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "nobody@default-org" })).status, 403);
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "retention.read"),
+      (await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "retention.read"),
       "the read is audited",
     );
   } finally {

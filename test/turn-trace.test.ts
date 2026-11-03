@@ -8,9 +8,10 @@ import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
@@ -99,7 +100,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
       } as AgentTurnInput["tools"],
       scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-      emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       cancel: AbortSignal.timeout(10_000),
     }),
@@ -139,45 +140,47 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.timestamp <= gap.timestamp);
 });
 
-test("a human web turn persists its entries inside step.persist spans of the run", async () => {
-  transactions.length = 0;
-  const built = buildApp(testConfig());
-  await built.modelCredentials.set("anthropic", "sk-test", "test");
-  const result = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "web:U1:trace" },
-    text: "hello",
-  });
-  assert.equal(result.status, "ok");
-  for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
-  assert.ok(run, "the run transaction arrived");
-  const persisted = run.spans.filter((span: { op: string }) => span.op === "step.persist");
-  assert.ok(persisted.length >= 2, "the user entry and the reply are each persisted in a span");
-});
-
-test("a turn whose agent fails still sends its dispatch span", async () => {
-  transactions.length = 0;
-  const built = buildApp(testConfig());
-  await built.modelCredentials.set("anthropic", "sk-test", "test");
-  await assert.rejects(
-    built.app.turn({
+test("a human web turn persists its entries inside step.persist spans of the run", () =>
+  inTestTenant(async () => {
+    transactions.length = 0;
+    const built = buildApp(testConfig());
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
+    const result = await built.app.turn({
       surface: "web",
       actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
-      text: "!boom-always",
-    }),
-    /boom/,
-  );
-  for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
-    await flushErrorReporting();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
-  assert.ok(run, "the run transaction arrived");
-  assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.dispatch"));
-});
+      conversation: { kind: "dm", threadRef: "web:U1:trace" },
+      text: "hello",
+    });
+    assert.equal(result.status, "ok");
+    for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
+      await flushErrorReporting();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
+    assert.ok(run, "the run transaction arrived");
+    const persisted = run.spans.filter((span: { op: string }) => span.op === "step.persist");
+    assert.ok(persisted.length >= 2, "the user entry and the reply are each persisted in a span");
+  }));
+
+test("a turn whose agent fails still sends its dispatch span", () =>
+  inTestTenant(async () => {
+    transactions.length = 0;
+    const built = buildApp(testConfig());
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
+    await assert.rejects(
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
+        text: "!boom-always",
+      }),
+      /boom/,
+    );
+    for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
+      await flushErrorReporting();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
+    assert.ok(run, "the run transaction arrived");
+    assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.dispatch"));
+  }));

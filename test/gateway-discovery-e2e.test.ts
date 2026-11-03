@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
@@ -235,7 +236,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
         tenantSettings: testTenantSettings({ ...gatewaySettings(config), PI_MODEL: "gateway/acme/future" }),
       }),
     );
-    await built.tenantSettings.get();
+    await inTestTenant(() => built.tenantSettings.get());
     await built.refreshModels();
     const runtime = await runtimeConfigBody(
       {
@@ -267,12 +268,14 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       "Discovered model replied",
     );
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
-    const result = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
-      text: "Use the execute tool, then reply.",
-    });
+    const result = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
+        text: "Use the execute tool, then reply.",
+      }),
+    );
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /Discovered model replied/);
     assert.ok(
@@ -299,7 +302,7 @@ test("gateway outage leaves direct providers available", async () => {
       ),
     }),
   );
-  await built.modelCredentials.set("anthropic", "independent-key", "admin");
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "independent-key", "admin"));
   const providers = await built.modelCredentials.availability();
   assert.equal(providers.anthropic, true);
   assert.deepEqual([...providers.modelIds!], []);

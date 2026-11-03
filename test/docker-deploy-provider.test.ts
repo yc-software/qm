@@ -5,6 +5,18 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import type { DockerExec } from "../src/sandbox/docker-exec.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 test("Docker deployments use isolated networks and remove them on destroy", async () => {
   const calls: string[][] = [];
@@ -16,7 +28,7 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
       stderr: args[1] === "inspect" ? "No such network" : "",
     };
   };
-  const store = createDeployStore(testDeployBackings());
+  const store = tenantBound(createDeployStore(testDeployBackings()));
   const first = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -46,7 +58,7 @@ test("Docker deployments use isolated networks and remove them on destroy", asyn
 
 test("a transient docker failure does not report the deployment missing", async () => {
   const dockerExec: DockerExec = async () => ({ code: 1, stdout: "", stderr: "daemon unavailable" });
-  const store = createDeployStore(testDeployBackings());
+  const store = tenantBound(createDeployStore(testDeployBackings()));
   const deployment = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -65,7 +77,7 @@ test("a deployment is missing unless docker lists a container with exactly its n
     if (args[0] === "ps") return { code: 0, stdout: "agent-deploy-other\tbridge\n", stderr: "" };
     return { code: 1, stdout: "", stderr: "daemon unavailable" };
   };
-  const store = createDeployStore(testDeployBackings());
+  const store = tenantBound(createDeployStore(testDeployBackings()));
   const deployment = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -91,7 +103,7 @@ test("a deployment network created concurrently is reused, and a create that lea
     }
     return { code: 0, stdout: "", stderr: "" };
   };
-  const store = createDeployStore(testDeployBackings());
+  const store = tenantBound(createDeployStore(testDeployBackings()));
   const deployment = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -163,7 +175,7 @@ test("a Docker app that only answers 5xx fails publish, reports its output and l
     return { code: 0, stdout: "", stderr: "" };
   };
   const reported: Array<{ code: string; message: string }> = [];
-  const store = createDeployStore(testDeployBackings());
+  const store = tenantBound(createDeployStore(testDeployBackings()));
   const d = await store.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

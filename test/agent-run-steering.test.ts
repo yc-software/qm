@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
+import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -23,10 +24,10 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
+      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -118,9 +119,9 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     try {
       const turn = turnInput("steer-order", sink, { runId: "run-order" });
       const emit = turn.emit;
-      turn.emit = async (entry) => {
-        if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
-        return emit(entry);
+      turn.emit = async (item) => {
+        if (item.kind === "Reasoning") await new Promise((resolve) => setTimeout(resolve, 100));
+        return emit(item);
       };
       turn.prepareSteer = async (text) => {
         if (finishDuringPreparation) {
@@ -189,26 +190,22 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   });
 }
 
-test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
+test("a session deleted mid-turn fails the turn instead of degrading silently", async () => {
   const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
-  const attempt = await store.acquireLease(session.id, "turn");
-  const lease = attempt.lease!;
-  assert.ok(lease);
+  const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
-    await store.releaseLease(lease);
-    const thief = await store.acquireLease(session.id, "turn");
-    assert.ok(thief.lease);
-    return sse(textReplyEvents("reply after the lease was stolen"));
+    await store.deleteSession(session.id);
+    return sse(textReplyEvents("reply after the session was deleted"));
   }) as typeof globalThis.fetch;
   try {
     const turn = turnInput(session.id, sink, {
-      emit: (entry) => store.append(lease, entry),
+      emit: (entry) => store.append(writer, entry),
     });
-    await assert.rejects(agent.runTurn(turn), /without a valid session lease/);
+    await assert.rejects(agent.runTurn(turn), /foreign key/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -220,8 +217,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
@@ -256,25 +252,24 @@ test("completed Pi attach results retain openable files in viewer history", asyn
           tools: {
             attach: async () => ({ ok: true, files, staged: files.length }),
           } as unknown as AgentTurnInput["tools"],
-          emit: (entry) => store.append(lease, entry),
+          emit: (entry) => store.append(writer, entry),
         },
       ),
     );
     assert.equal(result.reply, "Here are the previews.");
     assert.equal(calls, 2);
-    const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
+    const original = (await store.getItems(session.id)).find((item) => item.kind === "ToolResult");
     assert.ok(original);
-    assert.deepEqual((original.payload as { files?: unknown[] }).files, files);
+    assert.deepEqual(original.body.files, files);
     const source = createTranscriptSource(store);
     for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
-      const restored = read.entries.find((e) => e.type === "tool_result");
+      const restored = read.items.find((item) => item.kind === "ToolResult");
       assert.ok(restored);
-      assert.deepEqual((restored.payload as { files?: unknown[] }).files, files);
+      assert.deepEqual(restored.body.files, files);
       assert.deepEqual(restored, original);
     }
   } finally {
     globalThis.fetch = realFetch;
-    await store.releaseLease(lease);
   }
 });
 
@@ -429,7 +424,7 @@ for (const stopBeforeIntake of [false, true]) {
     const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }), signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -477,8 +472,8 @@ for (const stopBeforeIntake of [false, true]) {
               return { text };
             },
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
-              entries.push(saved);
+              const saved = await store.append(writer, entry);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },
@@ -498,14 +493,13 @@ for (const stopBeforeIntake of [false, true]) {
         );
         assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
         assert.deepEqual(
-          (await store.getEntries(session.id)).map((entry) => [entry.seq, entry.type]),
+          (await store.getItems(session.id)).map((item) => [item.seq, entryFromItem(item, session.scopeId).type]),
           entries.map((entry) => [entry.seq, entry.type]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
       }
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });
@@ -637,7 +631,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -679,8 +673,8 @@ for (const abort of ["shutdown", "stop"] as const) {
               },
             } as AgentTurnInput["tools"],
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
-              entries.push(saved);
+              const saved = await store.append(writer, entry);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },
@@ -702,7 +696,6 @@ for (const abort of ["shutdown", "stop"] as const) {
       );
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });

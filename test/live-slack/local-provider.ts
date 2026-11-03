@@ -10,6 +10,8 @@ import { testTenantSettings } from "../support/build-app.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
+import { entryFromItem } from "../../src/sessions/items.ts";
+import { inTestTenant } from "../support/test-tenants.ts";
 
 async function main(): Promise<void> {
   assert.ok(
@@ -36,9 +38,8 @@ async function main(): Promise<void> {
     },
     { tenantSettings: testTenantSettings({ ...fromEnv, SANDBOX_BACKEND: "local" }, process.env.DATABASE_URL) },
   );
-  if (process.env.ANTHROPIC_API_KEY) {
-    await built.modelCredentials.set("anthropic", process.env.ANTHROPIC_API_KEY, "qualification");
-  }
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) await inTestTenant(() => built.modelCredentials.set("anthropic", anthropicKey, "qualification"));
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;
@@ -62,7 +63,7 @@ async function main(): Promise<void> {
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);
-    const entries = await built.sessions.getEntries(result.sessionId);
+    const entries = (await built.sessions.getItems(result.sessionId)).map((item) => entryFromItem(item, scopeId));
     try {
       assertSandboxExecution(entries, sandbox.id, `${left}${right}\n`);
     } catch (error) {

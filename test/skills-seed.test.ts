@@ -12,6 +12,7 @@ import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "./support/build-app.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -209,53 +210,54 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     dataDir: mkdtempSync(join(tmpdir(), "seeded-skills-")),
   });
   const built = buildApp(config);
-  await built.identity.ready();
-  await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
-  await built.config.setConnectorClient(scopeId("org", "default-org"), "google", {
-    clientId: "google-client",
-    clientSecret: "google-secret",
+  await inTestTenant(async () => {
+    await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
+    await built.config.setConnectorClient(scopeId("org", "default-org"), "google", {
+      clientId: "google-client",
+      clientSecret: "google-secret",
+    });
+    const { app } = built;
+    const actor = { externalId: "U1" };
+    const sys = await app.turn({
+      surface: "test",
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills" },
+      text: "!sysprompt",
+    } as TurnRequest);
+    assert.match(sys.reply ?? "", /google-workspace/);
+    assert.match(sys.reply ?? "", /google-drive-sheets/);
+    assert.match(sys.reply ?? "", /github-gitlab/);
+    assert.doesNotMatch(sys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
+
+    const channelSys = await app.turn({
+      surface: "test",
+      actor,
+      conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:seeded-skills", audience: [actor] },
+      text: "!sysprompt",
+    } as TurnRequest);
+    assert.match(channelSys.reply ?? "", /google-workspace/);
+    assert.match(channelSys.reply ?? "", /google-drive-sheets/);
+    assert.doesNotMatch(channelSys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
+
+    const read = await app.turn({
+      surface: "test",
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
+      text: "!skill google-workspace",
+    } as TurnRequest);
+    assert.match(read.reply ?? "", /Google Workspace/);
+    assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
+    assert.match(read.reply ?? "", /Authorization: Bearer/);
+
+    const drive = await app.turn({
+      surface: "test",
+      actor,
+      conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },
+      text: "!skill google-drive-sheets",
+    } as TurnRequest);
+    assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
+    assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
   });
-  const { app } = built;
-  const actor = { externalId: "U1" };
-  const sys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills" },
-    text: "!sysprompt",
-  } as TurnRequest);
-  assert.match(sys.reply ?? "", /google-workspace/);
-  assert.match(sys.reply ?? "", /google-drive-sheets/);
-  assert.match(sys.reply ?? "", /github-gitlab/);
-  assert.doesNotMatch(sys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
-
-  const channelSys = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "channel", channelRef: "C1", threadRef: "channel:C1:seeded-skills", audience: [actor] },
-    text: "!sysprompt",
-  } as TurnRequest);
-  assert.match(channelSys.reply ?? "", /google-workspace/);
-  assert.match(channelSys.reply ?? "", /google-drive-sheets/);
-  assert.doesNotMatch(channelSys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
-
-  const read = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-skills-read" },
-    text: "!skill google-workspace",
-  } as TurnRequest);
-  assert.match(read.reply ?? "", /Google Workspace/);
-  assert.match(read.reply ?? "", /VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM/);
-  assert.match(read.reply ?? "", /Authorization: Bearer/);
-
-  const drive = await app.turn({
-    surface: "test",
-    actor,
-    conversation: { kind: "dm", threadRef: "dm:U1:seeded-drive-read" },
-    text: "!skill google-drive-sheets",
-  } as TurnRequest);
-  assert.match(drive.reply ?? "", /Google Drive \/ Docs \/ Sheets \/ Slides/);
-  assert.match(drive.reply ?? "", /sheets\.googleapis\.com/);
 });
 
 function fakeSandbox() {

@@ -12,7 +12,7 @@ import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/re
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createRenderWorkspaceStore } from "./workspace/render-workspace-store.ts";
+import { createRenderWorkspaceStore, RENDER_WORKSPACE_MIGRATIONS } from "./workspace/render-workspace-store.ts";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
@@ -52,14 +52,14 @@ import {
   sessionTreeRoot,
   sessionTreeRunCount,
   sessionTreeWorking,
-  stoppableAncestors,
+  stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
   createSandboxResources,
   type SandboxResource,
@@ -107,7 +107,7 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -124,9 +124,9 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { APP_PAGE_VIEW_MIGRATIONS, createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
-import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
@@ -150,7 +150,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { inTenantOf } from "./tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "./tenants/claim.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -307,12 +307,18 @@ import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } f
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
+  INSTANCE_HEARTBEAT_MIGRATIONS,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
-import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
+import {
+  createPostgresProcessRegistry,
+  PROCESS_REGISTRY_MIGRATIONS,
+  type ProcessRegistry,
+} from "./processes/process-registry.ts";
+import { MEMORY_VECTOR_MIGRATIONS } from "./memory/postgres-vector-store.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -705,6 +711,13 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
+  registerPgMigrations(databaseUrl, [
+    ...RENDER_WORKSPACE_MIGRATIONS,
+    ...FILE_UPLOAD_MIGRATIONS,
+    ...BUDGET_MIGRATIONS,
+    ...MEMORY_VECTOR_MIGRATIONS,
+    ...PROCESS_REGISTRY_MIGRATIONS,
+  ]);
   const workspace =
     config.workspaceStore === "postgres"
       ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
@@ -753,9 +766,9 @@ export function buildApp(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionEntries: (sessionId) => {
+      sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
     (scope) => memoryTidy.ensure(scope),
@@ -1115,6 +1128,8 @@ export function buildApp(
   const tenantRouting = tenantSandboxRouting(() => tenantSettings.get(), sandboxBackends, misconfiguredSandboxes);
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
+  const sandboxRollout = artifactMap<{ activatedAt: string }>("sandbox_resource_rollout");
+  const legacySandboxRoutes = artifactMap<LegacyRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
@@ -1126,8 +1141,8 @@ export function buildApp(
         }),
         records: sandboxRecords,
         defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        marker: sandboxRollout,
+        routes: () => legacySandboxRoutes.entries(),
         lock: advisoryLock,
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
         legacyScopes: async () => [
@@ -1259,8 +1274,9 @@ export function buildApp(
         }
       : {}),
   });
+  const browserSessions = artifactMap<StoredBrowserSession>("browser_sessions");
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
+    ? createBrowserSessionStore({ sessions: browserSessions, key: credentialKey })
     : undefined;
   const connectorTokens = credentialStore;
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
@@ -1461,9 +1477,9 @@ export function buildApp(
     );
   };
   const workingAncestors = async (session: Session) => {
-    const candidates = await stoppableAncestors(sessions, session);
-    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
-    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
+    const root = await stoppableRoot(sessions, session);
+    const awaiting = await blockingApprovalSessions(root ? [root.id] : []);
+    const ancestors = root && !awaiting.has(root.id) ? [root] : [];
     return Promise.all(
       ancestors.map(async (ancestor) => ({
         session: ancestor,
@@ -1542,6 +1558,7 @@ export function buildApp(
     processes = createPostgresProcessRegistry(databaseUrl);
   }
 
+  registerPgMigrations(databaseUrl, APP_PAGE_VIEW_MIGRATIONS);
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
@@ -1722,7 +1739,7 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -1990,6 +2007,7 @@ export function buildApp(
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
   const orchestratorDeps: OrchestratorDeps = {
+    admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
@@ -2033,7 +2051,6 @@ export function buildApp(
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
     securityScreenTimeoutMs: config.securityScreenTimeoutMs,
     securityScreener,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
@@ -2112,7 +2129,7 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
-  const reaper: Reaper = createReaper(runs, sessions, {
+  const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
     maxAgeMs: config.runMaxAgeMs,
@@ -2122,7 +2139,7 @@ export function buildApp(
   let reapInFlight = false;
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
+  const pokeReaper = crossTenantLoop((): void => {
     if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
     void leaderLease
@@ -2132,7 +2149,7 @@ export function buildApp(
         reapInFlight = false;
         lastReapAt = Date.now();
       });
-  };
+  });
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },
@@ -2297,7 +2314,7 @@ export function buildApp(
       const settle = async (target: Session): Promise<boolean> => {
         if (await runs.activeForThread(target.threadRef)) return false;
         const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        if (!waiting && !target.parentSessionId && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({
           threadRef: target.threadRef,
@@ -2309,7 +2326,8 @@ export function buildApp(
         return true;
       };
       if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+      const root = await stoppableRoot(sessions, session);
+      if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
@@ -2594,6 +2612,7 @@ export function buildApp(
         active: () => backgroundActive(),
       }
     : undefined;
+  registerPgMigrations(databaseUrl, INSTANCE_HEARTBEAT_MIGRATIONS);
   const instanceRegistry: InstanceRegistry =
     pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
@@ -2608,7 +2627,6 @@ export function buildApp(
     createWorker({
       admittedWork,
       runs,
-      sessions,
       orchestrator,
       leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,

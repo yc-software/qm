@@ -11,8 +11,13 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 afterEach(() => setCustomProviders([]));
 
@@ -24,7 +29,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     tenantSettings: testTenantSettings({ PI_MODEL: "custom/acme-gateway/acme-large" }),
     modelCredentialFetch: async () => new Response(null, { status: 200 }),
   });
-  await built.tenantSettings.get();
+  await inTestTenant(() => built.tenantSettings.get());
   const deps = serverDeps(config, built);
   assert.equal(deps.customProviders, built.customProviders);
   assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);

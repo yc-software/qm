@@ -16,6 +16,7 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -26,11 +27,12 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   let base: string;
   let built: BuiltApp;
 
-  const token = async (p: string, secret = PID) => mintSignedPayload({ p, exp: Date.now() + 60_000 }, secret);
+  const token = async (p: string, secret = PID) =>
+    mintSignedPayload({ p, t: testTenants()[0], exp: Date.now() + 60_000 }, secret);
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
-    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
     server = createInsecureTestServer(built.app, {
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
@@ -47,10 +49,11 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  const get = (headers: Record<string, string> = {}) => fetch(`${base}/v1/sessions/nope?viewer=U1`, { headers });
+  const get = (headers: Record<string, string> = {}) =>
+    fetch(`${base}/v1/sessions/nope?viewer=U1`, { headers: { ...testTenantHeaders(), ...headers } });
 
   it("passes the gate when a valid portal identity matches the requested viewer", async () => {
-    assert.equal((await get({ "x-portal-identity": await token("U1") })).status, 404);
+    assert.equal((await get({ ...testTenantHeaders(), "x-portal-identity": await token("U1") })).status, 404);
   });
 
   it("rejects (401) when no portal identity is forwarded", async () => {
@@ -67,18 +70,21 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("run event streams require a verified actor and preserve run visibility", async () => {
     const actor = { id: "internal:U1", type: "internal" as const };
-    const { run } = await built.runs.enqueue({
-      sessionId: "identity-gate-run",
-      request: {
-        actor,
-        conversation: { kind: "dm", threadRef: "identity-gate-run", audience: [actor] },
-        origin: { kind: "direct" },
-        text: "test request",
-      },
+    const run = await inTestTenant(async () => {
+      const { run } = await built.runs.enqueue({
+        sessionId: "identity-gate-run",
+        request: {
+          actor,
+          conversation: { kind: "dm", threadRef: "identity-gate-run", audience: [actor] },
+          origin: { kind: "direct" },
+          text: "test request",
+        },
+      });
+      const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
+      assert.ok(claimed?.leaseToken);
+      await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
+      return run;
     });
-    const claimed = await built.runs.claimById(run.id, "identity-gate-worker", 60_000);
-    assert.ok(claimed?.leaseToken);
-    await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
     const strictServer = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
@@ -92,7 +98,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       const path = `/v1/runs/${run.id}/events?nonce=${crypto.randomUUID()}`;
       return fetch(`${strictBase}${path}`, {
         headers: {
-          ...signedHeaders(SOURCE, "GET", path, ""),
+          ...inTestTenant(() => signedHeaders(SOURCE, "GET", path, "")),
           ...(identity ? { "x-portal-identity": identity } : {}),
         },
         signal: AbortSignal.timeout(5_000),
@@ -128,7 +134,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...headers },
+      headers: { "content-type": "application/json", ...testTenantHeaders(), ...headers },
       body: JSON.stringify(body),
     });
 
@@ -145,18 +151,18 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     ]) {
       assert.equal((await fetch(`${base}${path}U1`)).status, 401, `${path} without an identity`);
       assert.equal(
-        (await fetch(`${base}${path}U2`, { headers: { "x-portal-identity": alice } })).status,
+        (await fetch(`${base}${path}U2`, { headers: { ...testTenantHeaders(), "x-portal-identity": alice } })).status,
         403,
         `${path} naming another principal`,
       );
-      const mine = await fetch(`${base}${path}U1`, { headers: { "x-portal-identity": alice } });
+      const mine = await fetch(`${base}${path}U1`, { headers: { ...testTenantHeaders(), "x-portal-identity": alice } });
       assert.ok(mine.status !== 401 && mine.status !== 403, `${path} as myself should reach the handler`);
     }
   });
 
   it("session sharing mutations bind the portal actor", async () => {
     for (const method of ["POST"]) {
-      for (const headers of [{}, { "x-portal-identity": await token("U1") }]) {
+      for (const headers of [{}, { ...testTenantHeaders(), "x-portal-identity": await token("U1") }]) {
         const response = await fetch(`${base}/v1/sessions/s1/share`, {
           method,
           headers: { "content-type": "application/json", ...headers },
@@ -175,14 +181,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
         body: JSON.stringify({ principalId: "U2", facts: [{ id: "1", text: "x" }] }),
       });
     assert.equal((await patch({})).status, 401);
-    const r = await patch({ "x-portal-identity": await token("U1") });
+    const r = await patch({ ...testTenantHeaders(), "x-portal-identity": await token("U1") });
     assert.equal(r.status, 403, "editing another person's memory must not pass on a bare valid actor");
   });
 
   it("directory resolve requires a portal actor even though it names no identity field", async () => {
     assert.equal((await fetch(`${base}/v1/directory/resolve?q=alice`)).status, 401);
     const r = await fetch(`${base}/v1/directory/resolve?q=alice`, {
-      headers: { "x-portal-identity": await token("U1") },
+      headers: { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
     });
     assert.ok(r.status !== 401, "a verified actor may resolve names");
   });
@@ -191,7 +197,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const r = await post(
       "/v1/skills",
       { principalId: "U2", name: "x", body: "y" },
-      { "x-portal-identity": await token("U1") },
+      { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
     );
     assert.equal(r.status, 403);
   });
@@ -199,13 +205,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   it("Project reads and every mutation bind principalId to the portal identity", async () => {
     assert.equal((await fetch(`${base}/v1/projects?principalId=U1`)).status, 401);
     assert.equal(
-      (await fetch(`${base}/v1/projects?principalId=U2`, { headers: { "x-portal-identity": await token("U1") } }))
-        .status,
+      (
+        await fetch(`${base}/v1/projects?principalId=U2`, {
+          headers: { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
+        })
+      ).status,
       403,
     );
     assert.equal(
-      (await fetch(`${base}/v1/projects?principalId=U1`, { headers: { "x-portal-identity": await token("U1") } }))
-        .status,
+      (
+        await fetch(`${base}/v1/projects?principalId=U1`, {
+          headers: { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
+        })
+      ).status,
       200,
     );
 
@@ -216,7 +228,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     ] as const) {
       const response = await fetch(`${base}${path}`, {
         method,
-        headers: { "content-type": "application/json", "x-portal-identity": await token("U1") },
+        headers: { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": await token("U1") },
         body: JSON.stringify(body),
       });
       assert.equal(response.status, 403, `${method} ${path}`);
@@ -240,7 +252,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     ] as const) {
       const init = {
         method,
-        headers: { "content-type": "application/json", "x-portal-identity": alice },
+        headers: { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": alice },
         ...(method === "PATCH" ? { body: JSON.stringify({ title: "changed" }) } : {}),
       };
       assert.equal((await fetch(`${base}${path}${suffix}`, init)).status, 403, `${method} without principalId`);
@@ -251,14 +263,18 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       );
     }
     assert.equal(
-      (await fetch(`${base}${path}?principalId=U1`, { headers: { "x-portal-identity": alice } })).status,
+      (
+        await fetch(`${base}${path}?principalId=U1`, {
+          headers: { ...testTenantHeaders(), "x-portal-identity": alice },
+        })
+      ).status,
       200,
     );
     assert.equal(
       (
         await fetch(`${base}${path}?principalId=U1`, {
           method: "PATCH",
-          headers: { "content-type": "application/json", "x-portal-identity": alice },
+          headers: { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": alice },
           body: JSON.stringify({ schedule: { everyMs: 1 } }),
         })
       ).status,
@@ -268,29 +284,35 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       (
         await fetch(`${base}${path}?principalId=U1`, {
           method: "PATCH",
-          headers: { "content-type": "application/json", "x-portal-identity": alice },
+          headers: { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": alice },
           body: JSON.stringify({ title: "mine" }),
         })
       ).status,
       200,
     );
     assert.equal(
-      (await fetch(`${base}${path}?principalId=U1`, { method: "DELETE", headers: { "x-portal-identity": alice } }))
-        .status,
+      (
+        await fetch(`${base}${path}?principalId=U1`, {
+          method: "DELETE",
+          headers: { ...testTenantHeaders(), "x-portal-identity": alice },
+        })
+      ).status,
       200,
     );
   });
 
   it("binds webhook, deployment, and approval routes to the verified actor", async () => {
     const alice = await token("U1");
-    const aliceHeaders = { "content-type": "application/json", "x-portal-identity": alice };
-    const webhook = await built.app.createWebhook({
-      ownerScopeId: "personal:U2",
-      owner: "U2",
-      createdBy: "U2",
-      action: "private webhook",
-      verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
-    });
+    const aliceHeaders = { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": alice };
+    const webhook = await inTestTenant(() =>
+      built.app.createWebhook({
+        ownerScopeId: "personal:U2",
+        owner: "U2",
+        createdBy: "U2",
+        action: "private webhook",
+        verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
+      }),
+    );
     assert.equal((await fetch(`${base}/v1/webhooks?viewer=U2`, { headers: aliceHeaders })).status, 403);
     assert.deepEqual(
       (
@@ -338,15 +360,17 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.equal(response.status, 403, `deployment ${suffix}`);
     }
 
-    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
-      mode: "denylist",
-      rules: [{ pattern: "printf", decision: "require_approval" }],
-    });
-    const pending = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "web:U2:private" },
-      text: "!run printf private",
+    const pending = await inTestTenant(async () => {
+      await built.config.setCommandPolicy(scopeId("org", "default-org"), {
+        mode: "denylist",
+        rules: [{ pattern: "printf", decision: "require_approval" }],
+      });
+      return built.app.turn({
+        surface: "web",
+        actor: { externalId: "U2" },
+        conversation: { kind: "dm", threadRef: "web:U2:private" },
+        text: "!run printf private",
+      });
     });
     assert.equal(pending.status, "pending_approval");
     const requestId = pending.pendingApprovals![0]!.requestId;
@@ -363,7 +387,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const r = await post(
       "/v1/turns",
       { surface: "web", text: "hi", actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "t" } },
-      { "x-portal-identity": await token("U1") },
+      { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
     );
     assert.equal(r.status, 403);
   });
@@ -375,7 +399,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       actor: { externalId: "U2" },
       conversation: { kind: "dm", threadRef: "t" },
     };
-    const identity = { "x-portal-identity": await token("U1") };
+    const identity = { ...testTenantHeaders(), "x-portal-identity": await token("U1") };
     assert.equal((await post("/v1/turns", turn, identity)).status, 403);
     assert.equal((await post("/v1/%74urns", turn, identity)).status, 404);
     assert.equal((await post("/v1/%74urns", turn)).status, 404);
@@ -400,7 +424,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {
-    const r = await post("/v1/session-cap", {}, { "x-portal-identity": await token("U1") });
+    const r = await post("/v1/session-cap", {}, { ...testTenantHeaders(), "x-portal-identity": await token("U1") });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { token: unknown };
     assert.equal(typeof body.token, "string", "token must be the minted string, not a serialized Promise");

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import {
   createRenderSandbox,
   type StoredRenderSandbox,
@@ -15,7 +16,7 @@ import {
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
-import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { migrateTestDatabase, testMap, testAdvisoryLock } from "./support/test-database.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "render-scratch-"));
@@ -321,6 +322,8 @@ test(
     const table = `render_scratch_test_${randomUUID().replaceAll("-", "")}`;
     const initial = first.map<StoredRenderScratch>(table);
     const recovered = second.map<StoredRenderScratch>(table);
+    const ownerDb = createPgPool(process.env.DATABASE_OWNER_URL!);
+    await migrateTestDatabase(process.env.DATABASE_URL);
     fake.failTerminate(new Error("termination refused"));
     try {
       const owner = make(initial, createPostgresAdvisoryLock(first.pool));
@@ -328,19 +331,17 @@ test(
       await assert.rejects(owner.teardown(handle, { destroy: true }), /termination refused/);
       await first.pool.close();
       assert.equal((await recovered.get(handle.id))?.cleanupPending, true);
-      const applied = await second.pool.q("SELECT id FROM qm_schema_migrations WHERE id=$1", [
-        `durable-map/${table}/0001`,
-      ]);
+      const applied = await ownerDb.q("SELECT id FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
       assert.equal(applied.length, 1);
       fake.failTerminate();
       assert.deepEqual(await make(recovered, createPostgresAdvisoryLock(second.pool)).reapDeepIdle!(0), { reaped: 1 });
       assert.equal(fake.sandboxes.get(handle.providerSandboxId!)?.status, "terminated");
       assert.deepEqual(await recovered.entries(), []);
     } finally {
-      await second.pool.q(`DROP TABLE IF EXISTS ${table}`);
-      await second.pool.q("DELETE FROM durable_map_versions WHERE tbl=$1", [table]);
-      await second.pool.q("DELETE FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
-      await Promise.all([first.pool.close(), second.pool.close()]);
+      await ownerDb.q(`DROP TABLE IF EXISTS ${table}`);
+      await ownerDb.q("DELETE FROM durable_map_versions WHERE tbl=$1", [table]);
+      await ownerDb.q("DELETE FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
+      await Promise.all([first.pool.close(), second.pool.close(), ownerDb.close()]);
     }
   },
 );

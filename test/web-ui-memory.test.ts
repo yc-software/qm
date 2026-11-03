@@ -13,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -57,7 +58,9 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
   assert.equal(empty.status, 200);
   assert.deepEqual(((await empty.json()) as Facts).facts, []);
 
-  await built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
+  await inTestTenant(() =>
+    built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2)),
+  );
   const [al, oakland] = ((await (await fetch(`${webBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
 
   const edit = await fetch(
@@ -82,7 +85,7 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
     }),
   );
   assert.equal(spoofed.status, 404, "bob's notebook has no such fact; a spoofed principalId is ignored");
-  assert.equal(await built.memory.read("personal:alice"), "- (2026-01-02) Calls me Ally");
+  assert.equal(await inTestTenant(() => built.memory.read("personal:alice")), "- (2026-01-02) Calls me Ally");
 });
 
 test("memory routes require a signed-in principal", async () => {

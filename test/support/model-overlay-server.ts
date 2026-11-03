@@ -4,6 +4,7 @@ import { serverDeps } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { buildApp, testTenantSettings } from "./build-app.ts";
 import { testConfig } from "./test-config.ts";
+import { inTestTenant } from "./test-tenants.ts";
 
 const config = testConfig({
   databaseUrl: process.env.MODEL_OVERLAY_TEST_DATABASE_URL,
@@ -20,7 +21,7 @@ const built = buildApp(config, {
   ),
 });
 if (!(await built.modelCredentials.resolve("openai")))
-  await built.modelCredentials.set("openai", "local-test-key", "admin-alice");
+  await inTestTenant(() => built.modelCredentials.set("openai", "local-test-key", "admin-alice"));
 await built.tenantSettings.get();
 const server = createInsecureTestServer(built.app, serverDeps(config, built));
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

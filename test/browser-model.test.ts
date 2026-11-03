@@ -15,6 +15,7 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 
 const model = "claude-opus-5";
@@ -148,48 +149,11 @@ test("browser inference uses the company gateway with scoped model authorization
   assert.equal(calls.length, 3);
 });
 
-test("gateway deployment provisions a browser token without exposing the company model key", async () => {
-  const config = testConfig({
-    signingSecret: "ingress-secret".repeat(3),
-    apiBaseUrl: "https://core.example.test",
-  });
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
-    tenantSettings: gatewaySettings(),
-  });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
-  let captured: ProvisionOptions | undefined;
-  const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
-    captured = opts;
-    return provision(layers, opts);
-  };
-  const result = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "dm:U1:browser" },
-    text: "!run echo browser",
-  });
-  assert.equal(result.status, "ok");
-  const env = captured?.env;
-  assert.equal(env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
-  assert.equal(env?.BROWSE_LAB_BASE_URL, "https://core.example.test/v1/browser-model");
-  assert.ok(!Object.values(env ?? {}).includes(key));
-  const claims = await verifyCapabilityToken(env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims?.aud, BROWSER_MODEL_AUD);
-  assert.equal(claims?.browserModel, model);
-  assert.equal(claims?.scopeId, "personal:U1");
-  assert.equal(claims?.sessionId, result.sessionId);
-  assert.equal(claims?.origin, "conversation");
-  assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
-});
-
-test("gateway browsing never selects a direct provider when callback signing or URL is missing", async () => {
-  for (const missing of [{ signingSecret: undefined }, { apiBaseUrl: undefined }]) {
+test("gateway deployment provisions a browser token without exposing the company model key", () =>
+  inTestTenant(async () => {
     const config = testConfig({
       signingSecret: "ingress-secret".repeat(3),
       apiBaseUrl: "https://core.example.test",
-      ...missing,
     });
     const built = buildApp(config, {
       modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
@@ -202,16 +166,55 @@ test("gateway browsing never selects a direct provider when callback signing or 
       captured = opts;
       return provision(layers, opts);
     };
-    await built.app.turn({
+    const result = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:missing" },
-      text: "!run echo missing",
+      conversation: { kind: "dm", threadRef: "dm:U1:browser" },
+      text: "!run echo browser",
     });
-    assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
-    assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
-  }
-});
+    assert.equal(result.status, "ok");
+    const env = captured?.env;
+    assert.equal(env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
+    assert.equal(env?.BROWSE_LAB_BASE_URL, "https://core.example.test/v1/browser-model");
+    assert.ok(!Object.values(env ?? {}).includes(key));
+    const claims = await verifyCapabilityToken(env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
+    assert.equal(claims?.aud, BROWSER_MODEL_AUD);
+    assert.equal(claims?.browserModel, model);
+    assert.equal(claims?.scopeId, "personal:U1");
+    assert.equal(claims?.sessionId, result.sessionId);
+    assert.equal(claims?.origin, "conversation");
+    assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
+  }));
+
+test("gateway browsing never selects a direct provider when callback signing or URL is missing", () =>
+  inTestTenant(async () => {
+    for (const missing of [{ signingSecret: undefined }, { apiBaseUrl: undefined }]) {
+      const config = testConfig({
+        signingSecret: "ingress-secret".repeat(3),
+        apiBaseUrl: "https://core.example.test",
+        ...missing,
+      });
+      const built = buildApp(config, {
+        modelCredentialFetch: async () => new Response("unavailable", { status: 503 }),
+        tenantSettings: gatewaySettings(),
+      });
+      await selectDefaultSandbox(built, "U1", "personal:U1");
+      let captured: ProvisionOptions | undefined;
+      const provision = built.sandbox.provision.bind(built.sandbox);
+      built.sandbox.provision = (layers, opts) => {
+        captured = opts;
+        return provision(layers, opts);
+      };
+      await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:missing" },
+        text: "!run echo missing",
+      });
+      assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
+      assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
+    }
+  }));
 
 test("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
   const calls: Array<{ key: string | undefined; model: string }> = [];
@@ -254,8 +257,8 @@ test("company browsing without a gateway uses current deployment credentials and
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`,
     }),
   });
-  await built.modelCredentials.set("anthropic", "deployment-key", "U1");
-  await built.tenantSettings.get();
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "deployment-key", "U1"));
+  await inTestTenant(() => built.tenantSettings.get());
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -290,13 +293,13 @@ test("company browsing without a gateway uses current deployment credentials and
     ((await first.json()) as { choices: Array<{ message: { content: string } }> }).choices[0]?.message.content,
     "DIRECT_OK",
   );
-  await built.modelCredentials.set("anthropic", "rotated-admin-key", "U1");
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "rotated-admin-key", "U1"));
   assert.equal((await post()).status, 200);
   assert.deepEqual(calls, [
     { key: "deployment-key", model },
     { key: "rotated-admin-key", model },
   ]);
-  await built.modelCredentials.delete("anthropic", "U1");
+  await inTestTenant(() => built.modelCredentials.delete("anthropic", "U1"));
   assert.equal((await post()).status, 503);
   assert.equal(calls.length, 2);
 });

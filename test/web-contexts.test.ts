@@ -10,10 +10,11 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { ContextSummary } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
-  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -21,7 +22,9 @@ async function start() {
 }
 
 const contexts = async (base: string, principalId: string): Promise<ContextSummary[]> => {
-  const res = await fetch(`${base}/v1/contexts?principalId=${encodeURIComponent(principalId)}`);
+  const res = await fetch(`${base}/v1/contexts?principalId=${encodeURIComponent(principalId)}`, {
+    headers: testTenantHeaders(),
+  });
   assert.equal(res.status, 200);
   return ((await res.json()) as { contexts: ContextSummary[] }).contexts;
 };
@@ -29,7 +32,7 @@ const contexts = async (base: string, principalId: string): Promise<ContextSumma
 const webTurn = (base: string, actor: string, conversation: unknown, text = "hi") =>
   fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...testTenantHeaders() },
     body: JSON.stringify({ surface: "web", actor: { externalId: actor }, conversation, text }),
   });
 
@@ -41,12 +44,14 @@ test("GET /v1/contexts: personal always; public channels and current private mem
     assert.equal(before[0]!.scopeId, "personal:alice");
     assert.equal(before[0]!.kind, "personal");
 
-    await s.built.app.upsertChannels(
-      [
-        { channelId: "C1", name: "eng", isPrivate: false },
-        { channelId: "C2", name: "sekrit", isPrivate: true },
-      ],
-      [{ channelId: "C2", principalId: "alice" }],
+    await inTestTenant(() =>
+      s.built.app.upsertChannels(
+        [
+          { channelId: "C1", name: "eng", isPrivate: false },
+          { channelId: "C2", name: "sekrit", isPrivate: true },
+        ],
+        [{ channelId: "C2", principalId: "alice" }],
+      ),
     );
 
     const alice = await contexts(s.base, "alice");
@@ -68,16 +73,20 @@ test("GET /v1/contexts: personal always; public channels and current private mem
 test("web turns into a shared scope are membership-checked; sessions then count toward the context", async () => {
   const s = await start();
   try {
-    await s.built.app.upsertDirectory([
-      { principalId: "alice", displayName: "Alice", type: "internal" },
-      { principalId: "bob", displayName: "Bob", type: "internal" },
-    ]);
-    await s.built.app.upsertChannels(
-      [
-        { channelId: "C1", name: "eng", isPrivate: false },
-        { channelId: "C2", name: "sekrit", isPrivate: true },
-      ],
-      [{ channelId: "C2", principalId: "alice" }],
+    await inTestTenant(() =>
+      s.built.app.upsertDirectory([
+        { principalId: "alice", displayName: "Alice", type: "internal" },
+        { principalId: "bob", displayName: "Bob", type: "internal" },
+      ]),
+    );
+    await inTestTenant(() =>
+      s.built.app.upsertChannels(
+        [
+          { channelId: "C1", name: "eng", isPrivate: false },
+          { channelId: "C2", name: "sekrit", isPrivate: true },
+        ],
+        [{ channelId: "C2", principalId: "alice" }],
+      ),
     );
 
     const aliceOk = await webTurn(s.base, "alice", { kind: "channel", threadRef: "web:alice:t1", channelRef: "C2" });
@@ -102,7 +111,7 @@ test("web turns into a shared scope are membership-checked; sessions then count 
     const c2 = alice.find((c) => c.scopeId === "channel:C2")!;
     assert.equal(c2.sessionCount, 1);
     assert.ok((c2.lastActivityAt ?? 0) > 0);
-    const aliceSessions = await s.built.app.listSessions("alice");
+    const aliceSessions = await inTestTenant(() => s.built.app.listSessions("alice"));
     const expected = Math.max(
       ...aliceSessions.filter((x) => x.scopeId === "channel:C2").map((x) => x.lastActivityAt ?? x.createdAt),
     );
@@ -121,7 +130,7 @@ test("a web turn carrying fastMode on a non-fast model is accepted; dispatch mas
   try {
     const res = await fetch(`${s.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify({
         surface: "web",
         actor: { externalId: "alice" },
@@ -142,7 +151,7 @@ test("prior participation never authorizes a shared scope after directory member
   try {
     const slack = await fetch(`${s.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify({
         surface: "slack",
         actor: { externalId: "alice" },
@@ -174,12 +183,14 @@ test("prior participation never authorizes a shared scope after directory member
 test("a web turn can't pair an authorized scope claim with a thread living elsewhere", async () => {
   const s = await start();
   try {
-    await s.built.app.upsertChannels(
-      [{ channelId: "C2", name: "sekrit", isPrivate: true }],
-      [
-        { channelId: "C2", principalId: "alice" },
-        { channelId: "C2", principalId: "carol" },
-      ],
+    await inTestTenant(() =>
+      s.built.app.upsertChannels(
+        [{ channelId: "C2", name: "sekrit", isPrivate: true }],
+        [
+          { channelId: "C2", principalId: "alice" },
+          { channelId: "C2", principalId: "carol" },
+        ],
+      ),
     );
 
     assert.equal((await webTurn(s.base, "alice", { kind: "dm", threadRef: "web:alice:p1" })).status, 200);
@@ -216,13 +227,13 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
 test("directory push stores the workspace URL; /v1/directory/meta serves it", async () => {
   const s = await start();
   try {
-    const before = await fetch(`${s.base}/v1/directory/meta`);
+    const before = await fetch(`${s.base}/v1/directory/meta`, { headers: testTenantHeaders() });
     assert.equal(before.status, 200);
     assert.deepEqual(await before.json(), { workspaceUrl: null });
 
     const push = await fetch(`${s.base}/v1/directory`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify({
         members: [{ principalId: "alice", displayName: "Alice", type: "internal" }],
         workspaceUrl: "https://acme.slack.com/",
@@ -230,7 +241,9 @@ test("directory push stores the workspace URL; /v1/directory/meta serves it", as
     });
     assert.equal(push.status, 200);
 
-    const after = (await (await fetch(`${s.base}/v1/directory/meta`)).json()) as { workspaceUrl: string | null };
+    const after = (await (await fetch(`${s.base}/v1/directory/meta`, { headers: testTenantHeaders() })).json()) as {
+      workspaceUrl: string | null;
+    };
     assert.equal(after.workspaceUrl, "https://acme.slack.com", "stored normalized, trailing slash dropped");
   } finally {
     await s.close();
