@@ -53,6 +53,10 @@ export async function delegatedAuthorizationOrigin(
   )
     return;
   const source = await deps.runs.get(request.delegatingRunId);
+  if (!source)
+    console.warn(
+      `[authority] delegating run ${request.delegatingRunId} of ${request.conversation.threadRef} is gone; no inherited authority`,
+    );
   const sender = await deps.sessions.getForParticipant(request.sessionSenderId, request.actor.id);
   const child = await deps.sessions.getByThread(request.conversation.threadRef);
   if (!source || !sender || !child) return;
