@@ -77,7 +77,7 @@ test("listing a root's children costs the same number of queries for 3 children 
   assert.equal(busy, small);
 });
 
-test("a working session marks its same-scope ancestors working, skipping ancestors in another scope", async () => {
+test("a session's same-scope ancestors come back nearest first, skipping ancestors in another scope", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ancestors-")), seedSkills: false }));
   try {
     const session = async (threadRef: string, scope: string, parent?: Session) => {
@@ -90,7 +90,11 @@ test("a working session marks its same-scope ancestors working, skipping ancesto
     const mid = await session("subagent:root:2", "personal:U1", elsewhere);
     const leaf = await session("subagent:root:3", "personal:U1", mid);
     const ancestors = await built.sessions.sameScopeAncestors([leaf.threadRef, "web:U1:missing"]);
-    assert.deepEqual(ancestors.map((a) => a.threadRef).sort(), [mid.threadRef, root.threadRef].sort());
+    assert.deepEqual(
+      ancestors.map((a) => a.threadRef),
+      [mid.threadRef, root.threadRef],
+      "nearest ancestor first",
+    );
     assert.deepEqual(await built.sessions.sameScopeAncestors([root.threadRef]), []);
   } finally {
     await built.runtime.stop();
