@@ -526,7 +526,7 @@ export interface SessionStore {
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
 
-  recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
+  recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 

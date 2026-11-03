@@ -830,7 +830,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows[0] ? rowToEntry(rows[0]) : undefined;
     },
 
-    async recordLlmRequest(sessionId, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord> {
+    async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope) {
         await q(
@@ -838,7 +838,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
-          { signal },
         );
       }
       const full: LlmRequestRecord = {
@@ -870,7 +869,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.usage ? JSON.stringify(full.usage) : null,
           full.transport ? JSON.stringify(full.transport) : null,
         ],
-        { signal },
       );
       return full;
     },
