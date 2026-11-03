@@ -1,5 +1,7 @@
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
+import { boundedResponse } from "../util/bytes.ts";
+import type { AddressFetch } from "../util/network.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
 import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
 import type { MemoryService } from "./memory-service.ts";
@@ -7,9 +9,25 @@ import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { SessionEntry } from "../types.ts";
 
-function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
+const MAX_RESPONSE_BYTES = 1_000_000;
+
+function operation(
+  url: string,
+  spec: McpMemoryOperationConfig,
+  timeoutMs: number,
+  fetchFn: AddressFetch,
+): McpMemoryOperation {
   return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth }, fetch }),
+    client: createMcpClient({
+      url,
+      auth: { mode: "client-credentials", ...spec.auth },
+      fetch: async (input, init) =>
+        boundedResponse(
+          await fetchFn(input, init),
+          MAX_RESPONSE_BYTES,
+          () => new Error(`${new URL(input).origin} sent a response larger than ${MAX_RESPONSE_BYTES} bytes`),
+        ),
+    }),
     tool: spec.tool,
     timeoutMs,
     ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),
@@ -30,7 +48,10 @@ export const logMemoryProviderError = (error: unknown, provider: string, operati
 
 export function createMemoryProviders(
   configs: MemoryProviderConfig["providers"],
-  opts: { sessionEntries?: (sessionId: string) => Promise<SessionEntry[]> } = {},
+  opts: {
+    sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+    fetchFor?: (providerId: string) => AddressFetch | undefined;
+  } = {},
 ): Record<string, MemoryService> {
   const providers: Record<string, MemoryService> = {};
   for (const provider of configs) {
@@ -47,9 +68,10 @@ export function createMemoryProviders(
       });
       continue;
     }
+    const fetchFn = opts.fetchFor?.(provider.id) ?? fetch;
     providers[provider.id] = createMcpMemoryProvider({
-      read: operation(provider.url, provider.read, provider.timeoutMs),
-      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
+      read: operation(provider.url, provider.read, provider.timeoutMs, fetchFn),
+      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs, fetchFn) } : {}),
       attestActor: provider.attestActor,
     });
   }

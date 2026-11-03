@@ -7,9 +7,16 @@ import {
 } from "../../auth/capability-token.ts";
 import { KeychainError, type GrantMode } from "../../credentials/keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
-import { MemoryRegistryError, readRegistry, setBrainSecret, type MemoryRegistry } from "../../memory/registry.ts";
+import {
+  brainRefusal,
+  MemoryRegistryError,
+  readRegistry,
+  REGISTRY_ERRORS,
+  setBrainSecret,
+  type MemoryRegistry,
+} from "../../memory/registry.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
-import { samePerson } from "../../directory/person.ts";
+import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -206,15 +213,16 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     });
     return null;
   }
-  const brain = readRegistry((await deps.memoryRegistry.current()).record).brains.find(
-    ({ id }) => id === b.memoryBrain,
-  );
+  const record = readRegistry((await deps.memoryRegistry.current()).record);
+  const brain = record.brains.find(({ id }) => id === b.memoryBrain);
   if (!brain) {
     sendJson(res, 404, { error: "not_found", message: `no memory brain ${String(b.memoryBrain)}` });
     return null;
   }
-  if ((await adminStanding(deps, capability!.actorId)) !== "admin") {
-    sendJson(res, 403, { error: "forbidden", message: `only an org admin can set brain ${brain.id}'s secret` });
+  const actor = canonicalPerson(capability!.actorId);
+  const refusal = brainRefusal(record, brain, actor, await adminStanding(deps, actor));
+  if (refusal) {
+    sendJson(res, 403, { error: "forbidden", message: refusal });
     return null;
   }
   return { id: brain.id, url: brain.url };
@@ -230,7 +238,11 @@ async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<Bra
     origin: new URL(target.url).origin,
     scopes: record.bindings
       .filter((binding) => binding.brain === target.id)
-      .map(({ scope }) => (scope === "personal" ? "every member's personal memory" : scope)),
+      .map(({ scope }) => {
+        if (scope === "personal") return "every member's personal memory";
+        const { ref } = parseScopeId(scope);
+        return ref === canonicalPerson(rec.ownerId) ? "your personal memory" : `${ref}'s personal memory`;
+      }),
   };
 }
 
@@ -253,22 +265,26 @@ async function saveBrainSecret(
     });
     return sendJson(res, status, { error, message });
   };
-  if ((await adminStanding(deps, drop.ownerId)) !== "admin")
-    return refuse(403, "forbidden", "you can no longer set this brain's secret");
-  const save = (record: MemoryRegistry) =>
-    setBrainSecret(record, target, secret, {
+  const owner = canonicalPerson(drop.ownerId);
+  const standing = await adminStanding(deps, owner);
+  const save = (record: MemoryRegistry) => {
+    const brain = record.brains.find(({ id }) => id === target.id);
+    const refusal = brain && brainRefusal(record, brain, owner, standing);
+    if (refusal) throw new MemoryRegistryError(403, `you can no longer set this brain's secret: ${refusal}`);
+    return setBrainSecret(record, target, secret, {
       actor: drop.ownerId,
       now: Date.now(),
       overlayIds: registry.overlayIds,
       key: registry.key,
     });
+  };
   try {
     save(readRegistry((await registry.current()).record));
     if (!(await take())) return;
     await registry.update(save);
   } catch (error) {
     if (!(error instanceof MemoryRegistryError)) throw error;
-    return refuse(error.status, error.status === 409 ? "conflict" : "bad_request", error.message);
+    return refuse(error.status, REGISTRY_ERRORS[error.status], error.message);
   }
   audit(deps, {
     principalId: drop.ownerId,

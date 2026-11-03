@@ -59,6 +59,7 @@ import {
   getMemoryBinding,
   getMemoryBrain,
   getMemoryRegistry,
+  putMemberBrains,
   putMemoryBinding,
   putMemoryBrain,
 } from "./admin/memory-registry.ts";
@@ -367,6 +368,7 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       handle: deleteMemoryBinding,
     },
+    { method: "PUT", path: "/v1/admin/memory-registry/member-brains", auth: "either", handle: putMemberBrains },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "DELETE", path: "/v1/admin/memory", auth: "either", handle: adminMemory },

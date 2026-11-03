@@ -7,7 +7,14 @@ import { createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { orgId } from "../src/config.ts";
-import { putBinding, putBrain, readRegistry, resolveMemoryRegistry } from "../src/memory/registry.ts";
+import {
+  memberBrainId,
+  putBinding,
+  putBrain,
+  readRegistry,
+  resolveMemoryRegistry,
+  setMemberBrains,
+} from "../src/memory/registry.ts";
 import type { DropResolution } from "../src/triggers/keychain-ask.ts";
 import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -22,6 +29,15 @@ const BRAIN = {
   clientId: "qm-personal",
   label: "Acme personal memory",
 };
+
+interface OwnBrain {
+  principalId: string;
+  memberBrains: boolean;
+  brain: { id: string; auth: { clientId: string; hasClientSecret: boolean } } | null;
+  binding: { scope: string } | null;
+  disabled: Array<{ code: string }>;
+  message: string;
+}
 
 async function setup(
   t: { after(fn: () => Promise<void>): void },
@@ -99,12 +115,32 @@ async function setup(
         ),
     };
   };
-  const servedSecret = async () => {
-    const provider = resolveMemoryRegistry(readRegistry((await registry.current()).record), registry).config
-      .providers[0];
+  const servedSecret = async (id = "acme-personal") => {
+    const provider = resolveMemoryRegistry(
+      readRegistry((await registry.current()).record),
+      registry,
+    ).config.providers.find((entry) => entry.id === id);
     return provider?.type === "mcp" ? provider.read.auth.clientSecret : undefined;
   };
-  return { built, change, mint, servedSecret };
+  const self = async (
+    actorId: string,
+    method: string,
+    body?: unknown,
+    extra: Partial<CapabilityClaims> = {},
+  ): Promise<{ status: number; text: string; json: OwnBrain }> => {
+    const cap = await mintCapabilityToken(
+      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS, ...extra },
+      SECRET,
+    );
+    const res = await fetch(`${base}/v1/memory/brain`, {
+      method,
+      headers: { "x-agent-capability": cap, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await res.text();
+    return { status: res.status, text, json: JSON.parse(text) };
+  };
+  return { base, built, change, mint, self, servedSecret };
 }
 
 test("an org admin's brain link saves the client secret core-only, from a project and from a DM", async (t) => {
@@ -215,4 +251,59 @@ test("an unfilled brain link is never a pending sibling of a keychain drop in th
   assert.equal((await stripe.redeem("sk-stripe")).status, 200);
   await waited;
   assert.equal(fires[0]!.pendingSiblings, undefined);
+});
+
+test("a member connects their own brain from chat and sets its secret through their own link only", async (t) => {
+  const { base, built, mint, self, servedSecret } = await setup(t);
+  const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
+  const id = memberBrainId("U-member");
+  assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
+  assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
+  const forged = await self("U-member", "PUT", { ...own, owner: "U-bob" });
+  assert.equal(forged.status, 400);
+  assert.match(forged.json.message, /not owner/);
+  assert.match((await self("U-member", "PUT", { ...own, clientSecret: "s" })).json.message, /never goes through/);
+  assert.equal((await self("U-member", "PUT", { ...own, url: "http://10.0.0.5/mcp" })).status, 400);
+
+  const put = await self("U-member", "PUT", own);
+  assert.equal(put.status, 200);
+  assert.equal(put.json.principalId, "U-member");
+  assert.deepEqual(
+    [put.json.brain?.id, put.json.brain?.auth, put.json.binding?.scope, put.json.disabled.map(({ code }) => code)],
+    [id, { clientId: "member-qm", hasClientSecret: false }, "personal:U-member", ["secret_missing"]],
+  );
+  assert.deepEqual((await self("U-member", "GET")).json.brain, put.json.brain);
+
+  const notTheirs = await mint("U-bob", { memoryBrain: id, purpose: "connect it" });
+  assert.equal(notTheirs.status, 403);
+  assert.match(JSON.parse(notTheirs.text).message, /only an org admin or the brain's owner/);
+  const link = await mint("U-member", { memoryBrain: id, purpose: "connect my brain" });
+  assert.equal(link.status, 200);
+  assert.match((await link.form()).text, /your personal memory/);
+  assert.equal((await link.redeem("member-secret-one")).status, 200);
+  assert.equal(await servedSecret(id), "member-secret-one");
+  const served = (await self("U-member", "GET")).json;
+  assert.deepEqual([served.brain?.auth.hasClientSecret, served.disabled], [true, []]);
+
+  const early = await mint("U-member", { memoryBrain: id, purpose: "rotate it" });
+  await built.memoryRegistry.update((record) => setMemberBrains(record, { enabled: false }));
+  const off = (await self("U-member", "GET")).json;
+  assert.deepEqual([off.memberBrains, off.disabled.map(({ code }) => code)], [false, ["member_brains_off"]]);
+  assert.equal((await self("U-member", "PUT", { label: "Mine" })).status, 403);
+  assert.equal((await mint("U-member", { memoryBrain: id, purpose: "p" })).status, 403);
+  const refused = await early.redeem("member-secret-two");
+  assert.equal(refused.status, 403);
+  assert.match(JSON.parse(refused.text).message, /turned off/);
+
+  const gone = await self("U-member", "DELETE");
+  assert.deepEqual([gone.status, gone.json.brain, gone.json.binding], [200, null, null]);
+  assert.equal(
+    readRegistry((await built.memoryRegistry.current()).record).brains.some((brain) => brain.id === id),
+    false,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const rows = JSON.stringify(await built.auditLog.events());
+  for (const action of ["member-brain.update", "member-brain.delete", "brain.secret.refused"])
+    assert.ok(rows.includes(`memory-registry.${action}`), action);
+  assert.doesNotMatch(rows, /member-secret-/);
 });

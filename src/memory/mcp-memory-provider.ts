@@ -37,7 +37,12 @@ export function createMcpMemoryProvider(opts: {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
-    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
+    const deadline = new AbortController();
+    const result = await withTimeout(
+      () => op.client.callTool(op.tool, args, headers, deadline.signal),
+      op.timeoutMs,
+      "memory provider",
+    ).finally(() => deadline.abort());
     reportEnvelope(mcpEnvelope(result));
     return result;
   };

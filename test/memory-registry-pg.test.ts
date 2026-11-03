@@ -293,10 +293,27 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     (await api.call("DELETE", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org")).status,
     200,
   );
+  const switchOff = { enabled: false };
+  assert.equal(
+    (await api.call("PUT", "/v1/admin/memory-registry/member-brains", "U-nobody@default-org", switchOff)).status,
+    403,
+  );
+  assert.equal(
+    (await api.call("PUT", "/v1/admin/memory-registry/member-brains", "admin-alice@default-org", { enabled: "no" }))
+      .status,
+    400,
+  );
+  const off = await api.call("PUT", "/v1/admin/memory-registry/member-brains", "admin-alice@default-org", switchOff);
+  assert.equal(JSON.parse(off.text).memberBrains, false);
+  assert.equal(
+    JSON.parse((await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org")).text).memberBrains,
+    false,
+  );
   await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
   assert.match(rows, /memory-registry\.binding\.delete/);
+  assert.match(rows, /memory-registry\.member-brains\.update/);
   assert.doesNotMatch(rows, /never-shown-secret/);
 });
 

@@ -4,11 +4,16 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import {
   EMPTY_MEMORY_REGISTRY,
   MemoryRegistryError,
+  brainRefusal,
   deleteBinding,
   deleteBrain,
+  deleteMemberBrain,
+  memberBrainId,
   putBinding,
   putBrain,
+  putMemberBrain,
   resolveMemoryRegistry,
+  setMemberBrains,
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
 
@@ -192,4 +197,114 @@ test("moving a brain drops its secret, and a brain with bindings can't be delete
   refused(() => deleteBrain(record, "acme-personal"), 409, /delete it first/);
   record = deleteBrain(deleteBinding(record, "alice"), "acme-personal");
   assert.deepEqual(record, EMPTY_MEMORY_REGISTRY);
+});
+
+const ALICE_BRAIN = memberBrainId("U1");
+const aliceBrain = (record: MemoryRegistry = EMPTY_MEMORY_REGISTRY, body: Record<string, unknown> = {}) =>
+  putMemberBrain(record, "U1", { url: "https://brain.alice.example/mcp", clientId: "alice-qm", ...body }, change);
+
+test("a member's own brain serves only their personal scope, as them, and names no other owner", () => {
+  const record = aliceBrain();
+  assert.deepEqual(
+    record.brains.map(({ id, owner, preset, label }) => ({ id, owner, preset, label })),
+    [{ id: ALICE_BRAIN, owner: "U1", preset: "gbrain-v1", label: "Personal memory" }],
+  );
+  assert.deepEqual(
+    record.bindings.map(({ id, brain, scope, capture }) => ({ id, brain, scope, capture })),
+    [{ id: ALICE_BRAIN, brain: ALICE_BRAIN, scope: "personal:U1", capture: "explicit" }],
+  );
+  assert.notEqual(memberBrainId("U2"), ALICE_BRAIN);
+  for (const scope of ["personal", "personal:U2"])
+    refused(() => putBinding(record, "other", { brain: ALICE_BRAIN, scope }, change), 400, /only their own/);
+  refused(() => aliceBrain(record, { owner: "U2" }), 400, /takes only url, clientId, label, timeoutMs, not owner/);
+  refused(() => aliceBrain(record, { clientSecret: "s" }), 400, /never goes through the agent/);
+  refused(
+    () =>
+      putMemberBrain(
+        putBrain(
+          EMPTY_MEMORY_REGISTRY,
+          ALICE_BRAIN,
+          { preset: "gbrain-v1", url: "https://x.example/mcp", clientId: "c", label: "l" },
+          change,
+        ),
+        "U1",
+        {},
+        change,
+      ),
+    409,
+    /taken by another brain/,
+  );
+
+  const renamed = putBrain(aliceBrain(record, { label: "Alice's gbrain" }), ALICE_BRAIN, { timeoutMs: 5000 }, change);
+  assert.deepEqual(
+    [renamed.brains[0]!.label, renamed.brains[0]!.owner, renamed.brains[0]!.timeoutMs, renamed.bindings.length],
+    ["Alice's gbrain", "U1", 5000, 1],
+  );
+  assert.deepEqual(deleteMemberBrain(renamed, "U1"), EMPTY_MEMORY_REGISTRY);
+  refused(() => deleteMemberBrain(renamed, "U2"), 404, /no brain connected/);
+});
+
+test("a member's brain needs a public https url, whoever writes it", () => {
+  for (const url of [
+    "http://brain.alice.example/mcp",
+    "https://10.0.0.5/mcp",
+    "https://127.0.0.1:3131/mcp",
+    "https://[::1]/mcp",
+    "https://169.254.169.254/latest",
+  ])
+    refused(() => aliceBrain(EMPTY_MEMORY_REGISTRY, { url }), 400, /public https:\/\/ url/);
+  refused(() => putBrain(aliceBrain(), ALICE_BRAIN, { url: "http://localhost:3131/mcp" }, change), 400, /public https/);
+  assert.equal(
+    personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://localhost:3131/mcp" }).brains[0]!.url,
+    "http://localhost:3131/mcp",
+  );
+});
+
+test("the org switch stops members' brains and refuses new ones, and leaves org brains serving", () => {
+  let record = putBinding(
+    aliceBrain(personalBrain()),
+    "everyone",
+    { brain: "acme-personal", scope: "personal" },
+    change,
+  );
+  record = putBrain(record, ALICE_BRAIN, { clientSecret: "alice-secret" }, change);
+  const serving = (current: MemoryRegistry) => resolveMemoryRegistry(current, change);
+  assert.deepEqual(
+    serving(record).config.routes.map(({ provider }) => provider),
+    [ALICE_BRAIN, "acme-personal"],
+  );
+
+  const off = setMemberBrains(record, { enabled: false });
+  assert.deepEqual(
+    serving(off).config.routes.map(({ provider }) => provider),
+    ["acme-personal"],
+  );
+  assert.deepEqual(
+    serving(off).disabled.map(({ binding, code }) => [binding, code]),
+    [[ALICE_BRAIN, "member_brains_off"]],
+  );
+  refused(() => aliceBrain(off), 403, /turned off/);
+  refused(
+    () => putMemberBrain(off, "U2", { url: "https://brain.bob.example/mcp", clientId: "b" }, change),
+    403,
+    /turned off/,
+  );
+  assert.deepEqual(serving(setMemberBrains(off, { enabled: true })).config.routes.length, 2);
+  refused(() => setMemberBrains(record, { enabled: "no" }), 400, /true or false/);
+});
+
+test("only an org admin, or the brain's own active member while the switch is on, may set a brain's secret", () => {
+  const record = aliceBrain(personalBrain());
+  const alice = record.brains.find(({ id }) => id === ALICE_BRAIN)!;
+  const org = record.brains.find(({ id }) => id === "acme-personal")!;
+  assert.equal(brainRefusal(record, alice, "U1", "member"), undefined);
+  assert.equal(brainRefusal(record, alice, "admin-alice", "admin"), undefined);
+  assert.equal(brainRefusal(record, org, "admin-alice", "admin"), undefined);
+  for (const [brain, who, standing] of [
+    [alice, "U2", "member"],
+    [alice, "U1", "inactive"],
+    [org, "U1", "member"],
+  ] as const)
+    assert.match(brainRefusal(record, brain, who, standing) ?? "", /only an org admin or the brain's owner/);
+  assert.match(brainRefusal(setMemberBrains(record, { enabled: false }), alice, "U1", "member") ?? "", /turned off/);
 });

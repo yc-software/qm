@@ -93,7 +93,12 @@ export type McpAuth =
 
 export interface McpClient {
   listTools(opts?: { headers?: Record<string, string>; maxTools?: number }): Promise<McpListing>;
-  callTool(name: string, args: Record<string, unknown>, headers?: Record<string, string>): Promise<CallToolResult>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    headers?: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<CallToolResult>;
 }
 
 export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: AddressFetch }): McpClient {
@@ -114,16 +119,22 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
     op: string,
     work: (client: Client) => Promise<T>,
     extraHeaders: Record<string, string> = {},
+    signal?: AbortSignal,
   ): Promise<T> {
     const headers = { ...extraHeaders, ...(auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {}) };
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
-      fetch: (url, init) => fetchFn(url, { ...init, redirect: "error" }),
+      fetch: (url, init) =>
+        fetchFn(url, {
+          ...init,
+          redirect: "error",
+          ...(signal ? { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal } : {}),
+        }),
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
     try {
-      await client.connect(transport);
+      await client.connect(transport, signal ? { signal } : undefined);
       return await work(client);
     } catch (e) {
       const status = httpStatus(e);
@@ -133,7 +144,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
         cause: e,
       });
     } finally {
-      await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
+      if (!signal?.aborted) await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
       await client.close();
     }
   }
@@ -164,11 +175,16 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
         },
         opts?.headers,
       ),
-    async callTool(name, args, headers) {
+    async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",
-        (client) => client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
+        (client) =>
+          client.callTool({ name, arguments: args }, undefined, {
+            timeout: CALL_TIMEOUT_MS,
+            ...(signal ? { signal } : {}),
+          }),
         headers,
+        signal,
       )) as CallToolResult;
       if (result.isError) {
         const code = errorCode(result);

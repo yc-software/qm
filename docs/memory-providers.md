@@ -91,7 +91,7 @@ Capture policies are:
 
 MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas.
 
-Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Provider calls time out after `timeoutMs` (3 seconds by default). QM continues to decide readable/writable scopes and passes the acting user to the provider.
+Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Each provider call has a hard deadline of `timeoutMs` (3 seconds by default) that cancels the connection, the OAuth token request and the tool call alike, and QM stops reading any response at 1 MB, so an oversized reply fails the call and an endless one is cut off there and ends at the deadline. QM continues to decide readable/writable scopes and passes the acting user to the provider.
 
 External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall or search for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure the same way on either kind of route, as described under [Provider outcomes](#provider-outcomes), because the other routes may already have stored the facts.
 
@@ -188,7 +188,7 @@ external route it fails open by default, so the notebook write still lands and t
 
 ## Memory registry
 
-Org admins can register personal-memory brains and bind members to them at runtime, without a redeploy. QM keeps every brain and binding in one Postgres record (table `memory_registry`, row `org`), so a change reaches every instance, blue-green included, on its next memory operation. Each operation reads the record's version and holds one snapshot for the whole operation, so a deleted binding is never served from a cache.
+Org admins can register personal-memory brains and bind members to them at runtime, and a member can connect a brain of their own, without a redeploy. QM keeps every brain and binding, and the org's member-brain switch, in one Postgres record (table `memory_registry`, row `org`), so a change reaches every instance, blue-green included, on its next memory operation. Each operation reads the record's version and holds one snapshot for the whole operation, so a deleted binding is never served from a cache.
 
 `MEMORY_PROVIDER_CONFIG` keeps its grammar and meaning. It becomes a read-only overlay: the API can't change it, and a registry brain can't reuse one of its provider ids. Routes run in this order: the env var's routes (or, with no env var, the default notebook route for every scope kind, with automatic capture, editing and fail-closed recall), then registry bindings. Registry bindings never manage a notebook, so a first binding never takes notebook memory away from anyone.
 
@@ -200,19 +200,36 @@ A scope binds to a brain once. Capture is `off` or `explicit`; automatic capture
 
 QM is always an MCP client of gbrain and never gets gbrain's database URL or its owner admin token. The brain's operator provisions the client, the attest right and member links; QM only binds members to what was provisioned.
 
+### A member's own brain
+
+A member who runs their own gbrain connects it as their personal memory from chat: the agent calls `PUT /v1/memory/brain` as them, on a turn they sent. QM registers it as a brain they own (`owner`, their canonical principal id), under an id derived from that id, with the `gbrain-v1` preset, and binds it to their own personal scope only, with `explicit` capture. Nobody can bind it to another scope, and the body can't name another owner. On their gbrain they need a confidential client-credentials client that may attest an actor, and a link from their gbrain member to the `principalId` that `GET /v1/memory/brain` returns.
+
+A member's brain gets stricter transport than one an admin registered, because nobody vetted it. Its `url` must be public `https://`, not a private address. Every call, including the OAuth token request, goes through QM's guarded fetch, which refuses a name that resolves to any private address and refuses redirects. Org-registered brains keep the provider URL rule, which allows private hosts.
+
+An org admin's switch, `PUT /v1/admin/memory-registry/member-brains` with `{"enabled": false}`, stops every member's brain at once (code `member_brains_off`) and refuses new ones, without deleting them; `{"enabled": true}` turns them back on. It defaults on.
+
+| Route                     | Body or result                                                                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/memory/brain`    | `principalId`, `memberBrains` (the switch), the member's `brain` and `binding` (or `null`) and their `disabled` rows                   |
+| `PUT /v1/memory/brain`    | `url`, `clientId`, and optionally `label` and `timeoutMs`; `clientSecret` is refused. Audited as `memory-registry.member-brain.update` |
+| `DELETE /v1/memory/brain` | Deletes the brain and its binding. Audited as `memory-registry.member-brain.delete`                                                    |
+
+These routes take only an agent capability for an active member, refuse triggered turns, and are blocked like any other control-plane change in a strict conversation. An admin can still change or delete a member's brain through the admin routes; its `owner` never changes.
+
 ### API
 
-Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, and changing a brain's `url` clears its secret.
+Every `/v1/admin/memory-registry` route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, and changing a brain's `url` clears its secret.
 
-An agent can register a brain for an admin but never carries its client secret. On the admin's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. The link stops working if the brain's `url` changes or its owner stops being an org admin.
+An agent can register a brain for an admin, or connect a member's own, but never carries its client secret. On that person's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. Only an org admin, or the member who owns the brain while member brains are on, can mint or use one. The link stops working if the brain's `url` changes or the person who minted it can no longer set the secret.
 
-| Route                                           | Body or result                                                                                            |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `GET /v1/admin/memory-registry`                 | `brains`, `bindings`, `disabled` (each binding that isn't serving, with its code) and `overlay` (env ids) |
-| `PUT /v1/admin/memory-registry/brains/:id`      | `preset`, `url`, `clientId`, `clientSecret`, `label`, and optionally `timeoutMs`                          |
-| `DELETE /v1/admin/memory-registry/brains/:id`   | Refused while the brain has a binding                                                                     |
-| `PUT /v1/admin/memory-registry/bindings/:id`    | `brain`, `scope`, and optionally `capture`, `recall`, `failOpen`, `label`                                 |
-| `DELETE /v1/admin/memory-registry/bindings/:id` | Deletes the binding                                                                                       |
+| Route                                           | Body or result                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/admin/memory-registry`                 | `memberBrains`, `brains`, `bindings`, `disabled` (each binding that isn't serving, with its code) and `overlay` (env ids) |
+| `PUT /v1/admin/memory-registry/brains/:id`      | `preset`, `url`, `clientId`, `clientSecret`, `label`, and optionally `timeoutMs`                                          |
+| `DELETE /v1/admin/memory-registry/brains/:id`   | Refused while the brain has a binding                                                                                     |
+| `PUT /v1/admin/memory-registry/bindings/:id`    | `brain`, `scope`, and optionally `capture`, `recall`, `failOpen`, `label`                                                 |
+| `DELETE /v1/admin/memory-registry/bindings/:id` | Deletes the binding                                                                                                       |
+| `PUT /v1/admin/memory-registry/member-brains`   | `enabled`: turns members' own brains on or off                                                                            |
 
 `GET` on `/brains/:id` and `/bindings/:id` returns one entry with its `disabled` rows.
 
@@ -220,11 +237,12 @@ An agent can register a brain for an admin but never carries its client secret. 
 
 A binding that QM can't serve contributes nothing, and every recall, search or explicit write for its scope records outcome `disabled` with one of these codes (problem `memory_provider_disabled`). `GET /v1/admin/memory-registry` shows each one, with a `detail` for `invalid_config`.
 
-| Code             | Cause                                                                                                                                                            | Fix                                                                |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `secret_missing` | The brain has no client secret, for example after its `url` changed.                                                                                             | Set the brain's client secret.                                     |
-| `preset_unknown` | This QM build doesn't know the brain's preset, for example during a rollback.                                                                                    | Upgrade QM, or change the preset.                                  |
-| `id_taken`       | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                                                                                             | Re-register the brain under another id.                            |
-| `invalid_config` | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting), or its secret was stored under another `CONNECTOR_SECRET_KEY`. | Read its `detail`, then fix or delete it, or set the secret again. |
+| Code                | Cause                                                                                                                                                            | Fix                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `secret_missing`    | The brain has no client secret, for example after its `url` changed.                                                                                             | Set the brain's client secret.                                     |
+| `preset_unknown`    | This QM build doesn't know the brain's preset, for example during a rollback.                                                                                    | Upgrade QM, or change the preset.                                  |
+| `id_taken`          | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                                                                                             | Re-register the brain under another id.                            |
+| `member_brains_off` | The brain belongs to a member and an org admin turned member brains off.                                                                                         | Turn member brains back on, or leave it off.                       |
+| `invalid_config`    | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting), or its secret was stored under another `CONNECTOR_SECRET_KEY`. | Read its `detail`, then fix or delete it, or set the secret again. |
 
-A stored record this build can't read leaves the last valid snapshot serving; an instance that starts on such a record serves the env routes only. To roll back, delete registry bindings first, then revert QM; the table is never dropped.
+A stored record this build can't read leaves the last valid snapshot serving; an instance that starts on such a record serves the env routes only. To roll back, delete registry bindings first, then revert QM; the table is never dropped. A build from before member brains ignores `owner` and the switch and would call a member's brain without the guarded transport, so delete members' bindings before running one.

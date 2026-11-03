@@ -1,5 +1,6 @@
 import { SCOPE_KINDS, type SessionEntry, type ScopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
+import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
@@ -36,6 +37,7 @@ export function createRegistryMemoryService(opts: {
   overlay?: MemoryProviderConfig;
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  memberFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
@@ -53,14 +55,19 @@ export function createRegistryMemoryService(opts: {
     const { version, record } = await opts.registry.current();
     if (version === snapshot.version) return snapshot;
     try {
-      const { config, disabled } = resolveMemoryRegistry(readRegistry(record), opts.registry);
+      const registry = readRegistry(record);
+      const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
+      const owned = new Set(registry.brains.flatMap((brain) => (brain.owner ? [brain.id] : [])));
+      const memberFetch = opts.memberFetch ?? publicFetch;
       snapshot = {
         version,
         disabled,
         service: config.routes.length
           ? routed(
               [...(opts.overlay?.routes ?? [NOTEBOOK_ROUTE]), ...config.routes],
-              createMemoryProviders(config.providers),
+              createMemoryProviders(config.providers, {
+                fetchFor: (id) => (owned.has(id) ? memberFetch : undefined),
+              }),
             )
           : overlayOnly,
       };

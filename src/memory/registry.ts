@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { parseScopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
+import { isPrivateNetworkIp } from "../util/network.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
@@ -21,6 +23,7 @@ export interface RegistryBrain {
   preset: string;
   url: string;
   auth: { clientId: string; clientSecretEnc?: string };
+  owner?: string;
   timeoutMs?: number;
   label: string;
   updatedAt: number;
@@ -41,13 +44,14 @@ interface RegistryBinding {
 
 export interface MemoryRegistry {
   schema: 1;
+  memberBrains?: boolean;
   brains: RegistryBrain[];
   bindings: RegistryBinding[];
 }
 
 export const EMPTY_MEMORY_REGISTRY: MemoryRegistry = { schema: 1, brains: [], bindings: [] };
 
-type RegistryDisabledCode = "secret_missing" | "preset_unknown" | "id_taken" | "invalid_config";
+type RegistryDisabledCode = "secret_missing" | "preset_unknown" | "id_taken" | "invalid_config" | "member_brains_off";
 
 export interface DisabledRegistryRoute extends Pick<MemoryProviderRoute, "provider" | "scopes" | "recall" | "capture"> {
   binding: string;
@@ -55,9 +59,14 @@ export interface DisabledRegistryRoute extends Pick<MemoryProviderRoute, "provid
   detail?: string;
 }
 
+export const REGISTRY_ERRORS = { 400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict" } as const;
+
+export const AGENT_SECRET_REFUSAL =
+  'a brain\'s client secret never goes through the agent: register the brain without clientSecret, then mint a link for it with POST /v1/keychain/drops {"memoryBrain":"<brain id>","purpose":"…"}';
+
 export class MemoryRegistryError extends Error {
-  readonly status: 400 | 404 | 409;
-  constructor(status: 400 | 404 | 409, message: string) {
+  readonly status: keyof typeof REGISTRY_ERRORS;
+  constructor(status: keyof typeof REGISTRY_ERRORS, message: string) {
     super(message);
     this.status = status;
   }
@@ -114,8 +123,13 @@ export function readRegistry(value: unknown): MemoryRegistry {
   return record as MemoryRegistry;
 }
 
-function brainBlock(brain: RegistryBrain, overlayIds: ReadonlySet<string>): RegistryDisabledCode | undefined {
+function brainBlock(
+  brain: RegistryBrain,
+  record: MemoryRegistry,
+  overlayIds: ReadonlySet<string>,
+): RegistryDisabledCode | undefined {
   if (!presetOf(brain)) return "preset_unknown";
+  if (brain.owner && record.memberBrains === false) return "member_brains_off";
   if (overlayIds.has(brain.id)) return "id_taken";
   if (!brain.auth.clientSecretEnc) return "secret_missing";
   return undefined;
@@ -154,7 +168,7 @@ export function resolveMemoryRegistry(
       disable("invalid_config", `${binding.scope} isn't a personal scope`);
       continue;
     }
-    const code = brainBlock(brain, overlayIds);
+    const code = brainBlock(brain, record, overlayIds);
     if (code) {
       disable(code);
       continue;
@@ -203,14 +217,35 @@ function flag(value: unknown, field: string, fallback: boolean): boolean {
   return value;
 }
 
-export function putBrain(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
+function publicUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalid("url is not a valid URL");
+  }
+  if (parsed.protocol !== "https:" || isPrivateNetworkIp(parsed.hostname))
+    throw invalid(
+      `a member's brain needs a public https:// url, not ${parsed.protocol}//${parsed.hostname}; QM also refuses any name that resolves to a private address`,
+    );
+}
+
+export function putBrain(
+  record: MemoryRegistry,
+  id: string,
+  input: unknown,
+  change: RegistryChange,
+  owner?: string,
+): MemoryRegistry {
   if (change.overlayIds.has(id)) throw conflict(`${id} comes from MEMORY_PROVIDER_CONFIG, which the API can't change`);
   const body = object(input);
   const existing = record.brains.find((brain) => brain.id === id);
+  const brainOwner = existing ? existing.owner : owner;
   const preset = body.preset ?? existing?.preset;
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url", 2048);
+  if (brainOwner) publicUrl(url);
   const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret", 4096);
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
   const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
@@ -223,6 +258,7 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
       clientId: text(body.clientId ?? existing?.auth.clientId, "clientId"),
       ...(clientSecretEnc ? { clientSecretEnc } : {}),
     },
+    ...(brainOwner ? { owner: brainOwner } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
     label: text(body.label ?? existing?.label, "label", 80),
     updatedAt: change.now,
@@ -257,6 +293,8 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
   const scope = text(body.scope ?? existing?.scope, "scope");
   if (!isPersonalScope(scope))
     throw invalid(`brain ${brain.id} serves personal memory: bind the kind personal or one member's personal scope`);
+  if (brain.owner && scope !== scopeId("personal", brain.owner))
+    throw invalid(`brain ${brain.id} belongs to ${brain.owner} and serves only their own personal memory`);
   const capture = body.capture ?? existing?.capture ?? "off";
   if (capture === "automatic")
     throw invalid('automatic capture into a brain isn\'t available yet; use "off" or "explicit"');
@@ -301,6 +339,65 @@ export function setBrainSecret(
       `brain ${target.id} changed after this link was made, so the secret wasn't saved; ask for a fresh link`,
     );
   return putBrain(record, target.id, { clientSecret }, change);
+}
+
+const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label", "timeoutMs"]);
+
+export const memberBrainId = (owner: string): string =>
+  `member-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
+
+const memberBrainsOff = () =>
+  new MemoryRegistryError(403, "member brains are turned off for this org; an org admin can turn them back on");
+
+export function putMemberBrain(
+  record: MemoryRegistry,
+  owner: string,
+  input: unknown,
+  change: RegistryChange,
+): MemoryRegistry {
+  if (record.memberBrains === false) throw memberBrainsOff();
+  const body = object(input);
+  if (body.clientSecret !== undefined) throw invalid(AGENT_SECRET_REFUSAL);
+  const extra = Object.keys(body).filter((key) => !MEMBER_BRAIN_FIELDS.has(key));
+  if (extra.length)
+    throw invalid(`your brain takes only ${[...MEMBER_BRAIN_FIELDS].join(", ")}, not ${extra.join(", ")}`);
+  const id = memberBrainId(owner);
+  const existing = record.brains.find((brain) => brain.id === id);
+  if (existing && existing.owner !== owner) throw conflict(`brain id ${id} is taken by another brain`);
+  const defaults = existing ? {} : { preset: "gbrain-v1", label: "Personal memory" };
+  const withBrain = putBrain(record, id, { ...defaults, ...body }, change, owner);
+  return withBrain.bindings.some((binding) => binding.id === id)
+    ? withBrain
+    : putBinding(withBrain, id, { brain: id, scope: scopeId("personal", owner), capture: "explicit" }, change);
+}
+
+export function deleteMemberBrain(record: MemoryRegistry, owner: string): MemoryRegistry {
+  const id = memberBrainId(owner);
+  if (!record.brains.some((brain) => brain.id === id && brain.owner === owner))
+    throw new MemoryRegistryError(404, "you have no brain connected");
+  return {
+    ...record,
+    brains: record.brains.filter((brain) => brain.id !== id),
+    bindings: record.bindings.filter((binding) => binding.brain !== id),
+  };
+}
+
+export function setMemberBrains(record: MemoryRegistry, input: unknown): MemoryRegistry {
+  const { enabled } = object(input);
+  if (typeof enabled !== "boolean") throw invalid("enabled must be true or false");
+  return { ...record, memberBrains: enabled };
+}
+
+export function brainRefusal(
+  record: MemoryRegistry,
+  brain: Pick<RegistryBrain, "id" | "owner">,
+  principalId: string,
+  standing: "inactive" | "admin" | "member",
+): string | undefined {
+  if (standing === "admin") return undefined;
+  if (standing === "member" && brain.owner === principalId)
+    return record.memberBrains === false ? memberBrainsOff().message : undefined;
+  return `only an org admin or the brain's owner can set brain ${brain.id}'s secret`;
 }
 
 export function redactBrain({ auth, ...rest }: RegistryBrain) {
