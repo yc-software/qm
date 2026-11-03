@@ -2,6 +2,7 @@ import { orgId as configOrgId } from "../config.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import type { CachedMessage, ContainerState, LiveFallback, IngestEvent, SurfaceCache, SurfaceKey } from "./types.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 export type {
   ActiveThread,
@@ -44,6 +45,7 @@ export function createPostgresSurfaceCache(
 ): SurfaceCache {
   const orgId = configOrgId();
   const { q, pool, close } = createPgPool(connectionString, [
+    ...TENANCY,
     {
       id: "surface-cache/store/0001",
       statements: [
@@ -147,6 +149,23 @@ export function createPostgresSurfaceCache(
             ON channel_files(org_id, surface, account, container, ts, file_id)`,
       ],
     },
+    tenantTables("surface-cache/store/0010-tenants", [
+      {
+        table: "channel_messages",
+        primaryKey: "org_id, container, ts",
+        unique: [{ name: "channel_messages_surface_key", columns: "org_id, surface, account, container, ts" }],
+      },
+      {
+        table: "channel_state",
+        primaryKey: "org_id, container",
+        unique: [{ name: "channel_state_surface_key", columns: "org_id, surface, account, container" }],
+      },
+      {
+        table: "channel_files",
+        primaryKey: "org_id, container, ts, file_id",
+        unique: [{ name: "channel_files_surface_key", columns: "org_id, surface, account, container, ts, file_id" }],
+      },
+    ]),
   ]);
 
   const liveFallback = opts.liveFallback;

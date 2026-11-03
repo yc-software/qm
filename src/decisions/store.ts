@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 interface DecisionWriter {
   actorId: string;
@@ -55,7 +56,27 @@ const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
-  const { q, pool } = createPgPool(connectionString, [{ id: "decisions/0001", statements: SCHEMA }]);
+  const { q, pool } = createPgPool(connectionString, [
+    ...TENANCY,
+    { id: "decisions/0001", statements: SCHEMA },
+    tenantTables(
+      "decisions/0002-tenants",
+      [
+        { table: "decision_providers", primaryKey: "provider_id" },
+        { table: "decision_rules", primaryKey: "rule_id" },
+      ],
+      {
+        foreignKeys: [
+          {
+            table: "decision_rules",
+            name: "decision_rules_provider_id_fkey",
+            columns: "provider_id",
+            references: "decision_providers(tenant_id, provider_id)",
+          },
+        ],
+      },
+    ),
+  ]);
   const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
   let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
   const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
