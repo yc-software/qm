@@ -1,3 +1,4 @@
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
@@ -6,7 +7,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import type { Principal, TurnResult } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { test, inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -342,6 +343,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   await inTestTenant(() => store.runs.enqueue({ sessionId: "s1", request: turn }));
   const run = await withoutTenant(() => store.runs.claim("w1", 9_000));
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
+  await microtasks();
 
   t.mock.timers.tick(3_000);
   await microtasks();
