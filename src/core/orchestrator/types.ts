@@ -99,7 +99,6 @@ export interface OrchestratorInput extends Omit<
 
   runStartedAt?: number;
   finalAttempt?: boolean;
-  background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];
