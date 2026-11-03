@@ -1056,12 +1056,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
+      const automationDestination = input.origin.kind === "automation" ? input.origin.destination?.type : undefined;
       const surfaceName =
-        input.origin.kind === "automation" && input.origin.destination
-          ? deps.surfaces.get(input.origin.destination.type)
-            ? input.origin.destination.type
-            : "slack"
-          : (input.surface ?? "slack");
+        automationDestination === undefined
+          ? (input.surface ?? "slack")
+          : (deps.surfaces.get(automationDestination)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";

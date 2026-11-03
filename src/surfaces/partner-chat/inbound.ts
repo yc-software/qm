@@ -18,11 +18,6 @@ const CONTEXT_DEFAULT_COUNT = 50;
 
 type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
 
-export interface PartnerChatInboundResult {
-  status: number;
-  body: Record<string, unknown>;
-}
-
 export function createPartnerChatInbound(deps: {
   secret: string;
   app: InboundApp;
