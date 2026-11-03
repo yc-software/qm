@@ -6,8 +6,8 @@ import {
   applyPgMigrations,
   createPgPool,
   definePgMigration,
-  migrateRegisteredPgSchemas,
   PG_MIGRATIONS_TABLE,
+  verifyRegisteredPgSchemas,
 } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 
@@ -188,88 +188,60 @@ test("a failed migration rolls back and is not recorded", { skip }, async () => 
   }
 });
 
-test("repeatable maintenance runs once per store instance after migrations", { skip }, async () => {
+const lock = "qm:schema-migrations";
+test(`waiting for the ${lock} lock does not deadlock a concurrent index build`, { skip }, async () => {
   const admin = new pg.Pool({ connectionString: databaseUrl });
+  const holder = new pg.Client({ connectionString: databaseUrl });
   const { id, table } = names();
-  const maintenanceId = `${id}/maintenance`;
-  const store = createPgPool(
-    databaseUrl!,
-    [
-      {
-        id,
-        statements: [`CREATE TABLE ${table}(value INT NOT NULL)`, `INSERT INTO ${table}(value) VALUES (0)`],
-      },
-      {
-        id: `${id}/0002`,
-        statements: [`UPDATE ${table} SET value = value + 10`],
-      },
-    ],
-    [{ id: maintenanceId, statements: [`UPDATE ${table} SET value = value + 1`] }],
-  );
+  const store = createPgPool(databaseUrl!, [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }]);
+  await holder.connect();
   try {
-    await migrateRegisteredPgSchemas(databaseUrl);
-    assert.deepEqual(await store.q(`SELECT value FROM ${table}`), [{ value: 11 }]);
-    const ledger = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} WHERE id IN ($1, $2, $3) ORDER BY id`, [
-      id,
-      `${id}/0002`,
-      maintenanceId,
-    ]);
-    assert.deepEqual(ledger.rows, [{ id }, { id: `${id}/0002` }]);
+    await admin.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+    await admin.query(`INSERT INTO ${table}(value) VALUES (1)`);
+    const holderPid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+    await holder.query("SELECT pg_advisory_lock(hashtext($1))", [lock]);
+    const ready = store.pool();
+    let startFailure: unknown;
+    ready.catch((error: unknown) => {
+      startFailure = error;
+    });
+    let waiting = 0;
+    await settle(async () => {
+      const waiters = await admin.query(
+        "SELECT 1 FROM pg_stat_activity WHERE pid NOT IN (pg_backend_pid(), $1) AND query LIKE '%advisory_lock(hashtext(%'",
+        [holderPid],
+      );
+      waiting = waiters.rowCount ?? 0;
+      return waiting > 0;
+    });
+    assert.ok(waiting, `the store never waited for the schema lock${startFailure ? `: ${String(startFailure)}` : ""}`);
+    try {
+      await holder.query(`CREATE INDEX CONCURRENTLY ${table}_idx ON ${table}(value)`);
+    } finally {
+      await holder.query("SELECT pg_advisory_unlock(hashtext($1))", [lock]);
+    }
+    await ready;
+    assert.deepEqual(await store.q(`SELECT value, extra FROM ${table}`), [{ value: 1, extra: null }]);
   } finally {
+    await holder.end();
     await store.close();
     await admin.query(`DROP TABLE IF EXISTS ${table}`);
-    await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id IN ($1, $2)`, [id, `${id}/0002`]);
+    await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
     await admin.end();
   }
 });
 
-for (const lock of ["qm:schema-maintenance", "qm:schema-migrations"]) {
-  test(`waiting for the ${lock} lock does not deadlock a concurrent index build`, { skip }, async () => {
-    const admin = new pg.Pool({ connectionString: databaseUrl });
-    const holder = new pg.Client({ connectionString: databaseUrl });
-    const { id, table } = names();
-    const store = createPgPool(
-      databaseUrl!,
-      [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }],
-      [{ id: `${id}/repair`, statements: ["SELECT 1"] }],
+test("boot verification refuses pending migrations and creates nothing", { skip }, async () => {
+  const admin = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const store = createPgPool(databaseUrl!, [{ id, statements: [`CREATE TABLE ${table}(value INT)`] }]);
+  try {
+    await assert.rejects(verifyRegisteredPgSchemas(databaseUrl), (error: Error) =>
+      error.message.includes(`${id} are pending`),
     );
-    await holder.connect();
-    try {
-      await admin.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
-      await admin.query(`INSERT INTO ${table}(value) VALUES (1)`);
-      const holderPid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
-      await holder.query("SELECT pg_advisory_lock(hashtext($1))", [lock]);
-      const ready = store.pool();
-      let startFailure: unknown;
-      ready.catch((error: unknown) => {
-        startFailure = error;
-      });
-      let waiting = 0;
-      await settle(async () => {
-        const waiters = await admin.query(
-          "SELECT 1 FROM pg_stat_activity WHERE pid NOT IN (pg_backend_pid(), $1) AND query LIKE '%advisory_lock(hashtext(%'",
-          [holderPid],
-        );
-        waiting = waiters.rowCount ?? 0;
-        return waiting > 0;
-      });
-      assert.ok(
-        waiting,
-        `the store never waited for the schema lock${startFailure ? `: ${String(startFailure)}` : ""}`,
-      );
-      try {
-        await holder.query(`CREATE INDEX CONCURRENTLY ${table}_idx ON ${table}(value)`);
-      } finally {
-        await holder.query("SELECT pg_advisory_unlock(hashtext($1))", [lock]);
-      }
-      await ready;
-      assert.deepEqual(await store.q(`SELECT value, extra FROM ${table}`), [{ value: 1, extra: null }]);
-    } finally {
-      await holder.end();
-      await store.close();
-      await admin.query(`DROP TABLE IF EXISTS ${table}`);
-      await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
-      await admin.end();
-    }
-  });
-}
+    assert.deepEqual((await admin.query("SELECT to_regclass($1) AS present", [table])).rows, [{ present: null }]);
+  } finally {
+    await store.close();
+    await admin.end();
+  }
+});
