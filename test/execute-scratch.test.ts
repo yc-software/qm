@@ -121,22 +121,20 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
 });
 
 test("the tool_call/tool_result entries record which box ran the command", async () => {
-  const emitted: Array<{ type: string; payload: { tool?: string; scope?: string } }> = [];
+  const emitted: string[] = [];
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
     current: tc,
-    emit: (e) => {
-      emitted.push(e as never);
+    emit: async (item) => {
+      emitted.push(`${item.kind}:${String(item.body?.scope)}`);
+      return undefined;
     },
     scopeLabel: scopeId("personal", "U1"),
   };
   const [execute] = createAgentTools(ref);
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
-  assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.scope}`),
-    ["tool_call:scratch", "tool_result:scratch", "tool_call:scoped", "tool_result:scoped"],
-  );
+  assert.deepEqual(emitted, ["ToolCall:scratch", "ToolResult:scratch", "ToolCall:scoped", "ToolResult:scoped"]);
 });
 
 async function freshApp(extra: Partial<Config> = {}) {
