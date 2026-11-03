@@ -16,12 +16,12 @@ const DEFAULT_PROMPT_HINTS: SurfacePromptHints = {
     "- This is a group chat: keep each reply to a couple of sentences unless they ask for more.\n- Each chat or thread is its own session, so `history` only searches this one. If someone refers to something you can't find here (an earlier request, a file, a brief), read the chat history with `POST $AGENT_API_URL/v1/surface-context` (no body reads this conversation; use `before`/`match` to page) before asking them to repeat it.",
 };
 
-export function partnerChatPrincipal(user: PartnerChatUser): ActorAssertion {
+export function partnerChatPrincipal(user: PartnerChatUser, internal: boolean): ActorAssertion {
   const email = user.email?.trim().toLowerCase();
   const name = user.name?.trim();
   return {
     externalId: email?.includes("@") ? email : `partner-chat:${user.id}`,
-    ...(email?.includes("@") ? {} : { isExternalGuest: true }),
+    ...(internal && email?.includes("@") ? {} : { isExternalGuest: true }),
     ...(user.bot ? { isBot: true } : {}),
     ...(name ? { displayName: name } : {}),
   };
@@ -35,7 +35,7 @@ export function createPartnerChatSurface(deps: {
   return {
     kind: "partner-chat",
     label: deps.label ?? DEFAULT_LABEL,
-    capabilities: { mirrored: true, liveReplies: true, nativeActor: true, externalParticipants: true },
+    capabilities: { mirrored: true, liveReplies: true, nativeActor: true, externalParticipants: false },
     promptHints: { ...DEFAULT_PROMPT_HINTS, ...deps.promptHints },
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))

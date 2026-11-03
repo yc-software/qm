@@ -84,7 +84,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
   ]);
 
-  const enqueueListeners = new Set<() => void>();
+  const enqueueListeners = new Set<(type: string) => void>();
 
   async function expireOveraged(): Promise<void> {
     const rows = await q(
@@ -137,7 +137,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l();
+        if (input.shadow !== true) for (const l of enqueueListeners) l(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);

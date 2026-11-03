@@ -2448,7 +2448,16 @@ export function buildApp(
     }
   };
   const partnerChatInbound = config.partnerChat
-    ? createPartnerChatInbound({ secret: config.partnerChat.secret, app, surfaceCache })
+    ? createPartnerChatInbound({
+        secret: config.partnerChat.secret,
+        app,
+        surfaceCache,
+        isInternalEmail: async (email) =>
+          email.includes("@") &&
+          (config.emailAuthPrincipals?.includes(email) ||
+            Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
+            (await directory.get(email))?.type === "internal"),
+      })
     : null;
   const partnerChatOutbound = config.partnerChat
     ? createPartnerChatDeliveries({
@@ -2458,9 +2467,15 @@ export function buildApp(
         app,
       })
     : null;
-  if (partnerChatOutbound) deliveries.onEnqueue(() => void partnerChatOutbound.drain());
+  if (partnerChatOutbound)
+    deliveries.onEnqueue((type) => {
+      if (type === "partner-chat") void partnerChatOutbound.drain();
+    });
   const partnerChatDeliverySweeper = partnerChatOutbound
-    ? createSweeper(() => partnerChatOutbound.drain(), 15_000, { label: "partner-chat-deliveries", immediate: true })
+    ? createSweeper(() => advisoryLock.tryWithLock("partner-chat-deliveries", partnerChatOutbound.drain), 15_000, {
+        label: "partner-chat-deliveries",
+        immediate: true,
+      })
     : null;
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),

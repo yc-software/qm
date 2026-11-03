@@ -22,6 +22,7 @@ export function createPartnerChatInbound(deps: {
   secret: string;
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
+  isInternalEmail: (email: string) => Promise<boolean>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -49,35 +50,30 @@ export function createPartnerChatInbound(deps: {
     const event = parsePartnerChatEvent(parsed);
     if (!event) return { status: 400, body: { error: "bad_request" } };
     const { message, chat } = event;
+    const humans = await Promise.all(
+      chat.members
+        .filter((m) => !m.bot)
+        .map(async (m) => partnerChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? ""))),
+    );
+    if (humans.some((p) => p.isExternalGuest)) return { status: 200, body: { ok: true } };
+    const self = message.user.bot === true;
+    const author = partnerChatPrincipal(message.user, !self);
+    const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
     const ts = partnerChatTs(message.created_at, message.id);
-    const self = message.user.bot === true;
-    const created = event.type === "message.created";
-    const seen =
-      created &&
-      (
-        await cache.readMessages(container, {
-          surface: SURFACE,
-          timestamps: [ts],
-          includeDeleted: true,
-          noFallback: true,
-        })
-      ).length > 0;
     const addressed =
-      created &&
-      !seen &&
+      event.type === "message.created" &&
       !self &&
       (chat.kind === "dm" ||
         message.mentions_agent ||
-        (event.thread_id !== undefined && (await threadEngaged(container, event.thread_id))));
-    const author = partnerChatPrincipal(message.user);
+        (thread !== undefined && (await threadEngaged(container, thread))));
     await deps.app.ingestSurfaceEvents(
       [
         {
           surface: SURFACE,
           container,
           ts,
-          sub: event.thread_id ?? null,
+          sub: thread ?? null,
           authorId: author.externalId,
           ...(author.displayName ? { authorName: author.displayName } : {}),
           text: message.body,
@@ -87,7 +83,7 @@ export function createPartnerChatInbound(deps: {
           ...(event.type === "message.updated" ? { editedAt: now() } : {}),
           ...(event.type === "message.deleted" ? { deleted: true } : {}),
           createdAt: Date.parse(message.created_at),
-          members: chat.members.filter((m) => !m.bot).map((m) => partnerChatPrincipal(m).externalId),
+          members: humans.map((p) => p.externalId),
           ...(chat.name ? { containerName: chat.name } : {}),
           kind: chat.kind,
         },
@@ -99,7 +95,7 @@ export function createPartnerChatInbound(deps: {
       account: event.account,
       kind: chat.kind,
       chat: chat.id,
-      ...(event.thread_id ? { thread: event.thread_id } : {}),
+      ...(thread ? { thread } : {}),
     });
     await deps.app.turn({
       surface: SURFACE,
@@ -107,7 +103,7 @@ export function createPartnerChatInbound(deps: {
       surfaceOrigin: {
         author: { surface: SURFACE, account: event.account, id: message.user.id },
         workspace: event.account,
-        ...(event.thread_id ? { replyThread: event.thread_id } : {}),
+        ...(thread ? { replyThread: thread } : {}),
         audience: "internal",
       },
       conversation: {
@@ -115,21 +111,21 @@ export function createPartnerChatInbound(deps: {
         threadRef,
         ...(chat.kind === "group" ? { channelRef: container, isPrivate: true } : {}),
         ...(chat.name ? { channelName: chat.name } : {}),
-        audience: chat.members.filter((m) => !m.bot).map(partnerChatPrincipal),
+        audience: humans,
       },
       deliveryTarget: threadRef,
       text: message.body,
       liveActor: true,
       triggerTs: ts,
       async: true,
-      redeliveryKey: `${SURFACE}:${event.account}:${event.event_id}`,
+      redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });
     return { status: 200, body: { ok: true } };
   }
 
   async function answerContext(query: SurfaceContextQuery): Promise<SurfaceContextResult> {
     const ref = query.conversationTarget ? parsePartnerChatRef(query.conversationTarget) : null;
-    if (!ref) return { messages: [], note: "this PartnerChat conversation can't be read" };
+    if (!ref) return { messages: [], note: "this conversation can't be read" };
     const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
     const rows = await cache.readMessages(container, {
       surface: SURFACE,

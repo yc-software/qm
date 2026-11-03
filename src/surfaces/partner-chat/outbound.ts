@@ -1,16 +1,17 @@
 import type { App } from "../../api/app-types.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { Delivery } from "../../types.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { partnerChatMessageId, parsePartnerChatRef, signPartnerChat } from "./protocol.ts";
 
 const CLAIM_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const MESSAGE_ID = /^\d+$/;
 
 class PartnerChatHttpError extends Error {
   readonly status: number;
   constructor(status: number, body: string) {
-    super(`partnerChat ${status}: ${body.slice(0, 200)}`);
+    super(`partner-chat ${status}: ${body}`);
     this.status = status;
   }
 }
@@ -45,20 +46,26 @@ export function createPartnerChatDeliveries(deps: {
     });
     const text = await res.text();
     if (!res.ok) throw new PartnerChatHttpError(res.status, text);
-    const parsed: unknown = text ? JSON.parse(text) : {};
-    const messageId = (parsed as { message_id?: unknown }).message_id;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = {};
+    }
+    const messageId = (parsed as { message_id?: unknown } | null)?.message_id;
     return typeof messageId === "string" || typeof messageId === "number" ? { message_id: String(messageId) } : {};
   }
 
   async function deliver(d: Delivery): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
     const body = d.text.trim();
+    const editId = d.destination.editRef ? partnerChatMessageId(d.destination.editRef) : undefined;
     if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
-    if (!body || d.destination.react || d.destination.delete || d.destination.pin) return;
-    if (d.destination.editRef) {
-      await call(`/qm_surface/messages/${encodeURIComponent(partnerChatMessageId(d.destination.editRef))}/update`, {
-        body,
-      });
+    if (d.destination.react || d.destination.delete || d.destination.pin || !body)
+      throw new PartnerChatHttpError(400, "only non-empty text posts and edits are supported");
+    if (editId !== undefined) {
+      if (!MESSAGE_ID.test(editId)) throw new PartnerChatHttpError(400, `bad message id ${editId}`);
+      await call(`/qm_surface/messages/${editId}/update`, { body });
       return;
     }
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
@@ -69,13 +76,18 @@ export function createPartnerChatDeliveries(deps: {
       body,
     });
     const ackRun = d.idempotencyKey.startsWith("ack:") ? d.idempotencyKey.slice("ack:".length) : undefined;
-    if (ackRun && posted.message_id) await deps.app.setRunDeliveryState(ackRun, { editRef: posted.message_id });
+    if (ackRun && posted.message_id)
+      await deps.app
+        .setRunDeliveryState(ackRun, { editRef: posted.message_id })
+        .catch(reportFailureAs("partner-chat: record ack message", false));
   }
 
   let draining: Promise<void> | null = null;
   let again = false;
   async function drainOnce(): Promise<void> {
+    const claimedAt = now();
     for (const d of await deps.deliveries.claimPending("partner-chat", CLAIM_MS)) {
+      if (now() - claimedAt > CLAIM_MS - REQUEST_TIMEOUT_MS) return;
       try {
         await deliver(d);
         await deps.deliveries.ack(d.id, now());

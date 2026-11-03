@@ -14,6 +14,7 @@ import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
 import { buildApp } from "./support/build-app.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
+import { loadConfig } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
@@ -99,6 +100,7 @@ async function partnerChatApp() {
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "partner-chat-surface-")),
       partnerChat: { url: partnerChat.url, secret: SECRET },
+      emailAuthDomain: "example.com",
     }),
   );
   built.runtime.start();
@@ -120,7 +122,7 @@ test("partner-chat events are rejected unless signed with the shared secret insi
     const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true });
     assert.deepEqual(
       rows.map((m) => [m.ts, m.authorId, m.authorName, m.text, Boolean(m.self)]),
-      [["1793649600.0000001001", "ada@example.com", "Ada Lovelace", "hello there", false]],
+      [["1793649600.00000000000000001001", "ada@example.com", "Ada Lovelace", "hello there", false]],
     );
     assert.deepEqual(await built.surfaceCache.members(CONTAINER, { surface: "partner-chat" }), [
       "ada@example.com",
@@ -164,7 +166,7 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
     await settle(async () => partnerChat.received.some((r) => r.body.body === "ambient reply"));
     const posted = partnerChat.received.find((r) => r.body.body === "ambient reply");
     assert.equal(posted?.body.chat_id, "88");
-    assert.ok(await built.sessions.getByThread(`partner-chat:${CONTAINER}:ambient:1793649600.0000001003`));
+    assert.ok(await built.sessions.getByThread(`partner-chat:${CONTAINER}:ambient:1793649600.00000000000000001003`));
   } finally {
     await partnerChat.close();
   }
@@ -270,7 +272,7 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
       idempotencyKey: "post:run-1:1",
     });
     await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER, editRef: "1793649600.0000001021" },
+      destination: { type: "partner-chat", target: CONTAINER, editRef: "1793649600.00000000000000001021" },
       text: "edited by ref",
       idempotencyKey: "post:run-1:2",
     });
@@ -317,24 +319,62 @@ test("partner-chat rejections fail the delivery while server errors leave it for
   }
 });
 
-test("partner-chat principals use the email when present and otherwise an external partner-chat id", () => {
-  assert.deepEqual(partnerChatPrincipal({ id: "5", email: " Ada@Example.com ", name: "Ada" }), {
+test("partner-chat principals are internal only when vouched for, otherwise external guests", () => {
+  assert.deepEqual(partnerChatPrincipal({ id: "5", email: " Ada@Example.com ", name: "Ada" }, true), {
     externalId: "ada@example.com",
     displayName: "Ada",
   });
-  assert.deepEqual(partnerChatPrincipal({ id: "6", name: "Guest" }), {
+  assert.deepEqual(partnerChatPrincipal({ id: "5", email: "ada@startup.dev", name: "Ada" }, false), {
+    externalId: "ada@startup.dev",
+    isExternalGuest: true,
+    displayName: "Ada",
+  });
+  assert.deepEqual(partnerChatPrincipal({ id: "6", name: "Guest" }, true), {
     externalId: "partner-chat:6",
     isExternalGuest: true,
     displayName: "Guest",
   });
   const surface = createPartnerChatSurface({ deliveries: createDeliveryStore() });
-  const user = {
-    surface: "partner-chat",
-    account: "7001",
-    id: "5",
-    principal: partnerChatPrincipal({ id: "5", name: "Ada Lovelace" }),
-  };
-  assert.equal(surface.mention(user), "@Ada Lovelace");
-  assert.deepEqual(surface.principalFor(user), user.principal);
-  assert.equal(surface.readableText("**bold** [x](https://y)", undefined), "**bold** [x](https://y)");
+  const principal = partnerChatPrincipal({ id: "5", name: "Ada Lovelace" }, false);
+  assert.equal(surface.mention({ surface: "partner-chat", account: "7001", id: "5", principal }), "@Ada Lovelace");
+});
+
+test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
+    withGuest.chat.members.push({ id: "7", email: "founder@startup.dev", name: "Founder" });
+    assert.equal((await deliver(withGuest)).status, 200);
+    await new Promise((r) => setTimeout(r, 1_500));
+    assert.deepEqual(
+      await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
+      [],
+    );
+    assert.equal(partnerChat.received.length, 0);
+    assert.equal(await built.runs.latestForThread(CONTAINER), null);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("partner-chat config requires the url and secret together and validates prompt hints", () => {
+  assert.throws(() => loadConfig({ PARTNER_CHAT_URL: "https://chat.example" }), /must be set together/);
+  assert.throws(
+    () =>
+      loadConfig({
+        PARTNER_CHAT_URL: "https://chat.example",
+        PARTNER_CHAT_SECRET: "s",
+        PARTNER_CHAT_PROMPT_HINTS: '{"tone":1}',
+      }),
+    /PARTNER_CHAT_PROMPT_HINTS/,
+  );
+  assert.deepEqual(
+    loadConfig({
+      PARTNER_CHAT_URL: "https://chat.example",
+      PARTNER_CHAT_SECRET: "s",
+      PARTNER_CHAT_LABEL: "Acme Chat",
+      PARTNER_CHAT_PROMPT_HINTS: '{"linkSyntax":"plain urls"}',
+    }).partnerChat,
+    { url: "https://chat.example", secret: "s", label: "Acme Chat", promptHints: { linkSyntax: "plain urls" } },
+  );
 });
