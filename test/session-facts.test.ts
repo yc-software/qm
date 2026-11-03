@@ -52,16 +52,15 @@ test("a session ended in failure while its newest item is an error", async () =>
   const failed = await sessions.getOrCreateByThread("web:U1:failed", "dm", scope);
   const recovered = await sessions.getOrCreateByThread("web:U1:recovered", "dm", scope);
   for (const session of [failed, recovered]) {
-    const { lease } = await sessions.acquireLease(session.id);
-    await sessions.append(lease!, { type: "user", payload: { text: "go" }, scopeLabel: scope, author: actor.id });
-    await sessions.append(lease!, {
+    const lease = { sessionId: session.id };
+    await sessions.append(lease, { type: "user", payload: { text: "go" }, scopeLabel: scope, author: actor.id });
+    await sessions.append(lease, {
       type: "system",
       payload: { kind: "turn_failure", message: "boom" },
       scopeLabel: scope,
     });
     if (session === recovered)
-      await sessions.append(lease!, { type: "assistant", payload: { text: "done" }, scopeLabel: scope });
-    await sessions.releaseLease(lease!);
+      await sessions.append(lease, { type: "assistant", payload: { text: "done" }, scopeLabel: scope });
   }
   assert.deepEqual(await sessions.endedInFailure([failed.id, recovered.id, "missing"]), new Set([failed.id]));
 });
