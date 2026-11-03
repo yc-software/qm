@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest, type TestOptions } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -11,6 +11,12 @@ import { scopeId } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, ...args: [() => void | Promise<void>] | [TestOptions, () => void | Promise<void>]): void {
+  const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
+  nodeTest(name, options, () => inTestTenant(fn));
+}
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;

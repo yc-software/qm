@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { STALE_LEASE_GRACE_MS } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const built = buildApp(
@@ -16,38 +17,63 @@ test("getRun reports stale exactly when no live worker owns a previously-claimed
       backgroundWorkEnabled: false,
     }),
   );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t1" },
-    text: "x",
-    async: true,
-  });
+  const ack = await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t1" },
+      text: "x",
+      async: true,
+    }),
+  );
   const runId = ack.runId!;
 
-  assert.equal((await built.app.getRun(runId))?.stale, undefined, "a fresh pending run was never claimed — not stale");
-
-  const claimed = await built.runs.claim("w1", 60_000);
-  assert.equal(claimed?.id, runId);
-  assert.equal((await built.app.getRun(runId))?.stale, undefined, "running on a live lease — not stale");
-
-  assert.equal(await built.runs.heartbeat(runId, claimed!.leaseToken!, -(STALE_LEASE_GRACE_MS + 1_000)), true);
-  assert.equal((await built.app.getRun(runId))?.stale, true, "running past its lease — the worker is gone");
-
-  assert.equal(await built.runs.heartbeat(runId, claimed!.leaseToken!, 5_000), true);
-  assert.equal((await built.app.getRun(runId))?.stale, undefined, "a renewed lease clears staleness");
-
-  await built.runs.releaseLease(runId, claimed!.leaseToken!);
   assert.equal(
-    (await built.app.getRun(runId))?.stale,
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
+    undefined,
+    "a fresh pending run was never claimed — not stale",
+  );
+
+  const claimed = await inTestTenant(() => built.runs.claim("w1", 60_000));
+  assert.equal(claimed?.id, runId);
+  assert.equal(
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
+    undefined,
+    "running on a live lease — not stale",
+  );
+
+  assert.equal(
+    await inTestTenant(() => built.runs.heartbeat(runId, claimed!.leaseToken!, -(STALE_LEASE_GRACE_MS + 1_000))),
+    true,
+  );
+  assert.equal(
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
+    true,
+    "running past its lease — the worker is gone",
+  );
+
+  assert.equal(await inTestTenant(() => built.runs.heartbeat(runId, claimed!.leaseToken!, 5_000)), true);
+  assert.equal(
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
+    undefined,
+    "a renewed lease clears staleness",
+  );
+
+  await inTestTenant(() => built.runs.releaseLease(runId, claimed!.leaseToken!));
+  assert.equal(
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
     true,
     "requeued after a claim (deploy drain) — awaiting re-claim",
   );
 
-  const reclaimed = await built.runs.claim("w2", 5_000);
+  const reclaimed = await inTestTenant(() => built.runs.claim("w2", 5_000));
   assert.equal(reclaimed?.id, runId);
-  assert.equal((await built.app.getRun(runId))?.stale, undefined, "re-claimed on a fresh lease — not stale");
+  assert.equal(
+    (await inTestTenant(() => built.app.getRun(runId)))?.stale,
+    undefined,
+    "re-claimed on a fresh lease — not stale",
+  );
 
-  await built.runs.complete(runId, reclaimed!.leaseToken!, { status: "ok", reply: "done" });
-  assert.equal((await built.app.getRun(runId))?.stale, undefined, "terminal runs are never stale");
+  await inTestTenant(() => built.runs.complete(runId, reclaimed!.leaseToken!, { status: "ok", reply: "done" }));
+  assert.equal((await inTestTenant(() => built.app.getRun(runId)))?.stale, undefined, "terminal runs are never stale");
 });

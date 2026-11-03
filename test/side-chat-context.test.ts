@@ -1,7 +1,7 @@
 import { countTokens } from "../src/util/tokens.ts";
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,11 @@ import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];
@@ -82,7 +87,7 @@ test("side-chat context excludes copied history, tools, footers, private message
   assert.equal(await sideChatContext(store, parent, ["alice"], 10000), "");
 });
 
-test("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
+nodeTest("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
   const inputs: AgentTurnInput[] = [];
   const mock = createMockAgent();
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qm-side-context-")) }), {
@@ -95,16 +100,20 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
     },
   });
   const turn = (threadRef: string, text: string) =>
-    app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text,
-    });
+    inTestTenant(() =>
+      app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text,
+      }),
+    );
   const first = await turn("web:U1:context-parent", "Explain queues");
-  const child = await app.forkSession(first.sessionId!, "U1", {
-    sideChat: { entrySeq: 0, quote: "queues", occurrence: 0 },
-  });
+  const child = await inTestTenant(() =>
+    app.forkSession(first.sessionId!, "U1", {
+      sideChat: { entrySeq: 0, quote: "queues", occurrence: 0 },
+    }),
+  );
   assert.ok(child);
   await turn(child.session.threadRef, "The retry decision is five attempts");
   assert.equal(inputs.length, 2);
@@ -120,7 +129,7 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
     false,
   );
   assert.ok(discussion.messages.every((message: object) => !Object.hasOwn(message, "environment")));
-  await app.expandSideChat("U1", child.session.id);
+  await inTestTenant(() => app.expandSideChat("U1", child.session.id));
   await turn(child.session.threadRef, "Now this is a normal session");
   await turn("web:U1:context-parent", "Any remaining side discussions?");
   assert.deepEqual(discussions(inputs.at(-1)!.systemPrompt), []);
