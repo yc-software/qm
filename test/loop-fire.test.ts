@@ -970,7 +970,7 @@ test("event-only Email work skips scanning and holds its draft instead of markin
       dedupeKey: "thread1",
       source: "gmail",
       sourceAt: 1000,
-      sourcePayload: { source: "gmail", snippet: "Hello from email", gmail: { threadId: "thread1" } },
+      sourcePayload: { snippet: "Hello from email", gmail: { threadId: "thread1" } },
     },
   ]);
   const result = await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
@@ -1250,7 +1250,6 @@ test("a reply Loop's work stage can settle an event as replied or no reply neede
         source: "gmail",
         sourceAt: 2000,
         sourcePayload: {
-          source: "gmail",
           snippet: "Can you send the deck?",
           gmail: { threadId: "thread1" },
           latestEvent: { author: "owner", at: 2000, text: "Sent it over" },

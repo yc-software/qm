@@ -241,22 +241,9 @@ export function createLoopItemLedger(
   const forLoop = async (loopId: string): Promise<LoopItem[]> =>
     (await backing.all()).filter((item) => item.loopId === loopId);
 
-  const idFor = async (loopId: string, sourceKey: string): Promise<string> => {
-    const id = loopItemId(loopId, sourceKey);
-    if (await backing.get(id)) return id;
-    return (
-      (
-        await backing.select({
-          where: { field: "loopId", anyOfFold: [loopId] },
-          omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-        })
-      ).find((item) => item.loopId === loopId && item.sourceKey === sourceKey)?.id ?? id
-    );
-  };
-
   const ledger: LoopItemLedger = {
     async enqueue(input) {
-      const id = await idFor(input.loopId, input.sourceKey);
+      const id = loopItemId(input.loopId, input.sourceKey);
       const now = Date.now();
       const candidate: LoopItem = {
         id,
@@ -282,14 +269,12 @@ export function createLoopItemLedger(
       const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
+        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
       });
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
         return {
           ...item,
-          ...(source !== undefined ? { source } : {}),
-          ...(source === "slack"
+          ...(item.source === "slack"
             ? {
                 inboxPreview: {
                   ...item.inboxPreview,
@@ -298,7 +283,7 @@ export function createLoopItemLedger(
                 },
               }
             : {}),
-          ...(source === "gmail"
+          ...(item.source === "gmail"
             ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
             : {}),
         };
@@ -307,23 +292,10 @@ export function createLoopItemLedger(
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
       if (!entries.length) return outcome;
-      const existing = await backing.select({
-        where: { field: "loopId", anyOfFold: [...new Set(entries.map((entry) => entry.loopId))] },
-        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-      });
-      const ids = new Set(existing.map((item) => item.id));
-      const legacy = new Map<string, string>();
-      for (const item of existing) {
-        const key = JSON.stringify([item.loopId, item.sourceKey]);
-        if (!legacy.has(key)) legacy.set(key, item.id);
-      }
       const changed: LoopItem[] = [];
       await backing.mutateMany(
         entries.map((entry) => {
-          const canonical = loopItemId(entry.loopId, entry.dedupeKey);
-          const id = ids.has(canonical)
-            ? canonical
-            : (legacy.get(JSON.stringify([entry.loopId, entry.dedupeKey])) ?? canonical);
+          const id = loopItemId(entry.loopId, entry.dedupeKey);
           return {
             id,
             apply: (item: LoopItem | null): LoopItem => {
