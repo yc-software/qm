@@ -111,7 +111,7 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl(createDatabaseSync({}))), { seed });
 }
 
 export function testDeployBackings(
