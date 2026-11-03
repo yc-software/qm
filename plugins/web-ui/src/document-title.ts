@@ -27,6 +27,7 @@ const VIEW_TITLES: Record<View, string> = {
   memory: "Memory",
   skills: "Skills",
   settings: "Settings",
+  seat: "Agent Seat",
 };
 
 export function documentTitle(view?: View, conversationTitle?: string | null, conversationOpen = false): string {

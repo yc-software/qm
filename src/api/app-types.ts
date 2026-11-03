@@ -101,6 +101,7 @@ import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
+import type { Seat } from "../seat/seat.ts";
 import type { SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
@@ -636,6 +637,7 @@ interface DeploymentGitPrincipals {
 }
 
 export interface AppDeps {
+  seat?: Pick<Seat, "enabled">;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;

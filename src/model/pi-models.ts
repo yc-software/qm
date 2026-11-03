@@ -20,7 +20,13 @@ import {
 } from "./model-overlay.ts";
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import {
+  type CustomRuntimeModel,
+  customModelCatalog,
+  isCustomModelId,
+  resolveCustomModel,
+} from "./custom-providers.ts";
+import { SEAT_MODEL_ID, seatModel } from "./seat-model.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -101,7 +107,9 @@ export function modelUnavailableReason(id: string): string | undefined {
 }
 
 export function catalogModelIdTaken(id: string): boolean {
-  return REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || OPENROUTER_CATALOG_MODELS.has(id);
+  return (
+    id === SEAT_MODEL_ID || REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || OPENROUTER_CATALOG_MODELS.has(id)
+  );
 }
 
 export function modelIdReserved(id: string): boolean {
@@ -141,6 +149,7 @@ export function defaultWebuiModelIds(): readonly string[] {
     ...chatOverlays()
       .filter((m) => m.webui)
       .map((m) => m.id),
+    ...customModelCatalog().map((m) => m.id),
   ];
 }
 
@@ -267,6 +276,7 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
 }
 
 function resolveBaseModel(id: string): PiModel | undefined {
+  if (id === SEAT_MODEL_ID) return seatModel();
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -339,6 +349,7 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
 }
 
 export function modelSupported(id: string | undefined): boolean {
+  if (id === SEAT_MODEL_ID) return false;
   if (id && modelRequestOverrides(id)) return true;
   if (id && isGatewayModelId(id)) return Boolean(resolveGatewayModel(id));
   if (!id || overlayUnavailableReason(id) !== undefined) return false;

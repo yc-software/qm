@@ -110,6 +110,7 @@ import { createStepRecorder, recordingTools, type StepRecorder } from "./step-re
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
+import { seatRuntime, type Seat } from "../seat/seat.ts";
 import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
@@ -154,6 +155,7 @@ export interface AgentOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
+  seat?: Pick<Seat, "streamSimple">;
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
@@ -919,11 +921,14 @@ export function createAgent(opts?: AgentOptions): Agent {
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(
-      turnProviderKeys ?? (await resolveProviderKeys()),
-      turnProviderKeys ? undefined : modelGateway,
-      "turn",
-      "long",
+    const modelRuntime = seatRuntime(
+      await buildModelRuntime(
+        turnProviderKeys ?? (await resolveProviderKeys()),
+        turnProviderKeys ? undefined : modelGateway,
+        "turn",
+        "long",
+      ),
+      opts?.seat,
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
