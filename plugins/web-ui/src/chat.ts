@@ -3314,28 +3314,26 @@ export function createChatSurface(
     return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
-  const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-    execute: { icon: Terminal, active: "Running command", done: "Running command", attempted: "Tried command" },
-    read: { icon: BookOpen, active: "Reading file", done: "Reading file", attempted: "Tried reading file" },
-    skill: { icon: BookOpen, active: "Loading skill", done: "Loading skill", attempted: "Tried loading skill" },
-    write: { icon: Pencil, active: "Writing file", done: "Writing file", attempted: "Tried writing file" },
-    publish: { icon: Rocket, active: "Publishing", done: "Publishing", attempted: "Tried publishing" },
-    recall: { icon: Brain, active: "Searching memory", done: "Searching memory", attempted: "Tried searching memory" },
-    memory: { icon: Brain, active: "Using memory", done: "Using memory", attempted: "Tried using memory" },
+  const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
+    execute: { icon: Terminal, active: "Running command", attempted: "Tried running command" },
+    read: { icon: BookOpen, active: "Reading file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", attempted: "Tried loading skill" },
+    write: { icon: Pencil, active: "Writing file", attempted: "Tried writing file" },
+    publish: { icon: Rocket, active: "Publishing", attempted: "Tried publishing" },
+    recall: { icon: Brain, active: "Searching memory", attempted: "Tried searching memory" },
+    memory: { icon: Brain, active: "Using memory", attempted: "Tried using memory" },
     history: {
       icon: ScrollText,
       active: "Searching history",
-      done: "Searching history",
       attempted: "Tried searching history",
     },
     background: {
       icon: Terminal,
       active: "Managing process",
-      done: "Managing process",
       attempted: "Tried managing process",
     },
   };
-  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Working", attempted: "Tried step" };
+  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", attempted: "Tried step" };
 
   function toolName(tool: string): string {
     const parts = tool.split(/__|[/:.]/).filter(Boolean);
@@ -3526,7 +3524,7 @@ export function createChatSurface(
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
-    } else if (kind === "ok") label = knownMeta ? meta.done : name;
+    } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
     if (kind === "approval") why = firstLine(result.reason ?? "", 90);
