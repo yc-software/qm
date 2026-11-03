@@ -63,6 +63,16 @@ test("Render preserves an allocation error when no disposable sandbox was create
   assert.deepEqual(fake.terminated, []);
 });
 
+test("Render keeps the provider error when a disposable sandbox ends under a command", async (t) => {
+  const { make, fake, store } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision([], options);
+  await fake.client.terminate(handle.providerSandboxId!);
+  await assert.rejects(sandbox.run(handle, "true"), /no longer running/);
+  assert.deepEqual(await store.entries(), []);
+  await sandbox.teardown(handle);
+});
+
 test("Render keeps a disposable sandbox until its last local handle is released", async (t) => {
   const { make, fake, scratchStore, store } = setup(t);
   const sandbox = make();

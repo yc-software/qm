@@ -136,9 +136,11 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
     const sandboxId = await idFor(name, true);
     const result = await client.runScript(sandboxId, script, timeoutSec).catch(async (error: unknown) => {
-      const info = await client.get(sandboxId).catch(() => undefined);
-      if (info === undefined || (info && info.status !== "terminated" && info.status !== "errored")) throw error;
-      await store.merge(scopeFor(name), { stopped: true });
+      const scope = base.scopeFor(name);
+      const info = scope ? await client.get(sandboxId).catch(() => undefined) : undefined;
+      if (!scope || info === undefined || (info && info.status !== "terminated" && info.status !== "errored"))
+        throw error;
+      await store.merge(scope, { stopped: true });
       throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint", {
         cause: error,
       });
