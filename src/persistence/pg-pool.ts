@@ -141,14 +141,19 @@ async function pipelinedTransaction(
   settings: readonly PgSetting[],
   text: string,
   values: unknown[],
-  commitAfterResult: boolean,
+  signal: AbortSignal | undefined,
 ): Promise<QueryResult> {
-  if (!settings.length) return client.query({ text, values });
+  if (!settings.length) return withAbort(() => client.query({ text, values }), signal);
   const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
-  const prefix = [client.query("BEGIN"), client.query(`SELECT ${assignments.join(", ")}`, settings.flat())];
-  const query = client.query({ text, values });
-  const [result] = await Promise.all([query, ...prefix, ...(commitAfterResult ? [] : [client.query("COMMIT")])]);
-  if (commitAfterResult) await client.query("COMMIT");
+  const [result] = await withAbort(() => {
+    const prefix = [client.query("BEGIN"), client.query(`SELECT ${assignments.join(", ")}`, settings.flat())];
+    const query = client.query({ text, values });
+    return Promise.all([query, ...prefix, ...(signal ? [] : [client.query("COMMIT")])]);
+  }, signal);
+  if (signal) {
+    signal.throwIfAborted();
+    await client.query("COMMIT");
+  }
   const status = client.getTransactionStatus();
   if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
   return result;
@@ -491,13 +496,13 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params, Boolean(signal)), signal);
+      const res = await pipelinedTransaction(client, settings, text, params, signal);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
+      if (signal?.aborted && error === signal.reason) client.connection.stream.destroy();
       throw error;
     } finally {
-      if (queryError && signal?.aborted) client.connection.stream.destroy();
       client.release(queryError);
     }
   }
