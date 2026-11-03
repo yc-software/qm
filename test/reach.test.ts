@@ -299,7 +299,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.deepEqual(d.destination.delete, { messageTs: "1782340476.7" });
   });
 
-  it("an edit carries new text via editRef, delivered verbatim", async () => {
+  it("an edit carries the target message and its new text, delivered verbatim", async () => {
     const deliveries = createDeliveryStore();
     const editDest = withEdit(
       { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
@@ -311,7 +311,7 @@ describe("Reach: verbatim relay attribution", () => {
       text: "the corrected summary",
       idempotencyKey: "ke1",
     });
-    assert.equal(ok.destination.editRef, "1782340476.7");
+    assert.deepEqual(ok.destination.edit, { messageTs: "1782340476.7" });
     assert.equal(ok.text, "the corrected summary");
   });
 });

@@ -12,6 +12,7 @@ import {
   withSlackUnfurlOption,
   withReact,
   withDelete,
+  withEdit,
   withThread,
   type ReachResolution,
 } from "../reach/reach.ts";
@@ -556,14 +557,14 @@ export function createMessagingMethods(
         channel?: { channelId: string; name: string };
         group?: { groupId: string };
       } = {};
-      if (input.delete && !hasNamedTarget) {
+      if ((input.delete || input.edit) && !hasNamedTarget) {
         const dest = input.currentDestination;
         if (!dest?.target)
           return {
             ok: false,
             status: 400,
             error: "no_conversation",
-            message: "this conversation has no message surface to delete from — name a channel or its participants",
+            message: `this conversation has no message surface to ${input.edit ? "edit in" : "delete from"} — name a channel or its participants`,
           };
         baseDestination = dest;
       } else {
@@ -574,13 +575,21 @@ export function createMessagingMethods(
             ...(input.participants !== undefined ? { participants: input.participants } : {}),
           },
           input.senderId,
-          { mayOpenGroup: !input.react && !input.delete },
+          { mayOpenGroup: !input.react && !input.delete && !input.edit },
         );
         if (!r.ok) return r;
         baseDestination = r.destination;
         if (r.recipient) extra.recipient = r.recipient;
         if (r.channel) extra.channel = r.channel;
         if (r.group) extra.group = r.group;
+      }
+      if (input.edit && baseDestination.type !== "slack" && baseDestination.type !== "group") {
+        return {
+          ok: false,
+          status: 400,
+          error: "bad_request",
+          message: "edit rewrites a Slack message in a channel, group DM, or this Slack conversation",
+        };
       }
       if (input.threadTs) {
         if (
@@ -600,9 +609,9 @@ export function createMessagingMethods(
       const sender = await deps.directory.get(input.senderId).catch(() => null);
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
-        destination: withDelete(
-          withReact(withSlackUnfurlOption(baseDestination, input.unfurlLinks), input.react),
-          input.delete,
+        destination: withEdit(
+          withDelete(withReact(withSlackUnfurlOption(baseDestination, input.unfurlLinks), input.react), input.delete),
+          input.edit?.messageTs,
         ),
         text: input.text ?? "",
         idempotencyKey: `reach:${randomUUID()}`,

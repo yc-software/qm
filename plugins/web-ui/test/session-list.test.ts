@@ -652,6 +652,7 @@ test("sidebar excludes cron, webhook, and loop runs but keeps conversations", ()
 test("cronRowMeta shows the next fire and the last result of a session's cron", () => {
   const now = Date.now();
   assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 10 * 60_000 + 1_000 }), "next fire in 10m");
+  assert.equal(cronRowMeta({ id: "c", nextFireAt: now + 62 * 60_000 + 1_000 }), "next fire in 1h 2m");
   assert.equal(
     cronRowMeta({
       id: "c",
