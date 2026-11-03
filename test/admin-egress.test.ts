@@ -33,21 +33,25 @@ const getJson = async (base: string, path: string, headers: Record<string, strin
 test("egress: brokered calls surface as scope-labelled audit records, org-wide", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
-      slug: "x-firehose",
-      host: "api.x.com",
-      status: "ok",
-      upstreamStatus: 200,
-      scopeLabel: "personal:U1",
-      principalId: "U1",
-    });
-    s.built.credentialUsage.record({
-      slug: "x-firehose",
-      host: "api.x.com",
-      status: "denied",
-      scopeLabel: "personal:U2",
-      principalId: "U2",
-    });
+    inTestTenant(() =>
+      s.built.credentialUsage.record({
+        slug: "x-firehose",
+        host: "api.x.com",
+        status: "ok",
+        upstreamStatus: 200,
+        scopeLabel: "personal:U1",
+        principalId: "U1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.credentialUsage.record({
+        slug: "x-firehose",
+        host: "api.x.com",
+        status: "denied",
+        scopeLabel: "personal:U2",
+        principalId: "U2",
+      }),
+    );
 
     await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
@@ -82,24 +86,28 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
 test("egress: broker and firewall sources are unioned into one feed", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
-      slug: "x-firehose",
-      host: "api.x.com",
-      status: "ok",
-      upstreamStatus: 200,
-      scopeLabel: "personal:U1",
-      principalId: "U1",
-    });
-    s.built.egressAudit.record({
-      source: "proxy",
-      host: "pastebin.com",
-      allowed: false,
-      verdict: "host_denied",
-      via: "connect",
-      port: 443,
-      peerIp: "1.2.3.4",
-      scopeLabel: "personal:U1",
-    });
+    inTestTenant(() =>
+      s.built.credentialUsage.record({
+        slug: "x-firehose",
+        host: "api.x.com",
+        status: "ok",
+        upstreamStatus: 200,
+        scopeLabel: "personal:U1",
+        principalId: "U1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.egressAudit.record({
+        source: "proxy",
+        host: "pastebin.com",
+        allowed: false,
+        verdict: "host_denied",
+        via: "connect",
+        port: 443,
+        peerIp: "1.2.3.4",
+        scopeLabel: "personal:U1",
+      }),
+    );
 
     await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 1);
     await settle(async () => (await inTestTenant(() => s.built.egressAudit.list())).length >= 1);
@@ -124,34 +132,42 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
 test("egress: a scoped read returns only that scope's records, across both sources", async () => {
   const s = start();
   try {
-    s.built.credentialUsage.record({
-      slug: "a",
-      host: "api.a.com",
-      status: "ok",
-      scopeLabel: "personal:U1",
-      principalId: "U1",
-    });
-    s.built.credentialUsage.record({
-      slug: "b",
-      host: "api.b.com",
-      status: "ok",
-      scopeLabel: "personal:U2",
-      principalId: "U2",
-    });
-    s.built.egressAudit.record({
-      source: "proxy",
-      host: "fw.a.com",
-      allowed: true,
-      verdict: "ok",
-      scopeLabel: "personal:U1",
-    });
-    s.built.egressAudit.record({
-      source: "proxy",
-      host: "fw.b.com",
-      allowed: true,
-      verdict: "ok",
-      scopeLabel: "personal:U2",
-    });
+    inTestTenant(() =>
+      s.built.credentialUsage.record({
+        slug: "a",
+        host: "api.a.com",
+        status: "ok",
+        scopeLabel: "personal:U1",
+        principalId: "U1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.credentialUsage.record({
+        slug: "b",
+        host: "api.b.com",
+        status: "ok",
+        scopeLabel: "personal:U2",
+        principalId: "U2",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.egressAudit.record({
+        source: "proxy",
+        host: "fw.a.com",
+        allowed: true,
+        verdict: "ok",
+        scopeLabel: "personal:U1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.egressAudit.record({
+        source: "proxy",
+        host: "fw.b.com",
+        allowed: true,
+        verdict: "ok",
+        scopeLabel: "personal:U2",
+      }),
+    );
 
     await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 2);
     await settle(async () => (await inTestTenant(() => s.built.egressAudit.list())).length >= 2);

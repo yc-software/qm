@@ -332,14 +332,18 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
         createdBy: "U1",
       }),
     );
-    s.built.errors.record({
-      category: "turn",
-      code: "boom",
-      message: "redacted",
-      scopeLabel: "personal:U1",
-      sessionId: "sess-1",
-    });
-    s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" });
+    inTestTenant(() =>
+      s.built.errors.record({
+        category: "turn",
+        code: "boom",
+        message: "redacted",
+        scopeLabel: "personal:U1",
+        sessionId: "sess-1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" }),
+    );
 
     const crons = await json(
       await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, {
