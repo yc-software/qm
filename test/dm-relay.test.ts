@@ -17,6 +17,18 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const SECRET = "dm-relay-secret".repeat(3);
 
@@ -26,19 +38,19 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
   let built: BuiltApp;
 
   const capDm = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
   const capChannel = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("channel", "C"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken({ actorId, scopeId: scopeId("channel", "C"), exp: Date.now() + CAPABILITY_TTL_MS }, SECRET),
     );
   const capGroup = async (actorId: string, groupId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("group", groupId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken({ actorId, scopeId: scopeId("group", groupId), exp: Date.now() + CAPABILITY_TTL_MS }, SECRET),
     );
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -55,30 +67,36 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.app.upsertDirectory([
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-sam1", displayName: "Sam Lee", type: "internal" },
-      { principalId: "U-sam2", displayName: "Sam Park", type: "internal" },
-    ]);
-    await built.app.upsertChannels(
-      [
-        { channelId: "C", name: "current" },
-        { channelId: "C-eng", name: "eng" },
-        { channelId: "C-d1", name: "design-frontend" },
-        { channelId: "C-d2", name: "design-backend" },
-        { channelId: "C-secret", name: "secret", isPrivate: true },
-      ],
-      [
-        { channelId: "C", principalId: "U-carol" },
-        { channelId: "C-secret", principalId: "U-carol" },
-      ],
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "U-alice", displayName: "Alice", type: "internal" },
+        { principalId: "U-carol", displayName: "Carol", type: "internal" },
+        { principalId: "U-sam1", displayName: "Sam Lee", type: "internal" },
+        { principalId: "U-sam2", displayName: "Sam Park", type: "internal" },
+      ]),
     );
-    await built.app.upsertGroups([
-      { groupId: "G-jrs", principalId: "U-carol" },
-      { groupId: "G-jrs", principalId: "U-alice" },
-      { groupId: "G-jrs", principalId: "U-sam1" },
-    ]);
+    await inTestTenant(() =>
+      built.app.upsertChannels(
+        [
+          { channelId: "C", name: "current" },
+          { channelId: "C-eng", name: "eng" },
+          { channelId: "C-d1", name: "design-frontend" },
+          { channelId: "C-d2", name: "design-backend" },
+          { channelId: "C-secret", name: "secret", isPrivate: true },
+        ],
+        [
+          { channelId: "C", principalId: "U-carol" },
+          { channelId: "C-secret", principalId: "U-carol" },
+        ],
+      ),
+    );
+    await inTestTenant(() =>
+      built.app.upsertGroups([
+        { groupId: "G-jrs", principalId: "U-carol" },
+        { groupId: "G-jrs", principalId: "U-alice" },
+        { groupId: "G-jrs", principalId: "U-sam1" },
+      ]),
+    );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -332,7 +350,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
     ).json()) as any;
     assert.equal((after.crons ?? []).length, (before.crons ?? []).length);
-    const pending = await built.app.pendingDeliveries("principal");
+    const pending = await inTestTenant(() => built.app.pendingDeliveries("principal"));
     const d = pending.find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the principal queue");
     assert.equal(d!.text, "ship it 🚀");
@@ -349,7 +367,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
     assert.equal(body.channel.channelId, "C-eng");
-    const d = (await built.app.pendingDeliveries("slack")).find((x) => x.id === body.deliveryId);
+    const d = (await inTestTenant(() => built.app.pendingDeliveries("slack"))).find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the channel queue");
     assert.equal(d!.text, "heads up team");
     assert.equal(d!.destination.unfurlLinks, false);
@@ -364,7 +382,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
     assert.equal(body.group.groupId, "G-jrs");
-    const pending = await built.app.pendingDeliveries("group");
+    const pending = await inTestTenant(() => built.app.pendingDeliveries("group"));
     const d = pending.find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the group queue");
     assert.equal(d!.text, "heads up");
@@ -406,10 +424,10 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
 describe("agent → teammate DM: delivery events in the recipient's session (anti-amnesia, §10)", () => {
   it("records a recipient delivery event without appending a normal assistant turn", async () => {
     const deliveries = createDeliveryStore();
-    const sessions = createPostgresSessionStore(testDatabaseUrl());
-    const directory = createPostgresDirectoryStore(testDatabaseUrl());
+    const sessions = tenantBound(createPostgresSessionStore(testDatabaseUrl()));
+    const directory = tenantBound(createPostgresDirectoryStore(testDatabaseUrl()));
     await directory.replace([{ principalId: "U-carol", displayName: "Carol", type: "internal" }]);
-    const app = createApp({ deliveries, sessions, directory } as unknown as AppDeps);
+    const app = tenantBound(createApp({ deliveries, sessions, directory } as unknown as AppDeps));
 
     const d = await deliveries.enqueue({
       destination: {
@@ -455,9 +473,9 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
 
   it("is a no-op for a non-principal delivery", async () => {
     const deliveries = createDeliveryStore();
-    const sessions = createPostgresSessionStore(testDatabaseUrl());
-    const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    const app = createApp({ deliveries, sessions, directory } as unknown as AppDeps);
+    const sessions = tenantBound(createPostgresSessionStore(testDatabaseUrl()));
+    const directory = tenantBound(createPostgresDirectoryStore(testDatabaseUrl()));
+    const app = tenantBound(createApp({ deliveries, sessions, directory } as unknown as AppDeps));
     const d = await deliveries.enqueue({
       destination: { type: "slack", target: "C1" },
       text: "hi channel",

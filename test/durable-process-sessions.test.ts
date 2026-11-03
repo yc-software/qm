@@ -25,6 +25,18 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -141,10 +153,8 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
 }
 
 async function memoryScope(): Promise<string> {
-  const resolution = createResolutionService(
-    ORG,
-    testConfigStore(ORG),
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  const resolution = tenantBound(
+    createResolutionService(ORG, testConfigStore(ORG), createAclStore(createPostgresGrantStore(testDatabaseUrl()))),
   );
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));
 }
@@ -158,9 +168,9 @@ const turn = (text: string): OrchestratorInput => ({
 });
 
 test("a live durable process keeps the computer warm; none lets it suspend", async () => {
-  const reg = createPostgresProcessRegistry(testDatabaseUrl());
+  const reg = tenantBound(createPostgresProcessRegistry(testDatabaseUrl()));
   const fake = fakeProcessSandbox();
-  const orch = buildOrchestrator(reg, fake.sandbox);
+  const orch = tenantBound(buildOrchestrator(reg, fake.sandbox));
 
   const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
   const live = await fake.sandbox.startProcess!(handle, "long build");
@@ -182,7 +192,7 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
 });
 
 test("reattach reconciles a session whose process died while core was down", async () => {
-  const reg = createPostgresProcessRegistry(testDatabaseUrl());
+  const reg = tenantBound(createPostgresProcessRegistry(testDatabaseUrl()));
   const fake = fakeProcessSandbox();
   await reg.register({
     processId: "00000000-0000-0000-0000-0000000000ff",
@@ -194,7 +204,7 @@ test("reattach reconciles a session whose process died while core was down", asy
   });
   assert.equal((await reg.liveByScope(await memoryScope())).length, 1);
 
-  const orch = buildOrchestrator(reg, fake.sandbox);
+  const orch = tenantBound(buildOrchestrator(reg, fake.sandbox));
   await orch.handleTurn(turn("!run echo hi"));
 
   assert.equal((await reg.liveByScope(await memoryScope())).length, 0);
@@ -202,9 +212,9 @@ test("reattach reconciles a session whose process died while core was down", asy
 });
 
 test("with no live session the per-scope box suspends as before (gate is off by default)", async () => {
-  const reg = createPostgresProcessRegistry(testDatabaseUrl());
+  const reg = tenantBound(createPostgresProcessRegistry(testDatabaseUrl()));
   const fake = fakeProcessSandbox();
-  const orch = buildOrchestrator(reg, fake.sandbox);
+  const orch = tenantBound(buildOrchestrator(reg, fake.sandbox));
   await orch.handleTurn(turn("!run echo hello"));
   assert.equal(fake.teardowns.length, 1);
   assert.equal(fake.teardowns[0]!.keepWarm, false);

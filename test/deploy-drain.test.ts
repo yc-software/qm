@@ -8,6 +8,7 @@ import type { Principal, TurnResult } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sessions = createPostgresSessionStore(testDatabaseUrl());
 
@@ -47,16 +48,16 @@ test("a superseded worker stops claiming; in-flight turns finish; claiming resum
   });
   worker.start();
 
-  await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 });
+  await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 }));
   await sleep(50);
   assert.equal(turns.length, 1, "the first run was claimed");
 
   superseded = true;
   await sleep(50);
-  await runs.enqueue({ sessionId: "s2", request: turn, maxAttempts: 3 });
+  await inTestTenant(() => runs.enqueue({ sessionId: "s2", request: turn, maxAttempts: 3 }));
   release!();
   await sleep(80);
-  const statuses = (await runs.list()).map((r) => r.status).sort();
+  const statuses = (await inTestTenant(() => runs.list())).map((r) => r.status).sort();
   assert.deepEqual(
     statuses,
     ["done", "pending"],
