@@ -5,10 +5,11 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-type TenantIngress = LoopIngress & { tenantId: string };
+export type TenantIngress = LoopIngress & { tenantId: string };
 
 export interface IngressSourceRows {
   get(id: string): Promise<LoopIngress | null>;
+  claim(id: string): Promise<TenantIngress | null>;
   byLoop(loopId: string): Promise<LoopIngress[]>;
   insert(source: LoopIngress): Promise<void>;
   update(id: string, apply: (source: LoopIngress) => LoopIngress): Promise<LoopIngress | null>;
@@ -248,6 +249,10 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
       return (
         await claimAcrossTenants(connectionString, `${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)
       ).rows.map(tenantSource);
+    },
+    async claim(id) {
+      const { rows } = await claimAcrossTenants(connectionString, `${SELECT_SOURCE} WHERE id = $1`, [id]);
+      return rows[0] ? tenantSource(rows[0]) : null;
     },
     async gmailWatching(email) {
       const { rows } = await claimAcrossTenants(

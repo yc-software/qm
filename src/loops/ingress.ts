@@ -279,6 +279,79 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
+  async function receiveSigned(
+    source: LoopIngress,
+    request: { headers: VerifierInput["headers"]; rawBody: string },
+  ): Promise<{ status: number; body: string }> {
+    if (
+      !source.enabled ||
+      !(await deps.enabledFor(source.owner)) ||
+      source.kind === "gmail" ||
+      source.kind === "conversation"
+    )
+      return { status: 404, body: "Not found" };
+    const verifier = getVerifier(source.kind === "slack" ? "slack" : "hmac-sha256")!;
+    const input = { ...request, secret: source.secret };
+    if (!verifier.verify(input)) return { status: 401, body: "Invalid signature" };
+    let payload: unknown;
+    try {
+      payload = JSON.parse(request.rawBody);
+    } catch {
+      return { status: 400, body: "JSON body required" };
+    }
+    const handshake = verifier.handshake?.(input, payload);
+    if (handshake !== undefined && handshake !== null) return { status: 200, body: handshake };
+    const deliveryId = verifier.deliveryId(input);
+    let entry: IngestEntryInput;
+    if (source.kind === "slack") {
+      if (!isObj(payload) || payload.team_id !== source.teamId || !isObj(payload.event))
+        return { status: 200, body: "Skipped" };
+      const event = payload.event;
+      if (
+        event.type !== "message" ||
+        event.subtype ||
+        event.bot_id ||
+        typeof event.channel !== "string" ||
+        !source.channels?.includes(event.channel) ||
+        typeof event.ts !== "string" ||
+        typeof event.user !== "string" ||
+        typeof event.text !== "string" ||
+        !event.text.trim()
+      )
+        return { status: 200, body: "Skipped" };
+      const at = Number(event.ts) * 1000;
+      if (!Number.isFinite(at) || at <= 0) return { status: 400, body: "Invalid Slack timestamp" };
+      const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
+      const isDirectMessage = isDirectChannelType(event.channel_type);
+      entry = {
+        loopId: source.loopId,
+        source: "slack",
+        dedupeKey: slackConversationRef(event.channel, event.ts, threadTs, isDirectMessage),
+        summary: event.text.slice(0, 500),
+        sourceAt: at,
+        sourcePayload: {
+          source: "slack",
+          title: event.channel,
+          from: event.user,
+          snippet: event.text.slice(0, 10_000),
+          receivedAt: at,
+          slack: { channelId: event.channel, ts: event.ts, isDirectMessage, ...(threadTs ? { threadTs } : {}) },
+        },
+      };
+    } else {
+      entry = {
+        loopId: source.loopId,
+        source: "webhook",
+        dedupeKey: `${source.id}:${deliveryId}`,
+        summary: isObj(payload) && typeof payload.title === "string" ? payload.title.slice(0, 300) : "Webhook event",
+        sourceAt: Date.now(),
+        sourcePayload: { event: payload },
+      };
+    }
+    await enqueue(source, deliveryId, { entries: [entry] });
+    return { status: 202, body: "Accepted" };
+  }
+
   return {
     gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
     async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
@@ -388,74 +461,9 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
         return { status: 202, body: "Accepted" };
       }
-      const source = await deps.sources.get(id);
-      if (
-        !source?.enabled ||
-        !(await deps.enabledFor(source.owner)) ||
-        source.kind === "gmail" ||
-        source.kind === "conversation"
-      )
-        return { status: 404, body: "Not found" };
-      const verifier = getVerifier(source.kind === "slack" ? "slack" : "hmac-sha256")!;
-      const input = { ...request, secret: source.secret };
-      if (!verifier.verify(input)) return { status: 401, body: "Invalid signature" };
-      let payload: unknown;
-      try {
-        payload = JSON.parse(request.rawBody);
-      } catch {
-        return { status: 400, body: "JSON body required" };
-      }
-      const handshake = verifier.handshake?.(input, payload);
-      if (handshake !== undefined && handshake !== null) return { status: 200, body: handshake };
-      const deliveryId = verifier.deliveryId(input);
-      let entry: IngestEntryInput;
-      if (source.kind === "slack") {
-        if (!isObj(payload) || payload.team_id !== source.teamId || !isObj(payload.event))
-          return { status: 200, body: "Skipped" };
-        const event = payload.event;
-        if (
-          event.type !== "message" ||
-          event.subtype ||
-          event.bot_id ||
-          typeof event.channel !== "string" ||
-          !source.channels?.includes(event.channel) ||
-          typeof event.ts !== "string" ||
-          typeof event.user !== "string" ||
-          typeof event.text !== "string" ||
-          !event.text.trim()
-        )
-          return { status: 200, body: "Skipped" };
-        const at = Number(event.ts) * 1000;
-        if (!Number.isFinite(at) || at <= 0) return { status: 400, body: "Invalid Slack timestamp" };
-        const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
-        const isDirectMessage = isDirectChannelType(event.channel_type);
-        entry = {
-          loopId: source.loopId,
-          source: "slack",
-          dedupeKey: slackConversationRef(event.channel, event.ts, threadTs, isDirectMessage),
-          summary: event.text.slice(0, 500),
-          sourceAt: at,
-          sourcePayload: {
-            source: "slack",
-            title: event.channel,
-            from: event.user,
-            snippet: event.text.slice(0, 10_000),
-            receivedAt: at,
-            slack: { channelId: event.channel, ts: event.ts, isDirectMessage, ...(threadTs ? { threadTs } : {}) },
-          },
-        };
-      } else {
-        entry = {
-          loopId: source.loopId,
-          source: "webhook",
-          dedupeKey: `${source.id}:${deliveryId}`,
-          summary: isObj(payload) && typeof payload.title === "string" ? payload.title.slice(0, 300) : "Webhook event",
-          sourceAt: Date.now(),
-          sourcePayload: { event: payload },
-        };
-      }
-      await enqueue(source, deliveryId, { entries: [entry] });
-      return { status: 202, body: "Accepted" };
+      const source = await deps.sources.claim(id);
+      if (!source) return { status: 404, body: "Not found" };
+      return inTenantOf(source.tenantId, () => receiveSigned(source, request));
     },
     async maintain() {
       if (Date.now() >= nextCleanupAt) {

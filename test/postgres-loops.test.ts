@@ -395,6 +395,13 @@ test("ingress sources and deliveries queue per tenant and background claims span
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
       assert.equal(await withoutTenant(() => owner.deliveries.pruneCompleted(60)), 2);
+      const claimed = await withoutTenant(() => store.sources.claim("s1"));
+      assert.deepEqual([claimed?.id, claimed?.tenantId], ["s1", tenant]);
+      assert.equal(await withoutTenant(() => store.sources.claim("missing")), null);
+      await assert.rejects(
+        withTenant(tenant, () => store.sources.claim("s1")),
+        /cannot run while a tenant is bound/,
+      );
       assert.deepEqual(
         (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => l.name),
         ["Inbox"],
