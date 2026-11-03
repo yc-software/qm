@@ -108,6 +108,7 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
+import { brokerCredentialCheck, createStartup, seedCatalogs } from "./startup-work.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -677,20 +678,14 @@ export function buildApp(
       : {}),
   });
   const layer = () => deploymentLayerStore.runtime();
-  const installCatalogs = async (): Promise<void> => {
-    if (!config.seedSkills) return;
-    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-    for (const dir of config.pluginSkillDirs) {
-      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-      await installSeedSkills(skills, {
-        dir,
+  const installCatalogs = config.seedSkills
+    ? seedCatalogs(skills, {
+        seedDir: config.skillsSeedDir,
+        pluginDirs: config.pluginSkillDirs,
+        ...(layerSkillsDir ? { layerSkillsDir } : {}),
         scopeId: orgScope,
-        createdBy: "system:plugin-skills",
-        reviewer: "system:plugin-skills-reviewer",
-        respectArchived: true,
-      });
-    }
-  };
+      })
+    : async () => undefined;
   const seedTenant = () =>
     Promise.all([
       installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
@@ -1251,18 +1246,6 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
-  if (config.brokerCredentials?.length) {
-    const reserved = new Set(config.brokerCredentials.map((c) => c.slug));
-    void credentialStore.listServiceCredentials(scopeId("org", config.orgId)).then(
-      (stored) => {
-        const shadowed = stored.filter((c) => reserved.has(c.slug)).map((c) => c.slug);
-        if (shadowed.length)
-          console.warn(`[broker-credentials] BROKER_CREDENTIALS overrides stored credentials: ${shadowed.join(", ")}`);
-      },
-      (error) =>
-        console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
-    );
-  }
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
@@ -1319,8 +1302,23 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const checkBrokerCredentials = config.brokerCredentials?.length
+    ? brokerCredentialCheck(
+        credentialStore,
+        orgScope,
+        config.brokerCredentials.map((c) => c.slug),
+      )
+    : async () => undefined;
   const loadTenant = () =>
-    onFirstBind(() => Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders(), seedTenant()]));
+    onFirstBind(() =>
+      Promise.all([
+        identity.ready(),
+        configStore.hydrate?.(),
+        refreshCustomProviders(),
+        seedTenant(),
+        checkBrokerCredentials(),
+      ]),
+    );
   let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
@@ -1599,7 +1597,10 @@ export function buildApp(
     onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
     onChange: refreshRunStream,
   });
-  const stopStreamSync = serveRunStreamSync(runStreamEvents, turnStream);
+  const startup = createStartup({
+    blobTransfer,
+    listen: () => serveRunStreamSync(runStreamEvents, turnStream),
+  });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
   const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
@@ -2745,12 +2746,6 @@ export function buildApp(
     { label: "Composio consent returns", immediate: true },
   );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
-  const BLOB_TRANSFER_EXPIRY_DAYS = 1;
-  void blobTransfer
-    .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
-    .catch((e) =>
-      console.error("[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):", errMessage(e)),
-    );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
       ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
@@ -2879,6 +2874,7 @@ export function buildApp(
       stopTenantLoad ??= loadTenant();
       releasing = null;
       flyTunnel?.monitor();
+      startup.begin();
       drain.start();
       renderBasePreparing = new AbortController();
       void renderBase
@@ -2912,7 +2908,7 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
-      stopStreamSync();
+      startup.stop();
       stopTenantLoad?.();
       stopTenantLoad = undefined;
       await Promise.all(
