@@ -3178,7 +3178,7 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   const second = call(runtime, { action: "set", model: "Astra", lifetime: "scope" });
   controller.abort();
   release();
-  await Promise.all([first, second]);
+  await Promise.allSettled([first, second]);
   assert.equal(selected, false);
   assert.equal(ref.runtimeHandoff, undefined);
 });
@@ -4078,8 +4078,16 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
     const emitted: Emitted[] = [];
     const shutdown = new AbortController();
     const cancel = new AbortController();
+    const context = fakeToolContext();
     const ref: ToolContextRef = {
-      current: fakeToolContext(),
+      current: {
+        ...context,
+        history: async (...args) => {
+          if (abort === "shutdown") shutdown.abort();
+          if (abort !== "none") cancel.abort();
+          return context.history(...args);
+        },
+      },
       emit: (e) => {
         emitted.push(e as Emitted);
       },
@@ -4088,9 +4096,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
       abortSignal: cancel.signal,
     };
     const history = createAgentTools(ref).find((t) => t.name === "history")!;
-    if (abort === "shutdown") shutdown.abort();
-    if (abort !== "none") cancel.abort();
-    await callWith(history, `call-${abort}`, { query: "budget", retrySafe });
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe }).catch(() => undefined);
     return emitted;
   };
   const strategy = (emitted: Emitted[]) => {

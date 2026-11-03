@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -138,9 +140,12 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async pendingRunIds() {
-      const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
-      return rows.map((r) => r.run_id as string);
+    async pendingRuns() {
+      const { rows } = await claimAcrossTenants(
+        pg,
+        `SELECT DISTINCT ON (run_id) * FROM run_signals WHERE consumed_at IS NULL ORDER BY run_id`,
+      );
+      return rows.map((r) => ({ runId: r.run_id as string, ...rowTenant(r) }));
     },
 
     async prune(olderThanMs) {
@@ -148,12 +153,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     onSignal(runId, cb) {
+      const bound = AsyncLocalStorage.bind(cb);
       const set = listeners.get(runId) ?? new Set();
-      set.add(cb);
+      set.add(bound);
       listeners.set(runId, set);
       ensureListening();
       return () => {
-        set.delete(cb);
+        set.delete(bound);
         if (set.size === 0) listeners.delete(runId);
         if (listeners.size === 0) dropListenClient();
       };

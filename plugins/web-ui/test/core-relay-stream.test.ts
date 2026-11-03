@@ -4,6 +4,7 @@ import { createServer, request, type IncomingMessage } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const secret = "relay-stream-test";
 let releaseTail: (() => void) | undefined;
@@ -37,7 +38,7 @@ test.after(() => {
 });
 
 function get(path: string, headers: Record<string, string>, method = "GET", body?: string): Promise<IncomingMessage> {
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, secret);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, secret);
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port: (web.address() as AddressInfo).port, path, method }, resolve);
     req.setHeader(PORTAL_IDENTITY_HEADER, token);

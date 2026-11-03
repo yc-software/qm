@@ -12,13 +12,14 @@ import { baseModelProviders, configuredModel, providerKeysPresent } from "../src
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
   const built = stopAtEnd(buildApp(config));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
