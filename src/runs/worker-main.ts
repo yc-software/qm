@@ -2,7 +2,7 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { useOwnerDatabase } from "../tenants/claim.ts";
+import { useOwnerDatabase } from "../tenants/owner-pool.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
