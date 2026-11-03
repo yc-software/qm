@@ -1,4 +1,5 @@
 import { openSessionShare } from "./session-share";
+import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
@@ -28,6 +29,7 @@ import {
   PinOff,
   Plus,
   RefreshCw,
+  Smile,
   SquareTerminal,
   Users,
   X,
@@ -95,6 +97,7 @@ import {
   openProjectDetail,
   personalScopeId,
   renameProject,
+  setProjectIcon,
   scopeChip,
 } from "./contexts";
 import { groupDmLabel, groupDmText } from "./group-dm-label";
@@ -487,6 +490,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
+  const customGlyph = glyph === Folder ? projectIconTpl(projectOf(item.scopeId)?.icon, 14) : null;
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
@@ -504,7 +508,11 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
+                  ${
+                    glyph && !collapsed
+                      ? html`<span class="glyph">${customGlyph ?? icon(glyph, glyphSize)}</span>`
+                      : nothing
+                  }
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
@@ -649,9 +657,42 @@ function projectMenuPopover(item: Extract<RecentItem, { kind: "project" }>): Tem
             </button>`
           : nothing
       }
+      ${
+        projectOf(item.scopeId)
+          ? html`<button
+              class="session-menu-option"
+              type="button"
+              role="menuitem"
+              @click=${(event: Event) => changeProjectIcon(event, item.scopeId)}
+            >
+              ${icon(Smile, 15)}<span>${projectOf(item.scopeId)?.icon ? "Change icon" : "Add icon"}</span>
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }
+
+function changeProjectIcon(event: Event, scopeId: string): void {
+  const head = (event.currentTarget as HTMLElement).closest(".recent-project-head");
+  sessionsState.openMenuId = null;
+  renderList();
+  const anchor = head?.querySelector<HTMLElement>(".recent-project-toggle");
+  const project = projectOf(scopeId);
+  if (!anchor || !project) return;
+  openProjectIconPicker({
+    anchor,
+    current: project.icon,
+    onPick: async (value) => {
+      const latest = projectOf(scopeId);
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
+      renderList();
+      return error;
+    },
+  });
+}
+
+onCustomEmojiLoaded(() => renderList());
 
 function openProjectFromMenu(scopeId: string): void {
   sessionsState.openMenuId = null;

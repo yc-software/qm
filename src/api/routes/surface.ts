@@ -1265,6 +1265,19 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   });
 }
 
+/** Workspace custom emoji (name → image URL, aliases resolved), from the catalog the Slack surface publishes. */
+async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
+  const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  const raw = catalog?.emoji ?? {};
+  const emoji: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const url = value.startsWith("alias:") ? raw[value.slice("alias:".length)] : value;
+    if (url?.startsWith("https://")) emoji[name] = url;
+  }
+  ctx.res.setHeader("cache-control", "private, max-age=300");
+  return sendJson(ctx.res, 200, { emoji });
+}
+
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
@@ -1494,6 +1507,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
+  { method: "GET", path: "/v1/custom-emoji", auth: "source", handle: getCustomEmoji },
   { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
   { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
