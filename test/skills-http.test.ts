@@ -13,6 +13,10 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
+import type { ToolContext } from "../src/tools/primitives.ts";
+import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
+import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 
 function start() {
   const built = buildApp(
@@ -432,6 +436,7 @@ async function startSecure() {
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
+    config: built.config,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -452,7 +457,21 @@ async function startSecure() {
     skills: built.skills,
     directory: built.directory,
     sessions: built.sessions,
+    config: built.config,
     close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+function skillsTool(selfApi?: SelfApiCall) {
+  const tool = createAgentTools(
+    { current: (selfApi ? { selfApi } : {}) as unknown as ToolContext },
+    {
+      controlTools: true,
+    },
+  ).find((t) => t.name === "skills")!;
+  return async (args: Record<string, unknown>) => {
+    const result = await tool.execute("call", args, undefined, undefined, {} as never);
+    return (result.content[0] as { text: string }).text;
   };
 }
 
@@ -1101,6 +1120,78 @@ test("skill detail and restore capability calls hide other principals' skills an
       401,
     );
     assert.equal((await srv.skills.get(skill.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the skills tool saves a skill into the turn's scope and edits it through the skill API", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [
+        { channelId: "C9", principalId: "avery" },
+        { channelId: "C9", principalId: "jordan" },
+      ],
+    );
+    const skills = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"))));
+    const saved = await skills({
+      action: "save",
+      name: "investor-update",
+      description: "draft the weekly investor update",
+      body: "# investor-update",
+    });
+    const sk = (await srv.skills.list()).find((s) => s.manifest.name === "investor-update");
+    assert.ok(sk, saved);
+    assert.equal(sk.scopeId, scopeId("channel", "C9"));
+    assert.equal(sk.createdBy, "avery");
+    assert.equal(sk.status, "published");
+    assert.match(saved, new RegExp(`Saved skill investor-update \\(id ${sk.id}`));
+
+    const jordan = skillsTool(createSelfApiCall(srv.base, await srv.cap("jordan", scopeId("channel", "C9"))));
+    const edited = await jordan({ action: "edit", id: sk.id, body: "# investor-update v2" });
+    assert.match(edited, /^Updated skill investor-update/);
+    assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# investor-update v2");
+
+    const again = await skills({ action: "save", name: "investor-update", description: "d", body: "# b" });
+    assert.match(again, /already exists here/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the skills tool cannot save or edit where the skill API refuses", async () => {
+  const srv = await startSecure();
+  try {
+    await srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [{ channelId: "C9", principalId: "avery" }],
+    );
+    const trigger = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"), false)));
+    assert.equal(
+      await trigger({ action: "save", name: "auto-thing", description: "d", body: "# b" }),
+      `[error] ${SHARED_SKILL_TRIGGER_REFUSAL}`,
+    );
+
+    await srv.config.setSecurityPosture(scopeId("personal", "strict-user"), "strict");
+    const strict = skillsTool(createSelfApiCall(srv.base, await srv.cap("strict-user")));
+    assert.equal(
+      await strict({ action: "save", name: "strict-thing", description: "d", body: "# b" }),
+      "[error] Strict posture blocks direct control-plane mutations",
+    );
+
+    const id = await seedChannelSkill(srv);
+    const outsider = skillsTool(createSelfApiCall(srv.base, await srv.cap("mallory")));
+    assert.match(await outsider({ action: "edit", id, description: "taken over" }), /isn't yours to edit/);
+
+    assert.equal(
+      await skillsTool()({ action: "save", name: "tokenless", description: "d", body: "# b" }),
+      "[error] skills can't be saved or edited on this turn",
+    );
+    const names = (await srv.skills.list()).map((s) => s.manifest.name);
+    for (const name of ["auto-thing", "strict-thing", "tokenless"]) assert.ok(!names.includes(name), name);
+    assert.notEqual((await srv.skills.get(id))!.manifest.description, "taken over");
   } finally {
     await srv.close();
   }

@@ -2,6 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { PublishInput, PublishAudienceDescriptor } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
+import { isObj } from "../../util/objects.ts";
 import { text, outsideWorkspace, sandboxSelector, type ToolKit } from "./kit.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
@@ -112,6 +113,103 @@ export function workspaceTools(kit: ToolKit) {
         text(content === null ? `[no such skill file: ${p.name}/${p.path ?? "SKILL.md"}]` : `${where}${content}`),
         content === null,
         sourceScopeId,
+      );
+    },
+  });
+
+  async function writeSkill(
+    callId: string,
+    action: "save" | "edit",
+    request: { method: "POST" | "PUT"; path: string; body: Record<string, string> },
+    summary: Record<string, unknown>,
+  ) {
+    const tc = ref.current;
+    if (!tc) return text("[error] no active tool context");
+    await recordCall(callId, { tool: "skills", action, ...summary });
+    if (!tc.selfApi)
+      return recordResult(
+        callId,
+        { tool: "skills", action, error: "unavailable" },
+        text("[error] skills can't be saved or edited on this turn"),
+        true,
+      );
+    let response;
+    try {
+      response = await tc.selfApi(request.method, request.path, request.body, ref.abortSignal);
+    } catch (error) {
+      return recordResult(
+        callId,
+        { tool: "skills", action, error: errMessage(error) },
+        text(`[error] ${errMessage(error)}`),
+        true,
+      );
+    }
+    const skill = isObj(response.body) && isObj(response.body.skill) ? response.body.skill : undefined;
+    if (response.status >= 400 || !skill) {
+      const message =
+        isObj(response.body) && typeof response.body.message === "string"
+          ? response.body.message
+          : JSON.stringify(response.body);
+      return recordResult(
+        callId,
+        { tool: "skills", action, status: response.status },
+        text(`[error] ${message}`),
+        true,
+      );
+    }
+    return recordResult(
+      callId,
+      { tool: "skills", action, id: skill.id, name: skill.name, version: skill.version, status: skill.status },
+      text(
+        `${action === "save" ? "Saved" : "Updated"} skill ${String(skill.name)} (id ${String(skill.id)}, version ${String(skill.version)}, ${String(skill.status)}).`,
+      ),
+    );
+  }
+
+  const saveSkill = defineTool({
+    name: "save_skill",
+    label: "Save skill",
+    description:
+      "Save a repeatable procedure as a new skill in this conversation's scope: yours alone in a 1:1 DM, shared with everyone in a channel, group DM or project. A name already taken here fails; edit that skill instead.",
+    parameters: Type.Object({
+      name: Type.String({ minLength: 1, description: "Short kebab-case name; it can't be changed later." }),
+      description: Type.String({ minLength: 1, description: "One line saying when to use the skill." }),
+      body: Type.String({ minLength: 1, description: "The SKILL.md instructions, as plain steps." }),
+    }),
+    async execute(callId, params) {
+      const p = params as { name: string; description: string; body: string };
+      return writeSkill(
+        callId,
+        "save",
+        { method: "POST", path: "/v1/skills", body: { name: p.name, description: p.description, body: p.body } },
+        { name: p.name, bytes: p.body.length },
+      );
+    },
+  });
+
+  const editSkill = defineTool({
+    name: "edit_skill",
+    label: "Edit skill",
+    description: "Change the description or instructions of a skill you manage, by id from list or search.",
+    parameters: Type.Object({
+      id: Type.String({ minLength: 1, description: "Skill id from list or search." }),
+      description: Type.Optional(Type.String({ minLength: 1 })),
+      body: Type.Optional(Type.String({ minLength: 1, description: "The full new SKILL.md instructions." })),
+    }),
+    async execute(callId, params) {
+      const p = params as { id: string; description?: string; body?: string };
+      return writeSkill(
+        callId,
+        "edit",
+        {
+          method: "PUT",
+          path: `/v1/skills/${encodeURIComponent(p.id)}`,
+          body: {
+            ...(p.description !== undefined ? { description: p.description } : {}),
+            ...(p.body !== undefined ? { body: p.body } : {}),
+          },
+        },
+        { id: p.id, ...(p.body !== undefined ? { bytes: p.body.length } : {}) },
       );
     },
   });
@@ -314,5 +412,5 @@ export function workspaceTools(kit: ToolKit) {
     },
   });
 
-  return { discoverSkills, skill, read, installCanvas, write, publish };
+  return { discoverSkills, skill, saveSkill, editSkill, read, installCanvas, write, publish };
 }

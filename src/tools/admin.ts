@@ -1,4 +1,4 @@
-import { errMessage } from "../util/errors.ts";
+import { createSelfApiCall, type SelfApiResponse } from "./self-api.ts";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 
@@ -249,13 +249,10 @@ export interface AdminToolAccess {
   operationsAvailable: boolean;
 }
 
-type AdminCall = (
-  input: Record<string, unknown>,
-  signal?: AbortSignal,
-) => Promise<{ status: number; body: unknown; requestId?: string }>;
+type AdminCall = (input: Record<string, unknown>, signal?: AbortSignal) => Promise<SelfApiResponse>;
 
 export function createAdminCall(baseUrl: string, capability: string): AdminCall {
-  while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+  const request = createSelfApiCall(baseUrl, capability);
   return async (input, signal) => {
     const { action, retrySafe: _retrySafe, ...params } = input;
     const op = Object.hasOwn(adminOperations, String(action))
@@ -276,28 +273,6 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
         path = path.replace(`:${key}`, encodeURIComponent(segment));
       } else query.set(key === "auditAction" ? "action" : key, String(value));
     }
-    const response = await fetch(`${baseUrl}/v1/admin${path}?${query}`, {
-      method: op.method,
-      headers: { "x-agent-capability": capability, "content-type": "application/json" },
-      ...(params.value !== undefined ? { body: JSON.stringify(params.value) } : {}),
-      redirect: "error",
-      signal,
-    });
-    const requestId = response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined;
-    const result = { status: response.status, ...(requestId ? { requestId } : {}) };
-    let raw: string;
-    try {
-      raw = await response.text();
-    } catch (error) {
-      throw new Error(
-        `Admin HTTP ${response.status}${requestId ? ` request ${requestId}` : ""}: ${errMessage(error)}`,
-        { cause: error },
-      );
-    }
-    try {
-      return { ...result, body: JSON.parse(raw) as unknown };
-    } catch {
-      return { ...result, body: raw };
-    }
+    return request(op.method, `/v1/admin${path}?${query}`, params.value, signal);
   };
 }
