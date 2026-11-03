@@ -72,9 +72,9 @@ see. QM therefore attests a person only to that person, in their own personal
 scope: never where others read the answer, never in someone else's personal
 scope, and never for a QM system actor (`system:…`). A memory route to an
 `attestActor` provider may list only `personal` or `personal:<id>` selectors, and
-QM refuses any other at startup. Attested MCP connectors are offered only in the
-person's direct conversation with QM, not in channels, group conversations or
-projects. The credential broker refuses an actor-attested credential anywhere
+QM refuses any other at startup. Attested MCP connectors are offered and called
+only in the person's direct conversation with QM, not in channels, group
+conversations or projects. The credential broker refuses an actor-attested credential anywhere
 else with `private_only`; a published app's token belongs to its publisher's
 personal scope, so apps keep attesting their publisher as before.
 

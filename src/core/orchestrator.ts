@@ -2705,7 +2705,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId } : {}),
           ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {

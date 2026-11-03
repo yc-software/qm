@@ -85,8 +85,14 @@ export interface McpToolService {
   toolDefs(): McpToolDescriptor[];
   toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
-  needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    principalId?: string,
+    approval?: string,
+    scopeId?: ScopeId,
+  ): Promise<string>;
+  needsApproval(name: string, args: Record<string, unknown>, principalId?: string, scopeId?: ScopeId): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
@@ -137,6 +143,13 @@ function resultText(result: CallToolResult): string {
 function callResource(def: McpToolDescriptor, args: Record<string, unknown>): string {
   if (!def.catalog) return `${def.serverId}/${def.remoteName}`;
   return `${def.serverId}/${typeof args.tool === "string" ? args.tool : String(args.operation)}`;
+}
+
+function refuseOutsideAudience(server: McpServer, principalId: string | undefined, scopeId: ScopeId | undefined): void {
+  if (server.attestActor && !attestableAudience(attestedPerson(principalId, `MCP server ${server.id}`), scopeId))
+    throw new Error(
+      `MCP server ${server.id} acts as the person, so it answers only to them in their own private conversation with QM`,
+    );
 }
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
@@ -355,8 +368,9 @@ export function createMcpToolService(opts: {
   }
 
   async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
-    const mayAttest = scopeId !== undefined && attestableAudience(principalId, scopeId);
-    const current = mayAttest ? snapshot : snapshot.filter((t) => !attestedServers.has(t.serverId));
+    const current = attestableAudience(principalId, scopeId)
+      ? snapshot
+      : snapshot.filter((t) => !attestedServers.has(t.serverId));
     const gated = perUserServers;
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
@@ -380,7 +394,7 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: () => snapshot,
     toolDefsFor,
-    async needsApproval(name, args, principalId) {
+    async needsApproval(name, args, principalId, scopeId) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
@@ -388,17 +402,19 @@ export function createMcpToolService(opts: {
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+        refuseOutsideAudience(server, principalId, scopeId);
         return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
     },
-    async call(name, args, principalId, approval) {
+    async call(name, args, principalId, approval, scopeId) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+      refuseOutsideAudience(server, principalId, scopeId);
       try {
         if (def.catalog) return await callCatalog(server, args, principalId, approval);
         const client = await callerClient(server, principalId);

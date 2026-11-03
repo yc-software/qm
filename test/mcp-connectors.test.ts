@@ -214,28 +214,64 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
   assert.equal(
-    await service.call("records", { operation: "search", query: "message" }, "alice@example.com"),
+    await service.call(
+      "records",
+      { operation: "search", query: "message" },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     "- send-message (needs approval): Send a message to a contact",
   );
   assert.match(
-    await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com"),
+    await service.call(
+      "records",
+      { operation: "describe", tool: "send-message" },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     /"needsApproval":true/,
   );
   assert.equal(
-    await service.needsApproval("records", { operation: "invoke", tool: "send-message" }, "alice@example.com"),
+    await service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "send-message" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     true,
   );
   assert.equal(
-    await service.needsApproval("records", { operation: "invoke", tool: "find-record" }, "alice@example.com"),
+    await service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "find-record" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     false,
   );
-  assert.equal(await service.needsApproval("records", { operation: "search" }, "alice@example.com"), false);
+  assert.equal(
+    await service.needsApproval("records", { operation: "search" }, "alice@example.com", "personal:alice@example.com"),
+    false,
+  );
   await assert.rejects(
-    service.needsApproval("records", { operation: "invoke", tool: "send_message" }, "alice@example.com"),
+    service.needsApproval(
+      "records",
+      { operation: "invoke", tool: "send_message" },
+      "alice@example.com",
+      "personal:alice@example.com",
+    ),
     /Unknown Records tool: send_message\. Search for it first/,
   );
   await assert.rejects(
-    service.call("records", { operation: "invoke", tool: "send-message", arguments: { to: "x" } }, "alice@example.com"),
+    service.call(
+      "records",
+      { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
+      "alice@example.com",
+      undefined,
+      "personal:alice@example.com",
+    ),
     /needs the person's approval/,
     "an approval-requiring tool never goes out without an approval",
   );
@@ -245,6 +281,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
       { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
       "alice@example.com",
       "tool-call:abc",
+      "personal:alice@example.com",
     ),
     'send-message {"to":"x"}',
   );
@@ -253,15 +290,15 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     [["alice@example.com", "tool-call:abc"]],
   );
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
-  await service.call("records", { operation: "search" }, "bob@example.com");
+  await service.call("records", { operation: "search" }, "bob@example.com", undefined, "personal:bob@example.com");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
   assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
   await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
   await service.refresh();
   const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
   await Promise.all([
-    service.call("records", { operation: "search" }, "alice@example.com"),
-    service.call("records", { operation: "search" }, "alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com", undefined, "personal:alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com", undefined, "personal:alice@example.com"),
   ]);
   assert.equal(
     mcp.requests.filter((r) => r.rpc === "tools/list").length,
@@ -288,6 +325,36 @@ test("an attested connector is offered only to its person in their own private c
   service.close();
 });
 
+test("an attested connector refuses a call outside its person's own conversation even before this instance refreshes", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const shared = testMap<McpServer>();
+  const otherInstance = createMcpServerStore(shared);
+  const store = createMcpServerStore(shared);
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const records = server({ id: "records", name: "Records", url: mcp.url, catalog: true });
+  await store.put(records);
+  await service.refresh();
+  assert.deepEqual(
+    (await service.toolDefsFor("U1", "channel:C1")).map((d) => d.serverId),
+    ["records"],
+  );
+  await otherInstance.put({ ...records, attestActor: true, updatedAt: 1 });
+  const invoke = { operation: "invoke", tool: "find-record", arguments: {} };
+  const privateOnly = /answers only to them in their own private conversation/;
+  await assert.rejects(service.needsApproval("records", invoke, "U1", "channel:C1"), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
+  await assert.rejects(service.call("records", invoke, "U2", undefined, "personal:U1"), privateOnly);
+  assert.equal(mcp.requests.length, 0);
+  await service.call("records", invoke, "U1", undefined, "personal:U1");
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
+    ["U1"],
+  );
+  service.close();
+});
+
 test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
     canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),
@@ -302,7 +369,13 @@ test("attested connectors send one canonical person and never call for an actor 
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
   for (const person of ["alice@example.com", "U_ALICE"])
-    await service.call("records", { operation: "invoke", tool: "find-record", arguments: {} }, person);
+    await service.call(
+      "records",
+      { operation: "invoke", tool: "find-record", arguments: {} },
+      person,
+      undefined,
+      `personal:${person}`,
+    );
   assert.ok(mcp.requests.length > 0);
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
   const sent = mcp.requests.length;

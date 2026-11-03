@@ -474,13 +474,18 @@ test("a channel with a non-internal audience member is refused (internal-only, o
   assert.match(res.reason ?? "", /internal-only/);
 });
 
-test("an attested connector is offered only in the speaker's own DM, never where others read the answer", async () => {
+test("an attested connector is offered and called only in the speaker's own DM, never where others read the answer", async () => {
   const offered: Record<string, string[]> = {};
+  const called: Record<string, string> = {};
   const mock = createMockAgent();
   const agent: Agent = {
     ...mock,
-    runTurn: (input) => {
+    runTurn: async (input) => {
       offered[input.scopeLabel] = (input.mcpTools ?? []).map((tool) => tool.name);
+      called[input.scopeLabel] = await input.tools.callMcpTool("records", { operation: "search" }).then(
+        () => "answered",
+        (e: Error) => (/answers only to them/.test(e.message) ? "refused" : "sent"),
+      );
       return mock.runTurn(input);
     },
   };
@@ -494,7 +499,7 @@ test("an attested connector is offered only in the speaker's own DM, never where
     await built.mcpServers.put({
       id,
       name: id,
-      url: `https://${id}.example/mcp`,
+      url: `https://127.0.0.1:9/${id}/mcp`,
       auth: "bearer",
       bearerToken: "t",
       credentialScope: "shared",
@@ -523,6 +528,7 @@ test("an attested connector is offered only in the speaker's own DM, never where
     "channel:C1": ["wiki"],
     "group:G1": ["wiki"],
   });
+  assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
 });
 
 test("execute runs in the sandbox via the primitive", async () => {
