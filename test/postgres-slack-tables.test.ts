@@ -285,11 +285,8 @@ test(
 const INSTANCE = "00000000-0000-4000-8000-0000000000aa";
 
 async function seedTenants(admin: pg.Pool, legacyInstallation: boolean): Promise<void> {
-  await admin.query(`CREATE TABLE tenants(
-    id UUID PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
-  await admin.query(
-    `INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'a', 'A'), (gen_random_uuid(), 'b', 'B')`,
-  );
+  await admin.query(`CREATE TABLE tenants(id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  await admin.query(`INSERT INTO tenants(id) VALUES (gen_random_uuid()), (gen_random_uuid())`);
   await admin.query(`CREATE TABLE slack_installation(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
   if (legacyInstallation)
     await admin.query(`INSERT INTO slack_installation(id, json) VALUES ('company', '{"disabled": true}')`);
@@ -313,7 +310,7 @@ test(
         async () => {},
         (admin) => seedTenants(admin, true),
       ),
-      /Rows in slack_installation_kv need a tenant, but this database has 2 tenants/,
+      /Rows in slack_installation need a tenant, but this database has 2 tenants/,
     );
   },
 );

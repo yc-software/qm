@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "./pg-pool.ts";
-import { tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export interface TypedTableSpec {
   table: string;
@@ -18,28 +18,21 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
   if (!IDENTIFIER.test(table)) throw new Error(`invalid table name: ${table}`);
   const old = `${table}_kv`;
   const targets = Object.keys(spec.backfill);
-  return {
-    id: `tenancy/${table}/0001-typed`,
-    statements: [
-      `SET LOCAL lock_timeout = '5s'`,
+  return tenantTables(`tenancy/${table}/0001-typed`, [{ table, primaryKey: spec.primaryKey.join(", ") }], {
+    before: [
       `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `ALTER TABLE ${table} RENAME TO ${old}`,
       `ALTER INDEX ${table}_pkey RENAME TO ${old}_pkey`,
-      tenantColumn(old),
-      `CREATE TABLE ${table}(
-         tenant_id UUID NOT NULL,
-         ${[...spec.columns, ...(spec.constraints ?? []), `PRIMARY KEY (${["tenant_id", ...spec.primaryKey].join(", ")})`].join(",\n         ")}
-       )`,
-      `INSERT INTO ${table}(tenant_id, ${targets.join(", ")})
-         SELECT tenant_id, ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
+      `CREATE TABLE ${table}(${[...spec.columns, ...(spec.constraints ?? [])].join(", ")})`,
+      `INSERT INTO ${table}(${targets.join(", ")})
+         SELECT ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
       `DROP TABLE ${old}`,
       `DO $drop_version$ BEGIN
          IF to_regclass('durable_map_versions') IS NOT NULL THEN
            DELETE FROM durable_map_versions WHERE tbl = '${table}';
          END IF;
        END $drop_version$`,
-      ...(spec.indexes ?? []),
-      ...tenantPolicies(table),
     ],
-  };
+    after: spec.indexes ?? [],
+  });
 }

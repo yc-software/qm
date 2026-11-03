@@ -37,9 +37,9 @@ export async function withSlackDb(
     const tenant = randomUUID();
     const otherTenant = randomUUID();
     if (!(await admin.query(`SELECT 1 FROM tenants`)).rowCount)
-      await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
+      await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [tenant]);
     const first = String((await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0].id);
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
     login = await createAppLogin(ownerUrl.toString());
     store = createSlackTables(login.url);
     await fn({ store, owner, admin, tenant: first, otherTenant });

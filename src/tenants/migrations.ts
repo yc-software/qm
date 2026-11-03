@@ -25,7 +25,7 @@ END $adopt_tenant$`,
   ],
 };
 
-export function tenantPolicies(table: string): string[] {
+function tenantPolicies(table: string): string[] {
   return [
     `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
     `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
@@ -37,7 +37,7 @@ export function tenantPolicies(table: string): string[] {
 
 export const TENANT = "qm_bound_tenant()";
 
-export const tenantColumn = (table: string): string => `DO $tenant_column$
+const tenantColumn = (table: string): string => `DO $tenant_column$
 DECLARE
   tenant uuid;
   tenant_count bigint;

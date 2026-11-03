@@ -7,7 +7,7 @@ import {
 } from "../persistence/pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import { TENANCY_BASE, tenantPolicies } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import { z } from "zod";
 import type { StagedEnvelopeRows } from "./envelope-staging.ts";
@@ -147,18 +147,9 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
          WHERE NOT synced OR NOT finished`,
     ],
   }),
-  {
-    id: "tenancy/slack_install_states/0001-create",
-    statements: [
-      `CREATE TABLE slack_install_states(
-         tenant_id UUID NOT NULL,
-         nonce TEXT NOT NULL,
-         expires_at BIGINT NOT NULL,
-         PRIMARY KEY (tenant_id, nonce)
-       )`,
-      ...tenantPolicies("slack_install_states"),
-    ],
-  },
+  tenantTables("tenancy/slack_install_states/0001-create", [{ table: "slack_install_states", primaryKey: "nonce" }], {
+    before: [`CREATE TABLE slack_install_states(nonce TEXT PRIMARY KEY, expires_at BIGINT NOT NULL)`],
+  }),
 ];
 
 type Row = Rows[number];
