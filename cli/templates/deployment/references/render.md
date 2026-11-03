@@ -40,7 +40,7 @@ Set these keys in `qm.config.jsonc`:
 - `render.postgresPlan` and `render.postgresDiskSizeGB`: passed through to
   Render Postgres for QM core. `render.storage.diskSizeGB` sizes the MinIO disk.
   Each published app starts with a separate 1 GB disk mounted at `/data`.
-- `env.core.SHUTDOWN_DRAIN_MS` (default 10000): how long a previous core
+- `env.core.SHUTDOWN_DRAIN_MS` (default 30000): how long a previous core
   instance gives in-flight turns after SIGTERM. Render ends that instance 300
   seconds after SIGTERM, so keep the value below 290000.
 - `publicUrl` and `apiUrl`: the assigned `onrender.com` URLs work without DNS
