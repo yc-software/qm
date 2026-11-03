@@ -2,6 +2,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { pgRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
+import { claimAcrossTenants, rowTenant, type Claimed } from "../tenants/claim.ts";
 
 const RESOURCES_COLUMNS: RowColumns<SandboxResource, "id"> = {
   id: "text",
@@ -96,7 +97,7 @@ export interface SandboxResourceRecords {
   delete(id: string): Promise<void>;
   owners(): Promise<string[]>;
   ownedBy(scopes: readonly string[]): Promise<SandboxResource[]>;
-  jobComputers(): Promise<SandboxResource[]>;
+  jobComputers(): Promise<Array<Claimed<SandboxResource>>>;
 }
 
 export interface SandboxDefaults {
@@ -132,7 +133,9 @@ export function createSandboxResourceStores(databaseUrl: string): {
           )
         ).map(records.row),
       jobComputers: async () =>
-        (await records.db.q(`${records.select} WHERE ${records.scoped("job_only")} ORDER BY id`)).map(records.row),
+        (await claimAcrossTenants("SELECT * FROM sandbox_resources WHERE job_only ORDER BY tenant_id, id")).rows.map(
+          (r) => ({ ...records.row(r), ...rowTenant(r) }),
+        ),
     },
     defaults: {
       get: async (scopeId) => {

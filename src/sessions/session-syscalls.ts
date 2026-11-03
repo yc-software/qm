@@ -1,3 +1,4 @@
+import { entryFromItem } from "./items.ts";
 import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { TURN_STOPPED_KIND } from "../agent/replay.ts";
@@ -242,9 +243,8 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "getEntries"
-    | "latestEntrySeq"
-    | "visibleEntries"
+    | "latestItemSeq"
+    | "visibleItems"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
@@ -404,11 +404,12 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(
+export async function stoppableRoot(
   sessions: Pick<SessionStore, "sameScopeAncestors">,
   session: Session,
-): Promise<Session[]> {
-  return session.parentSessionId ? sessions.sameScopeAncestors([session.threadRef]) : [];
+): Promise<Session | undefined> {
+  if (!session.parentSessionId) return undefined;
+  return (await sessions.sameScopeAncestors([session.threadRef])).find((ancestor) => !ancestor.parentSessionId);
 }
 
 export async function sessionTreeWorking(
@@ -430,7 +431,7 @@ export async function workingSessionThreadRefs(
   const active = await runs.activeSessionIds();
   const working = new Set(active);
   for (const ancestor of await sessions.sameScopeAncestors(active))
-    if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
+    if (!ancestor.parentSessionId && !awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
@@ -553,11 +554,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           : [binding.request.actor];
         const views = await Promise.all(
           [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleEntries(target.id, id),
+            deps.sessions.visibleItems(target.id, id),
           ),
         );
         const allowed = commonEntrySeqs(views);
-        return (views[0] ?? []).filter((entry) => allowed.has(entry.seq));
+        return (views[0] ?? [])
+          .filter((item) => allowed.has(item.seq))
+          .map((item) => entryFromItem(item, target.scopeId));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -606,8 +609,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ]);
                   const readable = await Promise.all(
                     [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
+                      (await deps.sessions.visibleItems(sender.id, id)).some(
+                        (item) => item.seq === message.sourceEntrySeq,
                       ),
                     ),
                   );
@@ -802,7 +805,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+                const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -1035,7 +1038,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
@@ -1128,7 +1131,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "runLeaseToken",
     "runStartedAt",
     "finalAttempt",
-    "background",
     "cancel",
     "shutdown",
     "modelAccount",
@@ -1154,8 +1156,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
+      const visible = await deps.sessions.visibleItems(child.id, id);
+      if (!visible.some((item) => item.seq === outputSeq))
         throw new Error("the current parent audience cannot read this child result");
     }
   }

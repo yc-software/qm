@@ -82,7 +82,6 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
     await withTenant(otherTenant, async () => {
       assert.equal(await store.records.get("a"), null);
       assert.deepEqual(await store.records.owners(), []);
-      assert.deepEqual(await store.records.jobComputers(), []);
       assert.equal(await store.defaults.get("personal:alice"), null);
       await store.records.put("a", resource("a", { ownerScopeId: "personal:bob" }));
       assert.equal(await store.records.update("job", (r) => ({ ...r, state: "retired" })), null);
@@ -95,14 +94,14 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
         (await store.records.ownedBy(["personal:alice", "personal:bob"])).map((r) => r.id),
         ["a"],
       );
-      assert.deepEqual(
-        (await store.records.jobComputers()).map((r) => r.id),
-        ["job"],
-      );
       const held = await store.records.update("a", (r) => ({ ...r, holders: [...(r.holders ?? []), "run-2"] }));
       assert.deepEqual(held?.holders, ["run-2"]);
       assert.deepEqual((await store.records.get("a"))?.holders, ["run-2"]);
     });
+    assert.deepEqual(
+      (await store.records.jobComputers()).map((r) => [r.id, r.tenantId]),
+      [["job", tenant]],
+    );
   });
 });
 

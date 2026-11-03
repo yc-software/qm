@@ -18,8 +18,9 @@ import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testDeploymentRows, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -51,17 +52,18 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
 }
 
 async function agent(log: AppPageViewLog) {
+  const url = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(url));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore: createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) })),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
@@ -74,17 +76,19 @@ async function agent(log: AppPageViewLog) {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(url),
+    sessions: createPostgresSessionStore(url),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
-  const deployed = await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
+  const deployed = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
   const server = createInsecureTestServer(app, {
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
@@ -148,7 +152,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
     await settle();
     assert.equal(views.length, 1, "denied and signed-out requests that never reach the app are not recorded");
 
-    await h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await inTestTenant(() => h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" }));
     await get(h.port, "/", { Accept: "text/html", "x-qm-client-ip": "198.51.100.9" });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("mallory@example.com") });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("guest@example.org", true) });

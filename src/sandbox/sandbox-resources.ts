@@ -6,6 +6,7 @@ import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import type { SandboxDefaults, SandboxResourceRecords } from "./sandbox-resource-store.ts";
+import type { Claimed } from "../tenants/claim.ts";
 
 export interface SandboxResource {
   id: string;
@@ -66,7 +67,7 @@ export interface SandboxResources {
     reservationId?: string,
     jobOnly?: boolean,
   ): Promise<SandboxResource>;
-  jobComputers(): Promise<SandboxResource[]>;
+  jobComputers(): Promise<Array<Claimed<SandboxResource>>>;
   retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;

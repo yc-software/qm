@@ -7,7 +7,11 @@ import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 
-const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const headers = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
   const built = stopAtEnd(buildApp(config));
@@ -153,21 +157,26 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     assert.equal((await post(enable, { provider: "anthropic", verify: true }, "bob@default-org")).status, 403);
     assert.equal((await post(enable, { provider: "anthropic" })).status, 400);
     assert.equal(upstream.requests.length, 0);
-    const priorDefault = await built.config.getRuntimeSelectionDurable("org:default-org");
-    await built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    const priorDefault = await inTestTenant(() => built.config.getRuntimeSelectionDurable("org:default-org"));
+    await inTestTenant(() => built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]));
     upstream.behavior.status = 403;
     assert.equal((await post(enable, { provider: "anthropic", verify: true })).status, 422);
-    assert.deepEqual(await built.config.getWebuiModelsDurable("org:default-org"), ["claude-sonnet-4-6"]);
+    assert.deepEqual(await inTestTenant(() => built.config.getWebuiModelsDurable("org:default-org")), [
+      "claude-sonnet-4-6",
+    ]);
     upstream.behavior.status = 200;
     assert.equal((await post(enable, { provider: "anthropic", verify: true })).status, 200);
     assert.equal(upstream.requests.at(-1)?.body.model, "claude-opus-4-6");
     assert.equal(upstream.requests.at(-1)?.body.max_tokens, 128);
-    assert.deepEqual(await built.config.getWebuiModelsDurable("org:default-org"), [
+    assert.deepEqual(await inTestTenant(() => built.config.getWebuiModelsDurable("org:default-org")), [
       "claude-sonnet-4-6",
       "claude-opus-4-6",
     ]);
-    assert.deepEqual(await built.config.getRuntimeSelectionDurable("org:default-org"), priorDefault);
-    assert.deepEqual(await built.modelRegistry.statuses(), []);
+    assert.deepEqual(
+      await inTestTenant(() => built.config.getRuntimeSelectionDurable("org:default-org")),
+      priorDefault,
+    );
+    assert.deepEqual(await inTestTenant(() => built.modelRegistry.statuses()), []);
     const runtime = await fetch(
       base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
       { headers },
@@ -193,10 +202,10 @@ test("enable rechecks serving credentials before mutating the picker", async () 
   const org = "org:default-org";
   try {
     onProbe = async () => {
-      await built.modelCredentials.set("anthropic", "changed-key", "admin");
+      await inTestTenant(() => built.modelCredentials.set("anthropic", "changed-key", "admin"));
     };
     assert.equal((await enable()).status, 422);
-    assert.equal(await built.config.getWebuiModelsDurable(org), null);
+    assert.equal(await inTestTenant(() => built.config.getWebuiModelsDurable(org)), null);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
@@ -216,6 +225,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

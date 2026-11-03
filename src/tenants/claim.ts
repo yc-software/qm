@@ -3,39 +3,22 @@ import { boundTenant, withoutTenant, withTenant } from "./context.ts";
 
 export type Claimed<T> = T & { tenantId?: string };
 
-const ownerPools = new Map<string, PgPool>();
-
-let ownerDatabaseUrl: URL | undefined;
+let ownerPool: PgPool | undefined;
 
 export function useOwnerDatabase(url: string | undefined): void {
   if (!url)
     throw new Error("Set DATABASE_OWNER_URL to the table owner login so background work can claim across tenants");
-  ownerDatabaseUrl = new URL(url);
+  ownerPool = createPgPool(url);
 }
 
-function ownerPool(appDatabaseUrl: string): PgPool {
-  const owner = ownerDatabaseUrl;
-  if (!owner) throw new Error("Cross-tenant claims need useOwnerDatabase at startup");
-  const url = new URL(appDatabaseUrl);
-  url.username = owner.username;
-  url.password = owner.password;
-  const key = url.toString();
-  const existing = ownerPools.get(key);
-  if (existing) return existing;
-  const pool = createPgPool(key);
-  ownerPools.set(key, pool);
-  return pool;
-}
-
-export function claimAcrossTenants(
-  appDatabaseUrl: string,
+export async function claimAcrossTenants(
   text: string,
   params: unknown[] = [],
   options?: PgQueryOptions,
 ): ReturnType<PgPool["query"]> {
-  if (boundTenant() !== undefined)
-    return Promise.reject(new Error("A cross-tenant claim cannot run while a tenant is bound"));
-  return ownerPool(appDatabaseUrl).query(text, params, options);
+  if (boundTenant() !== undefined) throw new Error("A cross-tenant claim cannot run while a tenant is bound");
+  if (!ownerPool) throw new Error("Cross-tenant claims need useOwnerDatabase at startup");
+  return ownerPool.query(text, params, options);
 }
 
 export function crossTenantLoop<A extends unknown[], R>(body: (...args: A) => R): (...args: A) => R {

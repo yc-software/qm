@@ -20,6 +20,7 @@ import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-super
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;
@@ -36,7 +37,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSuperserveSandbox(newWorkspace(), {
-    store: createSuperserveBodies(testDatabaseUrl()),
+    store: createSuperserveBodies(tenantBoundUrl(testDatabaseUrl())),
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
@@ -169,7 +170,7 @@ test("a paused sandbox under a different egress policy is destroyed and replaced
 });
 
 test("a paused sandbox that predates egress stamping keeps its disk when the policy still matches", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "resident.txt", "months of work\n");
@@ -211,7 +212,7 @@ test("network reconciliation reads the actual policy independently of metadata",
 });
 
 test("a paused sandbox keeps its disk when its policy can be updated without resuming", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   fake.acceptNetworkUpdateWhilePaused();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
@@ -255,7 +256,7 @@ test("an unapplied policy update prevents resuming the sandbox under the old pol
 });
 
 test("a cached sandbox whose network drifted is reconciled before the next command", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store, egressDeny: ["0.0.0.0/0"], egressAllow: ["api.example.com"] });
   const h = await sandbox.provision(layers);
   const id = fake.current(scopeName())!.id;
@@ -317,7 +318,7 @@ test("an active sandbox gets a changed egress policy applied before its first co
 });
 
 test("computerStatus observing a deleted sandbox clears cached state so the next provision replaces it", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   await sandbox.provision(layers);
   fake.expire(scopeName());
@@ -412,13 +413,13 @@ test("concurrent cores serialize read-only layer preparation", async () => {
     connect: async (...args: Parameters<typeof fake.client.connect>) => wrap(await fake.client.connect(...args)),
   };
   const first = createSuperserveSandbox(workspace, {
-    store: createSuperserveBodies(testDatabaseUrl()),
+    store: createSuperserveBodies(tenantBoundUrl(testDatabaseUrl())),
     client,
     advisoryLock,
     configEpoch: 1,
   });
   const second = createSuperserveSandbox(workspace, {
-    store: createSuperserveBodies(testDatabaseUrl()),
+    store: createSuperserveBodies(tenantBoundUrl(testDatabaseUrl())),
     client,
     advisoryLock,
     configEpoch: 1,
@@ -440,13 +441,13 @@ test("an older core leaves newer read-only layers intact", async () => {
   const layered = [...layers, { scopeId: shared, mountPath: "global", mode: "ro" as const }];
   const advisoryLock = testAdvisoryLock();
   const older = createSuperserveSandbox(olderWorkspace, {
-    store: createSuperserveBodies(testDatabaseUrl()),
+    store: createSuperserveBodies(tenantBoundUrl(testDatabaseUrl())),
     client: fake.client,
     advisoryLock,
     configEpoch: 1,
   });
   const newer = createSuperserveSandbox(newerWorkspace, {
-    store: createSuperserveBodies(testDatabaseUrl()),
+    store: createSuperserveBodies(tenantBoundUrl(testDatabaseUrl())),
     client: fake.client,
     advisoryLock,
     configEpoch: 2,
@@ -650,7 +651,7 @@ test("the config epoch is claimed once per deployment generation, so a restarted
 });
 
 test("a command that finds its sandbox gone leaves a replacement provisioned meanwhile in place", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -674,7 +675,7 @@ test("a command that finds its sandbox gone leaves a replacement provisioned mea
 });
 
 test("a handle never runs against a replacement another turn is still provisioning", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const held = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -696,7 +697,7 @@ test("a handle never runs against a replacement another turn is still provisioni
 });
 
 test("a sandbox that disappears while checking ownership fails provisioning instead of returning a handle to it", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store, layerToolFiles: () => [] });
   const first = await sandbox.provision(layers);
   const lostId = fake.current(scopeName())!.id;
@@ -720,7 +721,7 @@ test("a sandbox that disappears while checking ownership fails provisioning inst
 });
 
 test("a gone sandbox never forgets a replacement another instance already recorded", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   const oldId = fake.current(scopeName())!.id;
@@ -784,7 +785,7 @@ test("a fresh core with an empty store rediscovers the sandbox by scope metadata
 });
 
 test("a durable store lets a restarted core reconnect without listing", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const first = await sandbox.provision(layers);
   await sandbox.teardown(first);
@@ -800,7 +801,7 @@ test("a durable store lets a restarted core reconnect without listing", async ()
 });
 
 test("a sandbox that disappeared is replaced on the next provision", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
@@ -813,7 +814,7 @@ test("a sandbox that disappeared is replaced on the next provision", async () =>
 });
 
 test("a sandbox lost mid-session fails the command and is replaced by the next provision", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   fake.expire(scopeName());
@@ -830,7 +831,7 @@ test("a sandbox lost mid-session fails the command and is replaced by the next p
 });
 
 test("destroyScope surfaces a failed listing instead of forgetting the scope", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   await sandbox.provision(layers);
   fake.failNextList(new Error("superserve unavailable"));
@@ -842,7 +843,7 @@ test("destroyScope surfaces a failed listing instead of forgetting the scope", a
 });
 
 test("destroy teardown and destroyScope kill the sandbox and forget the scope", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h, { destroy: true });
@@ -864,7 +865,7 @@ test("destroyScope also removes sandboxes only findable by metadata", async () =
 });
 
 test("computerStatus reports paused, running, and gone", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store });
   assert.equal(computerVerdict(await sandbox.computerStatus!(scope)), "down");
 
@@ -888,7 +889,7 @@ test("computerStatus reports paused, running, and gone", async () => {
 });
 
 test("computerStatus reports the sandbox it actually probed after a replacement", async () => {
-  const store = createSuperserveBodies(testDatabaseUrl());
+  const store = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   sandbox = make({ store, template: "qm-agent-1.0.0" });
   await sandbox.provision(layers);
   const firstId = fake.current(scopeName())!.id;
@@ -985,7 +986,7 @@ test("no access token or key ever appears in exec scripts", async () => {
 });
 
 test("a sandbox is not cached when its durable record cannot be written", async () => {
-  const inner = createSuperserveBodies(testDatabaseUrl());
+  const inner = createSuperserveBodies(tenantBoundUrl(testDatabaseUrl()));
   let failPuts = 1;
   const store: SuperserveBodies = {
     ...inner,

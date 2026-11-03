@@ -3,6 +3,7 @@ import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolContextRef } from "./agent-tools.ts";
 import type { AgentTurnInput } from "./agent.ts";
+import { emitEntry } from "./turn-support.ts";
 import {
   recordedToolArguments,
   type ReplayStep,
@@ -12,7 +13,6 @@ import {
 } from "./replay.ts";
 
 type RecordedEntry = Parameters<NonNullable<ToolContextRef["emit"]>>[0];
-type TurnEntry = Parameters<AgentTurnInput["emit"]>[0];
 type Persist = (write: () => Promise<unknown>) => void;
 type Positioned = { index: number; block: TextContent };
 
@@ -78,7 +78,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "scopeLab
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
   let streamingStep: string | undefined;
-  const write = (entry: RecordedEntry) => persist(() => turn.emit(entry as TurnEntry));
+  const write = (entry: RecordedEntry) => persist(() => emitEntry(turn, entry));
   const flush = (): void => {
     if (!pending) return;
     for (const { index, block } of pending.parts)
@@ -119,16 +119,16 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "scopeLab
       const call = calls.get(callId);
       if (call && entry.type === "tool_call") {
         called.add(callId);
-        return turn.emit({
+        return emitEntry(turn, {
           ...entry,
           payload: { ...payload, step: call.step, ...toolCallWire(payload, call.block) },
-        } as TurnEntry);
+        });
       }
       if (call && entry.type === "tool_result") {
         executing.set(callId, entry);
         return undefined;
       }
-      return turn.emit(entry as TurnEntry);
+      return emitEntry(turn, entry);
     },
     assistant(message: AssistantMessage): void {
       flush();

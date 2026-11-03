@@ -1,10 +1,12 @@
+import { claimAcrossTenants } from "../tenants/claim.ts";
+import { withTenant } from "../tenants/context.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
-import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
+import type { Session, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import type {
   NewSessionPin,
@@ -17,13 +19,9 @@ import type {
   ParticipantPageQuery,
   ParticipantScope,
   SessionDescendant,
-  GetEntriesOptions,
-  Lease,
-  LeaseAttempt,
-  LeaseHolder,
-  LeasePeek,
+  GetItemsOptions,
+  SessionWriter,
   LlmRequestRecord,
-  NewEntry,
   NewLlmRequest,
   ParticipantWindow,
   SessionOrigin,
@@ -43,19 +41,18 @@ import {
   sessionOrigin,
   userMessagePreview,
   isWebThread,
-  isOverheardEntry,
   DuplicateCallError,
 } from "./session-store.ts";
 import {
-  entryFromItem,
-  itemFromEntry,
   ITEM_COLUMNS,
-  type ItemRow,
+  type Item,
+  type NewItem,
+  storedItem,
   msOf,
   AGENT_REPLY_ITEM,
   SEARCHABLE_ITEM,
   searchTypeExpr,
-  USER_ITEM_KINDS,
+  isUserItem,
   USER_KINDS,
 } from "./items.ts";
 import { TENANT } from "../tenants/migrations.ts";
@@ -150,23 +147,22 @@ function rowToParticipantWindow(r: Record<string, unknown>): ParticipantWindow {
   };
 }
 
-function rowToEntry(r: Record<string, unknown>): SessionEntry {
-  return entryFromItem({
+function rowToItem(r: Record<string, unknown>): Item {
+  return {
     sessionId: r.session_id as string,
     seq: Number(r.seq),
-    ...(Object.fromEntries(
+    createdAt: Number(r.created_at),
+    ...Object.fromEntries(
       ITEM_COLUMNS.map(([, key, type]) => [
         key,
         type === "bigint" && r[key] != null ? Number(r[key]) : (r[key] ?? null),
       ]),
-    ) as unknown as ItemRow),
-    scopeLabel: r.scope_label as ScopeId,
-    createdAt: Number(r.created_at),
-  });
+    ),
+  } as Item;
 }
 
-const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
-const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
+const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
+const ITEM_FROM = "items i";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -199,11 +195,10 @@ const ADMIN_READ_TIMEOUT_MS = 10_000;
 const FIRST_PREVIEW_LEN = 160;
 const LAST_PREVIEW_LEN = 100;
 
-const storedPreview = (payload: unknown, maxLen: number): string => pgTextSafe(userMessagePreview(payload, maxLen));
+const storedPreview = (item: Item, maxLen: number): string => pgTextSafe(userMessagePreview(item.text ?? "", maxLen));
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
-  const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
 
   const userTurn = (col: string): string =>
     `${col}.kind IN ${USER_KINDS} AND NOT (${col}.body @> '{"overheard":true}')`;
@@ -418,23 +413,25 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
 
-  const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+  const withSessionLock = async <T>(writer: SessionWriter, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
-      const t = now();
-      const held = await client.query(
-        "UPDATE session_leases SET expires_at = $3 WHERE session_id = $1 AND token = $2 AND expires_at > $4",
-        [lease.sessionId, lease.token, t + leaseTtlMs, t],
-      );
-      if (!held.rowCount) throw new Error(invalidMsg);
+      await lockSession(client, writer.sessionId);
+      if (writer.turnId && writer.runLeaseToken) {
+        const held = await client.query(
+          "SELECT 1 FROM runs WHERE id = $1 AND lease_token = $2 AND status = 'running' FOR SHARE",
+          [writer.turnId, writer.runLeaseToken],
+        );
+        if (!held.rowCount) throw new Error(`run ${writer.turnId} no longer holds its claim; write refused`);
+      }
       return fn(client);
     });
 
-  const insertEntries = async (
+  const insertItems = async (
     client: PoolClient,
     sessionId: string,
-    entries: readonly NewEntry[],
+    entries: readonly NewItem[],
     turnId?: string,
-  ): Promise<SessionEntry[]> => {
+  ): Promise<Item[]> => {
     if (!entries.length) return [];
     const max = await client.query(
       `SELECT GREATEST(
@@ -444,20 +441,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     );
     const startSeq = Number(max.rows[0]!.n);
     const createdAt = now();
-    const items = entries.map((entry, index) => {
-      const seq = startSeq + index;
-      const item = itemFromEntry(entry.type, JSON.parse(jsonbStringify(entry.payload ?? null)), {
-        turnId: turnId ?? null,
-        author: entry.author ?? null,
-      });
-      return {
-        ...item,
-        seq,
-        scopeLabel: entry.scopeLabel as ScopeId,
-      };
-    });
-    const full = items.map((item) => entryFromItem({ sessionId, createdAt, ...item }));
-    const userTurns = full.filter((entry) => entry.type === "user" && !isOverheardEntry(entry));
+    const items = entries.map((entry, index) =>
+      storedItem(JSON.parse(jsonbStringify(entry)) as NewItem, { sessionId, seq: startSeq + index, createdAt, turnId }),
+    );
+    const userTurns = items.filter((item) => isUserItem(item) && item.body.overheard !== true);
     const firstUser = userTurns[0];
     const lastUser = userTurns[userTurns.length - 1];
     await client
@@ -484,12 +471,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [
           sessionId,
           createdAt,
-          startSeq + full.length,
+          startSeq + items.length,
           userTurns.length,
           startSeq,
-          firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
-          lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
-          items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
+          firstUser ? storedPreview(firstUser, FIRST_PREVIEW_LEN) : null,
+          lastUser ? storedPreview(lastUser, LAST_PREVIEW_LEN) : null,
+          items.some(isUserItem),
           jsonbStringify(items),
         ],
       )
@@ -502,11 +489,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           { cause: err },
         );
       });
-    return full;
+    return items;
   };
 
   return {
-    leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
@@ -610,90 +596,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async acquireLease(sessionId, holder): Promise<LeaseAttempt> {
-      const token = randomUUID();
-      const t = now();
-      return withPgTransaction(await pool(), async (client) => {
-        await lockSession(client, sessionId);
-        for (;;) {
-          const granted = await client.query(
-            `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
-               SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
-             ON CONFLICT (tenant_id, session_id) DO UPDATE
-               SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
-               WHERE session_leases.expires_at <= $4
-             RETURNING token`,
-            [sessionId, token, t + leaseTtlMs, t, holder ?? null],
-          );
-          if (granted.rows[0]) return { lease: { sessionId, token } };
-          const held = await client.query(
-            "SELECT expires_at, holder, acquired_at FROM session_leases WHERE session_id = $1",
-            [sessionId],
-          );
-          const row = held.rows[0];
-          if (row) {
-            return {
-              lease: null,
-              ...(row.holder != null ? { heldBy: row.holder as LeaseHolder } : {}),
-              ...(row.acquired_at != null ? { heldSince: Number(row.acquired_at) } : {}),
-              heldUntil: Number(row.expires_at),
-            };
-          }
-          const exists = await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId]);
-          if (!exists.rows[0]) return { lease: null };
-        }
-      });
+    async append(writer: SessionWriter, item: NewItem): Promise<Item> {
+      return (await this.appendMany(writer, [item]))[0]!;
     },
 
-    async peekLease(sessionId): Promise<LeasePeek | null> {
-      const rows = await q("SELECT holder, expires_at FROM session_leases WHERE session_id = $1", [sessionId]);
-      const row = rows[0];
-      if (!row) return null;
-      return {
-        ...(row.holder != null ? { holder: row.holder as LeaseHolder } : {}),
-        heldUntil: Number(row.expires_at),
-      };
+    async appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]> {
+      return withSessionLock(writer, (client) => insertItems(client, writer.sessionId, items, writer.turnId));
     },
 
-    async renewLease(lease): Promise<boolean> {
-      const t = now();
-      const rows = await q(
-        "UPDATE session_leases SET expires_at = $3 WHERE session_id = $1 AND token = $2 AND expires_at > $4 RETURNING token",
-        [lease.sessionId, lease.token, t + leaseTtlMs, t],
-      );
-      return rows.length > 0;
-    },
-
-    async releaseLease(lease): Promise<void> {
-      await q("DELETE FROM session_leases WHERE session_id = $1 AND token = $2", [lease.sessionId, lease.token]);
-    },
-
-    async forceReleaseLease(sessionId): Promise<void> {
-      await q("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
-    },
-
-    async fenceTurnLease(sessionId, until): Promise<void> {
-      const t = now();
-      await q(
-        `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
-           SELECT $1, $2, $3, 'turn', $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
-         ON CONFLICT (session_id) DO UPDATE SET token = $2, expires_at = $3, holder = 'turn', acquired_at = $4
-           WHERE session_leases.holder = 'turn' OR session_leases.expires_at <= $4`,
-        [sessionId, randomUUID(), until, t],
-      );
-    },
-
-    async append(lease, entry: NewEntry): Promise<SessionEntry> {
-      return (await this.appendMany(lease, [entry]))[0]!;
-    },
-
-    async appendMany(lease, entries: readonly NewEntry[]): Promise<SessionEntry[]> {
-      return withLease(lease, "append without a valid session lease", (client) =>
-        insertEntries(client, lease.sessionId, entries, lease.turnId),
-      );
-    },
-
-    async countEntriesBefore(sessionId, beforeSeq, principalId) {
+    async countItemsBefore(sessionId, beforeSeq, principalId) {
       const rows =
         principalId === undefined
           ? await q(
@@ -721,7 +632,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return new Map(rows.map((r) => [r.turn_id as string, r.purpose as string]));
     },
 
-    async latestEntrySeq(sessionId): Promise<number> {
+    async latestItemSeq(sessionId): Promise<number> {
       const rows = await q(
         `SELECT COALESCE(MAX(seq), -1) AS n FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,
         [sessionId],
@@ -737,9 +648,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return found;
     },
 
-    async setGoal(lease, goal, notices = []) {
-      await withLease(lease, "set goal without a valid session lease", async (client) => {
-        await insertEntries(client, lease.sessionId, notices, lease.turnId);
+    async setGoal(writer, goal, notices = []) {
+      await withSessionLock(writer, async (client) => {
+        await insertItems(client, writer.sessionId, notices, writer.turnId);
         await client.query(
           `INSERT INTO session_goals(session_id, objective, status, floor, token_cap, tokens_used, active_ms,
                                      active_since, completion_note, cancel_note, governor, pause_reason,
@@ -752,7 +663,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              cancel_note = EXCLUDED.cancel_note, governor = EXCLUDED.governor, pause_reason = EXCLUDED.pause_reason,
              created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
           [
-            lease.sessionId,
+            writer.sessionId,
             goal.objective,
             goal.status,
             goal.floor ? JSON.stringify(goal.floor) : null,
@@ -780,7 +691,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.length > 0;
     },
 
-    async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
+    async getItems(sessionId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
       if (opts?.messagesOnly)
@@ -799,7 +710,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params.push(opts.limit);
         sql += ` LIMIT $${params.length}`;
       }
-      return (await q(sql, params)).map(rowToEntry).reverse();
+      return (await q(sql, params)).map(rowToItem).reverse();
     },
 
     async getContextWindow(sessionId) {
@@ -819,18 +730,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2 ORDER BY i.seq`,
         [sessionId, sinceSeq],
       );
-      return { entries: rows.map(rowToEntry), totalEntries: Number(meta[0]?.total ?? 0) };
+      return { items: rows.map(rowToItem), totalItems: Number(meta[0]?.total ?? 0) };
     },
 
-    async getEntry(sessionId, seq): Promise<SessionEntry | undefined> {
+    async getItem(sessionId, seq): Promise<Item | undefined> {
       const rows = await q(
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq = $2`,
         [sessionId, seq],
       );
-      return rows[0] ? rowToEntry(rows[0]) : undefined;
+      return rows[0] ? rowToItem(rows[0]) : undefined;
     },
 
-    async recordLlmRequest(sessionId, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord> {
+    async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope) {
         await q(
@@ -838,7 +749,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
-          { signal },
         );
       }
       const full: LlmRequestRecord = {
@@ -870,7 +780,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.usage ? JSON.stringify(full.usage) : null,
           full.transport ? JSON.stringify(full.transport) : null,
         ],
-        { signal },
       );
       return full;
     },
@@ -960,7 +869,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM sessions WHERE id = $1", [sessionId]);
@@ -970,17 +878,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
-        await client.query("SELECT 1 FROM session_leases WHERE session_id = $1 FOR UPDATE", [sessionId]);
         const gone = await client.query(
           `DELETE FROM sessions
             WHERE id = $1
-              AND NOT EXISTS (SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1)
-              AND NOT EXISTS (SELECT 1 FROM session_leases WHERE session_id = $1 AND expires_at > $2)`,
-          [sessionId, now()],
+              AND NOT EXISTS (SELECT 1 FROM items WHERE tenant_id = ${TENANT} AND session_id = $1)`,
+          [sessionId],
         );
         if (gone.rowCount === 0) return false;
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         return true;
@@ -1117,7 +1022,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return res.length > 0;
     },
 
-    async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
+    async visibleItems(sessionId, principalId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, principalId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
@@ -1135,7 +1040,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params.push(opts.limit);
         sql += ` LIMIT $${params.length}`;
       }
-      return (await q(sql, params)).map(rowToEntry).reverse();
+      return (await q(sql, params)).map(rowToItem).reverse();
     },
 
     async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
@@ -1356,46 +1261,54 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async refreshSpendRollup() {
       const started = Date.now();
-      await withPgTransaction(await pool(), async (client) => {
-        const changed = await client.query(
-          "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
-        );
-        if (!changed.rowCount) return;
-        await client.query(
-          `WITH RECURSIVE affected(id) AS (
-             SELECT unnest($1::text[])
-             UNION
-             SELECT c.id FROM affected a
-               CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
-           )
-           INSERT INTO session_spend_dirty(day)
-           SELECT DISTINCT d.day FROM affected a
-             CROSS JOIN LATERAL (
-               SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
-                WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
-             ) d
-           ON CONFLICT DO NOTHING`,
-          [changed.rows.map((r) => r.session_id)],
-        );
-      });
-      const days = await q(
-        `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
-         LEFT JOIN session_spend_days c ON c.day = d.day
-         ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
+      const sessions = await claimAcrossTenants(
+        "SELECT tenant_id, session_id FROM session_spend_dirty WHERE session_id IS NOT NULL",
       );
-      for (const [index, { day }] of days.entries()) {
-        try {
-          await withPgTransaction(await pool(), async (client) => {
-            const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
-            if (!pending.rowCount) return;
-            const updatedAt = now();
-            const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
-            await client.query(
-              `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
-               ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
-              [day, jsonbStringify(rows.rows), updatedAt],
+      for (const row of sessions.rows)
+        await withTenant(String(row.tenant_id), async () =>
+          withPgTransaction(await pool(), async (client) => {
+            const changed = await client.query(
+              "DELETE FROM session_spend_dirty WHERE session_id = $1 RETURNING session_id",
+              [row.session_id],
             );
-          });
+            if (!changed.rowCount) return;
+            await client.query(
+              `WITH RECURSIVE affected(id) AS (
+                 SELECT $1::text
+                 UNION
+                 SELECT c.id FROM affected a
+                   CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
+               )
+               INSERT INTO session_spend_dirty(day)
+               SELECT DISTINCT d.day FROM affected a
+                 CROSS JOIN LATERAL (
+                   SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
+                    WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
+                 ) d
+               ON CONFLICT DO NOTHING`,
+              [row.session_id],
+            );
+          }),
+        );
+      const days = await claimAcrossTenants(`SELECT d.tenant_id, d.day
+           FROM (SELECT DISTINCT tenant_id, day FROM session_spend_dirty WHERE day IS NOT NULL) d
+           LEFT JOIN session_spend_days c ON c.tenant_id = d.tenant_id AND c.day = d.day
+          ORDER BY d.day = max(d.day) OVER (PARTITION BY d.tenant_id) DESC, c.updated_at NULLS FIRST, d.day DESC`);
+      for (const [index, { tenant_id: tenantId, day }] of days.rows.entries()) {
+        try {
+          await withTenant(String(tenantId), async () =>
+            withPgTransaction(await pool(), async (client) => {
+              const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
+              if (!pending.rowCount) return;
+              const updatedAt = now();
+              const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
+              await client.query(
+                `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
+                 ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+                [day, jsonbStringify(rows.rows), updatedAt],
+              );
+            }),
+          );
         } catch (error) {
           reportFailure("spend: refresh daily totals", error);
           continue;

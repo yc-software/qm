@@ -40,7 +40,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
         const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
         const matched = (await deps.items.byLoop(loop.id)).filter(
           (item) =>
-            (item.source ?? item.sourcePayload?.source) === event.source &&
+            item.source === event.source &&
             adapter.matchesEvent(item, event.conversationRef) &&
             !(owner && isResolved(item)),
         );

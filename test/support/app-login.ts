@@ -24,3 +24,12 @@ export async function createAppLogin(databaseUrl: string): Promise<AppLogin> {
     },
   };
 }
+
+export async function grantTestAppLogin(ownerUrl: string, appUrl: string): Promise<void> {
+  const owner = new pg.Pool({ connectionString: ownerUrl, max: 1 });
+  try {
+    await grantAppLogin(owner, appUrl);
+  } finally {
+    await owner.end();
+  }
+}

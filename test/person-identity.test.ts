@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it as nodeIt } from "node:test";
 import assert from "node:assert/strict";
 import {
   personKey,
@@ -12,6 +12,11 @@ import type { Cron, Webhook } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function it(name: string, fn: () => void | Promise<void>): void {
+  nodeIt(name, () => inTestTenant(fn));
+}
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {
   it("trims, and lowercases emails only (the exact formula the connector/secret-drop checks used)", () => {

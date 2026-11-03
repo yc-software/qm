@@ -27,6 +27,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { uuidSchema } from "../util/ids.ts";
 
 export interface DeployFile {
@@ -637,20 +638,21 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async maintainDeployments() {
+    maintainDeployments: crossTenantLoop(async () => {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let maintained = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
+        for (const d of await deps.deployStore.running()) {
           try {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running") continue;
-            if (await deps.provider.rotationDue?.(cur)) {
-              await rotateDeployment(cur.id);
-              maintained++;
-            } else if (cur.alwaysOn && (await liveEndpoint(cur))) {
-              maintained++;
-            }
+            const kept = await inTenantOf(d.tenantId, async () => {
+              const cur = await deps.deployStore.get(d.id);
+              if (!cur || cur.status !== "running") return false;
+              if (await deps.provider.rotationDue?.(cur)) {
+                await rotateDeployment(cur.id);
+                return true;
+              }
+              return Boolean(cur.alwaysOn && (await liveEndpoint(cur)));
+            });
+            if (kept) maintained++;
           } catch (e) {
             console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
           }
@@ -658,7 +660,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         return maintained;
       });
       return result ?? 0;
-    },
+    }),
 
     async reachDeployment(idOrName, principalId, opts = {}): Promise<Reach> {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
@@ -728,28 +730,29 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
-    async reapIdleDeployments(ttlMs, now = Date.now()) {
+    reapIdleDeployments: crossTenantLoop(async (ttlMs: number, now = Date.now()) => {
       const result = await leaderLease.hold("deployments:reaper", async () => {
         if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
+        for (const d of await deps.deployStore.running()) {
           if (d.alwaysOn) continue;
           const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
           if (now - last < ttlMs) continue;
-          await withDeployLock(d.id, async () => {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running" || cur.alwaysOn) return;
-            await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
-            stopped++;
-          });
+          await inTenantOf(d.tenantId, () =>
+            withDeployLock(d.id, async () => {
+              const cur = await deps.deployStore.get(d.id);
+              if (!cur || cur.status !== "running" || cur.alwaysOn) return;
+              await deps.provider.destroy(cur);
+              await deps.deployStore.setStatus(d.id, "stopped");
+              await deps.deployStore.setEndpoint(d.id, null);
+              stopped++;
+            }),
+          );
         }
         return stopped;
       });
       return result ?? 0;
-    },
+    }),
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;

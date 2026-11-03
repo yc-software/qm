@@ -20,9 +20,21 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testDeploymentRows, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-rw-secret".repeat(3);
@@ -35,10 +47,14 @@ const GIT_ENV = {
 };
 
 function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
+  const url = testDatabaseUrl();
   const deployStore = createDeployStore(
-    testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
+    testDeployBackings({
+      deployments: testDeploymentRows(url),
+      git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) },
+    }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl: AclStore = createAclStore(createPostgresGrantStore(url));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -55,28 +71,37 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(url),
+    sessions: createPostgresSessionStore(url),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(url),
     signingSecret: SECRET,
     identity,
     ...urls,
   });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    app: tenantBound(app),
+    deploy: tenantBound(deploy),
+    acl: tenantBound(acl),
+    identity,
+    base,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
 }
 
 async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
-  const token = await mintDeployGitAccess(SECRET, {
-    deploymentId,
-    permission,
-    principalId: "U1",
-    exp: Date.now() + 60_000,
-  });
+  const token = await inTestTenant(() =>
+    mintDeployGitAccess(SECRET, {
+      deploymentId,
+      permission,
+      principalId: "U1",
+      exp: Date.now() + 60_000,
+    }),
+  );
   const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
   url.username = "deployment";
   url.password = token;
@@ -101,15 +126,17 @@ async function pushStatus(url: string): Promise<number> {
 }
 
 const capFor = (actorId: string, scope?: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scope ?? scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId,
+        scopeId: scope ?? scopeId("personal", actorId),
+        aud: CONTROL_PLANE_AUD,
+        liveActor: true,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
+      SECRET,
+    ),
   );
 
 test("a read token can clone but cannot push (403 on receive-pack)", async () => {

@@ -10,7 +10,7 @@ export function sourceAdapter(id: unknown): LoopSourceAdapter | undefined {
 }
 
 export function adapterForItem(item: LoopItem): LoopSourceAdapter | undefined {
-  return sourceAdapter(item.source ?? item.sourcePayload?.source);
+  return sourceAdapter(item.source);
 }
 
 export type { LoopSourceAdapter } from "./adapter.ts";

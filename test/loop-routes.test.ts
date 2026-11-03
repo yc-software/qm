@@ -816,7 +816,7 @@ test("loop icons can be set and reset by their owner, reject invalid input and r
   assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { icon: "shield" }, "mallory")).status, 403);
 });
 
-test("agent loop reads omit avatar metadata even when source is only in the payload", async () => {
+test("agent loop reads omit Slack avatar metadata", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", CREATE);
   const loop = (created.body as { loop: Loop }).loop;
@@ -825,7 +825,7 @@ test("agent loop reads omit avatar metadata even when source is only in the payl
     participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
     slackAvatarsRefreshAt: 12345,
   };
-  await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", sourcePayload: payload }]);
+  await deps.items.ingest([{ loopId: loop.id, dedupeKey: "D1", source: "slack", sourcePayload: payload }]);
   for (const mode of ["source", "capability"] as const) {
     const response = await call(deps, "GET", `/v1/loops/${loop.id}`, undefined, "josh", mode);
     assert.equal(response.status, 200);

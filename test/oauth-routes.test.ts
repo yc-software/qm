@@ -9,9 +9,10 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -20,12 +21,10 @@ const oauthEnv = {
 } as NodeJS.ProcessEnv;
 
 function sign(method: string, pathWithQuery: string, body = ""): Record<string, string> {
-  const ts = Math.floor(Date.now() / 1000);
-  return {
+  return signedRequestHeaders(SECRET, method, pathWithQuery, body, {
     "content-type": "application/json",
-    "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
-  };
+    ...testTenantHeaders(),
+  });
 }
 
 function start(
@@ -85,8 +84,14 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     const replay = await fetch(`${srv.base}${callbackPath}`);
     assert.equal(replay.status, 400);
     assert.match(((await replay.json()) as { message: string }).message, /already used|invalid OAuth state/);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U2"), null);
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
+      "at-google",
+    );
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U2")),
+      null,
+    );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
@@ -103,7 +108,10 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
       body: revokeBody,
     });
     assert.equal(revokeRes.status, 200);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
+      null,
+    );
   } finally {
     await srv.close();
   }
@@ -114,11 +122,13 @@ test("revoke clears a connector linked under a non-default account type", async 
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.connectorTokens.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      { accessToken: "at-company", expiresAt: Date.now() + 3_600_000 },
-      "company",
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken(
+        "gmail.googleapis.com",
+        "U1",
+        { accessToken: "at-company", expiresAt: Date.now() + 3_600_000 },
+        "company",
+      ),
     );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
@@ -135,7 +145,10 @@ test("revoke clears a connector linked under a non-default account type", async 
     });
     assert.equal(revokeRes.status, 200);
 
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1", "company"), null);
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1", "company")),
+      null,
+    );
     const after = (await (await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) })).json()) as {
       providers: Record<string, { connected?: boolean }>;
     };
@@ -150,7 +163,9 @@ test("OAuth status reports expired non-refreshable connectors as reconnect-neede
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.connectorTokens.setConnectorToken("slack.com", "U1", { accessToken: "stale-slack", expiresAt: 1 });
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken("slack.com", "U1", { accessToken: "stale-slack", expiresAt: 1 }),
+    );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
@@ -196,7 +211,7 @@ test("connector token route normalizes expiry seconds before storing", async () 
       body,
     });
     assert.equal(res.status, 200);
-    const status = await srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1");
+    const status = await inTestTenant(() => srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1"));
     assert.equal(status.connected, true);
     assert.equal(status.expiresAt, expiresAtMs);
   } finally {
@@ -235,7 +250,10 @@ test("authorize state stays inside the tightest provider limit and still carries
     assert.equal(cb.status, 302, await cb.text());
     assert.equal(cb.headers.get("location"), "/keychain?connector=x&status=connected");
     assert.match(body, /code_verifier=/);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com"), "at-x");
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com")),
+      "at-x",
+    );
     const replayed = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
     assert.equal(replayed.status, 400, "the state is single-use");
   } finally {
@@ -249,23 +267,25 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.mcpServers.put({
-      id: "orders",
-      name: "Orders",
-      url: "https://mcp.orders.example/mcp",
-      auth: "oauth-user",
-      credentialHost: "api.orders.example",
-      clientId: "public-client",
-      oauthAuthorizeUrl: "https://id.orders.example/authorize",
-      oauthTokenUrl: "https://id.orders.example/token",
-      oauthScopes: ["orders:write"],
-      tools: [],
-      readOnly: false,
-      enabled: true,
-      updatedAt: Date.now(),
-      updatedBy: "admin",
-    });
-    await srv.built.mcpToolService.refresh();
+    await inTestTenant(() =>
+      srv.built.mcpServers.put({
+        id: "orders",
+        name: "Orders",
+        url: "https://mcp.orders.example/mcp",
+        auth: "oauth-user",
+        credentialHost: "api.orders.example",
+        clientId: "public-client",
+        oauthAuthorizeUrl: "https://id.orders.example/authorize",
+        oauthTokenUrl: "https://id.orders.example/token",
+        oauthScopes: ["orders:write"],
+        tools: [],
+        readOnly: false,
+        enabled: true,
+        updatedAt: Date.now(),
+        updatedBy: "admin",
+      }),
+    );
+    await inTestTenant(() => srv.built.mcpToolService.refresh());
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const read = async () => {
       const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
@@ -276,10 +296,12 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     };
     assert.equal((await read()).providers.orders, undefined, "unlinked MCP sign-ins stay out of the list");
 
-    await srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
-      accessToken: "orders-token",
-      expiresAt: Date.now() + 3_600_000,
-    });
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
+        accessToken: "orders-token",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
     const linked = (await read()).providers.orders;
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");

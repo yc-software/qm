@@ -12,10 +12,22 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 const tmp = () => mkdtempSync(join(tmpdir(), "deployment-env-"));
 
 function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
   let applied: DeploymentVersion | undefined;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
@@ -25,15 +37,17 @@ function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, 
     },
     destroy: async () => {},
   };
-  const service = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: tmp(),
-    ...(deploymentEnv ? { deploymentEnv } : {}),
-  });
+  const service = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      provider,
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: tmp(),
+      ...(deploymentEnv ? { deploymentEnv } : {}),
+    }),
+  );
   return {
     service,
     deployStore,
