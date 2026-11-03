@@ -3,21 +3,22 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+const TENANT_A = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
+const TENANT_B = "8a2d4c6e-1b3f-4a5c-9e7d-0f2b4d6a8c1e";
 let deliveriesStatus = 503;
+let deliveries: unknown[] = [{ id: "d1", tenantId: TENANT_A, createdAt: 0, destination: { target: "web:nobody:t1" } }];
 const acked: string[] = [];
+const ackTenants: string[] = [];
 const core = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://core");
   if (req.method === "GET" && url.pathname === "/v1/deliveries" && url.searchParams.get("type") === "web") {
     res.writeHead(deliveriesStatus, { "content-type": "application/json" });
-    res.end(
-      deliveriesStatus === 200
-        ? JSON.stringify({ deliveries: [{ id: "d1", createdAt: 0, destination: { target: "web:nobody:t1" } }] })
-        : JSON.stringify({ error: "unavailable" }),
-    );
+    res.end(deliveriesStatus === 200 ? JSON.stringify({ deliveries }) : JSON.stringify({ error: "unavailable" }));
     return;
   }
   if (req.method === "POST" && url.pathname.startsWith("/v1/deliveries/")) {
     acked.push(url.pathname);
+    ackTenants.push(String(req.headers["x-qm-tenant"]));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -54,4 +55,17 @@ test("web delivery poll warns once per outage and logs recovery", async (t) => {
   await drainWebDeliveries();
   assert.equal(pollLines().length, 3);
   assert.match(pollLines()[2]!, /http 500/);
+});
+
+test("web delivery poll acks each tenant's deliveries under that tenant", async () => {
+  deliveriesStatus = 200;
+  deliveries = [
+    { id: "a1", tenantId: TENANT_A, createdAt: 0, destination: { target: "web:nobody:t1" } },
+    { id: "b1", tenantId: TENANT_B, createdAt: 0, destination: { target: "web:nobody:t2" } },
+  ];
+  acked.length = 0;
+  ackTenants.length = 0;
+  await drainWebDeliveries();
+  assert.deepEqual(acked, ["/v1/deliveries/a1/ack", "/v1/deliveries/b1/ack"]);
+  assert.deepEqual(ackTenants, [TENANT_A, TENANT_B]);
 });

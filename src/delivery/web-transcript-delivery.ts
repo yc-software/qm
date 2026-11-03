@@ -4,6 +4,7 @@ import { type NewEntry, type SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { isAgentReply, isUserItem, type Item, itemFromEntry } from "../sessions/items.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -157,6 +158,14 @@ export function withWebTranscriptDeliveries(
     async pending(type) {
       const rows = await store.pending(type);
       return type === "web" ? drained(rows) : rows;
+    },
+    async pendingAcrossTenants(type) {
+      const rows = await store.pendingAcrossTenants(type);
+      if (type !== "web") return rows;
+      const out: Delivery[] = [];
+      for (const [tenantId, tenantRows] of Map.groupBy(rows, (row) => row.tenantId))
+        out.push(...(await inTenantOf(tenantId, () => drained(tenantRows))));
+      return out;
     },
     async claimPending(type, ttlMs) {
       const rows = await store.claimPending(type, ttlMs);

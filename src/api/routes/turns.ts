@@ -295,10 +295,9 @@ async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
 
 async function listDeliveries(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
-  const type = url.searchParams.get("type") ?? "";
-  const claimMsRaw = Number(url.searchParams.get("claimMs") ?? 0);
-  const claimMs = Number.isFinite(claimMsRaw) && claimMsRaw > 0 ? claimMsRaw : 0;
-  return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
+  return sendJson(res, 200, {
+    deliveries: await app.pendingDeliveriesAcrossTenants(url.searchParams.get("type") ?? ""),
+  });
 }
 
 async function ackDelivery(ctx: ApiCtx): Promise<void> {
@@ -339,7 +338,7 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
   { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
-  { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
+  { method: "GET", path: "/v1/deliveries", auth: "source", tenant: "none", handle: listDeliveries },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

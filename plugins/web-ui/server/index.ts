@@ -36,6 +36,7 @@ import {
   serveFavicon,
 } from "../../chassis/src/http.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
+import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -161,6 +162,7 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
 }
 
 const deliveryClients = new Map<string, Set<ServerResponse>>();
+const clientTenants = new WeakMap<ServerResponse, string | undefined>();
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -517,6 +519,7 @@ let deliveriesPollFailing = false;
 
 interface PendingWebDelivery {
   id: string;
+  tenantId: string;
   createdAt: number;
   destination?: { target?: string };
 }
@@ -551,14 +554,17 @@ async function pollWebDeliveries(): Promise<unknown> {
   let failure: unknown;
   for (const d of pending) {
     const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
+    const conns = [...(deliveryClients.get(ownerOfWebThread(target) ?? "") ?? [])].filter(
+      (res) => clientTenants.get(res) === d.tenantId,
+    );
+    if (conns.length) {
       for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
     } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
       continue;
     }
     try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
+      const ackPath = `/v1/deliveries/${encodeURIComponent(d.id)}/ack`;
+      const ack = await withTenant(d.tenantId, () => coreFetch("POST", ackPath));
       if (ack.status !== 200)
         failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
     } catch (e) {
@@ -2765,6 +2771,7 @@ const apiRoutes: readonly WebRoute[] = [
         deliveryClients.set(user, set);
       }
       set.add(res);
+      clientTenants.set(res, boundTenant());
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {

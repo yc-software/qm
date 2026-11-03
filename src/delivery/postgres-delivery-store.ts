@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
-import { rowTenant } from "../tenants/claim.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -157,6 +157,15 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async pending(type) {
       const rows = await q(
+        `SELECT * FROM deliveries
+          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+          ORDER BY created_at`,
+        [type],
+      );
+      return rows.map(rowToDelivery);
+    },
+    async pendingAcrossTenants(type) {
+      const { rows } = await claimAcrossTenants(
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
           ORDER BY created_at`,

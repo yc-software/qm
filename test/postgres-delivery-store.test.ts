@@ -7,7 +7,8 @@ import {
   exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
@@ -104,4 +105,27 @@ test("pg delivery store: a permanently refused row fails once and never revives"
   inTestTenant(async () => {
     await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
   }),
+);
+
+test(
+  "pg delivery store: the web poller sees every tenant's pending deliveries, each tagged with its tenant",
+  { skip },
+  async () => {
+    const store = createPostgresDeliveryStore(URL!);
+    const [a, b] = testTenants();
+    const enqueue = (tenant: string, key: string) =>
+      withTenant(tenant, () =>
+        store.enqueue({ destination: { type: "web", target: `web:u:${key}` }, text: key, idempotencyKey: key }),
+      );
+    const fromA = await enqueue(a, "across-a");
+    const fromB = await enqueue(b, "across-b");
+    const seen = (await store.pendingAcrossTenants("web")).filter((d) => d.id === fromA.id || d.id === fromB.id);
+    assert.deepEqual(
+      seen.map((d) => [d.id, d.tenantId]),
+      [
+        [fromA.id, a],
+        [fromB.id, b],
+      ],
+    );
+  },
 );
