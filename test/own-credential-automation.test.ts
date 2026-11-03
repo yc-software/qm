@@ -48,7 +48,7 @@ test("a scheduled turn in the owner's DM uses the owner's credential without a g
     actor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron" },
     text: read,
-    triggered: true,
+    origin: { kind: "automation" },
   } as TurnRequest);
   assert.equal(fired.status, "ok", fired.reason);
   assert.match(fired.reply ?? "", /own-login/);
@@ -73,7 +73,7 @@ test("a subagent of the owner's DM uses the owner's credential without a grant",
     actor,
     conversation: { kind: "dm", threadRef: child.threadRef },
     text: read,
-    triggered: true,
+    origin: { kind: "automation" },
   } as TurnRequest);
   assert.equal(result.status, "ok", result.reason);
   assert.match(result.reply ?? "", /own-login/);
@@ -88,7 +88,7 @@ test("a scheduled turn in a shared channel cannot use the owner's credential wit
       actor,
       conversation: { kind: "channel", threadRef: "ch:C1:cron", channelRef: "C1", audience: [actor] },
       text: read,
-      triggered: true,
+      origin: { kind: "automation" },
     } as TurnRequest),
     /credential handle is not available/,
   );

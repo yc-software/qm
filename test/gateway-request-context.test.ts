@@ -288,7 +288,7 @@ test("app turns and their helper calls tell the gateway which session they serve
     actor: { externalId: "U1" },
     conversation: { kind: "channel", threadRef: "ch:C1:context", channelRef: "C1", audience: [{ externalId: "U1" }] },
     text: "anyone around?",
-    unprompted: true,
+    origin: { kind: "ambient" },
   });
   const channel = (await built.sessions.get(ambient.sessionId!))!;
   assert.deepEqual(sent("detect"), {

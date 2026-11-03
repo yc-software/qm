@@ -1120,7 +1120,7 @@ test("the turn's intake names a steer's author the way it names a new message's 
         actor: steerer,
         conversation: { kind: "channel", threadRef: "steer-author", channelRef: "C1" },
         text: "use my linear key",
-        liveActor: true,
+        origin: { kind: "human" },
       });
       prepared.push({ text: steer.text, ...(steer.authorName ? { authorName: steer.authorName } : {}) });
     }
@@ -1145,8 +1145,7 @@ test("the turn's intake screens an unprompted mid-turn update with its author la
     actor: { externalId: "U2", displayName },
     conversation: { kind: "channel", threadRef: "steer-screen", channelRef: "C1" },
     text,
-    unprompted: true,
-    liveActor: true,
+    origin: { kind: "ambient", live: true },
   });
   agent.runTurn = async (turn) => {
     for (const steer of [
@@ -1202,8 +1201,8 @@ test("the turn's intake screens words from anyone but the person the turn acts f
   });
   agent.runTurn = async (turn) => {
     for (const request of [
-      from({ liveActor: true }),
-      from({ actor: { externalId: actor.id }, unprompted: true, liveActor: true }),
+      from({ origin: { kind: "human" } }),
+      from({ actor: { externalId: actor.id }, origin: { kind: "ambient", live: true } }),
       undefined,
     ])
       prepared.push((await turn.prepareSteer!(injected, request)).text);

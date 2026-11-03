@@ -407,7 +407,7 @@ interface AddParticipantOptions {
 }
 
 interface SessionFacts {
-  slackBinding?: Session["slackBinding"];
+  surfaceBinding?: Session["surfaceBinding"];
   context?: SpawnMeta;
 }
 

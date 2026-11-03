@@ -211,9 +211,9 @@ export function createDeliveryPoller(deps: {
     };
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
-    if (deps.clientForAccount)
-      return deps.clientForAccount(destination.slackAccountId ?? "default", destination.slackTeamId);
-    return destination.slackAccountId ? undefined : defaultClient;
+    const account = accountWithPreviousReleaseKeys(destination);
+    if (deps.clientForAccount) return deps.clientForAccount(account?.id ?? "default", account?.workspace);
+    return account ? undefined : defaultClient;
   }
 
   async function deliverToConversations(defaultClient: any, leaseLost?: () => boolean): Promise<number> {
@@ -224,11 +224,12 @@ export function createDeliveryPoller(deps: {
         if (!destinationClient) return;
         const client = destinationClient;
         const runId = d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
-        const namespace = deps.externalNamespace?.(d.destination.slackAccountId ?? "default");
+        const account = accountWithPreviousReleaseKeys(d.destination);
+        const namespace = deps.externalNamespace?.(account?.id ?? "default");
         if (
           namespace &&
           (parseDeliveryTarget(d.destination.target).channel.startsWith("D")
-            ? runId && d.destination.slackPolicyNamespace !== namespace
+            ? runId && account?.policyNamespace !== namespace
             : !d.provenance?.sourceThreadRef.startsWith(`${namespace}:`))
         ) {
           await ackDelivery(d.id);
@@ -560,4 +561,15 @@ export function createDeliveryPoller(deps: {
   }
 
   return { pollDeliveries };
+}
+
+function accountWithPreviousReleaseKeys(destination: Delivery["destination"]): Delivery["destination"]["account"] {
+  if (destination.account) return destination.account;
+  const oldKeys = destination as { slackAccountId?: string; slackTeamId?: string; slackPolicyNamespace?: string };
+  if (!oldKeys.slackAccountId && !oldKeys.slackTeamId && !oldKeys.slackPolicyNamespace) return undefined;
+  return {
+    id: oldKeys.slackAccountId || "default",
+    ...(oldKeys.slackTeamId ? { workspace: oldKeys.slackTeamId } : {}),
+    ...(oldKeys.slackPolicyNamespace ? { policyNamespace: oldKeys.slackPolicyNamespace } : {}),
+  };
 }

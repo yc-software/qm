@@ -1092,7 +1092,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     surface: "slack",
     actor,
     botActor: true,
-    liveActor: true,
+    origin: { kind: "human" },
     conversation: {
       kind: "channel",
       threadRef: "ch:C1:bot",

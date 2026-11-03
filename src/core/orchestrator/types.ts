@@ -65,23 +65,11 @@ import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
+import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  | "surface"
-  | "actor"
-  | "conversation"
-  | "idempotencyKey"
-  | "spawned"
-  | "async"
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
+  "surface" | "actor" | "conversation" | "idempotencyKey" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;
@@ -120,6 +108,7 @@ export interface OrchestratorDeps {
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
+  surfaces: SurfaceRegistry;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;

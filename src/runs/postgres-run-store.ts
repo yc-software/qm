@@ -5,7 +5,6 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type {
   EnqueueInput,
   EnqueueResult,
@@ -50,7 +49,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     id: r.id as string,
     sessionId: r.session_id as string,
     status: r.status as Run["status"],
-    request: { ...request, origin: resolveTurnOrigin(request) },
+    request,
     result: r.result != null ? (JSON.parse(r.result as string) as TurnResult) : null,
     deliveryState: r.delivery_state != null ? (JSON.parse(r.delivery_state as string) as RunDeliveryState) : null,
     turnUserSeq: r.turn_user_seq != null ? Number(r.turn_user_seq) : null,

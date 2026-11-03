@@ -1751,6 +1751,7 @@ for (const surface of ["slack", "web"] as const) {
 test("children of a Slack group turn keep its source so external-workspace policy admits them", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
   const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
+  const { slackSurfaceOrigin } = await import("../src/surfaces/slack/adapter.ts");
   const access = { companyDomains: ["partner.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
@@ -1768,11 +1769,13 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const cases = [
     {
       threadRef: "slack:group:G1",
-      request: { slackSource: { accountId: "staff", teamId: "T1", userId: "U1" } },
+      request: { surfaceOrigin: slackSurfaceOrigin({ accountId: "staff", teamId: "T1", userId: "U1" }) },
     },
     {
       threadRef: `${externalSlackNamespace("T2", access)}:C2`,
-      request: { externalSlack: { accountId: "ext", teamId: "T2", userId: "U1", ...access } },
+      request: {
+        surfaceOrigin: slackSurfaceOrigin({ accountId: "ext", teamId: "T2", userId: "U1", external: access }),
+      },
     },
   ];
   for (const c of cases) {
@@ -1789,12 +1792,12 @@ test("children of a Slack group turn keep its source so external-workspace polic
     const child = await freshSession(sessions, opened.sessionId);
     const [run] = await runs.inFlightForThread(child.threadRef);
     assert.ok(admitted(run!.request));
-    assert.deepEqual(run!.request.externalSlack, "externalSlack" in c.request ? c.request.externalSlack : undefined);
+    assert.deepEqual(run!.request.surfaceOrigin, c.request.surfaceOrigin);
     const followed = await syscalls.write({ target: child.id, text: "more", wake: true });
     assert.ok(followed.ok, JSON.stringify(followed));
     const latest = (await runs.inFlightForThread(child.threadRef)).at(-1)!;
     assert.ok(admitted(latest.request));
-    assert.deepEqual(latest.request.externalSlack, run!.request.externalSlack);
+    assert.deepEqual(latest.request.surfaceOrigin, run!.request.surfaceOrigin);
   }
 });
 

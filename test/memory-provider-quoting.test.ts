@@ -95,7 +95,7 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   const refused = await built.app.turn({
     ...dm("use the fancy model", "dm:U1:tB"),
     model: "not-a-real-model",
-    liveActor: true,
+    origin: { kind: "human" },
   });
   assert.equal(refused.status, "failed");
   assert.match(refused.reason ?? "", /not approved/);

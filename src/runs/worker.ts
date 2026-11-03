@@ -5,7 +5,6 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import {
   countedClaims,
   errorParks,
@@ -59,7 +58,7 @@ export async function processRun(
       "messaging.message.receive.latency":
         run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
       "qm.surface": request.surface,
-      "qm.origin": resolveTurnOrigin(request).kind,
+      "qm.origin": "origin" in request ? request.origin.kind : undefined,
     },
     () => attemptRun(deps, { ...run, request }, opts),
     (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
@@ -124,10 +123,10 @@ async function attemptRun(
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    if (!("origin" in run.request)) throw new NonRetryableTurnError("stored run request has no origin");
     started = true;
     const turn = deps.orchestrator.handleTurn({
       ...run.request,
-      origin: resolveTurnOrigin(run.request),
       runId: run.id,
       attempt: run.attempts,
       ...(run.lastStop ? { resumeCause: run.lastStop } : {}),

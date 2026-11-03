@@ -74,6 +74,7 @@ import { reactionTallies } from "./conversation-view.ts";
 import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
+import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
@@ -478,25 +479,16 @@ export function createTurnHandler(deps: {
       actor,
       ...(inc.userId
         ? {
-            slackSource: {
+            surfaceOrigin: slackSurfaceOrigin({
               accountId: deps.accountId ?? "default",
               teamId: ids.ownTeamId,
               userId: inc.userId,
               ...(deps.externalAccess
-                ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
               ...(replyThreadTs ? { replyThreadTs } : {}),
-            },
-          }
-        : {}),
-      ...(deps.externalAccess && inc.kind === "channel" && inc.userId
-        ? {
-            externalSlack: {
-              accountId: deps.accountId ?? "default",
-              teamId: ids.ownTeamId,
-              userId: inc.userId,
-              ...deps.externalAccess,
-            },
+              ...(deps.externalAccess && inc.kind === "channel" ? { external: deps.externalAccess } : {}),
+            }),
           }
         : {}),
       conversation: {
@@ -516,14 +508,14 @@ export function createTurnHandler(deps: {
       })(),
       text,
       gatewayContext,
-      ...(inc.unprompted
+      origin: inc.unprompted
         ? {
-            unprompted: true,
+            kind: "ambient",
             ...(inc.synthetic
               ? {}
-              : { entryTs: inc.ts, ...(actor.isBot || inc.botAuthored ? {} : { liveActor: true }) }),
+              : { ...(inc.ts ? { entryTs: inc.ts } : {}), ...(actor.isBot || inc.botAuthored ? {} : { live: true }) }),
           }
-        : { liveActor: true, triggerTs: inc.ts }),
+        : { kind: "human", ...(inc.ts ? { messageTs: inc.ts } : {}) },
       ...(actor.isBot ? { botActor: true } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
       ...(priorTurns ? { priorTurns } : {}),

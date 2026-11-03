@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   runResultDelivery,
   wireRunResultDeliveries,
@@ -78,19 +79,17 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
 test("runResultDelivery retains the Slack policy used for private admission", () => {
   const request = {
     ...turn("hi", "DPRIVATE"),
-    slackSource: {
+    surfaceOrigin: slackSurfaceOrigin({
       accountId: "partner",
       teamId: "TPARTNER",
       userId: "U1",
-      externalPolicyNamespace: "external-slack:TPARTNER:policy",
-    },
+      policyNamespace: "external-slack:TPARTNER:policy",
+    }),
   };
   assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
     type: "slack",
     target: "DPRIVATE",
-    slackAccountId: "partner",
-    slackTeamId: "TPARTNER",
-    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+    account: { id: "partner", workspace: "TPARTNER", policyNamespace: "external-slack:TPARTNER:policy" },
   });
 });
 
@@ -207,12 +206,6 @@ test("runResultDelivery keeps unprompted failures quiet, like the live path", ()
   const ok = run({});
   ok.request = { ...ok.request, origin: { kind: "ambient" } };
   assert.equal(runResultDelivery(ok)?.text, "the reply", "an unprompted reply the agent chose to send still recovers");
-});
-
-test("runResultDelivery recognizes legacy queued ambient turns", () => {
-  const failed = run({ status: "failed", result: { status: "failed", reason: "boom" } });
-  failed.request = { ...failed.request, origin: undefined, unprompted: true } as unknown as OrchestratorInput;
-  assert.equal(runResultDelivery(failed), null);
 });
 
 test("runResultDelivery skips terminal results that cannot be safely replayed", () => {

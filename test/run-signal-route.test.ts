@@ -95,7 +95,7 @@ function steererRequest(externalId: string, threadRef: string, text: string, dis
     surface: "web",
     actor: { externalId, ...(displayName ? { displayName } : {}) },
     conversation: { kind: "dm", threadRef },
-    liveActor: true,
+    origin: { kind: "human" },
     text,
   };
 }
@@ -138,7 +138,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    ownerKeychainUnion: true,
+    origin: { kind: "automation", useOwnerKeychain: true },
     spawned: true,
     unattendedGrants: ["admin-read"],
   };
@@ -146,7 +146,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
   assert.ok(signal?.request);
-  assert.equal("ownerKeychainUnion" in signal.request, false);
+  assert.deepEqual(signal.request.origin, { kind: "automation" });
   assert.equal("spawned" in signal.request, false);
   assert.equal("unattendedGrants" in signal.request, false);
 });
@@ -269,7 +269,7 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
       surface: "web",
       actor: { externalId: "web-eve" },
       conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
+      origin: { kind: "human" },
       text: "still matters",
     },
   });

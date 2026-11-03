@@ -596,9 +596,8 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, undefined);
-    assert.equal(f.core.turns[0].liveActor, true);
-    assert.equal(f.core.turns[0].triggerTs, "100.1");
+    assert.equal(f.core.turns[0].surfaceOrigin.replyThread, undefined);
+    assert.deepEqual(f.core.turns[0].origin, { kind: "human", messageTs: "100.1" });
     assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
     assert.equal(f.core.ackPicks.length, 1);
     assert.equal(f.core.ackPicks[0]?.text, "hello agent");
@@ -1200,7 +1199,7 @@ test("a DM thread reply carries its reply thread as a typed Slack source field",
     });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].conversation.kind, "dm");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, "100.1");
+    assert.equal(f.core.turns[0].surfaceOrigin.replyThread, "100.1");
   } finally {
     await f.stop();
   }
@@ -1267,9 +1266,11 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
       thread_ts: "300.1",
     });
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, true);
-    assert.equal(f.core.turns[0].entryTs, "300.3");
-    assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
+    assert.deepEqual(
+      f.core.turns[0].origin,
+      { kind: "ambient", entryTs: "300.3", live: true },
+      "a member's own verbatim follow-up is a live act",
+    );
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
   } finally {
@@ -1413,9 +1414,11 @@ test("a peer bot's thread reply dispatches without attesting liveness", async ()
       thread_ts: "301.1",
     });
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].unprompted, true);
-    assert.equal(f.core.turns[0].entryTs, "301.3");
-    assert.equal(f.core.turns[0].liveActor, undefined, "a bot author is automation, never a live act");
+    assert.deepEqual(
+      f.core.turns[0].origin,
+      { kind: "ambient", entryTs: "301.3" },
+      "a bot author is automation, never a live act",
+    );
   } finally {
     await f.stop();
   }

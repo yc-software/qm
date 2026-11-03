@@ -899,6 +899,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
+      ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),

@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
@@ -6,6 +7,9 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -57,7 +61,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal(out.ran, true);
     assert.equal(req?.surfaceTools, true, "a monitor fire wires the surface tools");
     assert.equal(req?.addressed, true, "and is addressed so it must reply-or-decline (shed fallback delivers)");
-    assert.deepEqual(req?.triggerDestination, toChannel, "the post tool aims at the arming thread");
+    assert.deepEqual(automationOrigin(req)?.destination, toChannel, "the post tool aims at the arming thread");
     assert.equal(req?.idempotencyKey, "monitor:m1:exit");
     assert.equal((await d.deliveries.pending("slack")).length, 0);
   });

@@ -122,7 +122,7 @@ function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
       ...session.spawnMeta,
-      ...(session.slackBinding ? { slackSource: session.slackBinding } : {}),
+      ...(session.surfaceBinding && !session.spawnMeta.surfaceOrigin ? { surfaceOrigin: session.surfaceBinding } : {}),
     }
   );
 }
@@ -137,7 +137,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
     ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
-    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
+    ...(input.surfaceOrigin?.audience === "external" ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
     surface: input.surface ?? "web",
@@ -255,8 +255,7 @@ interface SessionSyscallBinding {
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
-    | "slackSource"
-    | "externalSlack"
+    | "surfaceOrigin"
   > & { origin?: OrchestratorInput["origin"] };
 }
 
@@ -400,8 +399,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
-    ...(meta.slackSource ? { slackSource: meta.slackSource } : {}),
-    ...(meta.externalSlack ? { externalSlack: meta.externalSlack } : {}),
+    ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
@@ -734,7 +732,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 }),
                 origin: caller.origin,
                 openFingerprint: fingerprint,
-                ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
+                ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);

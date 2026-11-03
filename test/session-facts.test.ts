@@ -8,11 +8,18 @@ import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool
 import { sessionContextOf } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { TurnSurfaceOrigin } from "../src/surfaces/contract.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
 const slackSource = { accountId: "A2", teamId: "T1", userId: "U1" };
+const previousRelease = { slackSource } as unknown as Partial<OrchestratorInput>;
+const binding: TurnSurfaceOrigin = {
+  author: { surface: "slack", account: "A2", id: "U1" },
+  workspace: "T1",
+  audience: "internal",
+};
 
 function request(threadRef: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput {
   const conversation: Conversation = { kind: "dm", threadRef, audience: [actor] };
@@ -23,18 +30,18 @@ test("a session keeps the Slack binding it was created with and follows its late
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const first = request("slack:dm:facts");
   const created = await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", undefined, {
-    slackBinding: slackSource,
+    surfaceBinding: binding,
     context: sessionContextOf(first),
   });
-  assert.deepEqual(created.slackBinding, slackSource);
+  assert.deepEqual(created.surfaceBinding, binding);
   assert.deepEqual(created.spawnMeta?.origin, { kind: "human" });
   const later = request("slack:dm:facts", { timezone: "America/Los_Angeles" });
   await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", undefined, {
-    slackBinding: { ...slackSource, accountId: "A3" },
+    surfaceBinding: { ...binding, author: { ...binding.author, account: "A3" } },
     context: sessionContextOf(later),
   });
   const stored = (await sessions.getByThread("slack:dm:facts"))!;
-  assert.deepEqual(stored.slackBinding, slackSource);
+  assert.deepEqual(stored.surfaceBinding, binding);
   assert.equal(stored.spawnMeta?.timezone, "America/Los_Angeles");
   await sessions.setRuntime(stored.id, { modelId: "m1", label: "Model One" });
   assert.deepEqual((await sessions.get(stored.id))?.runtime, { modelId: "m1", label: "Model One" });
@@ -65,7 +72,7 @@ test("the session facts migration copies each conversation's facts from its late
   };
   const slack = await sessions.getOrCreateByThread("slack:dm:old", "dm", scope, undefined, "slack");
   const publicTurn = request(slack.threadRef, {
-    slackSource,
+    ...previousRelease,
     surfaceTools: true,
     deliveryTarget: "D1",
     deliveryCandidates: [{ target: "D1", label: "DM" }],
@@ -77,7 +84,7 @@ test("the session facts migration copies each conversation's facts from its late
   await finish(slack.threadRef, publicTurn, { modelId: "m1" });
   await finish(
     slack.threadRef,
-    request(slack.threadRef, { slackSource, privateSessionMessage: true, timezone: "UTC" }),
+    request(slack.threadRef, { ...previousRelease, privateSessionMessage: true, timezone: "UTC" }),
     { modelId: "m2" },
   );
   const cron = await sessions.getOrCreateByThread("cron:c1:fire:1", "dm", scope, undefined, "web");
@@ -92,7 +99,7 @@ test("the session facts migration copies each conversation's facts from its late
   });
   const quiet = await sessions.getOrCreateByThread("web:U1:quiet", "dm", scope, undefined, "web");
   const mixed = await sessions.getOrCreateByThread("slack:dm:mixed", "dm", scope, undefined, "slack");
-  const owning = request(mixed.threadRef, { slackSource });
+  const owning = request(mixed.threadRef, previousRelease);
   await finish(mixed.threadRef, owning, { modelId: "m4" });
   await finish(mixed.threadRef, request(mixed.threadRef, { sessionSenderId: "s1" }));
 
@@ -110,7 +117,21 @@ test("the session facts migration copies each conversation's facts from its late
   }
 
   const filled = (await sessions.get(slack.id))!;
-  assert.deepEqual(filled.slackBinding, slackSource);
+  assert.equal(filled.surfaceBinding, undefined, "a binding in the previous release's shape reads as unbound");
+  const copied = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    const bindings = await copied.query<{ id: string; slack_binding: unknown }>(
+      "SELECT id, slack_binding FROM sessions WHERE id = ANY($1)",
+      [[slack.id, mixed.id]],
+    );
+    assert.deepEqual(
+      Object.fromEntries(bindings.rows.map((r) => [r.id, r.slack_binding])),
+      { [slack.id]: slackSource, [mixed.id]: slackSource },
+      "boot copies each binding from the newest run that has one, in the previous release's shape",
+    );
+  } finally {
+    await copied.end();
+  }
   assert.deepEqual(filled.runtime, { modelId: "m2" });
   assert.deepEqual(filled.spawnMeta, sessionContextOf(publicTurn));
   assert.deepEqual((await sessions.get(cron.id))?.spawnMeta, sessionContextOf(fired));
@@ -118,10 +139,9 @@ test("the session facts migration copies each conversation's facts from its late
   assert.deepEqual(sessionTurn.runtime, { modelId: "m3" });
   assert.equal(sessionTurn.spawnMeta, undefined);
   const mixedFilled = (await sessions.get(mixed.id))!;
-  assert.deepEqual(mixedFilled.slackBinding, slackSource, "the binding comes from the newest run that has one");
   assert.deepEqual(mixedFilled.runtime, { modelId: "m4" }, "the label comes from the newest run that reported one");
   assert.deepEqual(mixedFilled.spawnMeta, sessionContextOf(owning), "context comes from the newest owning turn");
   const untouched = (await sessions.get(quiet.id))!;
-  assert.equal(untouched.slackBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
+  assert.equal(untouched.surfaceBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();
 });

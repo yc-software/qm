@@ -1,5 +1,6 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
 
 export type PrincipalType = "internal" | "guest";
@@ -84,8 +85,7 @@ export interface SurfaceBriefing {
 }
 
 export interface SpawnMeta {
-  slackSource?: TurnRequest["slackSource"];
-  externalSlack?: TurnRequest["externalSlack"];
+  surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
@@ -124,7 +124,7 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
-  slackBinding?: TurnRequest["slackSource"];
+  surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   lastActivityAt?: number;
   hasEntries?: boolean;
@@ -174,9 +174,7 @@ export interface GrantedHandle {
 }
 
 export interface Destination {
-  slackAccountId?: string;
-  slackTeamId?: string;
-  slackPolicyNamespace?: string;
+  account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -337,21 +335,7 @@ export interface ClientToolResult {
 export interface TurnRequest {
   desktopClientId?: string;
   midTurn?: "steer" | "queue";
-  slackSource?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    externalPolicyNamespace?: string;
-    replyThreadTs?: string;
-  };
-  externalSlack?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    companyDomains: string[];
-    companyTeamIds: string[];
-    serviceCredentials: string[];
-  };
+  surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
   delegatingRunId?: string;
   privateSessionMessage?: true;
@@ -373,16 +357,8 @@ export interface TurnRequest {
   };
   text: string;
   origin?: TurnOrigin;
-  triggerTs?: string;
-  entryTs?: string;
   gatewayContext?: GatewayContext;
-  triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
-  triggerDestination?: Destination;
-  ownerKeychainUnion?: boolean;
-  unprompted?: boolean;
-  liveActor?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];

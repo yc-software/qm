@@ -1,5 +1,4 @@
 import { samePerson } from "../directory/person.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
 import type { TurnOrigin } from "../types.ts";
 
@@ -65,7 +64,7 @@ export function stopsLiveWork(message: Pick<Incoming, "origin" | "text" | "selfH
 export function liveTurnOf(run: Run, handlesThisMessage = false): LiveTurn {
   return {
     kind: "run",
-    origin: resolveTurnOrigin(run.request).kind,
+    origin: run.request.origin.kind,
     actorId: run.request.actor.id,
     ...(run.request.modelAccount ? { modelAccount: run.request.modelAccount } : {}),
     dedupKey: run.dedupKey ?? null,

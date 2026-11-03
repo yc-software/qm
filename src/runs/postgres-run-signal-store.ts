@@ -3,7 +3,7 @@ import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
-import { resolveTurnOrigin, spokenByPerson } from "../core/turn-origin.ts";
+import { spokenByPerson } from "../core/turn-origin.ts";
 
 const CHANNEL = "run_signals";
 
@@ -103,7 +103,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       );
       const ids = rows
         .map((r) => (r.payload as RunSignal).request)
-        .filter((request) => request && spokenByPerson(resolveTurnOrigin(request)))
+        .filter((request) => request?.origin && spokenByPerson(request.origin))
         .map((request) => request?.actor?.externalId)
         .filter((id): id is string => typeof id === "string" && id !== "");
       return [...new Set(ids)];

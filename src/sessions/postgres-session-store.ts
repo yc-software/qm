@@ -100,7 +100,9 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
-    ...(r.slack_binding != null ? { slackBinding: r.slack_binding as Session["slackBinding"] } : {}),
+    ...((r.slack_binding as { author?: unknown } | null)?.author
+      ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
+      : {}),
     ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
   };
 }
@@ -505,12 +507,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           await q("UPDATE sessions SET surface = $2 WHERE id = $1", [s.id, surface]);
           s.surface = surface;
         }
-        if (facts?.slackBinding && !s.slackBinding) {
+        if (facts?.surfaceBinding && !s.surfaceBinding) {
           await q("UPDATE sessions SET slack_binding = $2::jsonb WHERE id = $1 AND slack_binding IS NULL", [
             s.id,
-            JSON.stringify(facts.slackBinding),
+            JSON.stringify(facts.surfaceBinding),
           ]);
-          s.slackBinding = facts.slackBinding;
+          s.surfaceBinding = facts.surfaceBinding;
         }
         if (facts?.context && canonicalJson(s.spawnMeta) !== canonicalJson(facts.context)) {
           await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [s.id, JSON.stringify(facts.context)]);

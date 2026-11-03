@@ -9,6 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import type { TriggerOutcome } from "../src/triggers/run-trigger.ts";
 import type { Destination, ScopeId, TurnRequest } from "../src/types.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: [] };
 const namespace = externalSlackNamespace("TBATCH", policy);
@@ -61,7 +62,12 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
   const seeded = await b.app.turn({
     surface: "slack",
     actor: { externalId: "U_BOB" },
-    slackSource: { accountId: "default", teamId: "TSTAFF", userId: "U_BOB", replyThreadTs: "1700000000.000100" },
+    surfaceOrigin: slackSurfaceOrigin({
+      accountId: "default",
+      teamId: "TSTAFF",
+      userId: "U_BOB",
+      replyThreadTs: "1700000000.000100",
+    }),
     conversation: { kind: "group", channelRef: "G1", threadRef, audience: [{ externalId: "U_BOB" }] },
     text: "needs github",
   } as TurnRequest);
@@ -69,7 +75,7 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
   const direct = await b.app.turn({
     surface: "web",
     actor: { externalId: "U_BOB" },
-    triggered: true,
+    origin: { kind: "automation" },
     conversation: { kind: "group", channelRef: "G1", threadRef, audience: [{ externalId: "U_BOB" }] },
     text: "resume",
   } as TurnRequest);
@@ -88,7 +94,12 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
       (r) => r.request.surface === "keychain-ask" && r.status === "done",
     );
   }
-  assert.equal(resumed?.request.slackSource?.accountId, "default");
+  assert.deepEqual(resumed?.request.surfaceOrigin, {
+    author: { surface: "slack", account: "default", id: "U_BOB" },
+    workspace: "TSTAFF",
+    replyThread: "1700000000.000100",
+    audience: "internal",
+  });
   assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.idempotencyKey === fallbackKey));
 });
 
@@ -99,8 +110,13 @@ test("a thread from a Slack account with an external policy still refuses trigge
   const seeded = await b.app.turn({
     surface: "slack",
     actor: { externalId: "U_BOB" },
-    slackSource: { accountId: "batch", teamId: "TBATCH", userId: "U_BOB", externalPolicyNamespace: namespace },
-    externalSlack: { accountId: "batch", teamId: "TBATCH", userId: "U_BOB", ...policy },
+    surfaceOrigin: slackSurfaceOrigin({
+      accountId: "batch",
+      teamId: "TBATCH",
+      userId: "U_BOB",
+      policyNamespace: namespace,
+      external: policy,
+    }),
     conversation: { kind: "channel", channelRef, threadRef, audience: [{ externalId: "U_BOB" }] },
     text: "needs github",
   } as TurnRequest);
