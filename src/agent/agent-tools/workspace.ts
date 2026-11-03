@@ -149,7 +149,7 @@ export function workspaceTools(kit: ToolKit) {
       const message =
         isObj(response.body) && typeof response.body.message === "string"
           ? response.body.message
-          : JSON.stringify(response.body);
+          : `HTTP ${response.status}${response.requestId ? ` (request ${response.requestId})` : ""}`;
       return recordResult(
         callId,
         { tool: "skills", action, status: response.status },

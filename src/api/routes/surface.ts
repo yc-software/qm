@@ -1018,6 +1018,9 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   const patch: { description?: string; body?: string } = {};
   if (typeof b.description === "string") patch.description = b.description;
   if (typeof b.body === "string") patch.body = b.body;
+  if (patch.description === undefined && patch.body === undefined) {
+    return sendJson(res, 400, { error: "bad_request", message: "description or body required" });
+  }
   const liveActor = capability ? livePersonCapability(capability) : true;
   const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
   if (updated === "trigger_blocked")

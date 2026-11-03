@@ -17,6 +17,7 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
 import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 
 function start() {
   const built = buildApp(
@@ -1153,6 +1154,9 @@ test("the skills tool saves a skill into the turn's scope and edits it through t
     const edited = await jordan({ action: "edit", id: sk.id, body: "# investor-update v2" });
     assert.match(edited, /^Updated skill investor-update/);
     assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# investor-update v2");
+    const version = (await srv.skills.get(sk.id))!.version;
+    assert.equal(await jordan({ action: "edit", id: sk.id }), "[error] description or body required");
+    assert.equal((await srv.skills.get(sk.id))!.version, version);
 
     const again = await skills({ action: "save", name: "investor-update", description: "d", body: "# b" });
     assert.match(again, /already exists here/);
@@ -1194,5 +1198,76 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
     assert.notEqual((await srv.skills.get(id))!.manifest.description, "taken over");
   } finally {
     await srv.close();
+  }
+});
+
+test("a turn's skills tool saves with that turn's own capability, and a read-only turn gets no save", async () => {
+  const SECRET = "skills-turn-cap-secret".repeat(3);
+  const mock = createMockAgent();
+  const seen: ToolContext[] = [];
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "skills-turn-")),
+      orgId: "acme",
+      seedSkills: false,
+      signingSecret: SECRET,
+      capabilitySecret: SECRET,
+      apiBaseUrl: "http://core.example.test",
+    }),
+    {
+      agent: {
+        ...mock,
+        runTurn: (input) => {
+          seen.push(input.tools);
+          return mock.runTurn(input);
+        },
+      },
+    },
+  );
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    capabilitySecret: SECRET,
+    config: built.config,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => realFetch(String(input).replace("http://core.example.test", base), init);
+  try {
+    await built.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [{ channelId: "C9", principalId: "avery" }],
+    );
+    const avery = { externalId: "avery" };
+    const turn = (readOnly: boolean) =>
+      built.app.turn({
+        surface: "test",
+        actor: avery,
+        conversation: {
+          kind: "channel",
+          threadRef: `ch:C9:${readOnly ? "read" : "live"}`,
+          channelRef: "C9",
+          audience: [avery],
+          publishMembers: [avery],
+        },
+        text: "hello",
+        liveActor: true,
+        ...(readOnly ? { readOnly: true } : {}),
+      });
+    assert.equal((await turn(false)).status, "ok");
+    assert.equal((await turn(true)).status, "ok");
+    const [live, readOnly] = seen;
+    assert.equal(readOnly!.selfApi, undefined);
+    assert.match(
+      await skillsTool(live!.selfApi)({ action: "save", name: "from-a-turn", description: "d", body: "# b" }),
+      /^Saved skill from-a-turn/,
+    );
+    const sk = (await built.skills.list()).find((s) => s.manifest.name === "from-a-turn");
+    assert.equal(sk?.scopeId, scopeId("channel", "C9"));
+    assert.equal(sk?.createdBy, "avery");
+  } finally {
+    globalThis.fetch = realFetch;
+    await new Promise<void>((r) => server.close(() => r()));
   }
 });
