@@ -1,6 +1,6 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import { setTimeout as wait } from "node:timers/promises";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, RowTable } from "../persistence/keyed-rows.ts";
 import { sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { RenderClient, RenderSnapshot } from "./render-client.ts";
@@ -19,6 +19,40 @@ export interface StoredRenderBase {
   error?: string;
 }
 
+export const RENDER_SANDBOX_BASES: RowTable<StoredRenderBase, "digest"> = {
+  table: "render_sandbox_bases",
+  key: "digest",
+  global: true,
+  columns: { digest: "text", ref: "text", snapshot: "jsonb", readyAtMs: "bigint", error: "text" },
+  migrations: [
+    {
+      id: "tenancy/render_sandbox_bases/0001-typed",
+      statements: [
+        `SET LOCAL lock_timeout = '5s'`,
+        `CREATE TABLE IF NOT EXISTS render_sandbox_bases(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+        `ALTER TABLE render_sandbox_bases RENAME TO render_sandbox_bases_kv`,
+        `ALTER INDEX render_sandbox_bases_pkey RENAME TO render_sandbox_bases_kv_pkey`,
+        `CREATE TABLE render_sandbox_bases(
+           digest TEXT PRIMARY KEY,
+           ref TEXT NOT NULL,
+           snapshot JSONB,
+           ready_at_ms BIGINT,
+           error TEXT
+         )`,
+        `INSERT INTO render_sandbox_bases(digest, ref, snapshot, ready_at_ms, error)
+           SELECT id, json->>'ref', json->'snapshot', (json->>'readyAtMs')::bigint, json->>'error'
+             FROM render_sandbox_bases_kv WHERE json->>'ref' IS NOT NULL`,
+        `DROP TABLE render_sandbox_bases_kv`,
+        `DO $drop_version$ BEGIN
+           IF to_regclass('durable_map_versions') IS NOT NULL THEN
+             DELETE FROM durable_map_versions WHERE tbl = 'render_sandbox_bases';
+           END IF;
+         END $drop_version$`,
+      ],
+    },
+  ],
+};
+
 interface RenderGolden {
   ref: string;
   snapshotId: string;
@@ -33,7 +67,7 @@ export interface RenderBase {
 
 export interface RenderBaseOptions {
   client: RenderClient;
-  store: DurableMap<StoredRenderBase>;
+  store: Pick<KeyedRows<StoredRenderBase>, "get" | "entries" | "putIfAbsent" | "merge" | "update">;
   image: string;
   hold?: <T>(work: () => Promise<T>) => Promise<T | null>;
   pollMs?: number;
@@ -76,12 +110,9 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
         return "pending";
       }
       await store
-        .mutateMany([
-          {
-            id: image.digest,
-            apply: (value) => ({ ...value!, ...(value?.snapshot?.id === snapshot.id ? { snapshot: undefined } : {}) }),
-          },
-        ])
+        .update(image.digest, (value) =>
+          value.snapshot?.id === snapshot.id ? { ...value, snapshot: undefined } : value,
+        )
         .catch(swallowAs(`render-base: clear failed golden ${snapshot.id}`, undefined));
       await client
         .deleteSnapshot(snapshot)

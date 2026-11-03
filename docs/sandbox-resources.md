@@ -63,9 +63,7 @@ backfill is needed; existing jobs remain controllable by process ID. Interrupted
 
 ## Upgrade and rollback
 
-Resources and explicit defaults are always enabled. At startup, a one-time, locked import adopts old routing entries, known session scopes, and provider records. It preserves existing defaults (including an explicit null), resource IDs, and original backing identities. It makes no provider calls or disk copies. Inferred resources start unverified; the completion marker is written last, so an interrupted import can be retried. Before writing adoption state, the import refuses any newly selected default whose provider is not configured, naming the affected scope and provider. Installations with the existing `explicit-defaults` marker have already completed this import.
-
-The old routing table is retained only as upgrade input. It is never read when selecting a computer, and there are no routing-table write or migration endpoints. `SANDBOX_SCOPE_BACKENDS` is accepted only to interpret old bindings during the import; remove it afterwards. `SANDBOX_RESOURCES_ENABLED` no longer changes behavior.
+Resources and explicit defaults are always enabled. The one-time import of old routing entries has been removed together with the `sandbox_routing` and `sandbox_resource_rollout` tables; an installation must have booted a release that completed the import (it wrote the `explicit-defaults` marker) before upgrading past it. `SANDBOX_SCOPE_BACKENDS` and `SANDBOX_RESOURCES_ENABLED` are no longer read.
 
 Before upgrading from a release without resource-aware readers, drain its cores and workers. Rollback must use a resource-aware release that honors the permanent completion marker. A missing default after import means no default, not permission to recreate an old scoped computer.
 

@@ -1,6 +1,6 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -59,9 +59,9 @@ export interface StoredRenderCleanup {
 export interface RenderSandboxOptions extends BlobStagingOptions {
   client: RenderClient;
   base: RenderBase;
-  store: DurableMap<StoredRenderSandbox>;
-  scratchStore: DurableMap<StoredRenderScratch>;
-  cleanupStore: DurableMap<StoredRenderCleanup>;
+  store: Pick<KeyedRows<StoredRenderSandbox>, "get" | "entries" | "put" | "merge" | "delete">;
+  scratchStore: Pick<KeyedRows<StoredRenderScratch>, "get" | "entries" | "put" | "delete">;
+  cleanupStore: Pick<KeyedRows<StoredRenderCleanup>, "get" | "entries" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
   homeDir?: string;

@@ -1,4 +1,4 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { pgRows, type KeyedRows, type RowColumns } from "../persistence/keyed-rows.ts";
 
 export interface BackgroundOwnership {
   ownerDeploymentId: string | null;
@@ -14,51 +14,74 @@ export interface BackgroundOwnershipChange {
 
 export class BackgroundOwnershipConflict extends Error {}
 
-interface MemberProtocolRecord {
-  enabled: boolean;
-  generation: number;
-  desiredDeploymentId: string | null;
-  members: unknown[];
+const COLUMNS: RowColumns<BackgroundOwnership, "id"> = {
+  id: "text",
+  ownerDeploymentId: "text",
+  setAt: "text",
+  setBy: "text",
+};
+
+const OWNED = `json ? 'ownerDeploymentId' AND (NOT json ? 'desiredDeploymentId'
+  OR json->'desiredDeploymentId' = json->'ownerDeploymentId')`;
+
+const BACKGROUND_OWNERSHIP_MIGRATION = {
+  id: "tenancy/background_ownership/0001-typed",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TABLE IF NOT EXISTS background_ownership(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    `ALTER TABLE background_ownership RENAME TO background_ownership_kv`,
+    `ALTER INDEX background_ownership_pkey RENAME TO background_ownership_kv_pkey`,
+    `CREATE TABLE background_ownership(
+       id TEXT PRIMARY KEY,
+       owner_deployment_id TEXT,
+       set_at TEXT,
+       set_by TEXT
+     )`,
+    `INSERT INTO background_ownership(id, owner_deployment_id, set_at, set_by)
+       SELECT id,
+              CASE WHEN ${OWNED} THEN json->>'ownerDeploymentId'
+                   WHEN json->>'enabled' = 'true' THEN json->>'desiredDeploymentId' END,
+              CASE WHEN ${OWNED} THEN json->>'setAt' END,
+              CASE WHEN ${OWNED} THEN json->>'setBy' END
+         FROM background_ownership_kv`,
+    `DROP TABLE background_ownership_kv`,
+    `DO $drop_version$ BEGIN
+       IF to_regclass('durable_map_versions') IS NOT NULL THEN
+         DELETE FROM durable_map_versions WHERE tbl = 'background_ownership';
+       END IF;
+     END $drop_version$`,
+  ],
+};
+
+export function createBackgroundOwnershipRows(databaseUrl: string): KeyedRows<BackgroundOwnership> {
+  return pgRows(databaseUrl, {
+    table: "background_ownership",
+    key: "id",
+    global: true,
+    columns: COLUMNS,
+    migrations: [BACKGROUND_OWNERSHIP_MIGRATION],
+  });
 }
 
-type StoredOwnership = BackgroundOwnership | MemberProtocolRecord | (BackgroundOwnership & MemberProtocolRecord);
+const normalized = (value: Partial<BackgroundOwnership>): BackgroundOwnership => ({
+  ownerDeploymentId: value.ownerDeploymentId ?? null,
+  setAt: value.setAt ?? null,
+  setBy: value.setBy ?? null,
+});
 
-function memberProtocolOwner(value: MemberProtocolRecord): BackgroundOwnership {
-  return { ownerDeploymentId: value.enabled ? value.desiredDeploymentId : null, setAt: null, setBy: null };
-}
-
-function fromStored(value: StoredOwnership): BackgroundOwnership {
-  if (!("ownerDeploymentId" in value)) return memberProtocolOwner(value);
-  if ("desiredDeploymentId" in value && value.desiredDeploymentId !== value.ownerDeploymentId)
-    return memberProtocolOwner(value);
-  return { ownerDeploymentId: value.ownerDeploymentId, setAt: value.setAt, setBy: value.setBy };
-}
-
-function readableByMemberProtocol(state: BackgroundOwnership, previous?: StoredOwnership): BackgroundOwnership {
-  const members = previous && "members" in previous ? previous : { generation: 0, members: [] };
-  return {
-    ...state,
-    enabled: true,
-    generation: members.generation,
-    desiredDeploymentId: state.ownerDeploymentId,
-    lastRequestId: null,
-    lastRequest: null,
-    members: members.members,
-  } as BackgroundOwnership;
-}
-
-export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnership>) {
+export function createBackgroundOwnershipStore(
+  rows: Pick<KeyedRows<BackgroundOwnership>, "get" | "putIfAbsent" | "update">,
+) {
   const key = "ownership";
-  const initial: BackgroundOwnership = { ownerDeploymentId: null, setAt: null, setBy: null };
-  const ready = () => map.putIfAbsent(key, readableByMemberProtocol(initial));
+  const ready = () => rows.putIfAbsent(key, normalized({}));
   return {
     async get(): Promise<BackgroundOwnership> {
-      return fromStored((await map.get(key)) ?? (await ready()));
+      return normalized((await rows.get(key)) ?? (await ready()));
     },
     async set(change: BackgroundOwnershipChange): Promise<BackgroundOwnership> {
       await ready();
-      const result = await map.update(key, (stored) => {
-        const current = fromStored(stored);
+      const result = await rows.update(key, (stored) => {
+        const current = normalized(stored);
         if (
           change.expectedOwnerDeploymentId !== undefined &&
           current.ownerDeploymentId !== change.expectedOwnerDeploymentId &&
@@ -66,13 +89,10 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
         )
           throw new BackgroundOwnershipConflict("Background owner changed");
         if (current.ownerDeploymentId === change.ownerDeploymentId) return stored;
-        return readableByMemberProtocol(
-          { ownerDeploymentId: change.ownerDeploymentId, setAt: new Date().toISOString(), setBy: change.setBy },
-          stored,
-        );
+        return { ownerDeploymentId: change.ownerDeploymentId, setAt: new Date().toISOString(), setBy: change.setBy };
       });
       if (!result) throw new Error("Background ownership disappeared");
-      return fromStored(result);
+      return normalized(result);
     },
   };
 }
