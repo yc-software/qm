@@ -15,7 +15,7 @@
   "src/config.ts": ["src/slack/config.ts"],
   "src/connectors/emoji-upload-service.ts": ["src/slack/payloads.ts"],
   "src/core/orchestrator.ts": ["src/slack/message-revisions.ts"],
-  "src/loops/inbox-source-refresh.ts": ["src/slack/config.ts"],
+  "src/loops/inbox-source-refresh.ts": ["src/slack/config.ts", "src/slack/message-content.ts"],
   "src/loops/ingress.ts": ["src/slack/payloads.ts"],
   "src/loops/item-ledger.ts": ["src/slack/mrkdwn.ts"],
   "src/loops/sources/slack.ts": [
