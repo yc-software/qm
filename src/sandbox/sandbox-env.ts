@@ -25,6 +25,7 @@ export const DROPPED_PROXY_ENV = new Set([
   "all_proxy",
   "no_proxy",
   "NO_PROXY",
+  "NODE_USE_ENV_PROXY",
 ]);
 
 export function forceThroughProxyEnv(
@@ -44,6 +45,7 @@ export function forceThroughProxyEnv(
     http_proxy: url,
     no_proxy: noProxy,
     GIT_HTTP_PROXY_AUTHMETHOD: "basic",
+    NODE_USE_ENV_PROXY: "1",
   };
 }
 

@@ -140,9 +140,10 @@ test("force-through proxy env is set when a proxy url and token are present", as
     "secret",
   );
   const h = await s.provision(layers, { egressToken: token });
-  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY; echo $GIT_HTTP_PROXY_AUTHMETHOD");
+  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY; echo $GIT_HTTP_PROXY_AUTHMETHOD; echo NODE=$NODE_USE_ENV_PROXY");
   assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
   assert.match(r.stdout, /^basic$/m);
+  assert.match(r.stdout, /^NODE=1$/m);
 });
 
 test("large command output survives intact", async () => {

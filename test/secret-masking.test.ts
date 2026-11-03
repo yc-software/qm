@@ -118,6 +118,7 @@ test("forced-egress env masks the proxy token without rewriting ordinary output"
   const token = "egress-token-value-123";
   const env = forceThroughProxyEnv("https://proxy.example.com", token, {});
   const mask = createExactSecretValueMasker(Object.values(executionSecretEnv(env)));
+  assert.equal(env.NODE_USE_ENV_PROXY, "1");
   const output = "0f1e2d3c-4b5a-1111-basic\n[exit 0]";
   assert.equal(mask(output), output);
   assert.equal(mask(env.HTTPS_PROXY!), "<redacted:credential>");
