@@ -415,8 +415,17 @@ test("Pi Responses captures exclude history and document text without changing r
 });
 
 for (const stopBeforeIntake of [false, true]) {
-  test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
+  const name = `steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`;
+  test(name, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    let stopTaken = () => {};
+    const stopped = new Promise<void>((resolve) => (stopTaken = resolve));
+    const pending = signals.pending.bind(signals);
+    signals.pending = async (runId) => {
+      const rows = await pending(runId);
+      if (rows.some((row) => row.signal.kind === "abort")) setTimeout(stopTaken);
+      return rows;
+    };
     const agent = createAgent({ apiKey: "sk-test", signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
@@ -458,7 +467,7 @@ for (const stopBeforeIntake of [false, true]) {
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
                   await signals.send("tool-steer", { kind: "abort" });
-                  await new Promise((resolve) => setTimeout(resolve, 30));
+                  await stopped;
                 }
                 return "saved facts";
               },
@@ -563,7 +572,7 @@ test("a steer wakes a waiting background poll and lands without waiting out the 
   }
 });
 
-test("a consumed steer is recorded when its acknowledgement fails", async () => {
+test("a consumed steer is recorded when its acknowledgement fails", { timeout: 60_000 }, async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
