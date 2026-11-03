@@ -5,7 +5,7 @@ import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscal
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
-import { rosterAdmits } from "../resolution/scope-membership.ts";
+import { conversationWriteAccess } from "./conversation-write-access.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
@@ -14,7 +14,6 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
 import {
   defaultModel,
@@ -80,7 +79,6 @@ export function createTurnMethods(
     approvalVisibleToViewer,
     pendingApprovalForSession,
     pendingApprovalResultForThread,
-    mayUseSharedScope,
     viewerMayUseRun,
     sessionForViewer,
     replayOrphanedRunSignals,
@@ -118,59 +116,19 @@ export function createTurnMethods(
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      let projectAudience: Principal[] | undefined;
-      let projectName: string | undefined;
-      let projectVersion: string | undefined;
-      let sessionParticipantIds: string[] | undefined;
+      const access = await conversationWriteAccess(deps, h, req, actor);
+      if (!access.ok) return { status: "refused", reason: access.reason };
+      const projectId = access.project?.id ?? null;
+      const projectAudience = access.project?.audience;
+      const projectName = access.project?.name;
+      const projectVersion = access.project?.version;
       const conversationRef = req.conversation.channelRef;
-      const projectGroup = req.conversation.kind === "group" && !!conversationRef && isProjectGroupRef(conversationRef);
-      const projectId = projectGroup ? projectIdFromGroupRef(conversationRef) : null;
-
-      if (projectGroup) {
-        if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
-        const project = await deps.projects?.get(projectId);
-        if (
-          !project ||
-          project.orgId !== orgIdOf() ||
-          !deps.identity.isInternal(deps.identity.classify(project.ownerId))
-        ) {
-          return { status: "refused", reason: "you're not a member of that context" };
-        }
-        const roster = (await deps.projects?.members(conversationRef)) ?? [];
-        const activeMemberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
-        if (!rosterAdmits(activeMemberIds, actor.id, scopeId("group", conversationRef)))
-          return { status: "refused", reason: "you're not a member of that context" };
-        projectAudience = await Promise.all(
-          activeMemberIds.map(async (memberId) => {
-            if (memberId === actor.id) return actor;
-            const principal = deps.identity.classify(memberId);
-            const member = await deps.directory.get(memberId).catch(() => null);
-            return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
-          }),
-        );
-        projectName = project.name;
-        projectVersion = String(project.updatedAt);
-        sessionParticipantIds = [...activeMemberIds];
-      } else if (req.surface === "web" && req.conversation.kind !== "dm") {
-        if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
-          return { status: "refused", reason: "you're not a member of that context" };
-        }
-      }
+      let sessionParticipantIds = access.project ? [...access.project.memberIds] : undefined;
 
       if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
         sessionParticipantIds = [actor.id];
       }
 
-      if (isSubagentThreadRef(req.conversation.threadRef)) {
-        const target = await deps.sessions.getByThread(req.conversation.threadRef);
-        if (
-          !target?.spawnMeta ||
-          target.scopeId !== conversationScope(req.conversation, actor.id) ||
-          !(await deps.sessions.getForParticipant(target.id, actor.id)) ||
-          !(await h.principalCanWriteScope(actor.id, target.scopeId))
-        )
-          return { status: "refused", reason: "you cannot continue that subagent session" };
-      }
       const orgRuntimeScope = scopeId("org", orgIdOf());
       const turnRuntimeScope =
         req.conversation.kind === "dm"
@@ -226,18 +184,6 @@ export function createTurnMethods(
       }
       let requestedModel = req.model;
       if (req.surface === "web") {
-        const threadRef = req.conversation.threadRef;
-        const existing = await deps.sessions.getByThread(threadRef);
-        if (existing) {
-          const claimed = conversationScope(req.conversation, actor.id);
-          if (existing.scopeId !== claimed) {
-            return { status: "refused", reason: "that conversation lives in a different context" };
-          }
-          if (!(await h.mayWriteSession(actor.id, existing)))
-            return { status: "refused", reason: "you can't continue that conversation from the web" };
-        } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
-          return { status: "refused", reason: "you can only start a new conversation on your own thread" };
-        }
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
         const runtimeFallback = deps.runtimeFallback ?? { modelId: defaultModel() };
@@ -396,7 +342,7 @@ export function createTurnMethods(
         ...(projectVersion ? { scopeVersion: projectVersion } : {}),
       };
 
-      if (projectGroup && req.approval) {
+      if (access.project && req.approval) {
         const [approval, approvalSession] = await Promise.all([
           deps.approvals?.get(req.approval.requestId),
           deps.sessions.getByThread(conversation.threadRef),
