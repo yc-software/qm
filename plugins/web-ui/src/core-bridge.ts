@@ -24,6 +24,8 @@ import {
   isNarration,
   isUserMessage,
   messageTs,
+  proddedReason,
+  retractedReason,
   stepMessage,
   type Item,
   type RunActivityEntry,
@@ -537,6 +539,7 @@ export type AssistantWork = AssistantMessage & {
   sendBlocked?: "pending_approval";
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
+  continuing?: string;
 };
 
 export interface RunPoll {
@@ -2098,7 +2101,12 @@ function deliveredSilence(item: Item): boolean {
 }
 
 function isFinishedReplyItem(item: Item): boolean {
-  return isNarration(item) && stepMessage(item)?.stopReason === "stop" && Boolean(item.text?.trim());
+  return (
+    isNarration(item) &&
+    !retractedReason(item) &&
+    stepMessage(item)?.stopReason === "stop" &&
+    Boolean(item.text?.trim())
+  );
 }
 
 function isWorkHistoryItem(item: Item): boolean {
@@ -2160,7 +2168,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       }
     }
     entrySeqs = [...entrySeqs, ...pending.map((item) => item.seq)];
-    const lastText = pending.findLastIndex(isNarration);
+    const lastText = pending.findLastIndex((item) => isNarration(item) && !retractedReason(item));
     if (lastText >= 0) {
       const segment = (pending[lastText]!.text ?? "").trim();
       if (text) {
@@ -2211,6 +2219,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     if (isFinishedReplyItem(e)) {
       spillHeldPosts();
       flushWork(text, e.createdAt, true, undefined, false, [e.seq]);
+      const prodded = proddedReason(e);
+      const flushed = out.at(-1) as AssistantWork | undefined;
+      if (prodded && flushed?.role === "assistant") flushed.continuing = prodded;
       posted = false;
       continue;
     }

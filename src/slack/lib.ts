@@ -11,6 +11,8 @@ export {
   setMentionIndex,
   isReservedMentionName,
   slackSectionBlocks,
+  plainContext,
+  blocksWithContext,
 } from "./mrkdwn.ts";
 export {
   type ActorAssertion,

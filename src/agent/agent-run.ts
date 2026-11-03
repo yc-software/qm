@@ -86,6 +86,8 @@ import {
   type TurnLlmRequestRecord,
   type AgentTurnInput,
   type AgentTurnResult,
+  REPLY_CHECK_LIMITS,
+  replyCheckPrompt,
 } from "./agent.ts";
 import {
   coreToolOptions,
@@ -1132,6 +1134,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         let steerWake = new AbortController();
         entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        const unrecordedPrompts = new Set<string>();
+        const retractedMessages = new Set<unknown>();
+        const checked = { retry: [] as string[], prod: [] as string[] };
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
           thinkTail = thinkTail.then(async () => {
@@ -1156,6 +1161,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           else if (role === "user") {
             steps.flush();
             const text = textFromContent((message as { content?: unknown }).content);
+            if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
             if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
@@ -1493,6 +1499,50 @@ export function createAgent(opts?: AgentOptions): Agent {
               }
             }
           }
+          const checkable = () =>
+            wallClock === "ok" &&
+            !userAborted &&
+            !turn.cancel?.aborted &&
+            !recoveryDead &&
+            !entry.ref.silentRequested &&
+            !entry.ref.runtimeHandoff &&
+            !entry.ref.pausedOnApproval &&
+            !entry.ref.pendingApprovals?.length &&
+            !endedOnPurpose(entry.ref) &&
+            roomToReprompt();
+          while (turn.checkReply && checkable()) {
+            const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
+            if (!draft) break;
+            const verdict = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
+            if (!verdict || checked[verdict.action].length >= REPLY_CHECK_LIMITS[verdict.action] || !checkable()) break;
+            if (
+              verdict.action === "prod" &&
+              !(await Promise.resolve(turn.onInterimReply?.(draft) ?? false).catch(
+                swallowAs("pi: interim reply", false),
+              ))
+            )
+              break;
+            checked[verdict.action].push(verdict.reason);
+            console.error(
+              `[pi] reply check ${verdict.action === "prod" ? "prodded" : "retracted"} the reply session=${turn.session.id} reason=${verdict.reason} round=${checked.retry.length + checked.prod.length}`,
+            );
+            steps.mark(verdict);
+            await thinkTail;
+            if (persistError) throw persistError;
+            await turn.onTextBlockStart?.();
+            const prompt = replyCheckPrompt(verdict);
+            const before = entry.agentSession.agent.state.messages.length;
+            if (verdict.action === "retry") unrecordedPrompts.add(prompt);
+            wallClock = await reprompt(prompt);
+            if (verdict.action === "retry")
+              for (const m of entry.agentSession.agent.state.messages.slice(before - 1, before + 1))
+                retractedMessages.add(m);
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
+          }
+          if (retractedMessages.size)
+            entry.agentSession.agent.state.messages = entry.agentSession.agent.state.messages.filter(
+              (m) => !retractedMessages.has(m),
+            );
         } catch (err) {
           if (persistError) throw persistError;
           const cancelAbortRejection =
@@ -1548,7 +1598,14 @@ export function createAgent(opts?: AgentOptions): Agent {
         };
         const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
           const cacheUsage = sumCacheUsage(callUsage);
-          return { reply, ...extra, modelCalls: entry.ref.modelCalls ?? 0, ...(cacheUsage ? { cacheUsage } : {}) };
+          return {
+            reply,
+            ...extra,
+            ...(checked.retry.length ? { retracted: checked.retry } : {}),
+            ...(checked.prod.length ? { prodded: checked.prod } : {}),
+            modelCalls: entry.ref.modelCalls ?? 0,
+            ...(cacheUsage ? { cacheUsage } : {}),
+          };
         };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
