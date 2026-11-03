@@ -70,6 +70,13 @@ export const ITEM_COLUMNS = [
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (value: unknown): string | null => (typeof value === "string" && value !== "" ? value : null);
+const AUTHORED_KINDS: ReadonlySet<ItemKind> = new Set([
+  "UserMessage",
+  "SteeringMessage",
+  "ElicitationResponse",
+  "Stop",
+  "RuntimeChange",
+]);
 const TEXT_KEYS: Partial<Record<ItemKind, string>> = {
   UserMessage: "text",
   SteeringMessage: "text",
@@ -256,7 +263,7 @@ export function storedItem<K extends ItemKind>(
   const turnId = at.turnId ?? item.turnId;
   const columns: ItemColumns = {
     turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
-    author: str(item.author),
+    author: AUTHORED_KINDS.has(item.kind) ? str(item.author) : null,
     callId: str(item.callId),
     elicitId: str(item.elicitId),
     wakeCause: item.wakeCause ?? null,

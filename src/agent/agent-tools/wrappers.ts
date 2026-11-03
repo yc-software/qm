@@ -203,9 +203,9 @@ export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDef
 
 export function withRuntimeBarrier(
   tool: ToolDefinition & { handlesAbort?: boolean },
-  kit: Pick<ToolKit, "ref" | "log">,
+  kit: Pick<ToolKit, "ref" | "logResult">,
 ): ToolDefinition {
-  const { ref, log } = kit;
+  const { ref, logResult } = kit;
   return {
     ...tool,
     async execute(...args) {
@@ -261,7 +261,7 @@ export function withRuntimeBarrier(
       } catch (error) {
         if (signal?.aborted) {
           stopped.add(callId);
-          await log("ToolResult", { tool: tool.name, callId, isError: true, result: errMessage(error) }).catch(
+          await logResult({ tool: tool.name, callId, isError: true, result: errMessage(error) }).catch(
             swallowAs(`${tool.name}: record stopped result`, undefined),
           );
         }
