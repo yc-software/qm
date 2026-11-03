@@ -130,6 +130,7 @@ import {
   rowArgs,
   rowTool,
   toolBody,
+  toolCallArguments,
   messageWorkTimeline,
   workTimelineSegments,
   streamedAnswer,
@@ -3491,7 +3492,7 @@ export function createChatSurface(
     row: ToolRowModel,
   ): TemplateResult {
     const execution = toolCategory(tool, { ...result, ...call }) === "execute";
-    const input = execution ? (call.command ?? "") : toolPayloadText(call);
+    const input = execution ? (call.command ?? "") : toolPayloadText(toolCallArguments(row.call));
     const text = row.result?.text ?? null;
     const output = execution ? "" : toolPayloadText({ ...result, ...(text !== null ? { result: text } : {}) });
     return html`<div class="tool-disclosure">

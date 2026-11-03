@@ -80,6 +80,17 @@ export function toolBody(item: Item | null | undefined): ToolPayload {
   return body as ToolPayload;
 }
 
+export function toolCallArguments(item: Item | null | undefined): ToolPayload {
+  const json = (item?.body.wire as { argumentsJson?: unknown } | undefined)?.argumentsJson;
+  if (typeof json !== "string") return toolBody(item);
+  try {
+    const args: unknown = JSON.parse(json);
+    return args && typeof args === "object" && !Array.isArray(args) ? (args as ToolPayload) : toolBody(item);
+  } catch {
+    return toolBody(item);
+  }
+}
+
 export function rowTool(row: Pick<ToolRowModel, "call" | "result">): string | null {
   return row.call?.tool ?? row.result?.tool ?? null;
 }

@@ -12,6 +12,7 @@ import {
   buildTimeline,
   workTimelineSegments,
   toolBody,
+  toolCallArguments,
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
@@ -828,4 +829,16 @@ test("tool rows read the call's arguments without the replay wire block", () => 
     body: { query: "qm", wire: { message: { id: "m1" } } },
   });
   assert.deepEqual(toolBody(call), { query: "qm" });
+});
+
+test("a tool call's input shows the arguments the model sent when the recorded body is narrower", () => {
+  const call = item("ToolCall", {
+    seq: 1,
+    createdAt: 1,
+    tool: "admin",
+    callId: "c1",
+    body: { action: "session", wire: { argumentsJson: '{"action":"session","id":"s1","limit":6}' } },
+  });
+  assert.deepEqual(toolCallArguments(call), { action: "session", id: "s1", limit: 6 });
+  assert.deepEqual(toolCallArguments({ ...call, body: { action: "session" } }), { action: "session" });
 });
