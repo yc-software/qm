@@ -210,6 +210,11 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
       "the omitted key is gone from every row",
     );
     assert.deepEqual(mine[0]!.nested, { n: 1 }, "nested fields survive the projection");
+    assert.deepEqual(
+      (await pgMap.select({ where: { field: "nested.n", anyOfFold: ["2", "3"] } })).map((w) => w.name),
+      ["sel-b", "sel-c"],
+      "a dotted field filters on the nested value",
+    );
     const mineEntries = await pgMap.selectEntries({
       omit: ["secretEnc"],
       where: { field: "owner", anyOfFold: ["U7"] },

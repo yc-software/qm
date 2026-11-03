@@ -26,6 +26,7 @@ export interface MonitorStore {
   list(): Promise<Monitor[]>;
   ownedBy(scopeId: string): Promise<Monitor[]>;
   enabled(): Promise<Monitor[]>;
+  enabledFor(threadRefs: readonly string[]): Promise<Monitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
@@ -67,6 +68,11 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
+    },
+    async enabledFor(threadRefs) {
+      return (await backing.select({ where: { field: "threadRef", anyOfFold: [...threadRefs] } })).filter(
+        (m) => m.enabled,
+      );
     },
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);

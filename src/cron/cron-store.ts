@@ -51,6 +51,7 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
+  tiedTo(threadRefs: readonly string[]): Promise<Cron[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
@@ -134,6 +135,14 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    async tiedTo(threadRefs) {
+      const rows = await Promise.all(
+        (["sessionRef", "destination.target"] as const).map((field) =>
+          backing.select({ where: { field, anyOfFold: [...threadRefs] } }),
+        ),
+      );
+      return [...new Map(rows.flat().map((cron) => [cron.id, cron])).values()];
+    },
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async update(id, patch) {
       const before = await backing.get(id);

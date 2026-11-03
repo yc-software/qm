@@ -302,18 +302,19 @@ export function createSessionMethods(
         })),
     );
     const now = Date.now();
+    const threadRefs = all.map((s) => s.threadRef);
     const jobCounts = new Map<string, number>();
-    for (const rec of (await deps.processes?.listLive(now)) ?? []) {
+    for (const rec of (await deps.processes?.listLiveFor(threadRefs, now)) ?? []) {
       if (rec.kind !== "background" || !rec.sessionRef) continue;
       jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
     }
     const watchCounts = new Map<string, number>();
-    for (const m of (await deps.monitors?.enabled()) ?? []) {
+    for (const m of (await deps.monitors?.enabledFor(threadRefs)) ?? []) {
       if (m.expiresAt <= now) continue;
       watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
     }
     const cronCounts = new Map<string, number>();
-    for (const c of await deps.crons.list()) {
+    for (const c of await deps.crons.tiedTo(threadRefs)) {
       if (!cronIsActive(c)) continue;
       for (const ref of new Set([c.destination?.target, c.sessionRef])) {
         if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);

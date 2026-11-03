@@ -4,7 +4,7 @@ import { jsonbStringify } from "../util/text.ts";
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
   pickNested?: Partial<Record<Extract<keyof T, string>, readonly string[]>>;
-  where?: { field: Extract<keyof T, string>; anyOfFold: readonly string[] };
+  where?: { field: Extract<keyof T, string> | `${Extract<keyof T, string>}.${string}`; anyOfFold: readonly string[] };
   limit?: number;
   afterId?: string;
 }
@@ -131,13 +131,15 @@ export function createPostgresMap<T>(
     }
     let sql = `SELECT id, ${projection} - $1::text[] AS json FROM ${table}`;
     if (query.where) {
-      const field = query.where.field;
-      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid select field: ${field}`);
+      const path = query.where.field.split(".");
+      if (!path.every((key) => /^[a-z_][a-z0-9_]*$/i.test(key)))
+        throw new Error(`invalid select field: ${query.where.field}`);
+      const value = `${["json", ...path.slice(0, -1).map((key) => `'${key}'`)].join("->")}->>'${path.at(-1)}'`;
       params.push(query.where.anyOfFold.map((v) => v.toLowerCase()));
       sql += ` WHERE id IN (
-          SELECT id FROM ${table} WHERE lower(json->>'${field}') = ANY($${params.length}::text[])
+          SELECT id FROM ${table} WHERE lower(${value}) = ANY($${params.length}::text[])
           UNION
-          SELECT id FROM ${table} WHERE json->>'${field}' ~ '[^\\x01-\\x7f]')`;
+          SELECT id FROM ${table} WHERE ${value} ~ '[^\\x01-\\x7f]')`;
     }
     if (query.afterId !== undefined) {
       params.push(query.afterId);
