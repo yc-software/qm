@@ -1,3 +1,4 @@
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import type { Run } from "../runs/run-store.ts";
@@ -151,7 +152,7 @@ async function upsert(
 }
 
 export function createPostgresSwarmRows(connectionString: string): SwarmRows {
-  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, SWARMS_MIGRATION]);
+  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, SWARMS_MIGRATION]);
   return {
     async get(id) {
       const rows = await q(`SELECT ${COLUMNS} FROM swarms WHERE ${MINE} AND id = $1`, [id]);
@@ -166,7 +167,8 @@ export function createPostgresSwarmRows(connectionString: string): SwarmRows {
       });
     },
     async pending(afterId, limit) {
-      const rows = await q(
+      const { rows } = await claimAcrossTenants(
+        { query },
         `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM swarms
           WHERE pending AND ($1::text IS NULL OR id > $1) ORDER BY id LIMIT $2`,
         [afterId ?? null, limit],

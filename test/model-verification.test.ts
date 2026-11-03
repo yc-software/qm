@@ -175,7 +175,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -511,6 +511,7 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

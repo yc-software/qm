@@ -12,6 +12,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { singleTenantResolver } from "./tenants/resolver.ts";
 
 const config = loadConfig();
 
@@ -37,6 +38,7 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: singleTenantResolver(built.tenants),
 });
 
 await built.config.hydrate?.();

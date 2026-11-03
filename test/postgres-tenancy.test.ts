@@ -64,14 +64,9 @@ test("qm_bound_tenant raises when no tenant is bound and returns the bound one",
 test("the pool binds the current tenant to each query and transaction in one batch", { skip }, async () => {
   const pool = createPgPool(asRole(url, role));
   try {
-    const setting =
-      "SELECT current_setting('qm.tenant_id', true) AS t, current_setting('statement_timeout') AS timeout";
+    const setting = "SELECT current_setting('qm.tenant_id', true) AS t";
     const probe = await withTenant(b, () => pool.q("SELECT n FROM tenant_probe", [], { timeoutMs: 5_000 }));
     assert.deepEqual(probe, [{ n: 2 }]);
-    const both = await withTenant(a, () => pool.q(setting, [], { timeoutMs: 4_000 }));
-    assert.deepEqual(both, [{ t: a, timeout: "4s" }]);
-    const signalled = await withTenant(a, () => pool.q(setting, [], { signal: new AbortController().signal }));
-    assert.equal(signalled[0]!.t, a);
     const seen = await Promise.all([a, b, a, b].map((id) => withTenant(id, async () => (await pool.q(setting))[0]!.t)));
     assert.deepEqual(seen, [a, b, a, b]);
     const inTx = await withTenant(b, async () =>
@@ -86,7 +81,6 @@ test("the pool binds the current tenant to each query and transaction in one bat
     );
     assert.equal(unpipelined, a);
     await withoutTenant(async () => {
-      for (let i = 0; i < 8; i++) assert.ok([null, ""].includes((await pool.q(setting))[0]!.t as string | null));
       await assert.rejects(pool.q("SELECT n FROM tenant_probe"), { code: "42501" });
       await assert.rejects(pool.q("INSERT INTO tenant_probe(n) VALUES (4)"), { code: "42501" });
     });

@@ -1,3 +1,4 @@
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Monitor } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
@@ -175,11 +176,18 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
       await q(`DELETE FROM monitors WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },
     async enabled() {
-      const rows = await q(`${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`);
+      const { rows } = await claimAcrossTenants(
+        { query },
+        `${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`,
+      );
       return rows.map((r) => ({ ...rowToMonitor(r), tenantId: r.tenant_id as string }));
     },
     async deleteDisabledBefore(cutoff) {
-      return (await query(`DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [cutoff])).rowCount;
+      return (
+        await claimAcrossTenants({ query }, `DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [
+          cutoff,
+        ])
+      ).rowCount;
     },
   };
 }

@@ -9,6 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -162,11 +163,15 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
-        for (const run of batch) {
-          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
-          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
-          recovered += 1;
+        for (const [tenantId, tenantRuns] of Map.groupBy(batch, (run) => run.tenantId)) {
+          await inTenantOf(tenantId, async () => {
+            const existing = await deliveries.existingKeys(tenantRuns.map((run) => `run:${run.id}`));
+            for (const run of tenantRuns) {
+              if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+              console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
+              recovered += 1;
+            }
+          });
         }
         const last = batch.at(-1);
         if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;

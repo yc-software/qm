@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import {
   renderSourceInboxTask,
@@ -954,7 +955,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.staleGoverned(now)) await applyGovernor(loop.id, undefined, now);
+    for (const loop of await deps.loops.staleGoverned(now))
+      await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
   }
 
   async function itemTurn(

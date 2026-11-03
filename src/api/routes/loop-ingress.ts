@@ -6,6 +6,8 @@ import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { conversationEvent, type LoopIngress, type IngressSetup } from "../../loops/ingress.ts";
 import { errMessage } from "../../util/errors.ts";
+import { withRowTenant } from "../tenant-ingress.ts";
+import { GMAIL_PUSH_ID } from "../../loops/ingress.ts";
 
 const eventsSchema = z.object({
   events: z
@@ -118,15 +120,22 @@ async function receive(ctx: BaseCtx) {
     ctx.req.resume();
     return sendJson(ctx.res, 404, { error: "not_found" });
   }
+  const ingress = ctx.deps.loopIngress;
+  const id = ctx.params.id!;
+  let rawBody: string;
   try {
-    const rawBody = await readRawBody(ctx.req);
-    const result = await ctx.deps.loopIngress.receive(ctx.params.id!, { headers: ctx.req.headers, rawBody });
-    ctx.res.writeHead(result.status, { "content-type": "text/plain", "cache-control": "no-store" });
-    ctx.res.end(result.body);
+    rawBody = await readRawBody(ctx.req);
   } catch (error) {
     if (error instanceof PayloadTooLargeError) return sendJson(ctx.res, 413, { error: "payload_too_large" });
     throw error;
   }
+  const deliver = async (): Promise<void> => {
+    const result = await ingress.receive(id, { headers: ctx.req.headers, rawBody });
+    ctx.res.writeHead(result.status, { "content-type": "text/plain", "cache-control": "no-store" });
+    ctx.res.end(result.body);
+  };
+  if (id === GMAIL_PUSH_ID) return deliver();
+  return withRowTenant(ctx.res, ctx.deps.rowTenants, { table: "loop_ingress", columns: ["id"], id }, deliver);
 }
 
 export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
