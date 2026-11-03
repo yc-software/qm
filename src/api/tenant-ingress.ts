@@ -1,8 +1,8 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
 import { isTenantId, withTenant } from "../tenants/context.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { tenantHeader } from "./http.ts";
+import { sendJson, tenantHeader } from "./http.ts";
 import type { Route } from "./routes/route.ts";
 
 const verified = new WeakMap<IncomingMessage, { token: string; claims: Promise<VerifiedCapability | null> }>();
@@ -35,17 +35,20 @@ async function claimedTenant(
 ): Promise<string | null> {
   const token = capabilityToken(req, typeof auth === "object" && auth.bearer === true);
   if (token) return (await requestCapability(req, token, capabilitySecret))?.tenant ?? null;
-  const header = tenantHeader(req);
+  const header = auth === "public" ? null : tenantHeader(req);
   return isTenantId(header) ? header : null;
 }
 
 export async function withRequestTenant(
   req: IncomingMessage,
-  route: Pick<Route, "auth"> | undefined,
+  res: ServerResponse,
+  route: Pick<Route, "auth" | "tenant"> | undefined,
   capabilitySecret: string | undefined,
   next: () => Promise<void> | void,
 ): Promise<void> {
-  if (route?.auth === "public") return next();
-  const tenant = await claimedTenant(req, route?.auth, capabilitySecret);
-  return tenant ? withTenant(tenant, next) : next();
+  if (!route || route.tenant) return next();
+  const tenant = await claimedTenant(req, route.auth, capabilitySecret);
+  if (tenant) return withTenant(tenant, next);
+  sendJson(res, 401, { error: "unauthorized", message: "this request carries no verifiable tenant" });
+  req.resume();
 }
