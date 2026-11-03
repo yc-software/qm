@@ -13,6 +13,7 @@ const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) t
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
 const UNTENANTED = [
   "durable_map_versions",
+  "operator_settings",
   "qm_schema_migrations",
   "qm_settings",
   "qm_tenant",

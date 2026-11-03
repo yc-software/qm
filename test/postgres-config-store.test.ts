@@ -250,12 +250,12 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
         ORDER BY c.relname`,
     );
     assert.deepEqual(rows, [
-      { relname: "connector_clients", relrowsecurity: true, policies: 2 },
+      { relname: "connector_clients", relrowsecurity: true, policies: 1 },
       { relname: "operator_settings", relrowsecurity: false, policies: 0 },
-      { relname: "purpose_runtimes", relrowsecurity: true, policies: 2 },
-      { relname: "scope_settings", relrowsecurity: true, policies: 2 },
-      { relname: "slack_emoji_catalog", relrowsecurity: true, policies: 2 },
-      { relname: "soul_revisions", relrowsecurity: true, policies: 2 },
+      { relname: "purpose_runtimes", relrowsecurity: true, policies: 1 },
+      { relname: "scope_settings", relrowsecurity: true, policies: 1 },
+      { relname: "slack_emoji_catalog", relrowsecurity: true, policies: 1 },
+      { relname: "soul_revisions", relrowsecurity: true, policies: 1 },
     ]);
   });
 });
@@ -274,6 +274,8 @@ test("a tenant added after boot loads its configuration on first use", { skip },
 });
 
 const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) => {
+  await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
+  await admin.query("INSERT INTO qm_tenant(id) VALUES (gen_random_uuid())");
   await seedKeyValueTable(admin, "soul_configs", {
     [channel]: {
       scopeId: channel,

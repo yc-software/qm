@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { dropDurableMapVersions, typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 
 const texts = (json: string) =>
@@ -175,7 +175,11 @@ export const CONFIG_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
         ...CREATE_TABLES,
         ...BACKFILL,
         ...SOURCES.map((table) => `DROP TABLE ${table}`),
-        dropDurableMapVersions(SOURCES),
+        `DO $drop_versions$ BEGIN
+           IF to_regclass('durable_map_versions') IS NOT NULL THEN
+             DELETE FROM durable_map_versions WHERE tbl IN (${SOURCES.map((table) => `'${table}'`).join(", ")});
+           END IF;
+         END $drop_versions$`,
       ],
     },
   ),

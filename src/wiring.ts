@@ -636,13 +636,7 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  const preloadConfig = () =>
-    onFirstBind((tenant) =>
-      withTenant(tenant, () => configStore.hydrate()).catch((error: unknown) => {
-        reportFailureAs("tenant: load configuration", undefined)(error);
-        throw error;
-      }),
-    );
+  const preloadConfig = () => onFirstBind((tenant) => withTenant(tenant, () => configStore.hydrate()));
   let stopConfigPreload: (() => void) | undefined = preloadConfig();
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),

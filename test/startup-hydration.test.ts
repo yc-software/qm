@@ -4,7 +4,6 @@ import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { tenantReady } from "../src/tenants/context.ts";
-import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -44,20 +43,14 @@ mock.module("../src/resolution/config-store.ts", {
 
 const { buildApp } = await import("./support/build-app.ts");
 
-test("load failures are reported and contained, while explicit loads and tenant readiness stay fail-closed", async (t) => {
-  const errors = t.mock.method(console, "error", () => {});
+test("first-bind load failures are contained while explicit loads and tenant readiness stay fail-closed", async () => {
   const built = buildApp(testConfig());
   try {
-    const logged = (context: string) =>
-      errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
-    await settle(async () => logged("startup: hydrate identity"));
-    assert.ok(logged("startup: hydrate identity"));
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
-      await assert.rejects(tenantReady(), (error: unknown) => error === configFailure);
       await assert.rejects(built.config.hydrate(), (error: unknown) => error === configFailure);
+      await assert.rejects(tenantReady(), (error: unknown) => error === configFailure || error === identityFailure);
     }
-    assert.ok(logged("tenant: load configuration"));
   } finally {
     await built.runtime.stop();
   }

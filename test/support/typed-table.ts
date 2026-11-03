@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { type AppLogin, createAppLogin } from "./app-login.ts";
 
 export const PG_URL = process.env.DATABASE_URL;
 export const skipWithoutPg = PG_URL ? false : "set DATABASE_URL (a Postgres) to run typed-table tests";
@@ -22,34 +23,30 @@ export async function withTypedTableDb<S extends Closable>(
 ): Promise<void> {
   const id = randomUUID().replaceAll("-", "");
   const schema = `typed_${id}`;
-  const role = `app_${id}`;
   const ownerUrl = new URL(PG_URL!);
   ownerUrl.searchParams.set("options", `-c search_path=${schema}`);
-  const appUrl = new URL(ownerUrl);
-  appUrl.username = role;
-  appUrl.password = "app";
   const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
   const owner = make(ownerUrl.toString());
   let store: S | undefined;
+  let login: AppLogin | undefined;
   try {
     await seed?.(admin);
     await migrateRegisteredPgSchemas(ownerUrl.toString());
     await owner.close?.();
-    await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`);
-    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
+    login = await createAppLogin(ownerUrl.toString());
+    await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO ${login.role}`);
     const existing = (await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0]?.id as string | undefined;
     const tenant = existing ?? randomUUID();
     if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
     const otherTenant = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
-    store = make(appUrl.toString());
-    await fn({ store, admin, url: appUrl.toString(), tenant, otherTenant });
+    store = make(login.url);
+    await fn({ store, admin, url: login.url, tenant, otherTenant });
   } finally {
     await store?.close?.();
+    await login?.drop();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.query(`DROP OWNED BY ${role}`).catch(() => undefined);
-    await admin.query(`DROP ROLE IF EXISTS ${role}`);
     await admin.end();
   }
 }
