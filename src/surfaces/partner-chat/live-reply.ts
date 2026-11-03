@@ -1,6 +1,6 @@
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { runResultDelivery } from "../../delivery/run-result-delivery.ts";
-import { userFacingFailureClause } from "../../core/failure-copy.ts";
+import { unfinishedTurnText, userFacingFailureClause } from "../../core/failure-copy.ts";
 import type { SurfaceRegistry } from "../registry.ts";
 import { reachEnqueue } from "../../reach/reach.ts";
 import type { Run } from "../../runs/run-store.ts";
@@ -33,10 +33,7 @@ export function createPartnerChatLiveReply(deps: {
       const target = run.request.deliveryTarget;
       if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !target) return;
       if (run.deliveryState?.editRef === "" || runResultDelivery(run, deps.surfaces)) return;
-      const text =
-        run.result?.status === "refused"
-          ? `⚠️ I couldn't finish that turn: ${userFacingFailureClause(run.result)}`
-          : SETTLED;
+      const text = run.result?.status === "refused" ? unfinishedTurnText(userFacingFailureClause(run.result)) : SETTLED;
       void enqueue({ type: "partner-chat", target }, text, `settle:${run.id}`);
     },
   };

@@ -777,6 +777,27 @@ test("reading a thread starts with the message the thread hangs off, once, on th
   }
 });
 
+test("a partner-chat history read returns a long message whole", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    const long = `${"a long design note ".repeat(60)}end`;
+    await deliver(event({ body: long, eventId: "l1", messageId: "1096" }));
+    const request = await built.app.createContextRequest("partner-chat", { conversationTarget: CONTAINER, count: 5 });
+    let result: { messages: Array<{ text: string }> } | undefined;
+    await settle(async () => {
+      const r = await built.app.getContextRequest(request.id);
+      result = r?.result as typeof result;
+      return r?.status === "done";
+    });
+    assert.deepEqual(
+      result!.messages.map((m) => m.text),
+      [long],
+    );
+  } finally {
+    await partnerChat.close();
+  }
+});
+
 test("a bot message echoing one of the agent's own posts is dropped", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {

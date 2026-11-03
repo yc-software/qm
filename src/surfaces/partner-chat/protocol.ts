@@ -73,8 +73,12 @@ export function partnerChatContainer(target: string): string {
   return ref ? partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }) : target;
 }
 
+function messageIdSuffix(messageId: string): string {
+  return `.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`;
+}
+
 export function partnerChatTs(createdAt: string, messageId: string): string {
-  return `${Math.floor(Date.parse(createdAt) / 1000)}.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`;
+  return `${Math.floor(Date.parse(createdAt) / 1000)}${messageIdSuffix(messageId)}`;
 }
 
 export function partnerChatMessageId(ref: string): string {
@@ -91,7 +95,7 @@ export async function findMessage(
   if (!/^\d+$/.test(messageId)) return undefined;
   const [hit] = await cache.readMessages(container, {
     surface: "partner-chat",
-    tsSuffix: `.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`,
+    tsSuffix: messageIdSuffix(messageId),
     ...(opts.self ? { self: true } : {}),
     limit: 1,
     noFallback: true,

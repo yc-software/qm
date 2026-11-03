@@ -25,8 +25,6 @@ export interface ContextSourceMessage {
   reactions?: ContextReaction[];
 }
 
-const MAX_CONTEXT_MESSAGE_CHARS = 600;
-
 export function clipText(t: string, max: number): string {
   const s = (t ?? "").replace(/\s+/g, " ").trim();
   return s.length > max ? `${s.slice(0, max)}…` : s;
@@ -46,7 +44,13 @@ export function compareTs(a: { ts: string }, b: { ts: string }): number {
 
 export function buildContextWindow(
   scanned: readonly ContextSourceMessage[],
-  opts: { count: number; match?: string; scanHasMore?: boolean; renderText?: (text: string) => string },
+  opts: {
+    count: number;
+    match?: string;
+    scanHasMore?: boolean;
+    renderText?: (text: string) => string;
+    clipChars?: number;
+  },
 ): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
   const asc = [...scanned].sort(compareTs);
   const needle = opts.match?.trim().toLowerCase();
@@ -56,11 +60,12 @@ export function buildContextWindow(
   const render = opts.renderText ?? ((text: string) => text);
   const messages = kept.map((m) => {
     const time = epochTsTime(m.ts);
+    const text = render(m.text ?? "");
     return {
       ts: m.ts,
       ...(time ? { time } : {}),
       author: m.isSelf ? "you" : m.name || "someone",
-      text: clipText(render(m.text ?? ""), MAX_CONTEXT_MESSAGE_CHARS),
+      text: opts.clipChars === undefined ? text : clipText(text, opts.clipChars),
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
       ...(m.files?.length ? { files: m.files } : {}),
       ...(m.reactions ? { reactions: m.reactions } : {}),
