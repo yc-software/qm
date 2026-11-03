@@ -372,9 +372,6 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: `http://${dockerPrefix(config)}-auth.internal:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   }

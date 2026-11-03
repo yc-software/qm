@@ -40,7 +40,9 @@ test("old env names map to tenant settings and the admin values they configure",
 test("the import writes settings, then each admin value only if the tenant has none", async () => {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
   const existing = new Set(["/v1/admin/scopes/org:default-org/security-posture", "/v1/admin/model-providers/openai"]);
-  const call: OperatorCall = async (path, body) => {
+  const call: OperatorCall = async (signed, body) => {
+    const [path = "", query = ""] = signed.split("?");
+    assert.match(query, /^nonce=[0-9a-f-]{36}$/);
     calls.push({ path, body });
     return { status: 200, body: JSON.stringify(existing.has(path) && body.ifUnset ? { unchanged: true } : {}) };
   };
@@ -94,7 +96,7 @@ test("the import writes settings, then each admin value only if the tenant has n
 test("a model key core could not check warns with core's answer and the import goes on; other failures stop it", async () => {
   const failing = { path: "/v1/admin/model-providers/anthropic" };
   const call: OperatorCall = async (path) =>
-    path === failing.path
+    path.split("?")[0] === failing.path
       ? { status: 400, body: '{"error":"invalid_api_key","message":"anthropic rejected this API key"}' }
       : { status: 200, body: "{}" };
   const warnings: string[] = [];

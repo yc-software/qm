@@ -101,10 +101,9 @@ export function readState(ctx: DeployContext, optional = false): State {
       services: {},
     };
   }
-  const { orgId, ...state } = JSON.parse(readFileSync(statePath(ctx), "utf8")) as State & { orgId?: string };
+  const state = JSON.parse(readFileSync(statePath(ctx), "utf8")) as State;
   if (state.version !== 1 || !state.services || Array.isArray(state.services))
     throw new CliError("The Render resource record has an unsupported format");
-  state.deploymentId ??= orgId!;
   if (
     state.deploymentId !== ctx.config.deploymentId ||
     state.workspaceId !== render.workspaceId ||

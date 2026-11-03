@@ -1,9 +1,9 @@
-import { sandboxCoreEnv, securityScreenEnv, tenantOf, type QmConfig } from "./config.ts";
+import { sandboxConfigBackend, securityScreenEnv, tenantOf, type QmConfig } from "./config.ts";
 import { CoreUnreachableError, isCoreUnreachable } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
 import { computedSecrets } from "./secrets.ts";
-import { brokerWiring } from "./services.ts";
+import { portalBrokerSignIn } from "./services.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
@@ -16,7 +16,7 @@ function sandboxBackendSetting(config: QmConfig): Record<string, string> {
     config.target === "render"
       ? "render"
       : config.env.core?.SANDBOX_BACKEND?.trim() ||
-        sandboxCoreEnv(config).env.SANDBOX_BACKEND ||
+        sandboxConfigBackend(config) ||
         config.sandbox?.backend ||
         TARGET_ENV_DEFAULTS[config.target](config, "core", "SANDBOX_BACKEND");
   return backend ? { SANDBOX_BACKEND: backend } : {};
@@ -35,12 +35,7 @@ const SLACK_SIGN_IN: Record<string, string> = {
 function portalSignInSettings(config: QmConfig): Record<string, string> {
   if (!config.services.includes("portal")) return {};
   if (config.services.includes("auth")) {
-    const allowedEmailDomain = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN;
-    return brokerWiring("portal", {
-      publicUrl: config.publicUrl,
-      authBaseUrl: "",
-      ...(allowedEmailDomain ? { allowedEmailDomain } : {}),
-    });
+    return portalBrokerSignIn(config.publicUrl, config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN);
   }
   return config.target === "render" ? SLACK_SIGN_IN : {};
 }
@@ -78,7 +73,7 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
     ...renderSandbox,
     ...fromSecrets,
   };
-  return Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name)));
+  return Object.fromEntries(Object.entries(env).filter(([name, value]) => isTenantSetting(name) && value.trim()));
 }
 
 export interface TenantSettingsTarget {
@@ -139,7 +134,7 @@ export async function seedTenantSettings(
     const text = JSON.stringify(body);
     return core.request(path, operatorInit(credentials, "PUT", path, text)).catch((error) => {
       if (!isCoreUnreachable(error)) throw error;
-      throw new CoreUnreachableError(`core did not answer ${path}: ${errMessage(error)}`);
+      throw new CoreUnreachableError(`core did not answer ${path.split("?")[0]}: ${errMessage(error)}`);
     });
   };
   let result: Awaited<ReturnType<typeof applyTenantImport>>;

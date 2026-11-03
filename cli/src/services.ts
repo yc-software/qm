@@ -72,7 +72,6 @@ export interface ServiceCtx {
   publicUrl: string;
   hasPortal: boolean;
   hasAuth: boolean;
-  authAllowedEmailDomain?: string;
   brand?: BrandEnv;
   /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
@@ -151,10 +150,22 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
-export function brokerWiring(
-  service: string,
-  o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
-): Record<string, string> {
+export function portalBrokerSignIn(publicUrl: string, allowedEmailDomain?: string): Record<string, string> {
+  const issuer = `${publicUrl.replace(/\/$/, "")}${AUTH_PATH_PREFIX}`;
+  return {
+    OIDC_CLIENT_ID: AUTH_CLIENT_ID,
+    OIDC_ISSUER: issuer,
+    OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+    OIDC_SCOPES: "openid email",
+    OIDC_PRINCIPAL_CLAIM: "email",
+    ...(allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: allowedEmailDomain } : {}),
+  };
+}
+
+export function brokerWiring(service: string, o: { publicUrl: string; authBaseUrl: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
   if (service === "portal") {
@@ -165,18 +176,8 @@ export function brokerWiring(
       AUTH_CLIENT_ID,
       AUTH_REDIRECT_URI: `${base}/auth/callback`,
       AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
-      OIDC_CLIENT_ID: AUTH_CLIENT_ID,
-      OIDC_ISSUER: issuer,
-      OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
-      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
-      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
-      OIDC_SCOPES: "openid email",
-      OIDC_PRINCIPAL_CLAIM: "email",
-      ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
     };
   }
-  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
   if (service === "auth") {
     return {
       AUTH_ISSUER: issuer,
@@ -192,7 +193,6 @@ const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
         authBaseUrl: s.authUrl,
-        ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
     : {};
 

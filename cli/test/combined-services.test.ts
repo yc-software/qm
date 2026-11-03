@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { brokerWiring, hostedServiceEnv, runnableServices } from "../src/services.ts";
+import { brokerWiring, portalBrokerSignIn, hostedServiceEnv, runnableServices } from "../src/services.ts";
 import { secretDestinations } from "../src/secrets.ts";
 
 test("five logical components deploy as three services without losing core-only deployments", () => {
@@ -32,7 +32,9 @@ test("broker stays private inside portal and keeps its public issuer and callbac
   assert.equal(env.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
   assert.equal(env.AUTH_ISSUER, "https://agent.example.com/idp");
   assert.equal(env.AUTH_REDIRECT_URI, "https://agent.example.com/auth/callback");
-  assert.equal(env.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(env.OIDC_TOKEN_ENDPOINT, undefined, "sign-in settings belong to the tenant");
+  assert.equal(portalBrokerSignIn("https://agent.example.com/").OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(portalBrokerSignIn("https://agent.example.com").OIDC_ISSUER, "https://agent.example.com/idp");
 });
 
 test("the broker client secret reaches the portal only under its own name", () => {

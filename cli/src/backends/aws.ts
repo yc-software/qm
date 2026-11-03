@@ -430,9 +430,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: `http://auth.${aws.networking.cloudMapNamespace}:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   }

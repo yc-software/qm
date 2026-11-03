@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   BRANDING_ENV,
   GOOGLE_WORKSPACE_DOMAIN,
@@ -102,8 +103,9 @@ export async function applyTenantImport(
   call: OperatorCall,
   warn: (message: string) => void,
 ): Promise<{ applied: string[]; unsaved: string[] }> {
+  const unique: OperatorCall = (path, body) => call(`${path}?nonce=${randomUUID()}`, body);
   const put = async (path: string, body: Record<string, unknown>): Promise<{ unchanged?: boolean }> => {
-    const response = await call(path, { tenant, ...body });
+    const response = await unique(path, { tenant, ...body });
     if (response.status < 200 || response.status >= 300)
       throw new OperatorRouteError(`${path} failed (${response.status}): ${response.body}`);
     return response.body ? (JSON.parse(response.body) as { unchanged?: boolean }) : {};
@@ -127,7 +129,7 @@ export async function applyTenantImport(
   }
   for (const [provider, apiKey] of Object.entries(plan.modelKeys)) {
     const path = `/v1/admin/model-providers/${provider}`;
-    const response = await call(path, { tenant, apiKey, ifUnset: true });
+    const response = await unique(path, { tenant, apiKey, ifUnset: true });
     if (response.status < 200 || response.status >= 300) {
       warn(`${provider} API key was not saved (${response.status}): ${response.body}`);
       unsaved.push(MODEL_KEY_ENV[provider as ModelProvider]);

@@ -53,9 +53,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
     publicUrl: config.publicUrl,
     hasPortal: config.services.includes("portal"),
     hasAuth: config.services.includes("auth"),
-    ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-      ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-      : {}),
     ...(brand ? { brand } : {}),
     coreUrl: `http://${appPrefix}-core.internal:8080`,
     authUrl: `http://${appPrefix}-auth.flycast`,
@@ -1341,8 +1338,10 @@ function livePublishedApps(config: QmConfig): string[] {
     let parsed: { Machines?: { state?: string }[] };
     try {
       parsed = JSON.parse(fly(["status", "-a", app, "--json"]) || "{}") as typeof parsed;
-    } catch {
-      throw new CliError(`could not read machine state for published app ${app}; stop it before qm down`);
+    } catch (error) {
+      throw new CliError(
+        `could not read machine state for published app ${app}: ${errMessage(error)}; stop it before qm down`,
+      );
     }
     return (parsed.Machines ?? []).some((machine) => machine.state === "started");
   });

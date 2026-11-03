@@ -109,7 +109,13 @@ spec:
                   "content-type": "application/json",
                   authorization: `Bearer ${process.env.DEPLOYMENT_CONTROL_SECRET}`,
                 });
-                const response = await fetch(`${process.env.QM_CORE_URL}${path}`, { method: "PUT", headers, body: text });
+                const response = await fetch(`${process.env.QM_CORE_URL}${path}`, {
+                  method: "PUT",
+                  headers,
+                  body: text,
+                  redirect: "error",
+                  signal: AbortSignal.timeout(60_000),
+                });
                 return { status: response.status, body: await response.text() };
               }
               const warn = (message) => console.warn(`[tenant-settings] ${message}`);

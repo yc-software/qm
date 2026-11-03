@@ -105,11 +105,11 @@ test("seeding creates the install tenant, then pushes its settings with the oper
       join(dir, ".env"),
       `ANTHROPIC_API_KEY=sk-ant\nCORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`,
     );
-    const seen: { path: string; init: RequestInit }[] = [];
+    const seen: { path: string; signed: string; init: RequestInit }[] = [];
     let closed = false;
     const link = async (): Promise<CoreLink> => ({
       request: async (path, init) => {
-        seen.push({ path, init });
+        seen.push({ path: path.split("?")[0]!, signed: path, init });
         return { status: 200, body: "{}" };
       },
       close: () => void (closed = true),
@@ -137,7 +137,7 @@ test("seeding creates the install tenant, then pushes its settings with the oper
     assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, undefined, "provider keys are not tenant settings");
     assert.equal(JSON.parse(body).tenant, "main");
     const expected = createHmac("sha256", signing)
-      .update(`v0:${headers["x-timestamp"]}:PUT\n/v1/tenant-settings\n${body}`)
+      .update(`v0:${headers["x-timestamp"]}:PUT\n${settings.signed}\n${body}`)
       .digest("hex");
     assert.equal(headers["x-signature"], `v0=${expected}`);
   } finally {
@@ -190,7 +190,7 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
     const rejected = async (): Promise<CoreLink> => ({
       request: async (path) => ({
-        status: path === "/v1/tenant-settings" ? 400 : 200,
+        status: path.startsWith("/v1/tenant-settings?") ? 400 : 200,
         body: '{"error":"not_tenant_settings"}',
       }),
       close: () => {},
@@ -247,8 +247,8 @@ test("the target retires only the pushed names, and only after core accepts them
     const target = {
       coreLink: async (): Promise<CoreLink> => ({
         request: async (path: string, init: RequestInit) => {
-          events.push(`${path} ${String(init.body)}`);
-          return { status: path === "/v1/tenant-settings" ? settingsStatus : 200, body: "{}" };
+          events.push(`${path.split("?")[0]} ${String(init.body)}`);
+          return { status: path.startsWith("/v1/tenant-settings?") ? settingsStatus : 200, body: "{}" };
         },
         close: () => {},
       }),

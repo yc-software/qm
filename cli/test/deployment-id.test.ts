@@ -7,9 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { QmConfig } from "../src/config.ts";
 import { derivedTomlFor, flyDown } from "../src/backends/fly.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
-import { readState } from "../src/render-state.ts";
 import { awsObjectStoreBucket } from "../src/terraform.ts";
-import type { DeployContext } from "../src/backends/registry.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -38,27 +36,6 @@ test("resource names derived from the deployment id stay exactly as they were", 
     aws: { accountId: "123456789012", region: "us-west-2", cluster: "acme-qm" },
   } as unknown as QmConfig;
   assert.equal(awsObjectStoreBucket(aws), "qm-acme-3007717887bc");
-});
-
-test("a Render resource record written under orgId is still recognized as this deployment's", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-render-state-"));
-  try {
-    const config = {
-      ...flyConfig(),
-      target: "render",
-      render: { workspaceId: "tea-acme", region: "oregon" },
-    } as unknown as QmConfig;
-    const ctx = { config, configDir: dir } as DeployContext;
-    const record = { version: 1, workspaceId: "tea-acme", region: "oregon", appPrefix: "acme", services: {} };
-    writeFileSync(join(dir, "render.resources.json"), JSON.stringify({ ...record, orgId: "acme" }));
-    const state = readState(ctx);
-    assert.equal(state.deploymentId, "acme");
-    assert.equal("orgId" in state, false);
-    writeFileSync(join(dir, "render.resources.json"), JSON.stringify({ ...record, orgId: "other" }));
-    assert.throws(() => readState(ctx), /belongs to another deployment/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 function fakeFlyForDown(dir: string, started: Record<string, boolean>): string {

@@ -35,10 +35,9 @@ test("the CLI import lands in the named tenant through core's operator routes an
   });
   server.listen(0);
   const origin = `http://localhost:${(server.address() as AddressInfo).port}`;
-  let nonce = 0;
   const call: OperatorCall = async (path, body) => {
     const raw = JSON.stringify(body);
-    const ts = Math.floor(Date.now() / 1000) + nonce++;
+    const ts = Math.floor(Date.now() / 1000);
     const response = await fetch(`${origin}${path}`, {
       method: "PUT",
       headers: {
@@ -91,6 +90,9 @@ test("the CLI import lands in the named tenant through core's operator routes an
       () => {},
     );
     assert.deepEqual(again, ["PI_MODEL", "inbox_loops for personal:ada@example.com"]);
+    const repeated = tenantImport({ ...env, HARNESS_SECURITY_POSTURE: "dangerous", ANTHROPIC_API_KEY: "sk-ant-other" });
+    const { applied: immediate } = await applyTenantImport(repeated, SLUG, call, () => {});
+    assert.deepEqual(immediate, again, "an identical import right after the last one is not refused as a replay");
     await withTenant(TEST_TENANT, async () => {
       assert.equal(await built.config.getSecurityPostureOwnDurable(orgScope()), "auto");
       assert.equal(await built.modelCredentials.resolve("anthropic"), "sk-ant-admin");

@@ -40,9 +40,6 @@ export async function setLoginPasswords(ownerUrl: string, appUrl: string): Promi
     for (const [login, password] of passwords)
       await owner.query(`ALTER ROLE ${login} PASSWORD '${scramVerifier(password)}'`);
     await owner.query("COMMIT");
-  } catch (error) {
-    await owner.query("ROLLBACK");
-    throw error;
   } finally {
     await owner.end();
   }

@@ -90,7 +90,7 @@ test("a dev instance writes its settings to the main tenant beside an older one,
       let body = "";
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
-        requests.push({ path: req.url, authorization: req.headers.authorization, body });
+        requests.push({ path: req.url?.split("?")[0], authorization: req.headers.authorization, body });
         res.writeHead(status).end("{}");
       });
     });

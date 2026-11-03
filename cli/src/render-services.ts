@@ -59,7 +59,6 @@ export function renderManagedCoreEnv(render: RenderConfig): Record<string, strin
     WORKSPACE_STORE: "postgres",
     SNAPSHOT_STORE: "s3",
     TRANSFER_STORE: "s3",
-    SANDBOX_BACKEND: "render",
     DEPLOY_PROVIDER: "render",
     RENDER_WORKSPACE_ID: render.workspaceId,
     RENDER_REGION: render.region,
@@ -111,9 +110,6 @@ export function renderServiceEnv(
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: "http://127.0.0.1:8099",
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   const managedValues: Record<string, string> = {

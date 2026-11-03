@@ -232,6 +232,19 @@ export const localSandboxActive = (config: QmConfig): boolean =>
     ? effectiveSandboxBackend(config) === "local"
     : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
 
+const REMOTE_SANDBOX_BACKENDS = new Set(["agent37", "superserve", "e2b"]);
+
+export function sandboxConfigBackend(config: QmConfig): string | undefined {
+  const sb = config.sandbox;
+  if (!sb) return undefined;
+  if (localSandboxActive(config)) return "local";
+  const backend =
+    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
+      ? effectiveSandboxBackend(config)
+      : sb.backend;
+  return backend && REMOTE_SANDBOX_BACKENDS.has(backend) ? backend : undefined;
+}
+
 export function sandboxCoreEnv(
   config: QmConfig,
   lookup?: (name: string) => string | undefined,
@@ -241,18 +254,10 @@ export function sandboxCoreEnv(
   const sb = config.sandbox;
   if (!sb) return { env, missingSecrets };
   if (localSandboxActive(config)) {
-    env.SANDBOX_BACKEND = "local";
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
-  const backend =
-    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
-      ? effectiveSandboxBackend(config)
-      : sb.backend;
-  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
-    env.SANDBOX_BACKEND = backend;
-    return { env, missingSecrets };
-  }
+  if (sandboxConfigBackend(config)) return { env, missingSecrets };
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
   for (const name of sb.secretEnv ?? []) {
     const v = lookup?.(name);
