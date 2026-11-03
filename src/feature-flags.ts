@@ -1,5 +1,7 @@
-import type { DurableMap } from "./persistence/durable-map.ts";
 import { orgId as configOrgId } from "./config.ts";
+import { createPgPool } from "./persistence/pg-pool.ts";
+import { currentTenant } from "./tenants/context.ts";
+import { FEATURE_FLAGS_MIGRATION, TENANCY_BASE, TENANT } from "./tenants/migrations.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 
 export const FEATURES = {
@@ -47,8 +49,62 @@ export interface FeatureFlagStore {
   setEnabled(featureName: FeatureName, scope: ScopeId, on: boolean, updatedBy: string): Promise<FeatureFlagRecord>;
 }
 
+export interface FeatureFlagBacking {
+  all(): Promise<FeatureFlagRecord[]>;
+  get(featureName: string): Promise<FeatureFlagRecord | null>;
+  put(featureName: string, record: FeatureFlagRecord): Promise<void>;
+}
+
+const FLAG_CACHE_MS = 2_000;
+
+export function postgresFeatureFlags(databaseUrl: string, now: () => number = Date.now): FeatureFlagBacking {
+  const db = createPgPool(databaseUrl);
+  db.registerMigration(TENANCY_BASE);
+  db.registerMigration(FEATURE_FLAGS_MIGRATION);
+  const cached = new Map<string, { at: number; rows: Promise<FeatureFlagRecord[]> }>();
+  const load = async (): Promise<FeatureFlagRecord[]> =>
+    (
+      await db.q(
+        `SELECT feature_name, enabled_scopes, (extract(epoch FROM updated_at) * 1000)::bigint AS updated_at, updated_by
+         FROM feature_flags WHERE tenant_id = ${TENANT} ORDER BY feature_name`,
+      )
+    ).map((row) => ({
+      featureName: row.feature_name as FeatureName,
+      enabledScopes: row.enabled_scopes as ScopeId[],
+      updatedAt: Number(row.updated_at),
+      updatedBy: String(row.updated_by),
+    }));
+  const all = (): Promise<FeatureFlagRecord[]> => {
+    const tenant = currentTenant();
+    const hit = cached.get(tenant);
+    if (hit && now() - hit.at < FLAG_CACHE_MS) return hit.rows;
+    const entry = { at: now(), rows: load() };
+    cached.set(tenant, entry);
+    entry.rows.catch(() => {
+      if (cached.get(tenant) === entry) cached.delete(tenant);
+    });
+    return entry.rows;
+  };
+  return {
+    all,
+    get: async (featureName) => (await all()).find((row) => row.featureName === featureName) ?? null,
+    async put(featureName, record) {
+      const tenant = currentTenant();
+      cached.delete(tenant);
+      await db.q(
+        `INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
+         VALUES (${TENANT}, $1, $2, to_timestamp($3::double precision / 1000), $4)
+         ON CONFLICT (tenant_id, feature_name) DO UPDATE
+           SET enabled_scopes = EXCLUDED.enabled_scopes, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by`,
+        [featureName, record.enabledScopes, record.updatedAt, record.updatedBy],
+      );
+      cached.delete(tenant);
+    },
+  };
+}
+
 export function createFeatureFlagStore(
-  backing: DurableMap<FeatureFlagRecord>,
+  backing: FeatureFlagBacking,
   opts: { now?: () => number } = {},
 ): FeatureFlagStore {
   const orgScope = scopeId("org", configOrgId());

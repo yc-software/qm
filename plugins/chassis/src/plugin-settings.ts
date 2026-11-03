@@ -9,8 +9,9 @@ export function corePluginSettings(
   signingSecret: string | undefined,
   ttlMs = 30_000,
   now: () => number = Date.now,
+  failureTtlMs = 2_000,
 ): () => Promise<PluginSettings> {
-  let cached: { at: number; settings: Promise<PluginSettings> } | undefined;
+  let cached: { until: number; settings: Promise<PluginSettings> } | undefined;
   const load = async (): Promise<PluginSettings> => {
     const path = withSourceAuthNonce(PLUGIN_SETTINGS_PATH, signingSecret);
     const response = await fetch(`${coreApiUrl}${path}`, {
@@ -24,11 +25,11 @@ export function corePluginSettings(
     );
   };
   return () => {
-    if (cached && now() - cached.at < ttlMs) return cached.settings;
-    const entry = { at: now(), settings: load() };
+    if (cached && now() < cached.until) return cached.settings;
+    const entry = { until: now() + ttlMs, settings: load() };
     cached = entry;
     entry.settings.catch(() => {
-      if (cached === entry) cached = undefined;
+      entry.until = Math.min(entry.until, now() + failureTtlMs);
     });
     return entry.settings;
   };

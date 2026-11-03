@@ -4,7 +4,7 @@ import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
-import { setGatewayModels } from "../src/model/gateway-models.ts";
+import { gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import {
   modelIdReserved,
@@ -19,8 +19,8 @@ import { setCustomProviders, validateCustomProviderSpec } from "../src/model/cus
 import { testConfigStore } from "./support/test-database.ts";
 import { parseModelGateway, parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { defaultModelFor } from "../src/model/tenant-models.ts";
-import { enterTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { enterTenant, withTenant } from "../src/tenants/context.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -352,4 +352,12 @@ test("gateway models send session-affinity headers on every API", async () => {
     );
   }
   assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
+});
+
+test("a tenant's gateway catalog change bumps only that tenant's model version", () => {
+  const other = withTenant(OTHER_TENANT, gatewayModelsVersion);
+  const own = gatewayModelsVersion();
+  setGatewayModels([], [`alias-${own}`]);
+  assert.equal(gatewayModelsVersion(), own + 1);
+  assert.equal(withTenant(OTHER_TENANT, gatewayModelsVersion), other);
 });

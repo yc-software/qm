@@ -1,3 +1,4 @@
+import { tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
@@ -101,10 +102,10 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
-  const portByName = new Map<string, number>();
-  const scopeByContainer = new Map<string, string>();
-  const scratchByKey = new Map<string, string>();
-  const activeByContainer = new Map<string, number>();
+  const portByName = tenantKeyedMap<number>();
+  const scopeByContainer = tenantKeyedMap<string>();
+  const scratchByKey = tenantKeyedMap<string>();
+  const activeByContainer = tenantKeyedMap<number>();
 
   let preflightDone: Promise<string> | undefined;
   let staleWarned = false;
@@ -328,7 +329,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
   function teardownQueueKey(handle: SandboxHandle): string {
     if (handle.scratch) {
-      for (const [k, name] of scratchByKey) if (name === handle.id) return `scratch:${k}`;
+      for (const [k, name] of scratchByKey.entries()) if (name === handle.id) return `scratch:${k}`;
       return handle.id;
     }
     return scopeByContainer.get(handle.id) ?? handle.id;
@@ -502,7 +503,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         activeByContainer.delete(handle.id);
 
         if (handle.scratch) {
-          for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
+          for (const [k, name] of scratchByKey.entries()) if (name === handle.id) scratchByKey.delete(k);
           if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
           await disconnectCore(localNetworkName(handle.id));

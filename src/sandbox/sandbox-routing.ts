@@ -16,18 +16,9 @@ import {
   type TeardownOptions,
 } from "./sandbox.ts";
 
-export type SandboxBackendName =
-  | "sprites"
-  | "aws"
-  | "local"
-  | "smolmachines"
-  | "e2b"
-  | "modal"
-  | "porter"
-  | "agent37"
-  | "superserve"
-  | "do-managed-agents"
-  | "render";
+import type { SandboxBackendName } from "../tenants/settings-parse.ts";
+
+export type { SandboxBackendName };
 
 export class NoDefaultSandboxError extends Error {
   constructor() {
