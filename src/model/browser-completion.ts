@@ -1,5 +1,9 @@
 import { Type } from "typebox";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import {
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+  type ModelRequestPurpose,
+} from "./provider-endpoints.ts";
 import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
@@ -37,6 +41,7 @@ export async function nativeBrowserCompletion(
   runtimeFactory: (
     keys: Parameters<typeof buildModelRuntime>[0],
     modelGateway?: ModelGatewayTransportConfig,
+    purpose?: ModelRequestPurpose,
   ) => Promise<Pick<Awaited<ReturnType<typeof buildModelRuntime>>, "completeSimple">> = buildModelRuntime,
 ) {
   const { selection, body } = input;
@@ -130,7 +135,7 @@ export async function nativeBrowserCompletion(
     if (!auth) throw new BrowserCompletionError("Reconnect your selected AI account in Settings", 409);
     keys = { [routing.kind === "apikey" ? routing.provider : CODEX_SUBSCRIPTION_PROVIDER]: auth };
   }
-  const runtime = await runtimeFactory(keys, gateway);
+  const runtime = await runtimeFactory(keys, gateway, "browser");
   const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {
     signal: input.signal,
