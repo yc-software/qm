@@ -1622,16 +1622,6 @@ test("steering retains intake identity, authors and attachments after history re
   assert.equal(steer.attachments[0]?.artifactId, "image-1");
 });
 
-test("hidden steering never creates a history row or work marker", () => {
-  const messages = itemsToMessages([
-    item("UserMessage", { seq: 1, createdAt: 1, text: "start" }),
-    item("SteeringMessage", { seq: 2, createdAt: 2, text: "private instruction", body: { hidden: true } }),
-    item("AgentMessage", { seq: 3, createdAt: 3, text: "Done" }),
-  ]);
-  assert.equal(messages.length, 2);
-  assert.equal((messages[1] as AssistantWork).work, undefined);
-});
-
 test("live consumed steers join canonical history once and survive stopped/error fork accounting", () => {
   const items: Item[] = [
     item("UserMessage", { seq: 1, createdAt: 1, text: "start" }),

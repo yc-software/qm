@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isUserItem, type Item } from "../../sessions/items.ts";
+import { isUserItem, visibleBody, type Item } from "../../sessions/items.ts";
 import { clampChars, stripTerminalControl } from "./inject.ts";
 
 export interface MemorableToolCall {
@@ -93,9 +93,12 @@ export function captureSession(sessionId: string, scopeId: string, entries: Item
       continue;
     }
     if (entry.kind !== "ToolCall" || !entry.tool) continue;
-    const { wire: _wire, ...input } = entry.body;
     const outcome = entry.callId ? outcomes.get(entry.callId)?.shift() : undefined;
-    current.tool_calls.push({ name: entry.tool, input: capInput(input), ...(outcome ? { result: outcome } : {}) });
+    current.tool_calls.push({
+      name: entry.tool,
+      input: capInput(visibleBody(entry)),
+      ...(outcome ? { result: outcome } : {}),
+    });
   }
   close();
   return { session_id: sessionId, scope_id: scopeId, workflows };

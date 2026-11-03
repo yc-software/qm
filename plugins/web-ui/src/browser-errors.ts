@@ -105,7 +105,7 @@ export function reportSessionSwitch(
       prefetched: String(result.prefetched),
       cached: String(result.cached),
       tracked: String(result.tracked),
-      entries: String(result.items),
+      items: String(result.items),
     },
     measurements: { fetch: result.fetchedMs - startMs, render: result.endMs - result.fetchedMs },
   });

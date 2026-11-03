@@ -2,7 +2,7 @@ import { sendJson } from "../http.ts";
 import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
-import type { Item } from "../../sessions/items.ts";
+import { visibleBody, type Item } from "../../sessions/items.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
@@ -11,10 +11,14 @@ const MAX_BUFFER_BYTES = 1_048_576;
 function toolEvent(item: Item): { id: string; data: Record<string, unknown> } | null {
   if (!item.callId) return null;
   if (item.kind === "ToolCall") {
-    const { wire: _wire, ...args } = item.body;
     return {
       id: `tool:${item.callId}:start`,
-      data: { type: "TOOL_CALL_START", toolCallId: item.callId, toolCallName: item.tool ?? "tool", args },
+      data: {
+        type: "TOOL_CALL_START",
+        toolCallId: item.callId,
+        toolCallName: item.tool ?? "tool",
+        args: visibleBody(item),
+      },
     };
   }
   return {

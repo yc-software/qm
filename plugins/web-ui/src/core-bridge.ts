@@ -20,7 +20,6 @@ import type { GoalStripState } from "./goal-strip.ts";
 import {
   activityCreatedAt,
   activityItems,
-  isHidden,
   isNarration,
   isUserMessage,
   messageTs,
@@ -1464,7 +1463,7 @@ function isRenderableThinking(item: Item): boolean {
 function isWorkItem(item: Item): boolean {
   if (item.kind === "Reasoning") return isRenderableThinking(item);
   if (item.kind === "AgentMessage") return item.variant === "narration";
-  if (item.kind === "SteeringMessage") return !isHidden(item);
+  if (item.kind === "SteeringMessage") return true;
   return ACTIVITY_KINDS.has(item.kind);
 }
 
@@ -2029,7 +2028,7 @@ function userItemText(item: Item): string | null {
 type UserAttachment = { name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string };
 
 export function userItemMessage(item: Item): HistoryUserMessage | null {
-  if (isHidden(item) || isAgentEcho(item)) return null;
+  if (item.hidden || isAgentEcho(item)) return null;
   const text = userItemText(item) ?? "";
   const attachments = Array.isArray(item.body.attachments) ? (item.body.attachments as UserAttachment[]) : [];
   if (!text && !attachments.length) return null;
@@ -2236,7 +2235,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         stoppedShown = false;
         hiddenPrompt = e.hidden === true;
       }
-      if (isHidden(e)) continue;
+      if (e.hidden) continue;
       if (!steered) {
         posted = false;
         spillHeldPosts();

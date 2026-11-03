@@ -109,8 +109,6 @@ export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVaria
   item.kind === "AgentMessage" && !item.variant;
 export const isOverheard = (item: Pick<Item, "kind" | "body">): boolean =>
   item.kind === "UserMessage" && item.body.overheard === true;
-export const isHidden = (item: Pick<Item, "hidden" | "body">): boolean =>
-  item.hidden === true || item.body.hidden === true;
 export const messageTs = (item: Pick<Item, "kind" | "externalId" | "body">): string | null => {
   if (item.kind === "UserMessage") return item.externalId;
   return item.kind === "SteeringMessage" && typeof item.body.ts === "string" && item.body.ts ? item.body.ts : null;
@@ -125,10 +123,15 @@ export function proseText(item: Pick<Item, "kind" | "text" | "body">): string | 
   if (PROSE_KINDS.has(item.kind)) return item.text ?? "";
   return typeof item.body.text === "string" ? item.body.text : null;
 }
+export function visibleBody(item: Pick<Item, "body">): Record<string, unknown> {
+  const { wire: _wire, ...rest } = item.body;
+  return rest;
+}
+export const compactItem = (item: Item): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(item).filter(([, value]) => value !== null));
 export function itemFields(item: Item): Record<string, unknown> {
-  const { sessionId: _s, seq: _q, createdAt: _c, kind: _k, turnId: _t, step: _p, body, ...columns } = item;
-  const { wire: _w, ...rest } = body;
-  return { ...Object.fromEntries(Object.entries(columns).filter(([, value]) => value !== null)), ...rest };
+  const { sessionId: _s, seq: _q, createdAt: _c, kind: _k, turnId: _t, step: _p, body: _b, ...columns } = item;
+  return { ...Object.fromEntries(Object.entries(columns).filter(([, value]) => value !== null)), ...visibleBody(item) };
 }
 export function stepMessage(item: Pick<Item, "body">): Record<string, unknown> | null {
   const wire = item.body.wire;

@@ -1,6 +1,8 @@
 import { errMessage } from "../util/errors.ts";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
+import { isObj } from "../util/objects.ts";
+import { compactItem, type Item } from "../sessions/items.ts";
 
 const string = Type.String();
 const optionalString = Type.Optional(string);
@@ -303,10 +305,14 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
         { cause: error },
       );
     }
+    let body: unknown;
     try {
-      return { ...result, body: JSON.parse(raw) as unknown };
+      body = JSON.parse(raw);
     } catch {
       return { ...result, body: raw };
     }
+    if (action === "session" && isObj(body) && Array.isArray(body.items))
+      body = { ...body, items: (body.items as Item[]).map(compactItem) };
+    return { ...result, body };
   };
 }

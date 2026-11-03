@@ -16,6 +16,7 @@ import {
   isUserItem,
   messageTs,
   stepMessage,
+  visibleBody,
   type Item,
   type NewItem,
 } from "../sessions/items.ts";
@@ -214,11 +215,6 @@ function itemStep(e: Item): ReplayStep | null {
   return { ...(message as unknown as ReplayStep), ...(e.step !== null ? { index: e.step } : {}) };
 }
 
-function storedBlock(body: Record<string, unknown>): Record<string, unknown> {
-  const { wire: _wire, ...rest } = body;
-  return rest;
-}
-
 export function legacyAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
   return {
     role: "assistant",
@@ -238,9 +234,9 @@ function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
   const p = e.body;
   const at = step.index ?? 0;
   if (e.kind === "Reasoning")
-    return [{ index: at, block: { ...storedBlock(p), type: "thinking", thinking: e.text ?? "" } as ThinkingContent }];
+    return [{ index: at, block: { ...visibleBody(e), type: "thinking", thinking: e.text ?? "" } as ThinkingContent }];
   if (e.kind === "AgentMessage" && e.variant === "narration")
-    return [{ index: at, block: { ...storedBlock(p), type: "text", text: e.text ?? "" } as TextContent }];
+    return [{ index: at, block: { ...visibleBody(e), type: "text", text: e.text ?? "" } as TextContent }];
   if (e.kind === "ToolCall") {
     if (!e.callId) return [];
     const {

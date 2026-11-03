@@ -11,6 +11,7 @@ import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import type { ItemKind } from "../../sessions/items-schema.ts";
+import { compactItem } from "../../sessions/items.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
   defaultModel,
@@ -242,9 +243,7 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    items: found.items
-      .filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind))
-      .map((item) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== null))),
+    items: found.items.filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind)).map(compactItem),
     ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
   });
 }

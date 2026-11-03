@@ -6,7 +6,7 @@ import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { isHidden, isUserItem } from "../src/sessions/items.ts";
+import { isUserItem } from "../src/sessions/items.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {
@@ -55,7 +55,6 @@ for (const mode of ["retry", "handoff"] as const) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await turn.emit({ kind: "SteeringMessage", text: "private steer", body: { hidden: true } });
     };
     try {
       const result = await built.app.turn(request);
@@ -63,17 +62,16 @@ for (const mode of ["retry", "handoff"] as const) {
       const session = await built.app.getSession(result.sessionId!);
       const users = session!.items.filter(isUserItem);
       const steerAt = mode === "retry" ? 1 : 2;
-      if (mode !== "retry") assert.equal(isHidden(users[1]!), true);
-      assert.equal(users.length, steerAt + 2);
+      if (mode !== "retry") assert.equal(users[1]!.hidden, true);
+      assert.equal(users.length, steerAt + 1);
       assert.equal(users[steerAt]!.text, "Change of plan");
-      assert.notEqual(isHidden(users[steerAt]!), true);
-      assert.equal(isHidden(users[steerAt + 1]!), true);
+      assert.notEqual(users[steerAt]!.hidden, true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
       const liveSteer = activity.flatMap((entry) =>
         "item" in entry && isUserItem(entry.item) && entry.item.text === "Change of plan" ? [entry.item] : [],
       )[0];
       assert.ok(liveSteer);
-      assert.notEqual(isHidden(liveSteer), true);
+      assert.notEqual(liveSteer.hidden, true);
     } finally {
       exercise = undefined;
     }

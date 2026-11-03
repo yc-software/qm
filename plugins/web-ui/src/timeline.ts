@@ -2,7 +2,6 @@ import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, WorkBlock } from "./core-bridge.ts";
 import {
   activityItems,
-  isHidden,
   isNarration,
   isUserMessage,
   reasoningStepKey,
@@ -210,7 +209,7 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   let open: ToolRowModel | null = null;
   for (const a of activityItems(work.activity)) {
     if (isUserMessage(a)) {
-      if (a.kind === "SteeringMessage" && !isHidden(a)) items.push({ kind: "steer", item: a });
+      if (a.kind === "SteeringMessage") items.push({ kind: "steer", item: a });
       open = null;
     } else if (a.kind === "Reasoning") {
       if (a.body.redacted !== true)

@@ -437,7 +437,7 @@ test("a stored quarantine refusal renders the canned copy on the web, never the 
   assert.match(final.errorMessage ?? "", /security screen flagged/);
 });
 
-test("live run polling includes only consumed visible steering in activity order", async () => {
+test("live run polling includes consumed steering in activity order", async () => {
   instantSleep();
   stubRuns([
     {
@@ -448,7 +448,6 @@ test("live run polling includes only consumed visible steering in activity order
         { item: item("ToolCall", { seq: 2, createdAt: 2, tool: "execute", callId: "a" }) },
         { item: item("ToolResult", { seq: 3, createdAt: 3, tool: "execute", callId: "a" }) },
         { item: item("SteeringMessage", { seq: 4, createdAt: 4, text: "Change direction" }) },
-        { item: item("SteeringMessage", { seq: 5, createdAt: 5, text: "Hidden", body: { hidden: true } }) },
         { item: item("ToolCall", { seq: 6, createdAt: 6, tool: "execute", callId: "b" }) },
       ],
     },
