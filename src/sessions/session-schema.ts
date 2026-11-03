@@ -289,7 +289,6 @@ END $base_schema$`,
   ],
 };
 
-/** Chat-message-only search index: about an eighth of items, so searches skip tool output entirely. */
 export const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
   id: "sessions/store/0048-message-search-index",
   statements: [

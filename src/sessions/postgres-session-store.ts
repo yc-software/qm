@@ -170,7 +170,6 @@ const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.creat
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
-/** Chats a person actually talks in: no subagents, automations, or collapsed side chats. */
 const OWN_CHAT = (s: string): string =>
   `${s}.parent_session_id IS NULL AND (${s}.side_chat IS NULL OR ${s}.side_chat->>'expanded' = 'true')
    AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
