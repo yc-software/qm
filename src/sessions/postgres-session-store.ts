@@ -36,7 +36,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { MESSAGE_SEARCH_INDEX, SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
+import { DROP_ITEMS_SEARCH, MESSAGE_SEARCH_INDEX, SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -290,11 +290,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
   const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
     const params: unknown[] = [principalId];
-    const where: string[] = [
-      "p.principal_id = $1",
-      OWN_CHAT("s"),
-      HAS_CONTENT,
-    ];
+    const where: string[] = ["p.principal_id = $1", OWN_CHAT("s"), HAS_CONTENT];
     const param = (value: unknown): string => {
       params.push(value);
       return `$${params.length}`;
@@ -403,7 +399,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, MESSAGE_SEARCH_INDEX]);
+  const { pool, q, query } = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    SESSION_SCHEMA,
+    MESSAGE_SEARCH_INDEX,
+    DROP_ITEMS_SEARCH,
+  ]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
