@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import test from "node:test";
+import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
 
@@ -58,8 +59,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
         env: {
           PATH: process.env.PATH,
           NODE_ENV: "test",
-          DATABASE_URL: url,
-          DATABASE_OWNER_URL: url,
+          ...databaseLoginEnv(url),
           SANDBOX_BACKEND: "local",
           ORG_ID: "migration-test",
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",

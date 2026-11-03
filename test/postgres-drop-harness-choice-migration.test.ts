@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
+import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -33,8 +34,7 @@ const migrate = (url: string) =>
     env: {
       PATH: process.env.PATH,
       NODE_ENV: "test",
-      DATABASE_URL: url,
-      DATABASE_OWNER_URL: url,
+      ...databaseLoginEnv(url),
       SANDBOX_BACKEND: "local",
       ORG_ID: "o",
       CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",

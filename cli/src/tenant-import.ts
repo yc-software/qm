@@ -13,7 +13,7 @@ type BrandingField = (typeof BRANDING_ENV)[keyof typeof BRANDING_ENV];
 type PostureResource = (typeof POSTURE_ENV)[keyof typeof POSTURE_ENV];
 type ModelProvider = keyof typeof MODEL_KEY_ENV;
 
-export interface OAuthClientImport {
+interface OAuthClientImport {
   provider: keyof typeof OAUTH_CLIENT_ENV;
   clientId: string;
   clientSecret: string;

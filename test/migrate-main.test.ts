@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -20,8 +21,7 @@ test(
         env: {
           PATH: process.env.PATH,
           NODE_ENV: "test",
-          DATABASE_URL: databaseUrl,
-          DATABASE_OWNER_URL: databaseUrl,
+          ...databaseLoginEnv(databaseUrl!),
           SANDBOX_BACKEND: "local",
           CONNECTOR_SECRET_KEY: "migration-test-connector-secret",
           CAPABILITY_SECRET: "migration-test-capability-secret",

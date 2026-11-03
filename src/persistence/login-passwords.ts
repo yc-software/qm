@@ -31,8 +31,18 @@ export async function setLoginPasswords(ownerUrl: string, appUrl: string): Promi
   const owner = new pg.Client(pgConnectionOptions(ownerUrl));
   await owner.connect();
   try {
+    await owner.query("BEGIN");
+    await owner.query("SELECT pg_advisory_xact_lock(hashtext('qm:login-passwords'))");
+    if (await loginAccepted(appUrl)) {
+      await owner.query("COMMIT");
+      return [];
+    }
     for (const [login, password] of passwords)
       await owner.query(`ALTER ROLE ${login} PASSWORD '${scramVerifier(password)}'`);
+    await owner.query("COMMIT");
+  } catch (error) {
+    await owner.query("ROLLBACK");
+    throw error;
   } finally {
     await owner.end();
   }
