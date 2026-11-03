@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
@@ -39,7 +40,6 @@ import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
-import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
 import type { Agent } from "../../agent/agent.ts";
@@ -99,7 +99,6 @@ export interface OrchestratorInput extends Omit<
 
   runStartedAt?: number;
   finalAttempt?: boolean;
-  background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];
@@ -110,6 +109,8 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
+  admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
@@ -129,7 +130,6 @@ export interface OrchestratorDeps {
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
   auditLog: AuditLog;
-  rateLimiter: RateLimiter;
   budget?: BudgetTracker;
   maxContextTokens?: number;
   execTimeoutMs?: number;
@@ -196,7 +196,6 @@ export interface OrchestratorDeps {
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
-  reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];

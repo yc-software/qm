@@ -130,8 +130,6 @@ import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -318,7 +316,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -410,11 +408,13 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-      await flushErrorReporting();
-      process.exit();
-    });
-  }, shutdownDrainMs + 5_000);
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      async () => {
+        await flushErrorReporting();
+        process.exit();
+      },
+    );
+  }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
   void runtime.stop().then(
     async () => {
@@ -426,10 +426,12 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-        await flushErrorReporting();
-        process.exit(1);
-      });
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+        async () => {
+          await flushErrorReporting();
+          process.exit(1);
+        },
+      );
     },
   );
 }
@@ -480,7 +482,6 @@ export interface BuiltApp {
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
   admin: AdminService;
-  rateLimiter: RateLimiter;
   budget: BudgetTracker | undefined;
   errors: ErrorLog;
   crons: CronStore;
@@ -714,8 +715,6 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
-  const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -1863,7 +1862,7 @@ export function buildApp(
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
+      return Boolean(loop && loop.state !== "archived");
     },
   });
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
@@ -2053,6 +2052,7 @@ export function buildApp(
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
   const orchestratorDeps: OrchestratorDeps = {
+    admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
@@ -2086,7 +2086,6 @@ export function buildApp(
     swarms,
     connectorTokens,
     auditLog,
-    rateLimiter,
     budget,
     agent,
     memory,
@@ -2145,7 +2144,6 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     environments,
     brokeredTools,
@@ -2686,6 +2684,7 @@ export function buildApp(
     createWorker({
       admittedWork,
       runs,
+      sessions,
       orchestrator,
       leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
@@ -2882,18 +2881,21 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
-  async function releaseInFlightRuns(): Promise<void> {
+  let releasing: Promise<void> | null = null;
+  function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
-    await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
+    releasing ??= Promise.all([
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
       ...workers.map((w) => w.releaseInFlight()),
-    ]);
+    ]).then(() => {});
+    return releasing;
   }
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      releasing = null;
       flyTunnel?.monitor();
       drain.start();
       renderBasePreparing = new AbortController();
@@ -2993,7 +2995,6 @@ export function buildApp(
     webhookReceiver,
     loopIngress,
     admin,
-    rateLimiter,
     errors,
     crons,
     credentialUsage,
@@ -3117,7 +3118,6 @@ export function serverDeps(
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
-    rateLimiter: built.rateLimiter,
     budget: built.budget,
     acl: built.acl,
     credentialUsage: built.credentialUsage,

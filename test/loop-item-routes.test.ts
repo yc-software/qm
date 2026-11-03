@@ -8,14 +8,13 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
+import { ensureDefaultInboxLoops, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import type { Loop, LoopItem } from "../src/loops/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
-import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
-import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
@@ -181,8 +180,8 @@ const ITEM = {
   slack: { channelId: "C1", ts: "1.2", isDirectMessage: false },
 };
 
-async function inboxLoop(w: World): Promise<Loop> {
-  return ensureInboxLoop(w.loops.store, "josh");
+async function inboxLoop(w: World, source = "slack"): Promise<Loop> {
+  return (await ensureDefaultInboxLoops(w.loops.store, "josh")).find((loop) => loop.sources?.includes(source))!;
 }
 
 async function seed(
@@ -625,10 +624,7 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   const current = renderSourceInboxTask(loopId, "gmail");
   w.crons.set(syncCron.id, {
     ...stored,
-    action: current.replace(
-      `Inbox sync v${INBOX_SYNC_TASK_VERSION}.`,
-      `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Older wording.`,
-    ),
+    action: "Older wording.",
     enabled: false,
   });
   const refreshed = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
@@ -760,27 +756,6 @@ test("concurrent source sends share a durable decision claim", async () => {
   assert.equal((await w.loops.items.get(item.id))!.decisionToken, undefined);
 });
 
-test("legacy and canonical item URLs serialize a concurrent send", async () => {
-  const w = world();
-  w.loops.lock = testAdvisoryLock();
-  const { loop, item } = await seed(w);
-  const defaults = await ensureDefaultInboxLoops(w.loops.store, "josh");
-  const target = defaults.find((value) => value.sources?.includes("slack"))!;
-  await w.loops.items.moveSource(loop.id, target.id, "slack");
-  const results = await Promise.all(
-    [loop.id, target.id].map((id) =>
-      call(w, {
-        method: "POST",
-        path: `/v1/loops/${id}/items/${item.id}/action?principalId=josh`,
-        body: { kind: "send" },
-        capability: PORTAL,
-      }),
-    ),
-  );
-  assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
-  assert.equal(w.sent.length, 1);
-});
-
 test("a conversational send refuses a stale draft before starting an agent turn", async () => {
   const w = world();
   const { loop, item } = await seed(w);
@@ -804,9 +779,8 @@ test("a conversational send refuses a stale draft before starting an agent turn"
 
 test("inbox list refreshes open Gmail items before returning, but not another owner's loop", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const loop = await inboxLoop(w, "gmail");
   const refreshes: string[] = [];
-  // Exercise the route with the real refresher via the same dependency used by wiring.
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
   const queued: unknown[] = [];
   w.sourceRefresh = createInboxSourceRefresh({
@@ -846,62 +820,24 @@ test("inbox list refreshes open Gmail items before returning, but not another ow
   assert.equal(refreshes.length, 1);
 });
 
-test("Slack thread keys reuse a legacy item's identity and edits", async () => {
+test("ordinary item reads only hydrate Slack with the refresh flag", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
-  await w.loops.items.ingest([
-    {
-      loopId: loop.id,
-      dedupeKey: "D1",
-      source: "slack",
-      sourceAt: 2000,
-      sourcePayload: { slack: { channelId: "D1", ts: "1.0", threadTs: "1.0" } },
-      proposal: { by: "human", data: { body: "Keep this edit" } },
-    },
-  ]);
-  const [original] = await w.loops.items.byLoop(loop.id);
-  const ingest = () =>
-    call(w, {
-      method: "POST",
-      path: `/v1/loops/${loop.id}/items`,
-      body: {
-        items: [
-          {
-            ...ITEM,
-            sourceKey: "D1:1.0",
-            receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0", isDirectMessage: true },
-            draft: { body: "Agent replacement" },
-          },
-        ],
-      },
-    });
-  assert.equal((await ingest()).status, 200);
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
+  const loop = await inboxLoop(w);
+  await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
+  const [item] = await w.loops.items.byLoop(loop.id);
+  let refreshes = 0;
+  w.sourceRefresh = async () => {
+    refreshes++;
+  };
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
+  assert.equal(refreshes, 0);
+  await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
+  assert.equal(refreshes, 1);
 });
-
-for (const migrated of [false, true])
-  test(`ordinary item reads only hydrate Slack with the refresh flag (migrated=${migrated})`, async () => {
-    const w = world();
-    const loop = migrated
-      ? (await ensureDefaultInboxLoops(w.loops.store, "josh")).find((loop) => loop.sources?.includes("slack"))!
-      : await ensureInboxLoop(w.loops.store, "josh");
-    await w.loops.items.ingest([{ loopId: loop.id, dedupeKey: "slack", source: "slack", sourcePayload: {} }]);
-    const [item] = await w.loops.items.byLoop(loop.id);
-    let refreshes = 0;
-    w.sourceRefresh = async () => {
-      refreshes++;
-    };
-    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}` });
-    assert.equal(refreshes, 0);
-    await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items/${item!.id}?refreshSource=1` });
-    assert.equal(refreshes, 1);
-  });
 
 test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", async () => {
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const loop = await inboxLoop(w);
   await w.loops.items.ingest([
     {
       loopId: loop.id,
@@ -992,7 +928,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
 });
 
 test("email classification is scoped to the owner's flagged personal inbox", async () => {
-  for (const surface of [undefined, "inbox", "inbox:gmail", "inbox:slack"]) {
+  for (const surface of [undefined, "inbox:gmail", "inbox:slack"]) {
     for (const enabled of [false, true]) {
       for (const source of ["gmail", "slack"]) {
         const w = world();
@@ -1005,7 +941,7 @@ test("email classification is scoped to the owner's flagged personal inbox", asy
           successCondition: "Messages reviewed",
           surface,
         });
-        const classified = enabled && source === "gmail" && (surface === "inbox" || surface === "inbox:gmail");
+        const classified = enabled && source === "gmail" && surface === "inbox:gmail";
         const flagEnabled = async (flag: string, scope: string) => {
           assert.equal(flag, "inbox_loops");
           assert.equal(scope, "personal:josh");
@@ -1119,7 +1055,7 @@ test("only a person overrides triage, and archiving a whole group resolves its m
 test("an owner cannot trigger Slack avatar enrichment through item detail when Inbox is disabled", async () => {
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
   const w = world();
-  const loop = await ensureInboxLoop(w.loops.store, "josh");
+  const loop = await inboxLoop(w);
   await w.loops.items.ingest([
     {
       loopId: loop.id,

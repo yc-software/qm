@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { runNowSettled } from "./support/settle.ts";
+import { runNowSettled, settle } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -1730,6 +1730,7 @@ test("turn-private transfer files are removed after staging", async () => {
     ["result.txt"],
   );
   assert.ok(usedHandle);
+  await settle(async () => cleanupAttempts === 3);
   assert.equal(cleanupAttempts, 3);
   assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
 });
@@ -3790,10 +3791,27 @@ test("execute and write provision a sandbox that is released after the turn", as
   const run = await app.turn(dm("!run echo sandbox-works"));
   assert.equal(run.status, "ok");
   assert.equal(boxes.provisioned, 1, "execute must provision");
+  await settle(async () => boxes.live === 0);
   assert.equal(boxes.live, 0, "box torn down after the turn");
 
   await app.turn(dm("!write notes.md hi"));
   assert.equal(boxes.provisioned, 2, "write must provision");
+});
+
+test("runtime stop waits for a synchronous turn's detached tail to reclaim its box", async () => {
+  const built = freshApp();
+  const teardown = built.sandbox.teardown.bind(built.sandbox);
+  built.sandbox.teardown = async (handle, opts) => {
+    await new Promise((r) => setTimeout(r, 300));
+    return teardown(handle, opts);
+  };
+  const boxes = spyProvisioning(built.sandbox);
+
+  const run = await built.app.turn(dm("!run echo short-lived"));
+  assert.equal(run.status, "ok");
+  assert.equal(boxes.provisioned, 1);
+  await built.runtime.stop();
+  assert.equal(boxes.live, 0, "a process that stops right after the turn must not leak its box");
 });
 
 test("thinking always reaches the run activity feed, with the model-bound signature stripped", async () => {
@@ -3872,6 +3890,7 @@ test("eager provisioning warms the box on a tool-using session's next turn and s
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello there/);
   assert.equal(boxes.provisioned, 2, "the box is provisioned eagerly even though no tool ran this turn");
+  await settle(async () => boxes.live === 0);
   assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
 });
 
@@ -3913,6 +3932,7 @@ test("a failed eager provision clears the slot — the tool call retries instead
   assert.equal(res.status, "ok", res.reason);
   assert.match(res.reply ?? "", /hi/);
   assert.equal(attempts, 2, "the eager failure must not poison the slot: the tool call re-provisions");
+  await settle(async () => boxes.live === 0);
   assert.equal(boxes.live, 0);
 });
 
@@ -3929,6 +3949,7 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
     return realRemove(handle, dir);
   };
   await built.app.turn(dm("!run echo hi")).catch(() => null);
+  await settle(async () => boxes.live === 0);
   assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
 });
 

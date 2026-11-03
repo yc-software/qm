@@ -21,7 +21,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -127,7 +126,6 @@ function buildOrchestrator(
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -138,11 +136,11 @@ function buildOrchestrator(
   return { orch, sessions };
 }
 
-test("background: the run finishes as soon as the reply is ready; backup/teardown run detached + the lease is freed early", async () => {
+test("detached tail: the run finishes as soon as the reply is ready; backup/teardown run detached + the lease is freed early", async () => {
   const g = gatedSandbox();
   const { orch, sessions } = buildOrchestrator(g.sandbox);
 
-  const result = await orch.handleTurn({ ...dm("dm:U1:t1", "!run echo hi"), runId: "r1", background: true });
+  const result = await orch.handleTurn({ ...dm("dm:U1:t1", "!run echo hi"), runId: "r1" });
   assert.equal(result.status, "ok");
   assert.equal(g.provisioned, 1, "the turn provisioned a box");
 
@@ -160,7 +158,7 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
   assert.equal(g.teardownFinished, 1, "the detached tail completed once unblocked");
 });
 
-test("background: title persistence finishes before the run while teardown stays detached", async () => {
+test("detached tail: title persistence finishes before the run while teardown stays detached", async () => {
   const g = gatedSandbox();
   const base = createMockAgent();
   const agent = { ...base, generateTitle: () => new Promise<string>(() => {}) };
@@ -169,7 +167,6 @@ test("background: title persistence finishes before the run while teardown stays
     ...dm("dm:U1:title-background", "!run echo hi"),
     displayText: "Simulate four-way title outage from the visible message",
     runId: "title-background",
-    background: true,
   });
 
   assert.equal(result.status, "ok");
@@ -191,7 +188,6 @@ test("spine-routed titles use visible text instead of the internal wake envelope
     ),
     displayText: "Simulate four-way title outage from the visible message",
     runId: "title-spine",
-    background: true,
   });
 
   assert.equal(
@@ -204,18 +200,18 @@ test("spine-routed titles use visible text instead of the internal wake envelope
   );
 });
 
-test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
+test("detached tail: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
   const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
-  const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
+  const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4" });
   assert.equal(first.status, "ok");
   for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   g.release();
   for (let i = 0; i < 2000 && g.teardownFinished === 0; i++) await tick();
   assert.equal(g.provisioned, 1);
 
-  const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: "r5", background: true });
+  const second = await orch.handleTurn({ ...dm("dm:U1:t4", "just chatting"), runId: "r5" });
   assert.equal(second.status, "ok");
   assert.equal(g.provisioned, 2, "the session had used tools before, so the box was provisioned eagerly");
   assert.equal(g.teardownFinished, 1, "the reply returned without waiting for the unused box's teardown");
@@ -229,17 +225,17 @@ test("background: a turn that never used its eagerly provisioned box returns bef
   assert.equal(g.teardownFinished, 2);
 });
 
-test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
+test("detached tail: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
   const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
-  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
+  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7" });
   assert.equal(first.status, "ok");
   for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
   g.release();
   for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
 
-  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: "r8", background: true });
+  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: "r8" });
   const paused = await Promise.race([turn, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))]);
   assert.ok(paused, "the paused turn returned while the teardown was still gated");
   assert.equal(paused.status, "pending_approval");
@@ -258,7 +254,7 @@ test("background: a turn paused on approval returns its card before the eagerly 
   assert.equal(g.teardownFinished, 2);
 });
 
-test("background: the message edit catch-up still runs before the lease is released", async () => {
+test("detached tail: the message edit catch-up still runs before the lease is released", async () => {
   const g = gatedSandbox();
   let asked = 0;
   const surfaceCache = new Proxy({} as Record<string, unknown>, {
@@ -276,7 +272,6 @@ test("background: the message edit catch-up still runs before the lease is relea
     surface: "slack",
     conversation: { kind: "channel", threadRef: "ch:C1:t1", audience: [actor] } as Conversation,
     runId: "r6",
-    background: true,
   });
   assert.equal(result.status, "ok");
   assert.equal(asked, 1, "the edit catch-up ran even though the tail was detached");
@@ -284,7 +279,7 @@ test("background: the message edit catch-up still runs before the lease is relea
   g.release();
 });
 
-test("background: an error in the detached tail still reclaims the box (no machine refcount leak)", async () => {
+test("detached tail: an error in the detached tail still reclaims the box (no machine refcount leak)", async () => {
   const handle: SandboxHandle = { id: "vm-err", rootDir: "/workspace", homeDir: "/root", coldStart: false };
   let teardowns = 0;
   const noop = async () => {};
@@ -335,29 +330,9 @@ test("background: an error in the detached tail still reclaims the box (no machi
   };
   const { orch } = buildOrchestrator(sandbox, throwingErrors, agent);
 
-  const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: "r3", background: true });
+  const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: "r3" });
   assert.equal(result.status, "ok");
 
   for (let i = 0; i < 2000 && teardowns === 0; i++) await tick();
   assert.equal(teardowns, 1, "the box is reclaimed even though the tail failed");
-});
-
-test("blocking path: the turn does NOT return until the tail (teardown) completes", async () => {
-  const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox);
-
-  const p = orch.handleTurn({ ...dm("dm:U1:t2", "!run echo hi"), runId: "r2" });
-  let done = false;
-  void p.then(() => {
-    done = true;
-  });
-
-  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
-  assert.equal(g.teardownStarted, 1, "the blocking path runs the tail (reaches teardown)");
-  assert.equal(done, false, "handleTurn has NOT returned — it awaits the tail");
-
-  g.release();
-  const result = await p;
-  assert.equal(result.status, "ok");
-  assert.equal(g.teardownFinished, 1, "the tail completed before the blocking turn returned");
 });

@@ -6,6 +6,9 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+
+const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,7 +126,7 @@ async function withWorkers(
   await setup?.(runs);
   const log: string[] = [];
   const workers = Array.from({ length: count }, () =>
-    createWorker({ runs, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
+    createWorker({ runs, sessions, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
   );
   const preemption = createRunPreemption({ runs, workers, graceMs: 0 });
   for (const worker of workers) worker.start();
