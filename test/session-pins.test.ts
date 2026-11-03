@@ -11,6 +11,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "session-pins-secret-value!".repeat(2);
 
@@ -26,16 +27,18 @@ describe("conversation pins self-API", async () => {
   const THREAD = "web:U1:pins";
 
   const capFor = (actorId: string, threadRef?: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        liveActor: true,
-        ...(threadRef ? { threadRef } : {}),
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          aud: CONTROL_PLANE_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          liveActor: true,
+          ...(threadRef ? { threadRef } : {}),
+        },
+        SECRET,
+      ),
     );
 
   const call = async (method: string, path: string, body?: unknown, token?: string) =>
@@ -57,7 +60,8 @@ describe("conversation pins self-API", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    sessionId = (await built.app.turn(dm("U1", "remember the launch date is Sept 4", THREAD))).sessionId!;
+    sessionId = (await inTestTenant(() => built.app.turn(dm("U1", "remember the launch date is Sept 4", THREAD))))
+      .sessionId!;
   });
 
   after(async () => {
@@ -90,7 +94,7 @@ describe("conversation pins self-API", async () => {
 
   it("pins a transcript entry by seq with a preview", async () => {
     const token = await capFor("U1", THREAD);
-    const entries = await built.sessions.getEntries(sessionId);
+    const entries = await inTestTenant(() => built.sessions.getEntries(sessionId));
     const userEntry = entries.find((e) => e.type === "user");
     assert.ok(userEntry, "session has a user entry");
     const res = await call("POST", "/v1/pins", { seq: userEntry!.seq }, token);
@@ -108,18 +112,21 @@ describe("conversation pins self-API", async () => {
   });
 
   it("nested children pin, list, and remove notes in the human conversation", async () => {
-    const child = await built.sessions.getOrCreateByThread(
-      "agent:main:subagent:pins-child",
-      "dm",
-      scopeId("personal", "U1"),
-    );
-    const nested = await built.sessions.getOrCreateByThread(
-      "agent:main:subagent:pins-nested",
-      "dm",
-      scopeId("personal", "U1"),
-    );
-    await built.sessions.setParentSession(child.id, sessionId);
-    await built.sessions.setParentSession(nested.id, child.id);
+    const nested = await inTestTenant(async () => {
+      const child = await built.sessions.getOrCreateByThread(
+        "agent:main:subagent:pins-child",
+        "dm",
+        scopeId("personal", "U1"),
+      );
+      const nested = await built.sessions.getOrCreateByThread(
+        "agent:main:subagent:pins-nested",
+        "dm",
+        scopeId("personal", "U1"),
+      );
+      await built.sessions.setParentSession(child.id, sessionId);
+      await built.sessions.setParentSession(nested.id, child.id);
+      return nested;
+    });
     const token = await capFor("U1", nested.threadRef);
     const added = await call("POST", "/v1/pins", { text: "delegated note" }, token);
     assert.equal(added.status, 200);
@@ -137,7 +144,7 @@ describe("conversation pins self-API", async () => {
   });
 
   it("surfaces pins on the transcript for the web UI", async () => {
-    const found = await built.app.getSessionForViewer(sessionId, "U1");
+    const found = await inTestTenant(() => built.app.getSessionForViewer(sessionId, "U1"));
     assert.ok(found, "viewer can read the session");
     assert.ok((found!.pins?.length ?? 0) >= 2, "transcript response carries the pins");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
@@ -145,13 +152,13 @@ describe("conversation pins self-API", async () => {
   });
 
   it("hides entry-pin previews from viewers outside the participant window", async () => {
-    await built.sessions.addParticipant(sessionId, "U3");
-    const found = await built.app.getSessionForViewer(sessionId, "U3");
+    await inTestTenant(() => built.sessions.addParticipant(sessionId, "U3"));
+    const found = await inTestTenant(() => built.app.getSessionForViewer(sessionId, "U3"));
     assert.ok(found, "the late joiner can read the session");
     const entryPin = found!.pins!.find((p) => p.entrySeq !== undefined);
     assert.ok(entryPin, "the pin itself is listed");
     assert.equal(entryPin!.preview, undefined, "no preview for an entry outside the viewer's window");
-    const mine = await built.app.getSessionForViewer(sessionId, "U1");
+    const mine = await inTestTenant(() => built.app.getSessionForViewer(sessionId, "U1"));
     const minePin = mine!.pins!.find((p) => p.entrySeq !== undefined);
     assert.ok(minePin?.preview, "the original participant still sees the preview");
   });
@@ -178,32 +185,40 @@ describe("conversation pins self-API", async () => {
       origin: { kind: "human", messageTs: "1723497600.000100" },
       text: "the venue is booked for Sept 4",
     };
-    await built.app.turn(slackTurn);
+    await inTestTenant(() => built.app.turn(slackTurn));
     const token = await capFor("U9", SLACK_DM);
     const res = await call("POST", "/v1/pins", { seq: 0 }, token);
     assert.equal(res.status, 200);
     const { pin } = (await res.json()) as { pin: { id: string } };
-    let queued = await built.deliveries.pending("slack");
+    let queued = await inTestTenant(() => built.deliveries.pending("slack"));
     assert.equal(queued.length, 1, "the DM entry pin enqueues one native pin action");
     assert.deepEqual(queued[0]!.destination.pin, { messageTs: "1723497600.000100" });
     assert.equal(queued[0]!.destination.target, "D0PINCHAN");
-    await built.deliveries.ack(queued[0]!.id, Date.now());
+    await inTestTenant(() => built.deliveries.ack(queued[0]!.id, Date.now()));
 
     const noteRes = await call("POST", "/v1/pins", { text: "just a note" }, token);
     assert.equal(noteRes.status, 200);
-    assert.equal((await built.deliveries.pending("slack")).length, 0, "a text-only pin has no Slack message to pin");
+    assert.equal(
+      (await inTestTenant(() => built.deliveries.pending("slack"))).length,
+      0,
+      "a text-only pin has no Slack message to pin",
+    );
 
     const del = await call("DELETE", `/v1/pins/${pin.id}`, undefined, token);
     assert.equal(del.status, 200);
-    queued = await built.deliveries.pending("slack");
+    queued = await inTestTenant(() => built.deliveries.pending("slack"));
     assert.equal(queued.length, 1, "unpinning mirrors a native unpin");
     assert.deepEqual(queued[0]!.destination.pin, { messageTs: "1723497600.000100", remove: true });
-    await built.deliveries.ack(queued[0]!.id, Date.now());
+    await inTestTenant(() => built.deliveries.ack(queued[0]!.id, Date.now()));
 
     const webToken = await capFor("U1", THREAD);
     const webRes = await call("POST", "/v1/pins", { seq: 0 }, webToken);
     assert.equal(webRes.status, 200);
-    assert.equal((await built.deliveries.pending("slack")).length, 0, "a web conversation never touches Slack pins");
+    assert.equal(
+      (await inTestTenant(() => built.deliveries.pending("slack"))).length,
+      0,
+      "a web conversation never touches Slack pins",
+    );
     const webPin = ((await webRes.json()) as { pin: { id: string } }).pin;
     await call("DELETE", `/v1/pins/${webPin.id}`, undefined, webToken);
   });
