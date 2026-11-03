@@ -41,6 +41,10 @@ export function actsAsScope(principalId: string, scope: ScopeId): boolean {
   return principalId === scopeActor(scope);
 }
 
+export function isSystemActor(actorId: string | undefined): boolean {
+  return !!actorId?.startsWith("system:");
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };

@@ -327,7 +327,7 @@ test("actor attestation is opt-in and taken from capability claims", async () =>
     const cap = captureFetch();
     const result = await brokerCredentialCall(
       base({
-        claims: { ...claims(["x-firehose"]), actorId: "actor-42" },
+        claims: { ...claims(["x-firehose"]), actorId: "actor-42", scopeId: "personal:actor-42" },
         reader: reader({ slug: "x-firehose", injection: actor === undefined ? {} : { actor } }),
         fetchImpl: cap.fetch,
       }),
@@ -423,7 +423,7 @@ test("actor attestation rejects alternate ports before sending credentials", asy
   assert.equal(cap.calls.length, 0);
 });
 
-test("an actor-attested credential answers only in its actor's personal scope, never a shared one", async () => {
+test("an actor-attested credential answers only to its person in their own private conversation", async () => {
   const call = async (scopeId: string, extra: Partial<CapabilityClaims> = {}) => {
     const cap = captureFetch();
     const result = await brokerCredentialCall(
@@ -435,10 +435,16 @@ test("an actor-attested credential answers only in its actor's personal scope, n
     );
     return { result, calls: cap.calls };
   };
-  for (const shared of ["channel:C1", "group:G1", "team:T1", "org:default-org"]) {
-    const { result, calls } = await call(shared);
-    assert.equal(result.status, 403);
-    assert.equal((result.json as { error: string }).error, "shared_scope");
+  const refused: Array<[string, Partial<CapabilityClaims>]> = [
+    ...["channel:C1", "group:G1", "team:T1", "org:default-org", "personal:U2"].map(
+      (scopeId): [string, Partial<CapabilityClaims>] => [scopeId, {}],
+    ),
+    ["personal:system:ambient:default-org", { actorId: "system:ambient:default-org" }],
+  ];
+  for (const [scopeId, extra] of refused) {
+    const { result, calls } = await call(scopeId, extra);
+    assert.equal(result.status, 403, scopeId);
+    assert.equal((result.json as { error: string }).error, "private_only");
     assert.equal(calls.length, 0, "nothing reaches the upstream");
   }
   const own = await call("personal:U1");

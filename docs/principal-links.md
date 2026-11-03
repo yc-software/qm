@@ -68,14 +68,15 @@ attested. QM makes no call for such a member and reports `invalid_actor`;
 link them to a conforming canonical id.
 
 An attested call reads as that person, so its answer can hold what only they may
-see. QM therefore attests a person only in their own personal scope, never where
-others read the answer. A memory route to an `attestActor` provider may list only
-`personal` or `personal:<id>` selectors, and QM refuses any other at startup.
-Attested MCP connectors are offered only in the person's direct conversation with
-QM, not in channels, group conversations or projects. The credential broker
-refuses an actor-attested credential outside the caller's personal scope with
-`shared_scope`; a published app's token belongs to its publisher's personal scope,
-so apps keep attesting their publisher as before.
+see. QM therefore attests a person only to that person, in their own personal
+scope: never where others read the answer, never in someone else's personal
+scope, and never for a QM system actor (`system:…`). A memory route to an
+`attestActor` provider may list only `personal` or `personal:<id>` selectors, and
+QM refuses any other at startup. Attested MCP connectors are offered only in the
+person's direct conversation with QM, not in channels, group conversations or
+projects. The credential broker refuses an actor-attested credential anywhere
+else with `private_only`; a published app's token belongs to its publisher's
+personal scope, so apps keep attesting their publisher as before.
 
 ## Self-service Slack linking
 

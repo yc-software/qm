@@ -1,6 +1,6 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
-import { attestableActor, attestableScope, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import { attestableActor, attestableAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -209,11 +209,11 @@ export async function brokerCredentialCall(opts: {
   if (rec.injection?.actor && !actor) {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
   }
-  if (rec.injection?.actor && !attestableScope(claims.scopeId)) {
+  if (rec.injection?.actor && !attestableAudience(actor, claims.scopeId)) {
     return deny(
       403,
-      "shared_scope",
-      "this credential acts as the person, so it answers only in their private conversation with QM, never a shared one",
+      "private_only",
+      "this credential acts as the person, so it answers only to them in their own private conversation with QM",
       rec.host,
     );
   }

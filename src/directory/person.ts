@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { parseScopeId } from "../types.ts";
+import { isSystemActor, parseScopeId } from "../types.ts";
 
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
@@ -34,8 +34,9 @@ export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;
 }
 
-export function attestableScope(scope: string): boolean {
-  return scope === "personal" || parseScopeId(scope).kind === "personal";
+export function attestableAudience(actorId: string | undefined, scope: string): boolean {
+  const { kind, ref } = parseScopeId(scope);
+  return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {

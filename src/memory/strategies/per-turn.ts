@@ -1,7 +1,7 @@
 import type { ModelUtilities } from "../../agent/agent.ts";
-import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
+import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
-import type { ScopeId } from "../../types.ts";
+import { isSystemActor, type ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
 import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
 import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";

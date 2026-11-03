@@ -14,7 +14,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestableScope, attestedPerson } from "../directory/person.ts";
+import { attestableAudience, attestedPerson } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -355,7 +355,7 @@ export function createMcpToolService(opts: {
   }
 
   async function toolDefsFor(principalId?: string, scopeId?: ScopeId): Promise<McpToolDescriptor[]> {
-    const mayAttest = scopeId !== undefined && attestableScope(scopeId);
+    const mayAttest = scopeId !== undefined && attestableAudience(principalId, scopeId);
     const current = mayAttest ? snapshot : snapshot.filter((t) => !attestedServers.has(t.serverId));
     const gated = perUserServers;
     if (!gated.size) return current;

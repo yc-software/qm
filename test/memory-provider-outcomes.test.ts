@@ -125,6 +125,18 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
   assert.match(problem?.fix ?? "", /POST \/v1\/admin\/principal-links/);
 });
 
+test("an attested provider is called only for the person whose private conversation it is", async (t) => {
+  const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
+  const memory = configured(mcp.url, { attestActor: true });
+  for (const actorId of ["U2", "system:personal:U1"]) {
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
+    await memory.capture("personal:U1", ["fact"], 1, actorId, { mode: "explicit", actorId });
+  }
+  assert.equal(mcp.requests.length, 0);
+  await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
+  assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
+});
+
 test("provider refusals, codes and failures are told apart", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: TOOLS,

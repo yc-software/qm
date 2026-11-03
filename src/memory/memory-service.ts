@@ -206,7 +206,3 @@ export function createNotebookMemory(store: FactStore): MemoryService {
     ...(store.metadata ? { metadata: () => store.metadata!() } : {}),
   };
 }
-
-export function isSystemActor(actorId: string | undefined): boolean {
-  return !!actorId?.startsWith("system:");
-}

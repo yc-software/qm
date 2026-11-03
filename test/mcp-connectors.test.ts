@@ -271,6 +271,23 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   service.close();
 });
 
+test("an attested connector is offered only to its person in their own private conversation", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  const offered = async (principalId: string, scopeId: string) =>
+    (await service.toolDefsFor(principalId, scopeId)).map((d) => d.serverId);
+  assert.deepEqual(await offered("U1", "personal:U1"), ["records"]);
+  assert.deepEqual(await offered("U2", "personal:U1"), []);
+  assert.deepEqual(await offered("system:ambient:acme", "personal:system:ambient:acme"), []);
+  assert.deepEqual(await offered("U1", "channel:C1"), []);
+  service.close();
+});
+
 test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
     canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),

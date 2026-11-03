@@ -1,7 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import { withTimeout } from "../util/async.ts";
-import { attestedPerson } from "../directory/person.ts";
+import { attestableAudience, attestedPerson } from "../directory/person.ts";
+import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 
@@ -33,8 +34,14 @@ export function createMcpMemoryProvider(opts: {
   write?: McpMemoryOperation;
   attestActor?: boolean;
 }): MemoryService {
-  const call = async (op: McpMemoryOperation, args: Record<string, unknown>, actorId: string | undefined) => {
+  const call = async (
+    op: McpMemoryOperation,
+    args: Record<string, unknown>,
+    actorId: string | undefined,
+    scopeId: string,
+  ) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
+    if (opts.attestActor && !attestableAudience(person, scopeId)) throw new MemoryRecallWithheld(scopeId);
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
@@ -48,7 +55,7 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId);
+    const result = await call(op, args, context?.actorId, scopeId);
     const { code } = mcpEnvelope(result);
     if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
       throw new McpCallError(`memory provider refused the read (${code})`, { code });
@@ -77,7 +84,7 @@ export function createMcpMemoryProvider(opts: {
       if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
       if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      const { code } = mcpEnvelope(await call(op, args, actor));
+      const { code } = mcpEnvelope(await call(op, args, actor, scopeId));
       if (code && DENIED_CODES.has(code))
         throw new McpCallError(`memory provider refused the write (${code})`, { code });
       return facts.length;
