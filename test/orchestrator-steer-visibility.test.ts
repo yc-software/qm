@@ -6,6 +6,7 @@ import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {
@@ -34,7 +35,11 @@ for (const mode of ["retry", "handoff"] as const) {
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",
     };
-    if (mode === "retry") await assert.rejects(built.app.turn(request), /boom/);
+    if (mode === "retry")
+      await assert.rejects(
+        inTestTenant(() => built.app.turn(request)),
+        /boom/,
+      );
     let runId: string | undefined;
     exercise = async (turn) => {
       runId = turn.runId;
@@ -61,9 +66,9 @@ for (const mode of ["retry", "handoff"] as const) {
       });
     };
     try {
-      const result = await built.app.turn(request);
+      const result = await inTestTenant(() => built.app.turn(request));
       assert.equal(result.status, "ok");
-      const session = await built.app.getSession(result.sessionId!);
+      const session = await inTestTenant(() => built.app.getSession(result.sessionId!));
       const users = session!.entries.filter((entry) => entry.type === "user");
       const steerAt = mode === "retry" ? 1 : 2;
       if (mode !== "retry") assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
@@ -71,7 +76,7 @@ for (const mode of ["retry", "handoff"] as const) {
       assert.equal((users[steerAt]!.payload as { text?: string }).text, "Change of plan");
       assert.notEqual((users[steerAt]!.payload as { hidden?: boolean }).hidden, true);
       assert.equal((users[steerAt + 1]!.payload as { hidden?: boolean }).hidden, true);
-      const activity = (await built.app.getRun(runId!))!.activity ?? [];
+      const activity = (await inTestTenant(() => built.app.getRun(runId!)))!.activity ?? [];
       const liveSteer = activity.find(
         (entry) => entry.type === "user" && (entry.payload as { text?: string }).text === "Change of plan",
       );
