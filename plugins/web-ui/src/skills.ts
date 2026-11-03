@@ -47,6 +47,7 @@ let editing: {
   originalBody: string;
   scopeId?: string;
   name: string;
+  version?: number;
   review: SkillEditReview | null;
 } | null = null;
 let editingTarget: SkillItem | null = null;
@@ -128,6 +129,7 @@ async function startEdit(s: SkillItem): Promise<void> {
       originalBody: r.skill.body ?? "",
       scopeId: r.skill.scopeId,
       name: r.skill.name,
+      ...(typeof r.skill.version === "number" ? { version: r.skill.version } : {}),
       review: null,
     };
     editingTarget = r.skill;
@@ -742,7 +744,11 @@ async function saveEdit(): Promise<void> {
   try {
     await api(`/api/skills/${encodeURIComponent(editing.id)}`, {
       method: "PUT",
-      body: JSON.stringify({ description: editing.description, body: editing.body }),
+      body: JSON.stringify({
+        description: editing.description,
+        body: editing.body,
+        ...(editing.version !== undefined ? { baseVersion: editing.version } : {}),
+      }),
     });
     if (!skillMutations.isCurrent(operation)) {
       await renderSkills();
