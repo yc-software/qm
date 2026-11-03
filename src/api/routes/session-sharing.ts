@@ -9,6 +9,7 @@ import {
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import { audit, isObj } from "./shared.ts";
+import { withTenant } from "../../tenants/context.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 async function createShare(ctx: ApiCtx): Promise<void> {
@@ -147,13 +148,30 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { createdAt: share.createdAt, audience: share.audience, messages: share.messages });
 }
 
+async function readPublicShare(ctx: ApiCtx): Promise<void> {
+  const share = await ctx.deps.sessionShares?.get(ctx.params.token!);
+  const tenant = share && (await ctx.app.tenantOfSession(share.sessionId));
+  if (!tenant) {
+    ctx.res.setHeader("Cache-Control", "no-store");
+    return sendJson(ctx.res, 404, { error: "not_found" });
+  }
+  return withTenant(tenant, () => readShare(ctx));
+}
+
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
   { method: "POST", path: "/v1/sessions/:id/share", actor: "body.principalId", auth: "source", handle: createShare },
-  ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
-    const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
-    return [
-      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", handle: readShare },
-      { method: "GET", path: `/v1/${prefix}/:token/files/:fileId`, actor, auth: "source", handle: readShare },
-    ];
-  }),
+  ...["/v1/shared-sessions/:token", "/v1/shared-sessions/:token/files/:fileId"].map((path): Route => ({
+    method: "GET",
+    path,
+    actor: "query.viewer",
+    auth: "source",
+    handle: readShare,
+  })),
+  ...["/v1/public-shares/:token", "/v1/public-shares/:token/files/:fileId"].map((path): Route => ({
+    method: "GET",
+    path,
+    auth: "source",
+    tenant: "row",
+    handle: readPublicShare,
+  })),
 ];

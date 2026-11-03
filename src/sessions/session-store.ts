@@ -521,6 +521,8 @@ export interface SessionStore {
 
   refreshSpendRollup?(): Promise<void>;
 
+  tenantOfSession(sessionId: string): Promise<string | undefined>;
+
   listParticipants(): Promise<ParticipantWindow[]>;
 
   distinctParticipants(): Promise<string[]>;

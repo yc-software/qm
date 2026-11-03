@@ -75,6 +75,7 @@ export function createSessionMethods(
   | "getSession"
   | "getSessionForViewer"
   | "canViewSessionSnapshot"
+  | "tenantOfSession"
   | "getSessionEntryForViewer"
   | "pinConversationItem"
   | "listConversationPins"
@@ -424,6 +425,10 @@ export function createSessionMethods(
         ...(earlier > 0 ? { earlierEntries: earlier } : {}),
         ...(pins.length ? { pins } : {}),
       };
+    },
+
+    tenantOfSession(sessionId) {
+      return deps.sessions.tenantOfSession(sessionId);
     },
 
     async canViewSessionSnapshot(sessionId, principalId, visibility) {

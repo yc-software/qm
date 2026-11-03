@@ -341,6 +341,7 @@ export interface App {
     goal?: GoalView;
     runtime?: TurnRuntime;
   } | null>;
+  tenantOfSession(sessionId: string): Promise<string | undefined>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,

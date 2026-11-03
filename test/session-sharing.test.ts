@@ -12,6 +12,9 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { boundTenant } from "../src/tenants/context.ts";
+
+const SESSION_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -105,6 +108,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   ];
   let visible = original;
   let accessible = true;
+  let sessionTenant: string | undefined = SESSION_TENANT;
+  let viewedUnder: string | undefined;
   let fileData: string | null = "<script>attachment contents</script>";
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
@@ -136,8 +141,11 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       actor: null,
       deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
-        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
-          accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
+        tenantOfSession: async () => sessionTenant,
+        canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) => {
+          viewedUnder = boundTenant();
+          return accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq);
+        },
         getSessionForViewer: async (_id: string, user: string) =>
           accessible && user === "alice"
             ? {
@@ -189,6 +197,10 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await (await read(second.share.token)).text()).includes("New message"), true);
   const external = (await (await create("external")).json()) as { share: { token: string } };
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
+  assert.equal(viewedUnder, SESSION_TENANT);
+  sessionTenant = undefined;
+  assert.equal((await read(external.share.token, "external", "", "")).status, 404);
+  sessionTenant = SESSION_TENANT;
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
   visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];

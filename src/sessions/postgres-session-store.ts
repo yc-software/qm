@@ -1259,6 +1259,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return { rows, asOf };
     },
 
+    async tenantOfSession(sessionId) {
+      const { rows } = await claimAcrossTenants("SELECT tenant_id::text AS tenant_id FROM sessions WHERE id = $1", [
+        sessionId,
+      ]);
+      const tenant = rows[0]?.tenant_id;
+      return typeof tenant === "string" ? tenant : undefined;
+    },
+
     async refreshSpendRollup() {
       const started = Date.now();
       const sessions = await claimAcrossTenants(
