@@ -13,7 +13,6 @@ import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } 
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
@@ -79,7 +78,7 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
       },
     ],
   );
-  const messages = reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE)));
+  const messages = reconstructMessagesFromHistory(entries);
   assert.equal(messages.at(-1)!.role, "assistant");
   assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
@@ -409,7 +408,7 @@ test("a recovered reply the turn never recorded is written into the transcript a
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.kind, "AgentMessage");
   assert.equal(entries[0]!.text, "recovered reply");
-  const model = JSON.stringify(reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE))));
+  const model = JSON.stringify(reconstructMessagesFromHistory(entries));
   assert.match(model, /recovered reply/);
   assert.doesNotMatch(model, /"via"/, "the turn's own reply carries no delivery badge");
 });

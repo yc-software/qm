@@ -14,7 +14,6 @@ import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sa
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
-import { contextSummaryPayload } from "../src/sessions/session-store.ts";
 import { egressDecision } from "../src/resolution/egress-policy.ts";
 import { hashId } from "../src/util/crypto.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -25,7 +24,7 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { brokerCredentialCall } from "../src/api/credential-broker.ts";
@@ -3765,7 +3764,13 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
     assert.equal(liveDecisions?.length, 1);
-    assert.deepEqual(liveDecisions![0]!.payload, entryFromItem(decisions[0]!, "personal:U1").payload);
+    assert.deepEqual(liveDecisions![0]!.payload, {
+      runId: replay.id,
+      requestId,
+      approved,
+      command,
+      ...(approved ? { scope: "once" } : {}),
+    });
   }
 });
 
@@ -4130,7 +4135,7 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
   const found = await app.getSession(t1.sessionId!);
   assert.equal(found!.entries.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
   assert.ok(
-    !found!.entries.some((e) => contextSummaryPayload(e)),
+    !found!.entries.some((e) => e.type === "system" && (e.payload as { kind?: string }).kind === "context_summary"),
     "no summary boundary appears: recovering a wedged session (a fold) is an explicit decision, not a streak heuristic — a transient outage retried twice must not cost the user their history",
   );
 

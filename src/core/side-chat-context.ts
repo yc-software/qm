@@ -1,6 +1,6 @@
 import { countTokens } from "../util/tokens.ts";
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
-import { entryFromItem } from "../sessions/items.ts";
+import { isAgentReply, isOverheard, isUserItem } from "../sessions/items.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
 import { visibleTitleEntryText } from "./orchestrator/turn-helpers.ts";
@@ -85,15 +85,15 @@ export async function sideChatContext(
         ),
       );
       const common = commonEntrySeqs([first, ...views]);
-      for (const entry of first.toReversed().map((item) => entryFromItem(item, session.scopeId))) {
-        if (!common.has(entry.seq) || (entry.type !== "user" && entry.type !== "assistant")) continue;
-        const text = visibleTitleEntryText(entry);
-        const payload = entry.payload as { speakerId?: string; name?: string; overheard?: boolean };
-        if (!text || payload.overheard) continue;
+      for (const item of first.toReversed()) {
+        if (!common.has(item.seq) || (!isUserItem(item) && !isAgentReply(item))) continue;
+        const text = visibleTitleEntryText(item);
+        if (!text || isOverheard(item)) continue;
+        const { speakerId, name } = item.body as { speakerId?: string; name?: string };
         const message: Message = {
-          role: entry.type,
-          ...(entry.type === "user" ? { user: payload.speakerId ?? payload.name } : {}),
-          timestamp: entry.createdAt,
+          role: isUserItem(item) ? "user" : "assistant",
+          ...(isUserItem(item) ? { user: speakerId ?? name } : {}),
+          timestamp: item.createdAt,
           text,
         };
         const tokens =

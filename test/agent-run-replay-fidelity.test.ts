@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
-import { entryFromItem, storedItem } from "../src/sessions/items.ts";
+import { type Item, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import type { SessionEntry } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
 import { type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { artifactImageLoader } from "../src/agent/replay-images.ts";
@@ -104,14 +104,14 @@ function withoutCacheControl(value: unknown): unknown {
 
 async function runTurn(
   input: string,
-  history: SessionEntry[],
+  history: Item[],
   replies: Array<(body: Body) => Response>,
   overrides: Partial<AgentTurnInput> = {},
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
   const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
-  const emitted: SessionEntry[] = [];
+  const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
   const realFetch = globalThis.fetch;
@@ -139,7 +139,7 @@ async function runTurn(
       emit: async (item) => {
         const body = jsonb(item.body ?? {}) as Record<string, unknown>;
         const stored = storedItem({ ...item, body }, { sessionId: "fidelity", seq: seq++, createdAt: Date.now() });
-        emitted.push(entryFromItem(stored, "personal:tester"));
+        emitted.push(stored);
         return stored;
       },
       recordModelCall: () => {},
@@ -171,12 +171,12 @@ test("the next turn's anthropic request replays the previous turn byte-for-byte:
   );
   assert.equal(first.result.reply, "It is in shared/q2.md.");
   assert.equal(first.bodies.length, 2);
-  const invalid = first.emitted.filter((e) => (e.payload as { callId?: string }).callId === "toolu_4");
+  const invalid = first.emitted.filter((e) => e.callId === "toolu_4");
   assert.deepEqual(
-    invalid.map((e) => [e.type, (e.payload as { isError?: boolean }).isError]),
+    invalid.map((e) => [e.kind, e.isError]),
     [
-      ["tool_call", undefined],
-      ["tool_result", true],
+      ["ToolCall", null],
+      ["ToolResult", true],
     ],
   );
 
@@ -353,12 +353,8 @@ test("a steer and an empty-ending re-prompt replay as the exact user messages th
   );
   assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
   assert.equal(first.bodies.length, 3);
-  const steered = first.emitted.find((e) => (e.payload as { steered?: boolean }).steered)!;
-  assert.equal(
-    (steered.payload as { text?: string }).text,
-    "also check Q3",
-    "the transcript keeps what the person typed",
-  );
+  const steered = first.emitted.find((e) => e.kind === "SteeringMessage")!;
+  assert.equal(steered.text, "also check Q3", "the transcript keeps what the person typed");
 
   const second = await runTurn("thanks", forModelContext(first.emitted), [
     () => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn"),
@@ -532,7 +528,7 @@ const PG_URL = process.env.DATABASE_URL;
 async function withPgSession(
   fn: (ctx: {
     emit: AgentTurnInput["emit"];
-    history: () => Promise<SessionEntry[]>;
+    history: () => Promise<Item[]>;
     toolOutput: ToolOutputStore;
   }) => Promise<void>,
 ): Promise<void> {
@@ -547,11 +543,7 @@ async function withPgSession(
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
-    const session = await store.getOrCreateByThread(
-      "web:replay",
-      "dm",
-      "personal:tester" as SessionEntry["scopeLabel"],
-    );
+    const session = await store.getOrCreateByThread("web:replay", "dm", "personal:tester" as ScopeId);
     const writer = { sessionId: session.id };
     await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
@@ -560,8 +552,7 @@ async function withPgSession(
         bytesFor: () => createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
-      history: async () =>
-        forModelContext((await store.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId))),
+      history: async () => forModelContext(await store.getItems(session.id)),
     });
   } finally {
     await raw.end();

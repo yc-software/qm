@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -32,10 +33,10 @@ import type { Agent, CompactInput } from "../src/agent/agent.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
-import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { entryFromItem, itemFromEntry, type Item } from "../src/sessions/items.ts";
+import { contextSummary } from "../src/sessions/session-store.ts";
+import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
@@ -159,15 +160,12 @@ function liveTurnProbe() {
   return { runs, busyThreads };
 }
 
-async function seed(
-  sessions: SessionStore,
-  entries: Array<Partial<Pick<SessionEntry, "type" | "payload">>>,
-): Promise<string> {
+const user = (text: string): NewItem => ({ kind: "UserMessage", text });
+
+async function seed(sessions: SessionStore, items: NewItem[]): Promise<string> {
   const session = await sessions.getOrCreateByThread(conv.threadRef, "dm", PERSONAL);
   const writer = { sessionId: session.id };
-  for (const e of entries) {
-    await sessions.append(writer, itemFromEntry({ type: e.type ?? "user", payload: e.payload ?? { text: "x" } }));
-  }
+  for (const item of items) await sessions.append(writer, item);
   return session.id;
 }
 
@@ -206,7 +204,7 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
 
   const sid = await seed(
     sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
+    msgTexts(6).map((text) => user(text)),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -235,7 +233,7 @@ test("token overflow triggers compaction with only a few huge entries", async ()
   const big = "many different tokens here ".repeat(25);
   const sid = await seed(
     sessions,
-    Array.from({ length: 4 }, (_, i) => ({ payload: { text: `${big} ${i}` } })),
+    Array.from({ length: 4 }, (_, i) => user(`${big} ${i}`)),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -256,12 +254,12 @@ test("a prior summary that still fits is reused, not regenerated", async () => {
   const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
 
   const sid = await seed(sessions, [
-    { payload: { text: "old 0" } },
-    { payload: { text: "old 1" } },
-    { payload: { text: "old 2" } },
-    { payload: { text: "old 3" } },
-    { type: "system", payload: createContextSummaryPayload(3, "prior summary") },
-    { payload: { text: "new 5" } },
+    user("old 0"),
+    user("old 1"),
+    user("old 2"),
+    user("old 3"),
+    { kind: "ContextCompaction", throughSeq: 3, text: "prior summary" },
+    user("new 5"),
   ]);
 
   const before = await summaryEntries(sessions, sid);
@@ -285,7 +283,7 @@ test("with no agent summarizer, overflow falls back to a plain slice — no summ
 
   const sid = await seed(
     sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
+    msgTexts(6).map((text) => user(text)),
   );
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -300,21 +298,11 @@ test("with no agent summarizer, overflow falls back to a plain slice — no summ
 
 test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", async () => {
   const { agent, compactCalls } = spyAgent();
-  const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
-  const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
-  const { orch, sessions } = buildOrchestrator(
-    agent,
-    budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
-  );
+  const call: NewItem = { kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "bash refresh.sh" } };
+  const result: NewItem = { kind: "ToolResult", callId: "c1", tool: "execute", text: "wrote inv=89", isError: false };
+  const { orch, sessions } = buildOrchestrator(agent, estimateHistoryTokens([mkItem(4, call), mkItem(5, result)]));
 
-  const sid = await seed(sessions, [
-    { payload: { text: "msg 0" } },
-    { payload: { text: "msg 1" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
-    { type: "tool_call", payload: callPayload },
-    { type: "tool_result", payload: resultPayload },
-  ]);
+  const sid = await seed(sessions, [user("msg 0"), user("msg 1"), user("msg 2"), user("msg 3"), call, result]);
 
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
@@ -334,12 +322,12 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
   const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
   const sid = await seed(sessions, [
-    { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
-    { payload: { text: "(system note: the platform restarted mid-turn...)" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
-    { payload: { text: "msg 4" } },
-    { payload: { text: "msg 5" } },
+    { kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "bash refresh.sh" } },
+    user("(system note: the platform restarted mid-turn...)"),
+    user("msg 2"),
+    user("msg 3"),
+    user("msg 4"),
+    user("msg 5"),
   ]);
 
   const res = await orch.handleTurn(turn("!histcount"));
@@ -350,18 +338,11 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
   assert.match(summaries[0]!.text!, /interrupted/, "interrupted call must be flagged, not invented");
 });
 
-const mkEntry = (over: Partial<SessionEntry> & { seq: number }): SessionEntry => ({
-  sessionId: "s",
-  parentSeq: over.seq === 0 ? null : over.seq - 1,
-  type: "user",
-  payload: { text: `msg ${over.seq}` },
-  scopeLabel: PERSONAL,
-  createdAt: over.seq,
-  ...over,
-});
+const mkItem = (seq: number, item: NewItem = { kind: "UserMessage", text: `msg ${seq}` }): Item =>
+  storedItem(item, { sessionId: "s", seq, createdAt: seq });
 
 test("overBudgetFraction: soft < hard — the gap where a background pass runs but a turn need not block", () => {
-  const history = Array.from({ length: 10 }, (_, i) => mkEntry({ seq: i }));
+  const history = Array.from({ length: 10 }, (_, i) => mkItem(i));
   const budget = budgetBetweenSoftAndHard(estimateHistoryTokens(history));
   assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), true, "past soft ⇒ background pass fires");
   assert.equal(overBudgetFraction(history, budget, COMPACT_HARD_FRACTION), false, "under hard ⇒ turn need not block");
@@ -369,7 +350,7 @@ test("overBudgetFraction: soft < hard — the gap where a background pass runs b
 });
 
 test("entry count alone never triggers compaction: hundreds of tiny entries under the token budget stay uncompacted", () => {
-  const history = Array.from({ length: 500 }, (_, i) => mkEntry({ seq: i, payload: { text: `tiny ${i}` } }));
+  const history = Array.from({ length: 500 }, (_, i) => mkItem(i, { kind: "UserMessage", text: `tiny ${i}` }));
   const budget = estimateHistoryTokens(history) * 4;
   assert.equal(overBudgetFraction(history, budget, COMPACT_SOFT_FRACTION), false);
   assert.equal(planCompaction(history, budget, 0.6), null);
@@ -377,12 +358,12 @@ test("entry count alone never triggers compaction: hundreds of tiny entries unde
 
 test("overBudgetFraction trips on the token budget (a few huge entries)", () => {
   const big = "many different tokens here ".repeat(250);
-  const history = Array.from({ length: 3 }, (_, i) => mkEntry({ seq: i, payload: { text: big } }));
+  const history = Array.from({ length: 3 }, (_, i) => mkItem(i, { kind: "UserMessage", text: big }));
   assert.equal(overBudgetFraction(history, 2_000, COMPACT_HARD_FRACTION), true);
 });
 
 test("planCompaction summarizes ONLY the evicted (oldest overflow) chunk, not the whole transcript", () => {
-  const history = Array.from({ length: 8 }, (_, i) => mkEntry({ seq: i }));
+  const history = Array.from({ length: 8 }, (_, i) => mkItem(i));
   const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(5))), 0.6)!;
   assert.ok(plan, "over budget ⇒ a plan");
   assert.deepEqual(
@@ -399,68 +380,32 @@ test("planCompaction summarizes ONLY the evicted (oldest overflow) chunk, not th
 });
 
 test("planCompaction chains a prior summary into the batch instead of accumulating summaries", () => {
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 0,
-      parentSeq: null,
-      type: "system",
-      payload: createContextSummaryPayload(-1, "prior"),
-      scopeLabel: PERSONAL,
-      createdAt: 0,
-    },
-    ...Array.from({ length: 6 }, (_, i) => mkEntry({ seq: i + 1 })),
+  const history = [
+    mkItem(0, { kind: "ContextCompaction", throughSeq: -1, text: "prior" }),
+    ...Array.from({ length: 6 }, (_, i) => mkItem(i + 1)),
   ];
   const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(-3))), 0.6)!;
   assert.ok(
-    plan.toSummarize.some((e) => contextSummaryPayload(e)),
+    plan.toSummarize.some((e) => contextSummary(e)),
     "the prior summary is folded into the new batch",
   );
 });
 
 test("planCompaction returns null when nothing needs to move (a still-fitting prior summary is reused)", () => {
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 0,
-      parentSeq: null,
-      type: "system",
-      payload: createContextSummaryPayload(2, "prior"),
-      scopeLabel: PERSONAL,
-      createdAt: 0,
-    },
-    mkEntry({ seq: 3 }),
-    mkEntry({ seq: 4 }),
-  ];
+  const history = [mkItem(0, { kind: "ContextCompaction", throughSeq: 2, text: "prior" }), mkItem(3), mkItem(4)];
   const plan = planCompaction(history, 1_000_000, 0.6)!;
   assert.equal(plan.toSummarize.length, 0, "nothing to summarize");
   assert.equal(plan.reuse?.seq, 0, "the fitting prior summary is reused");
 });
 
 test("planCompaction never splits a tool_call from its kept tool_result (no fabricated interruption)", () => {
-  const history: SessionEntry[] = [
-    mkEntry({ seq: 0 }),
-    mkEntry({ seq: 1 }),
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: 1,
-      type: "tool_call",
-      payload: { tool: "execute", callId: "c1" },
-      scopeLabel: PERSONAL,
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: 2,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "ok" },
-      scopeLabel: PERSONAL,
-      createdAt: 3,
-    },
-    mkEntry({ seq: 4 }),
-    mkEntry({ seq: 5 }),
+  const history = [
+    mkItem(0),
+    mkItem(1),
+    mkItem(2, { kind: "ToolCall", callId: "c1", tool: "execute" }),
+    mkItem(3, { kind: "ToolResult", callId: "c1", tool: "execute", text: "ok" }),
+    mkItem(4),
+    mkItem(5),
   ];
   const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(3))), 0.6)!;
   assert.deepEqual(
@@ -483,7 +428,7 @@ for (const [kind, mkTurn] of [
     const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
     const sid = await seed(
       sessions,
-      msgTexts(8).map((text) => ({ payload: { text } })),
+      msgTexts(8).map((text) => user(text)),
     );
 
     const res = await orch.handleTurn(mkTurn("!histcount"));
@@ -505,7 +450,7 @@ test("a model-overridden session's background pass sizes against the override's 
   const { orch, sessions } = buildOrchestrator(agent);
   const sid = await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    msgTexts(8).map((text) => user(text)),
   );
 
   const res = await orch.handleTurn({ ...turn("!histcount"), model: OVERRIDE });
@@ -526,7 +471,7 @@ test("a rapid follow-up that outran the background pass AND is over the HARD lim
   const { orch, sessions } = buildOrchestrator(agent, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
   await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    msgTexts(8).map((text) => user(text)),
   );
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -540,7 +485,7 @@ test("a session UNDER the soft threshold triggers no compaction at all (backgrou
   const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
   await seed(
     sessions,
-    Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    Array.from({ length: 3 }, (_, i) => user(`msg ${i}`)),
   );
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -559,16 +504,16 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...messages)));
   const sid = await seed(
     sessions,
-    messages.map((text) => ({ payload: { text } })),
+    messages.map((text) => user(text)),
   );
 
   await orch.handleTurn(turn("!histcount"));
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
   assert.equal(compactCalls.length, 1);
 
-  const expectedHistory = forModelContext((await sessions.getItems(sid)).map((item) => entryFromItem(item, PERSONAL)));
-  assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
-  assert.ok(expectedHistory.some((entry) => entry.type === "user"));
+  const expectedHistory = forModelContext(await sessions.getItems(sid));
+  assert.ok(expectedHistory.some((entry) => contextSummary(entry)));
+  assert.ok(expectedHistory.some((item) => item.kind === "UserMessage"));
   delete agent.compactHistory;
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
@@ -580,15 +525,15 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
 });
 
 test("forModelContext strips thinking/text (never laundered into a durable summary)", () => {
-  const entries: SessionEntry[] = [
-    mkEntry({ seq: 0, type: "user" }),
-    mkEntry({ seq: 1, type: "thinking", payload: { thinking: "secret reasoning" } }),
-    mkEntry({ seq: 2, type: "text", payload: { text: "scaffold" } }),
-    mkEntry({ seq: 4, type: "assistant" }),
+  const items = [
+    mkItem(0),
+    mkItem(1, { kind: "Reasoning", text: "secret reasoning" }),
+    mkItem(2, { kind: "AgentMessage", variant: "narration", text: "scaffold" }),
+    mkItem(4, { kind: "AgentMessage", text: "msg 4" }),
   ];
   assert.deepEqual(
-    forModelContext(entries).map((e) => e.type),
-    ["user", "assistant"],
+    forModelContext(items).map((e) => e.kind),
+    ["UserMessage", "AgentMessage"],
   );
 });
 
@@ -596,8 +541,8 @@ test("background compaction excludes thinking entries from the summary batch (Bu
   const { agent, compactCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(sessions, [
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
-    { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
+    ...msgTexts(8).map((text) => user(text)),
+    { kind: "Reasoning", text: "signature-less reasoning" },
   ]);
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -606,7 +551,7 @@ test("background compaction excludes thinking entries from the summary batch (Bu
   assert.equal(summaries.length, 1, "a background compaction ran");
   assert.equal(compactCalls.length, 1);
   assert.ok(
-    compactCalls[0]!.history.every((e) => e.type !== "thinking"),
+    compactCalls[0]!.history.every((e) => e.kind !== "Reasoning"),
     "the summarizer batch must not include the durable thinking entry",
   );
 });
@@ -618,8 +563,8 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
     budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
   );
   await seed(sessions, [
-    { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap") },
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
+    { kind: "ContextCompaction", throughSeq: -1, text: "prior recap" },
+    ...msgTexts(8).map((text) => user(text)),
   ]);
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -627,7 +572,7 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
   for (let i = 0; i < 300 && compactCalls.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
   assert.equal(compactCalls.length, 1, "over soft with an unfitting prior summary ⇒ re-summarize, not park");
   assert.ok(
-    compactCalls[0]!.history.some((e) => contextSummaryPayload(e)),
+    compactCalls[0]!.history.some((e) => contextSummary(e)),
     "the prior summary is chained into the new batch",
   );
 });
@@ -641,8 +586,8 @@ test("validateCompactSummary accepts a trimmed summary and rejects missing or ov
 
 test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
   const history = [
-    ...Array.from({ length: 40 }, (_, i) => mkEntry({ seq: i, payload: { text: `filler ${i} ${"x".repeat(400)}` } })),
-    mkEntry({ seq: 40, payload: { text: "don't touch prod" } }),
+    ...Array.from({ length: 40 }, (_, i) => mkItem(i, { kind: "UserMessage", text: `filler ${i} ${"x".repeat(400)}` })),
+    mkItem(40, { kind: "UserMessage", text: "don't touch prod" }),
   ];
   const out = deterministicCompactSummary(history);
   assert.match(out, /don't touch prod/);
@@ -655,7 +600,7 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
   const { orch, sessions, errors } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
   const sid = await seed(
     sessions,
-    msgTexts(12).map((text) => ({ payload: { text } })),
+    msgTexts(12).map((text) => user(text)),
   );
 
   const res = await orch.handleTurn(spineTurn("!histcount"));
@@ -669,19 +614,19 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
   assert.equal((await summaryEntries(sessions, sid)).length, 0);
 });
 
-function assertSummaryBoundary(history: SessionEntry[], label: string): void {
-  const summaries = history.filter((e) => contextSummaryPayload(e));
+function assertSummaryBoundary(history: Item[], label: string): void {
+  const summaries = history.filter((e) => contextSummary(e));
   assert.ok(summaries.length <= 1, `${label}: at most one summary in the model context (got ${summaries.length})`);
   if (!summaries.length) return;
-  const through = contextSummaryPayload(summaries[0]!)!.throughSeq;
+  const through = contextSummary(summaries[0]!)!.throughSeq;
   for (const e of history) {
-    if (contextSummaryPayload(e)) continue;
+    if (contextSummary(e)) continue;
     assert.ok(e.seq > through, `${label}: entry seq ${e.seq} is covered by the summary (throughSeq ${through})`);
   }
 }
 
 function captureAgent(agent: Agent) {
-  const seen: SessionEntry[][] = [];
+  const seen: Item[][] = [];
   const wrapped: Agent = {
     ...agent,
     runTurn: (input) => {
@@ -692,25 +637,16 @@ function captureAgent(agent: Agent) {
   return { wrapped, seen };
 }
 
-const stackedLog = (): Array<Partial<SessionEntry>> => [
-  ...Array.from({ length: 4 }, (_, i) => ({ payload: { text: `old ${i}` } })),
-  { type: "system" as const, payload: createContextSummaryPayload(3, "recap A"), scopeLabel: PERSONAL },
-  ...Array.from({ length: 3 }, (_, i) => ({ payload: { text: `mid ${i}` } })),
-  { type: "system" as const, payload: createContextSummaryPayload(7, "recap B"), scopeLabel: PERSONAL },
-  ...Array.from({ length: 2 }, (_, i) => ({ payload: { text: `new ${i}` } })),
+const stackedLog = (): NewItem[] => [
+  ...Array.from({ length: 4 }, (_, i) => user(`old ${i}`)),
+  { kind: "ContextCompaction", throughSeq: 3, text: "recap A" },
+  ...Array.from({ length: 3 }, (_, i) => user(`mid ${i}`)),
+  { kind: "ContextCompaction", throughSeq: 7, text: "recap B" },
+  ...Array.from({ length: 2 }, (_, i) => user(`new ${i}`)),
 ];
 
 test("forModelContext applies the latest-summary boundary: one summary, nothing it covers, older summaries dropped", () => {
-  const entries = stackedLog().map((e, seq) => ({
-    sessionId: "s",
-    seq,
-    parentSeq: null,
-    type: e.type ?? "user",
-    payload: e.payload!,
-    scopeLabel: PERSONAL,
-    createdAt: seq,
-  })) as SessionEntry[];
-  const view = forModelContext(entries);
+  const view = forModelContext(stackedLog().map((item, seq) => mkItem(seq, item)));
   assertSummaryBoundary(view, "forModelContext");
   assert.deepEqual(
     view.map((e) => e.seq),
@@ -758,34 +694,26 @@ test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary sti
   assert.equal(seen.length, 1);
   assertSummaryBoundary(seen[0]!, "boundRecent fallback");
   assert.ok(
-    seen[0]!.some((e) => contextSummaryPayload(e)),
+    seen[0]!.some((e) => contextSummary(e)),
     "the bounding slice must keep the latest summary",
   );
 });
 
 test("the context window start never regresses as the log grows", () => {
-  const entries: SessionEntry[] = [];
-  const add = (type: SessionEntry["type"], payload: object) => {
-    entries.push({
-      sessionId: "s",
-      seq: entries.length,
-      parentSeq: null,
-      type,
-      payload,
-      scopeLabel: PERSONAL,
-      createdAt: entries.length,
-    } as SessionEntry);
+  const items: Item[] = [];
+  const add = (item: NewItem) => {
+    items.push(mkItem(items.length, item));
   };
   let prevStart = -1;
-  const startOf = (view: SessionEntry[]): number => {
-    const summary = view.find((e) => contextSummaryPayload(e));
-    return summary ? contextSummaryPayload(summary)!.throughSeq + 1 : (view[0]?.seq ?? 0);
+  const startOf = (view: Item[]): number => {
+    const summary = view.find((e) => contextSummary(e));
+    return summary ? contextSummary(summary)!.throughSeq + 1 : (view[0]?.seq ?? 0);
   };
   for (let i = 0; i < 30; i++) {
-    add("user", { text: `msg ${i}` });
-    if (i === 10) add("system", createContextSummaryPayload(8, "recap 1"));
-    if (i === 20) add("system", createContextSummaryPayload(17, "recap 2"));
-    const start = startOf(forModelContext(entries));
+    add(user(`msg ${i}`));
+    if (i === 10) add({ kind: "ContextCompaction", throughSeq: 8, text: "recap 1" });
+    if (i === 20) add({ kind: "ContextCompaction", throughSeq: 17, text: "recap 2" });
+    const start = startOf(forModelContext(items));
     assert.ok(start >= prevStart, `window start regressed at i=${i}: ${prevStart} -> ${start}`);
     prevStart = start;
   }
@@ -827,7 +755,7 @@ test("the background pass waits out another live turn rather than throwing its s
   );
   const sid = await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    msgTexts(8).map((text) => user(text)),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
@@ -850,7 +778,7 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
   const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
   const sid = await seed(
     sessions,
-    paddedTexts.map((text) => ({ payload: { text } })),
+    paddedTexts.map((text) => user(text)),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
@@ -883,7 +811,7 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
   const sid = await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    msgTexts(8).map((text) => user(text)),
   );
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
@@ -902,16 +830,8 @@ test("a summary that landed while the pass was summarizing makes it drop its own
 
 test("the token estimate counts the environment note persisted on a user entry", () => {
   const environment = `<environment>\n${"## What you remember\nlikes terse replies. ".repeat(40)}\n</environment>`;
-  const bare = {
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "user",
-    payload: { text: "hi" },
-    scopeLabel: "org:o",
-    createdAt: 1,
-  } as SessionEntry;
-  const withEnv = { ...bare, seq: 2, payload: { text: "hi", environment } } as SessionEntry;
+  const bare = mkItem(1, user("hi"));
+  const withEnv = mkItem(2, { kind: "UserMessage", text: "hi", body: { environment } });
   const delta = estimateHistoryTokens([withEnv]) - estimateHistoryTokens([bare]);
   assert.ok(delta >= countTokens(environment) * 0.9, `environment tokens must be counted (delta ${delta})`);
 });
@@ -934,14 +854,14 @@ test("runtime handoff continues once with saved results under the original run a
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
+          body: { actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
         });
         await new Promise((resolve) => setTimeout(resolve, 5));
         return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
       }
       assert.deepEqual(input.runtime, choice);
       assert.equal(input.runId, "runtime-run");
-      assert.ok(input.history.some((e) => e.type === "tool_result"));
+      assert.ok(input.history.some((e) => e.kind === "ToolResult"));
       assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
       await input.emit({ kind: "AgentMessage", text: "continued" });
       return { reply: "continued", modelCalls: 1 };
@@ -995,7 +915,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
+          body: { actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
         });
         return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
       }
@@ -1004,7 +924,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
     },
   };
   const { orch } = buildOrchestrator(agent);
-  const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
+  const input = { ...turn("switch and finish"), runId: randomUUID(), surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
   assert.equal(calls, 2);
@@ -1029,7 +949,7 @@ test("only a cron automation receives task-runtime authority and each fire start
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+          body: { actorId: actor.id, runtimeHandoff: result.handoff },
         });
         return { reply: "", runtimeHandoff: result.handoff };
       }
@@ -1319,13 +1239,12 @@ for (const explicit of [false, true]) {
         }
         if (seen.length === (explicit ? 2 : 1)) {
           assert.ok(estimateHistoryTokens(input.history) <= 600);
-          assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
+          assert.ok(input.history.some((e) => e.body.mode === "recent"));
           assert.ok(
-            input.input.includes("finish the request") ||
-              input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
+            input.input.includes("finish the request") || input.history.some((e) => e.text === "finish the request"),
           );
           assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
-          if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
+          if (explicit) assert.ok(input.history.some((e) => e.callId === "effect"));
         }
         await input.emit({ kind: "AgentMessage", text: "finished" });
         return { reply: "finished" };
@@ -1334,7 +1253,7 @@ for (const explicit of [false, true]) {
     const { orch, sessions } = buildOrchestrator(agent, 1000);
     const sid = await seed(
       sessions,
-      explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
+      explicit ? [] : Array.from({ length: 10 }, () => user("old excluded sentinel ".repeat(300))),
     );
     const before = await sessions.getItems(sid);
     const result = await orch.handleTurn({ ...turn("finish the request"), surfaceTools: false });
@@ -1361,16 +1280,16 @@ test("retry recovery supplies an excluded request without rerunning its complete
       mainCalls++;
       assert.equal(input.input, "finish the stored request");
       assert.equal(input.continueTurn, undefined);
-      assert.ok(!input.history.some((e) => e.type === "user"));
+      assert.ok(!input.history.some((e) => e.kind === "UserMessage"));
       await input.emit({ kind: "AgentMessage", text: "resumed" });
       return { reply: "resumed" };
     },
   };
   const { orch, sessions } = buildOrchestrator(agent, 500);
   await seed(sessions, [
-    { payload: { text: "finish the stored request" } },
-    { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },
-    { type: "tool_result", payload: { tool: "files", callId: "done", result: "stored ".repeat(1000) } },
+    user("finish the stored request"),
+    { kind: "ToolCall", callId: "done", tool: "files", body: { action: "write" } },
+    { kind: "ToolResult", callId: "done", tool: "files", body: { result: "stored ".repeat(1000) } },
   ]);
   const result = await orch.handleTurn({ ...turn("finish the stored request"), attempt: 2, surfaceTools: false });
   assert.equal(result.status, "ok");

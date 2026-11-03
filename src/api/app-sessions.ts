@@ -7,7 +7,7 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session, SessionEntry } from "../types.ts";
-import { entryFromItem, itemFromEntry, type Item } from "../sessions/items.ts";
+import { entryFromItem, itemFromEntry, type Item, messageTs } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
@@ -223,8 +223,8 @@ export function createSessionMethods(
     const channel = slackDmChannel(session);
     if (!channel) return;
     const item = await renderedEntryAt(session.id, entrySeq);
-    const ts = (item && (entryFromItem(item, session.scopeId).payload as { ts?: unknown }))?.ts;
-    if (typeof ts !== "string" || !ts) return;
+    const ts = item && messageTs(item);
+    if (!ts) return;
     await deps.deliveries.enqueue({
       destination: { type: "slack", target: channel, pin: { messageTs: ts, ...(remove ? { remove: true } : {}) } },
       text: "",

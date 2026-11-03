@@ -1,7 +1,7 @@
 import { outermostJsonObject } from "../util/text.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
-import { withoutWire } from "./context-compaction.ts";
+import { isUserItem, itemFields, type Item } from "../sessions/items.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -394,14 +394,13 @@ const GOAL_GOVERNOR_SYSTEM_PROMPT = [
   'Reply with ONLY JSON: {"verdict": "continue" | "complete" | "step_back" | "pause", "reasons": "<one short paragraph; for pause, the exact question for the user>"}.',
 ].join("\n");
 
-export function goalWorkFromEntries(entries: ReadonlyArray<{ type: string; payload?: unknown }>): string {
+export function goalWorkFromItems(items: ReadonlyArray<Item>): string {
   const lines: string[] = [];
-  for (const e of entries) {
-    const payload = (e.payload ?? {}) as { text?: unknown };
-    if (e.type === "user" || e.type === "assistant" || e.type === "text") {
-      if (typeof payload.text === "string") lines.push(`${e.type}: ${payload.text}`);
-    } else if (e.type === "tool_call" || e.type === "tool_result") {
-      lines.push(`${e.type}: ${JSON.stringify(withoutWire(e.payload))}`);
+  for (const e of items) {
+    if (isUserItem(e) || (e.kind === "AgentMessage" && e.variant !== "files_delivered")) {
+      lines.push(`${e.kind}: ${e.text ?? ""}`);
+    } else if (e.kind === "ToolCall" || e.kind === "ToolResult") {
+      lines.push(`${e.kind}: ${JSON.stringify(itemFields(e))}`);
     }
   }
   return goalWorkDigest(lines);
