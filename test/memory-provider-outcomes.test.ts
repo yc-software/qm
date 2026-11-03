@@ -134,11 +134,23 @@ test("an attested provider is called only for the person whose private conversat
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
-  for (const actorId of ["U2", "system:personal:U1", "system:digest"]) {
+  for (const actorId of ["U2", "system:personal:U1", "system:digest"])
     assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
-    const write = await writeFacts(memory, "personal:U1", ["fact"], actorId, { mode: "explicit", actorId }, undefined);
-    assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
-    assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  const write = await writeFacts(memory, "personal:U1", ["fact"], "U2", { mode: "explicit", actorId: "U2" }, undefined);
+  assert.equal(write.added, 1);
+  assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+  assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const skipped = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      actorId,
+      { mode: "explicit", actorId },
+      undefined,
+    );
+    assert.equal(skipped.added, 1);
+    assert.deepEqual(external(skipped.outcomes), []);
   }
   assert.equal(mcp.requests.length, 0);
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });

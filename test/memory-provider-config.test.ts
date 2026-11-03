@@ -213,7 +213,7 @@ test("a write operation maps its facts with factsArg or contentArg, not both", (
 test("an attested provider cannot manage a notebook, because notebook reads carry no member", () => {
   const route = (fields: Record<string, unknown>) => {
     const parsed = JSON.parse(withProvider({ attestActor: true })) as { routes: Array<Record<string, unknown>> };
-    parsed.routes[1] = { ...parsed.routes[1], ...fields };
+    parsed.routes[1] = { ...parsed.routes[1], scopes: ["personal"], ...fields };
     return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.routes[1]?.manage;
   };
   assert.equal(route({ manage: false }), false);
