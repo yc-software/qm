@@ -1855,6 +1855,13 @@ a.chat-row-open {
   box-shadow: var(--chat-surface-shadow);
 }
 
+/* A stuck prompt keeps its resting height so the transcript doesn't jump, which puts its
+   bottom lane — and the hover footer in it — far below the condensed bubble, floating over
+   the reply. Keep the footer out while stuck; it returns once the prompt scrolls back home. */
+.message-stack .user-row.stuck > .message-meta {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .message-stack .user-row > .user-bubble {
     transition: none;
