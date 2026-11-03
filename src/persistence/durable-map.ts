@@ -35,7 +35,7 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
 ): DurableMap<T> {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -43,8 +43,36 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
+  const rowVersion = {
+    id: `durable-map/${table}/0002-row-version`,
+    statements: [
+      `SET LOCAL lock_timeout = '3s'`,
+      `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS rv BIGINT NOT NULL DEFAULT 0`,
+      `CREATE OR REPLACE FUNCTION durable_map_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      DECLARE
+        bumped BIGINT;
+      BEGIN
+        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1
+        RETURNING v INTO bumped;
+        IF TG_LEVEL = 'ROW' THEN
+          NEW.rv := bumped;
+          RETURN NEW;
+        END IF;
+        RETURN NULL;
+      END
+      $fn$`,
+      `DROP TRIGGER IF EXISTS ${table}_row_version ON ${table}`,
+      `CREATE TRIGGER ${table}_row_version BEFORE INSERT OR UPDATE ON ${table}
+      FOR EACH ROW EXECUTE FUNCTION durable_map_bump()`,
+      `DROP TRIGGER IF EXISTS ${table}_removal_version ON ${table}`,
+      `CREATE TRIGGER ${table}_removal_version AFTER DELETE OR TRUNCATE ON ${table}
+      FOR EACH STATEMENT EXECUTE FUNCTION durable_map_bump()`,
+    ],
+  };
   const migrations = [
     migration,
+    rowVersion,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -101,15 +129,31 @@ export function createPostgresMap<T>(
       return fn(client);
     });
   }
-  const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  let cache: { v: string; entries: Array<[string, T]> } | null = null;
+  async function applyChanges(since: { v: string; entries: Array<[string, T]> }) {
+    const rows = await pg.q(
+      `SELECT ver.v::text AS v, (SELECT count(*) FROM ${table})::int AS n, t.id, t.json
+       FROM ${VERSIONS_TABLE} ver LEFT JOIN ${table} t ON t.rv > $1::bigint
+       WHERE ver.tbl = '${table}'`,
+      [since.v],
+    );
+    if (!rows.length) return null;
+    const byId = new Map(since.entries);
+    for (const row of rows) {
+      if (row.id === null) continue;
+      if (!byId.has(row.id as string)) return null;
+      byId.set(row.id as string, row.json as T);
+    }
+    return byId.size === rows[0]!.n ? { v: rows[0]!.v as string, entries: [...byId] } : null;
+  }
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    if (cache && cache.v !== v) cache = cache.v && v ? await applyChanges(cache) : null;
+    if (!cache) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache = { v, entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
     return structuredClone(cache.entries);
   }

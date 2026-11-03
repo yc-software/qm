@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -157,6 +157,64 @@ test("pg map: all()/entries() stay coherent across instances despite the read ca
   assert.ok(!(await reader.all()).some((w) => w.name?.startsWith("c2")), "delete is visible");
   await writer.take("c1");
   assert.ok(!(await reader.entries()).some(([id]) => id === "c1"), "take is visible");
+});
+
+test("pg map: writes made outside the map reach a warm reader on its next read", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const reader = factory.map<Widget>("map_widgets");
+  try {
+    await reader.put("raw1", { name: "raw1", tags: [], nested: { n: 1 } });
+    await reader.put("raw2", { name: "raw2", tags: [], nested: { n: 2 } });
+    await reader.all();
+    await factory.pool.q(`UPDATE map_widgets SET json = jsonb_set(json, '{name}', '"raw1x"') WHERE id = 'raw1'`);
+    assert.equal((await reader.get("raw1"))?.name, "raw1x");
+    assert.ok(
+      (await reader.all()).some((w) => w.name === "raw1x"),
+      "an out-of-band update is visible",
+    );
+    await factory.pool.q(`DELETE FROM map_widgets WHERE id = 'raw2'`);
+    assert.ok(!(await reader.all()).some((w) => w.name === "raw2"), "an out-of-band delete is visible");
+    await factory.pool.q(
+      `INSERT INTO map_widgets (id, json) VALUES ('raw0', '{"name":"raw0","tags":[],"nested":{"n":0}}')`,
+    );
+    const ids = (await reader.entries()).map(([id]) => id).filter((id) => id.startsWith("raw"));
+    assert.deepEqual(ids, ["raw0", "raw1"], "an out-of-band insert is visible in id order");
+  } finally {
+    await factory.pool.q(`DELETE FROM map_widgets WHERE id LIKE 'raw%'`);
+    await factory.pool.close();
+  }
+});
+
+test("pg map: a warm reader refreshes after an update without rereading unchanged rows", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const writer = factory.map<Widget>("map_delta_widgets");
+  let rowsRead = 0;
+  const counting = {
+    ...factory.pool,
+    q: async (sql: string, params?: unknown[]) => {
+      const rows = await factory.pool.q(sql, params);
+      rowsRead += rows.length;
+      return rows;
+    },
+  };
+  const reader = createPostgresMap<Widget>(counting, "map_delta_widgets");
+  try {
+    for (let i = 0; i < 50; i++)
+      await writer.put(`d${String(i).padStart(2, "0")}`, { name: `d${i}`, tags: [], nested: { n: i } });
+    assert.equal((await reader.all()).length, 50);
+    await writer.merge("d07", { name: "d7x" });
+    rowsRead = 0;
+    const after = await reader.all();
+    assert.ok(rowsRead < 5, `only the changed row is fetched again (read ${rowsRead} rows)`);
+    assert.equal(after[7]?.name, "d7x", "the changed row is current and keeps its id-order position");
+    assert.deepEqual(
+      after.map((w) => w.nested.n),
+      Array.from({ length: 50 }, (_, i) => i),
+    );
+  } finally {
+    await factory.pool.q("DROP TABLE IF EXISTS map_delta_widgets");
+    await factory.pool.close();
+  }
 });
 
 test("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
