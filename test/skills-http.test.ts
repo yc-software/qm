@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { sleep } from "../src/util/async.ts";
 
 function start() {
   const built = buildApp(
@@ -385,6 +386,12 @@ test("POST /v1/skills rejects a duplicate name in the caller's personal scope wi
 
 test("concurrent POST /v1/skills of one name in one scope save it once and 409 the rest", async () => {
   const srv = start();
+  const list = srv.skills.list;
+  srv.skills.list = async () => {
+    const rows = await list();
+    await sleep(50);
+    return rows;
+  };
   try {
     const statuses = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
