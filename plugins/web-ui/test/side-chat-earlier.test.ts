@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
@@ -22,23 +23,18 @@ test("open a side chat from an earlier inherited assistant reply", async () => {
     forkedFrom: { sessionId: "parent" },
     forkBoundarySeq: 1,
   };
-  const entries = [
+  const items = [
     "Explain queues",
     "Persisted jobs survive worker crashes",
     "Give an example",
     "Retry the job safely",
-  ].map((text, seq) => ({
-    seq,
-    type: seq % 2 ? "assistant" : "user",
-    createdAt: Date.now(),
-    payload: { text },
-  }));
+  ].map((text, seq) => item(seq % 2 ? "AgentMessage" : "UserMessage", { seq, createdAt: Date.now(), text }));
   let forkBody: unknown;
   const h = await harness({
     path: "/s/source",
     session: source,
     listSessions: [source],
-    entries,
+    items,
     api(path, init) {
       if (path.endsWith("/side-chats")) return Response.json({ sessions: [] });
       if (path === "/api/sessions/source/fork") {
@@ -52,7 +48,7 @@ test("open a side chat from an earlier inherited assistant reply", async () => {
             forkBoundarySeq: 3,
             sideChat: { entrySeq: 1, quote: "worker crashes", expanded: false },
           },
-          entries,
+          items,
         });
       }
       return undefined;
@@ -64,12 +60,8 @@ test("open a side chat from an earlier inherited assistant reply", async () => {
     await h.sessionsReady();
     await until(() => Boolean(document.querySelector(".fork-origin-toggle")));
     document.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
-    await until(() =>
-      [...document.querySelectorAll(".message-row p")].some((p) => p.textContent === entries[1].payload.text),
-    );
-    const paragraph = [...document.querySelectorAll(".message-row p")].find(
-      (p) => p.textContent === entries[1].payload.text,
-    )!;
+    await until(() => [...document.querySelectorAll(".message-row p")].some((p) => p.textContent === items[1]!.text));
+    const paragraph = [...document.querySelectorAll(".message-row p")].find((p) => p.textContent === items[1]!.text)!;
     const range = document.createRange();
     range.setStart(paragraph.firstChild!, 22);
     range.setEnd(paragraph.firstChild!, paragraph.textContent!.length);

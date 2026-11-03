@@ -131,7 +131,7 @@ export function turnTools(kit: ToolKit) {
           tool: "runtime",
           action: request.action,
           ok: result.ok,
-          ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
+          ...(handoff ? { runtimeHandoff: handoff, actorId: ref.runtimeActorId } : {}),
           ...(result.ok && request.action === "get" && isObj(result.active) ? { runtimeActive: result.active } : {}),
         },
         { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },

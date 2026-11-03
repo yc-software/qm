@@ -99,7 +99,10 @@ export function sessionTools(kit: ToolKit) {
         );
       }
       if (p.action === "wait") {
-        await syscalls.receive?.(delegateWork ? 0 : (p.timeoutMs ?? 60_000));
+        await syscalls.receive?.(
+          delegateWork ? 0 : (p.timeoutMs ?? 60_000),
+          AbortSignal.any([ref.abortSignal, ref.steered].filter((signal) => signal !== undefined)),
+        );
         return recordCoreAuthoredResult(
           callId,
           { tool: "subagents", action: "wait" },

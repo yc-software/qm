@@ -69,7 +69,8 @@ import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
-import type { SlackReactionEvent } from "./payloads.ts";
+import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
+import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
   type SlackConversationKind,
@@ -94,6 +95,7 @@ interface Incoming {
   unprompted?: boolean;
   botAuthored?: boolean;
   synthetic?: boolean;
+  message?: Partial<SlackMessageEvent>;
   ackGate?: AckGate;
   prefetched?: {
     actor: ActorAssertion;
@@ -420,22 +422,10 @@ export function createTurnHandler(deps: {
       await ack?.settle().catch(swallowAs("slack: ack settle", undefined));
     };
 
-    if (!inc.synthetic) {
+    if (inc.message) {
       const containerName = inc.kind === "dm" ? actor.displayName?.trim() || undefined : channelName;
       await mirrorMessageEvent(
-        {
-          channel: inc.channel,
-          ts: inc.ts,
-          text: inc.rawText,
-          subtype: inc.subtype,
-          files: inc.files,
-          user: inc.userId,
-          bot_id: inc.botId,
-          username: inc.authorName,
-          ...(inc.botAuthored ? { bot_profile: { name: inc.authorName } } : {}),
-          thread_ts: inc.threadTs,
-          channel_type: channelType(inc.kind, conversationKind),
-        },
+        { ...inc.message, channel: inc.channel, ts: inc.ts, channel_type: channelType(inc.kind, conversationKind) },
         client,
         { partial: true, kind: conversationKind, handled: true, ...(containerName ? { containerName } : {}) },
       );
@@ -803,7 +793,7 @@ export function createTurnHandler(deps: {
       const m = res?.message;
       if (!m) return undefined;
       return {
-        text: decodeSlackEntities(String(m.text ?? "").trim()),
+        text: decodeSlackEntities(slackMessageContent(m).text.trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
         reactions: reactionTallies(m.reactions),
         ...(m.user ? { authorId: String(m.user) } : {}),

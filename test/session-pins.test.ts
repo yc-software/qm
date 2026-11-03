@@ -90,8 +90,8 @@ describe("conversation pins self-API", async () => {
 
   it("pins a transcript entry by seq with a preview", async () => {
     const token = await capFor("U1", THREAD);
-    const entries = await built.sessions.getEntries(sessionId);
-    const userEntry = entries.find((e) => e.type === "user");
+    const items = await built.sessions.getItems(sessionId);
+    const userEntry = items.find((e) => e.kind === "UserMessage");
     assert.ok(userEntry, "session has a user entry");
     const res = await call("POST", "/v1/pins", { seq: userEntry!.seq }, token);
     assert.equal(res.status, 200);

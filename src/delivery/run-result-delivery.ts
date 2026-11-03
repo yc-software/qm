@@ -1,12 +1,12 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { TurnFailurePayload } from "../core/turn-error.ts";
+import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
@@ -90,15 +90,16 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   return null;
 }
 
-export type TurnFailureSessions = Pick<
-  SessionStore,
-  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries"
->;
+export type TurnFailureSessions = Pick<SessionStore, "append" | "getByThread" | "getItems">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
-export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
+export async function recordRunFailureEntry(
+  sessions: TurnFailureSessions,
+  runs: Pick<RunStore, "inFlightForThread">,
+  run: Run,
+): Promise<boolean> {
   if (run.status !== "failed" || run.request.swarm) return false;
   const session = await sessions.getByThread(run.sessionId);
   if (!session) {
@@ -107,24 +108,15 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     );
     return false;
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "backfill", FAILURE_RECORD_WAIT_MS);
-  if (!lease) {
+  if (!(await waitForNoRunningRun(runs, run.sessionId, FAILURE_RECORD_WAIT_MS))) {
     console.error(`[delivery] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
     return false;
   }
-  try {
-    const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
-    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
-    const payload: TurnFailurePayload = {
-      kind: "turn_failure",
-      message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
-      runId: run.id,
-    };
-    await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
-    return true;
-  } finally {
-    await sessions.releaseLease(lease);
-  }
+  const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+  if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
+  const message = `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`;
+  await sessions.append({ sessionId: session.id }, turnFailureItem(message, run.id));
+  return true;
 }
 
 const RUN_RESULT_SWEEP_LOOKBACK_MS = 60 * 60_000;
@@ -136,14 +128,14 @@ export interface RunResultRecovery {
 }
 
 export function wireRunResultDeliveries(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished">,
+  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "inFlightForThread">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
   const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch(
+      void recordRunFailureEntry(sessions, runs, run).catch(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }

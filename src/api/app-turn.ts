@@ -2,10 +2,11 @@ import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
+import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
-import { rosterAdmits } from "../resolution/scope-membership.ts";
+import { conversationWriteAccess } from "./conversation-write-access.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
@@ -14,7 +15,6 @@ import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
-import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
 import {
   defaultModel,
@@ -62,7 +62,7 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
-  | "getRunToolEntries"
+  | "getRunToolItems"
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
@@ -80,7 +80,6 @@ export function createTurnMethods(
     approvalVisibleToViewer,
     pendingApprovalForSession,
     pendingApprovalResultForThread,
-    mayUseSharedScope,
     viewerMayUseRun,
     sessionForViewer,
     replayOrphanedRunSignals,
@@ -118,59 +117,16 @@ export function createTurnMethods(
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      let projectAudience: Principal[] | undefined;
-      let projectName: string | undefined;
-      let projectVersion: string | undefined;
-      let sessionParticipantIds: string[] | undefined;
+      const access = await conversationWriteAccess(deps, h, req, actor);
+      if (!access.ok) return { status: "refused", reason: access.reason };
+      const project = access.project;
       const conversationRef = req.conversation.channelRef;
-      const projectGroup = req.conversation.kind === "group" && !!conversationRef && isProjectGroupRef(conversationRef);
-      const projectId = projectGroup ? projectIdFromGroupRef(conversationRef) : null;
-
-      if (projectGroup) {
-        if (!projectId) return { status: "refused", reason: "you're not a member of that context" };
-        const project = await deps.projects?.get(projectId);
-        if (
-          !project ||
-          project.orgId !== orgIdOf() ||
-          !deps.identity.isInternal(deps.identity.classify(project.ownerId))
-        ) {
-          return { status: "refused", reason: "you're not a member of that context" };
-        }
-        const roster = (await deps.projects?.members(conversationRef)) ?? [];
-        const activeMemberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
-        if (!rosterAdmits(activeMemberIds, actor.id, scopeId("group", conversationRef)))
-          return { status: "refused", reason: "you're not a member of that context" };
-        projectAudience = await Promise.all(
-          activeMemberIds.map(async (memberId) => {
-            if (memberId === actor.id) return actor;
-            const principal = deps.identity.classify(memberId);
-            const member = await deps.directory.get(memberId).catch(() => null);
-            return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
-          }),
-        );
-        projectName = project.name;
-        projectVersion = String(project.updatedAt);
-        sessionParticipantIds = [...activeMemberIds];
-      } else if (req.surface === "web" && req.conversation.kind !== "dm") {
-        if (!conversationRef || !(await mayUseSharedScope(req.conversation.kind, conversationRef, actor))) {
-          return { status: "refused", reason: "you're not a member of that context" };
-        }
-      }
+      let sessionParticipantIds = project ? [...project.memberIds] : undefined;
 
       if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
         sessionParticipantIds = [actor.id];
       }
 
-      if (isSubagentThreadRef(req.conversation.threadRef)) {
-        const target = await deps.sessions.getByThread(req.conversation.threadRef);
-        if (
-          !target?.spawnMeta ||
-          target.scopeId !== conversationScope(req.conversation, actor.id) ||
-          !(await deps.sessions.getForParticipant(target.id, actor.id)) ||
-          !(await h.principalCanWriteScope(actor.id, target.scopeId))
-        )
-          return { status: "refused", reason: "you cannot continue that subagent session" };
-      }
       const orgRuntimeScope = scopeId("org", orgIdOf());
       const turnRuntimeScope =
         req.conversation.kind === "dm"
@@ -188,9 +144,9 @@ export function createTurnMethods(
       }
 
       async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
-        if (!projectId || !deps.projects) return fn();
-        if (!conversationRef || !projectVersion) return null;
-        return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
+        if (!project || !deps.projects) return fn();
+        if (!conversationRef) return null;
+        return (await deps.projects.withVersion(conversationRef, project.version, fn)) ?? null;
       }
 
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
@@ -226,18 +182,6 @@ export function createTurnMethods(
       }
       let requestedModel = req.model;
       if (req.surface === "web") {
-        const threadRef = req.conversation.threadRef;
-        const existing = await deps.sessions.getByThread(threadRef);
-        if (existing) {
-          const claimed = conversationScope(req.conversation, actor.id);
-          if (existing.scopeId !== claimed) {
-            return { status: "refused", reason: "that conversation lives in a different context" };
-          }
-          if (!(await h.mayWriteSession(actor.id, existing)))
-            return { status: "refused", reason: "you can't continue that conversation from the web" };
-        } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
-          return { status: "refused", reason: "you can only start a new conversation on your own thread" };
-        }
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);
         const runtimeFallback = deps.runtimeFallback ?? { modelId: defaultModel() };
@@ -314,7 +258,7 @@ export function createTurnMethods(
 
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
-        projectAudience ??
+        project?.audience ??
         rawAudience.map((a) => {
           const p = deps.identity.classify(a.externalId, a.isExternalGuest);
           if (p.id === actor.id) return actor;
@@ -323,15 +267,15 @@ export function createTurnMethods(
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =
-        projectAudience ??
+        project?.audience ??
         req.conversation.publishMembers?.map((a) => deps.identity.classify(a.externalId, a.isExternalGuest));
 
       const conversation: Conversation = {
         kind: req.conversation.kind,
         threadRef: req.conversation.threadRef,
         ...(req.conversation.channelRef ? { channelRef: req.conversation.channelRef } : {}),
-        ...(projectName || req.conversation.channelName
-          ? { channelName: projectName ?? req.conversation.channelName }
+        ...(project?.name || req.conversation.channelName
+          ? { channelName: project?.name ?? req.conversation.channelName }
           : {}),
         audience,
         ...(req.conversation.isPrivate !== undefined ? { isPrivate: req.conversation.isPrivate } : {}),
@@ -393,10 +337,10 @@ export function createTurnMethods(
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
-        ...(projectVersion ? { scopeVersion: projectVersion } : {}),
+        ...(project ? { scopeVersion: project.version } : {}),
       };
 
-      if (projectGroup && req.approval) {
+      if (project && req.approval) {
         const [approval, approvalSession] = await Promise.all([
           deps.approvals?.get(req.approval.requestId),
           deps.sessions.getByThread(conversation.threadRef),
@@ -444,8 +388,7 @@ export function createTurnMethods(
       }
       let dedupKey: string | undefined = redeliveryKey;
       if (req.idempotencyKey) {
-        dedupKey =
-          projectVersion === undefined ? req.idempotencyKey : `${req.idempotencyKey}:project-${projectVersion}`;
+        dedupKey = project ? `${req.idempotencyKey}:project-${project.version}` : req.idempotencyKey;
         if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
       }
 
@@ -498,21 +441,20 @@ export function createTurnMethods(
               ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
               : a.name,
           );
+          if (!req.text.trim() && !fileNames.length) return { status: "refused", reason: "empty message" };
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(Date.now()),
             text: injectedText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
           };
-          const route = routeWake(wake, true, resolveTurnOrigin(targetRun.request).kind === "ambient");
-          if (route.kind === "steer" || route.kind === "drop") {
+          const route = routeWake(wake, resolveTurnOrigin(targetRun.request).kind === "ambient");
+          if (route.kind === "steer") {
             const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
             let redelivered = false;
             const routedRunId = await withCurrentProjectRoster(async () => {
-              if (route.kind === "steer" && route.signal === "abort") {
-                await stopRunTree(targetRun);
-              } else if (route.kind === "steer")
+              if (route.signal === "abort") await stopRunTree(targetRun);
+              else
                 redelivered = !(await deps.signals!.send(targetRun.id, {
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
@@ -526,18 +468,16 @@ export function createTurnMethods(
               return { status: "refused", reason: "project membership changed; retry from the current project" };
             if (redelivered)
               return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
-            if (route.kind === "steer") {
-              const after = await deps.runs.get(targetRun.id);
-              if (!after || isTerminal(after.status)) {
-                const own = (await replayOrphanedRunSignals(targetRun.id)).find(
-                  (d) =>
-                    (d.signal.text === route.text ||
-                      (route.text !== undefined && d.signal.text === pgTextSafe(route.text))) &&
-                    d.signal.ts === steerTs,
-                );
-                if (own?.replayRunId)
-                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
-              }
+            const after = await deps.runs.get(targetRun.id);
+            if (!after || isTerminal(after.status)) {
+              const own = (await replayOrphanedRunSignals(targetRun.id)).find(
+                (d) =>
+                  (d.signal.text === route.text ||
+                    (route.text !== undefined && d.signal.text === pgTextSafe(route.text))) &&
+                  d.signal.ts === steerTs,
+              );
+              if (own?.replayRunId)
+                return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
             }
             return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
           }
@@ -745,22 +685,19 @@ export function createTurnMethods(
       };
     },
 
-    async getRunToolEntries(runId, viewer, afterSeq) {
+    async getRunToolItems(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
       if (!run || run.turnUserSeq === null) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = await deps.sessions.getEntries(session.id, {
+      const items = await deps.sessions.getItems(session.id, {
         sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
       });
-      const nextRun = entries.findIndex((e) => {
-        const owner = (e.payload as { runId?: unknown } | null)?.runId;
-        return e.type === "user" && typeof owner === "string" && owner !== runId;
-      });
-      return entries
+      const nextRun = items.findIndex((item) => isUserItem(item) && item.turnId !== null && item.turnId !== runId);
+      return items
         .slice(0, nextRun < 0 ? undefined : nextRun)
-        .filter((e) => e.type === "tool_call" || e.type === "tool_result");
+        .filter((item) => item.kind === "ToolCall" || item.kind === "ToolResult");
     },
 
     async stopConversation(threadRef, viewer) {

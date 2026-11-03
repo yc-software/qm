@@ -10,7 +10,7 @@ import type {
   QueuedRun,
   TurnOptions,
   TurnRuntime,
-  entriesToMessages,
+  itemsToMessages,
 } from "./core-bridge";
 import type { EffortLevel, ModelOption } from "./model-options";
 import type { ComposerMenu } from "./composer";
@@ -59,7 +59,7 @@ interface ChatState {
   earlierCount: number;
   loadingEarlier: boolean;
   forkSession: CoreSession | null;
-  inheritedMessages: ReturnType<typeof entriesToMessages>;
+  inheritedMessages: ReturnType<typeof itemsToMessages>;
   inheritedExpanded: boolean;
   inheritedLoaded: boolean;
 }
@@ -83,17 +83,17 @@ export interface ChatSurface {
     threadRef: string,
     sessionId: string | null,
     scopeId: string | null,
-    messages: ReturnType<typeof entriesToMessages>,
+    messages: ReturnType<typeof itemsToMessages>,
     contextName?: string | null,
     session?: CoreSession,
-    inheritedMessages?: ReturnType<typeof entriesToMessages>,
+    inheritedMessages?: ReturnType<typeof itemsToMessages>,
   ): void;
   mountReadOnly(
     s: CoreSession,
-    messages: ReturnType<typeof entriesToMessages>,
+    messages: ReturnType<typeof itemsToMessages>,
     earlierCount?: number,
     anchorSeq?: number | null,
-    inheritedMessages?: ReturnType<typeof entriesToMessages>,
+    inheritedMessages?: ReturnType<typeof itemsToMessages>,
   ): void;
   attachApprovalsWhenLoaded(sessionId: string, approvals: Promise<{ approvals: PendingApproval[] } | null>): void;
   mountLoadingPane(): () => boolean;

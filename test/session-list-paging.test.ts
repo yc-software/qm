@@ -114,11 +114,12 @@ test("a parent row counts its running subagents and its children load on demand"
     const page = (await get("/v1/sessions?principalId=U1")).body as Page;
     const row = page.sessions.find((s) => s.id === parent.id);
     assert.equal(row?.working, true);
-    assert.deepEqual(row?.subagents, { running: 2, waiting: 0 }, "the child is working on behalf of its child");
+    assert.deepEqual(row?.subagents, { running: 1, waiting: 0 }, "an idle child is not counted while its child runs");
 
     const children = (await get(`/v1/sessions/${parent.id}/children?principalId=U1`)).body as { sessions: Session[] };
     assert.deepEqual(children.sessions.map((s) => s.id).sort(), [child.id, grandchild.id].sort());
     assert.equal(children.sessions.find((s) => s.id === grandchild.id)?.working, true);
+    assert.ok(!children.sessions.find((s) => s.id === child.id)?.working);
     assert.deepEqual(
       children.sessions.find((s) => s.id === child.id)?.subagents,
       { running: 1, waiting: 0 },

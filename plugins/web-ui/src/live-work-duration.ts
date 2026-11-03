@@ -1,8 +1,9 @@
+import { html } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
 import { currentTextPhase } from "./timeline.ts";
-import { workDuration, workSeconds } from "./work-duration.ts";
+import { workDurationParts, workSeconds } from "./work-duration.ts";
 
 class LiveWorkDuration extends AsyncDirective {
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -27,7 +28,10 @@ class LiveWorkDuration extends AsyncDirective {
   }
 
   private label() {
-    return workDuration(this.seconds + (this.ticking ? (Date.now() - this.sampledAt) / 1000 : 0));
+    const { lead, seconds } = workDurationParts(
+      this.seconds + (this.ticking ? (Date.now() - this.sampledAt) / 1000 : 0),
+    );
+    return html`${lead}<span class="work-elapsed-seconds">${seconds}</span>s`;
   }
 
   protected disconnected() {

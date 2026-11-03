@@ -101,6 +101,38 @@ test("Render uses Git builds for all services and rejects image overrides", (t) 
   assert.ok(renderConfigErrors(config, []).some((error) => /remove imageOverrides/.test(error.message)));
 });
 
+test("Render core starts sandboxes from the configured base image and refuses the unpublished placeholder", (t) => {
+  const image = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+  const { config } = deployment(t, (raw) => Object.assign(raw, { sandbox: { backend: "render", baseImage: image } }));
+  assert.equal(renderServiceEnv(config, "core", new Map(), connections).RENDER_SANDBOX_IMAGE, image);
+  assert.ok(!renderConfigErrors(config, []).some((error) => /sandbox.baseImage/.test(error.message)));
+  delete config.sandbox!.baseImage;
+  assert.match(renderServiceEnv(config, "core", new Map(), connections).RENDER_SANDBOX_IMAGE!, /^registry\.invalid\//);
+  assert.ok(
+    renderConfigErrors(config, []).some((error) =>
+      /pins no published sandbox base image; set sandbox.baseImage/.test(error.message),
+    ),
+  );
+  for (const baseImage of [
+    image.replace(/:c+@/, "@"),
+    image.replace(/:c+@/, ":@"),
+    image.replace(/d{64}$/, "D".repeat(64)),
+  ]) {
+    const { config: invalid } = deployment(t, (raw) =>
+      Object.assign(raw, { sandbox: { backend: "render", baseImage } }),
+    );
+    assert.ok(
+      renderConfigErrors(invalid, []).some((error) =>
+        /Render sandbox.baseImage must be <repository>:<tag>@sha256:<64 hex digits>/.test(error.message),
+      ),
+    );
+  }
+  const { config: stray } = deployment(t, (raw) =>
+    Object.assign(raw, { sandbox: { backend: "render", baseImage: image, env: { FOO: "bar" } } }),
+  );
+  assert.ok(renderConfigErrors(stray, []).some((error) => /Render sandboxes ignore sandbox.env/.test(error.message)));
+});
+
 test("Render init selects managed MinIO without generated infrastructure files or storage inputs", (t) => {
   const { config } = deployment(t);
   assert.deepEqual(config.render?.storage, { plan: "0.5c-512mb", diskSizeGB: 10 });

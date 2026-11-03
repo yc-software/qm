@@ -12,6 +12,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import type { Item } from "../src/sessions/items.ts";
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -84,8 +85,8 @@ describe("agent conversations self-API", async () => {
     const [run] = await built.runs.inFlightForThread(out.session.threadRef);
     assert.equal(run?.request.text, "investigate the flaky test");
     assert.equal(run?.request.surface, "web");
-    const entries = await built.sessions.getEntries(out.session.id);
-    assert.ok(!entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+    const entries = await built.sessions.getItems(out.session.id);
+    assert.ok(!entries.some((e) => e.text?.includes("plan the launch")));
     const listed = await built.app.listSessions("U1");
     assert.ok(listed.some((s) => s.id === out.session.id));
   });
@@ -234,23 +235,18 @@ describe("agent conversations self-API", async () => {
     const token = await capFor("U1");
     const bounded = await get(`/v1/conversations/${mineId}`, token);
     assert.equal(bounded.status, 200);
-    const boundedBody = (await bounded.json()) as {
-      entries: Array<{ type: string; payload: { text?: string } }>;
-      earlierEntries?: number;
-    };
-    assert.ok(!boundedBody.entries.some((entry) => entry.payload.text === "plan the launch"));
-    assert.ok(boundedBody.entries.some((entry) => entry.payload.text === "launch question 21"));
-    assert.ok((boundedBody.earlierEntries ?? 0) > 0);
+    const boundedBody = (await bounded.json()) as { items: Item[]; earlierItems?: number };
+    assert.ok(!boundedBody.items.some((item) => item.text === "plan the launch"));
+    assert.ok(boundedBody.items.some((item) => item.text === "launch question 21"));
+    assert.ok((boundedBody.earlierItems ?? 0) > 0);
 
     const tail = await get(`/v1/conversations/${mineId}?tailTurns=1`, token);
     assert.equal(tail.status, 200);
-    const tailBody = (await tail.json()) as {
-      entries: Array<{ type: string; payload: { text?: string } }>;
-      earlierEntries?: number;
-    };
-    assert.ok(tailBody.entries.some((entry) => entry.payload.text === "launch question 21"));
-    assert.ok(!tailBody.entries.some((entry) => entry.payload.text === "launch question 20"));
-    assert.ok((tailBody.earlierEntries ?? 0) > 0);
+    const tailBody = (await tail.json()) as { items: Item[]; earlierItems?: number };
+    assert.ok(tailBody.items.some((item) => item.text === "launch question 21"));
+    assert.ok(!tailBody.items.some((item) => item.text === "launch question 20"));
+    assert.ok(tailBody.items.every((item) => Object.values(item).every((value) => value !== null)));
+    assert.ok((tailBody.earlierItems ?? 0) > 0);
     assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
   });
 
@@ -261,8 +257,8 @@ describe("agent conversations self-API", async () => {
     });
     assert.ok("session" in out);
     assert.notEqual(out.session.id, mineId);
-    const entries = await built.sessions.getEntries(out.session.id);
-    assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+    const entries = await built.sessions.getItems(out.session.id);
+    assert.ok(entries.some((e) => e.text?.includes("plan the launch")));
     assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
   });
 

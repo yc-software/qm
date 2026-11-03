@@ -2,7 +2,8 @@ import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ClientToolDeclaration, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, ScopeId } from "../types.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -27,7 +28,6 @@ export interface ToolContextRef {
   documents?: DocumentInput[];
   documentsStubbed?: boolean;
   runtimeHandoff?: TurnHandoff;
-  runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
@@ -43,7 +43,7 @@ export interface ToolContextRef {
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
-  emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
+  emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   llmCapture?: Array<{
@@ -57,6 +57,7 @@ export interface ToolContextRef {
   onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  steered?: AbortSignal;
   shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
@@ -76,11 +77,11 @@ export interface ToolContextRef {
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
   approvedToolCalls?: Map<string, string>;
+  stoppedCalls?: Set<string>;
 }
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
@@ -104,7 +105,6 @@ export type CoreToolOptions = Omit<
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: true,
-    reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
@@ -157,7 +157,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { attach, finishSilently, context, runtime } = turnTools(kit);
 
   const tools = [
-    ...(!delegateWork ? [execute] : []),
+    ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
     resourceTool("skills", {
       list: discoverSkills(false),
       search: discoverSkills(true),
@@ -200,10 +200,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface] : [attach]),
     finishSilently,
-    resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
+    { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
     runtime,
     context,
-    ...clientTools,
+    ...clientTools.map((tool) => ({ ...tool, handlesAbort: true })),
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
@@ -214,7 +214,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolSpan(withToolApprovalGate(validateSandboxTool(tool, kit), kit), ref),
-      ref,
+      kit,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });

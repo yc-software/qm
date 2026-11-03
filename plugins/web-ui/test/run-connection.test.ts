@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -273,11 +274,13 @@ test("approval activity reaches the visible transcript before any response text"
       result: null,
       activity: [
         {
-          seq: 57,
-          parentSeq: null,
-          type: "approval_resolved",
-          payload: { requestId: "a", command: "help", approved: true, scope: "once" },
-          createdAt: 100,
+          item: item("ElicitationResponse", {
+            seq: 57,
+            createdAt: 100,
+            elicitId: "a",
+            approved: true,
+            body: { command: "help", scope: "once" },
+          }),
         },
       ],
     },
@@ -292,11 +295,13 @@ test("approval activity reaches the visible transcript before any response text"
       result: { status: "ok", reply: "Done" },
       activity: [
         {
-          seq: 57,
-          parentSeq: null,
-          type: "approval_resolved",
-          payload: { requestId: "a", command: "help", approved: true, scope: "once" },
-          createdAt: 100,
+          item: item("ElicitationResponse", {
+            seq: 57,
+            createdAt: 100,
+            elicitId: "a",
+            approved: true,
+            body: { command: "help", scope: "once" },
+          }),
         },
       ],
     },

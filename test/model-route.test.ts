@@ -2,8 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent, type AgentOptions } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput, CompactInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
+import type { Item, NewItem } from "../src/sessions/items.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
@@ -18,9 +17,9 @@ const GATEWAY = {
 };
 
 const HISTORY = [
-  { seq: 1, type: "user", payload: { text: "hello" }, createdAt: 1 },
-  { seq: 2, type: "assistant", payload: { text: "hi" }, createdAt: 2 },
-] as unknown as SessionEntry[];
+  { seq: 1, kind: "UserMessage", text: "hello", body: {}, createdAt: 1 },
+  { seq: 2, kind: "AgentMessage", text: "hi", body: {}, createdAt: 2 },
+] as unknown as Item[];
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((e) => `event: ${e.type as string}\ndata: ${JSON.stringify(e)}\n\n`).join("");
@@ -102,7 +101,7 @@ function turn(agent: ReturnType<typeof createAgent>, modelId: string): Promise<u
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     runtime: { modelId },
-    emit: async (entry: NewEntry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+    emit: async (item: NewItem) => ({ ...item, seq: seq++, createdAt: Date.now() }) as unknown as Item,
     recordModelCall: () => {},
   });
 }
