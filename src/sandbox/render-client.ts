@@ -212,7 +212,6 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
           api
             .create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source })
             .catch((error: unknown) => {
-              // Hobby workspaces cap sandbox lifetime at one day; a computer that ends sooner is restored from its checkpoint.
               if (!(error instanceof ClientError && error.code === "invalid_timeout_seconds" && lifetimeSec > DAY_SEC))
                 throw error;
               return api.create({
