@@ -158,6 +158,9 @@ test("the operator sets the admin values the CLI imports, in the named tenant, a
     await withTenant(TEST_TENANT, async () =>
       assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "personal:ada@example.com"), true),
     );
+    await withTenant(OTHER_TENANT, async () =>
+      assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "personal:ada@example.com"), false),
+    );
     await withTenant(TEST_TENANT, async () =>
       assert.equal(
         (await srv.built.featureFlags.list()).find((row) => row.featureName === "inbox_loops")?.updatedBy,

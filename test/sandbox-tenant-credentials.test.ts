@@ -143,7 +143,7 @@ test("a fetch-based provider sends the bound tenant's token and fails closed wit
 
 test("the default backend and usable backends come from the bound tenant's settings", async () => {
   const { store, a, b, none } = await twoTenants();
-  const constructed = ["local", "sprites", "e2b", "modal"] as const;
+  const constructed = ["local", "aws", "porter", "sprites", "e2b", "modal"] as const;
   const resolve = (tenant: string) =>
     withTenant(tenant, async () => {
       const settings = await store.get();
@@ -152,8 +152,8 @@ test("the default backend and usable backends come from the bound tenant's setti
         default: tenantDefaultSandboxBackend(settings, constructed),
       };
     });
-  assert.deepEqual(await resolve(a), { usable: ["local", "e2b"], default: "e2b" });
-  assert.deepEqual(await resolve(b), { usable: ["local", "sprites", "e2b"], default: "sprites" });
+  assert.deepEqual(await resolve(a), { usable: ["e2b"], default: "e2b" });
+  assert.deepEqual(await resolve(b), { usable: ["sprites", "e2b"], default: "sprites" });
   await assert.rejects(resolve(none), /E2B_API_KEY is not set in this tenant's settings/);
   const unset = FOURTH_TENANT;
   await assert.rejects(
@@ -162,6 +162,13 @@ test("the default backend and usable backends come from the bound tenant's setti
       error instanceof TenantSettingMissingError &&
       error.message === "SANDBOX_BACKEND is not set in this tenant's settings",
   );
+  await withTenant(unset, async () => assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), []));
+  for (const backend of ["local", "aws", "porter"] as const) {
+    await withTenant(unset, () => store.update({ SANDBOX_BACKEND: backend }));
+    await withTenant(unset, async () =>
+      assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), [backend]),
+    );
+  }
   const render = FIFTH_TENANT;
   await withTenant(render, () =>
     store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),

@@ -41,6 +41,7 @@ export function tenantKeyedMap<V>() {
     set: (key: string, value: V): void => void own().set(key, value),
     delete: (key: string): boolean => own().delete(key),
     values: (): IterableIterator<V> => own().values(),
+    entries: (): IterableIterator<[string, V]> => own().entries(),
   };
 }
 

@@ -12,10 +12,10 @@ interface GatewayRegistry {
   models: Map<string, GatewayModel | EmbeddingModel>;
   snapshot: string;
   aliasedIds: Set<string>;
+  version: number;
 }
 
 const registries = new Map<string, GatewayRegistry>();
-let version = 0;
 
 function registry(): GatewayRegistry | undefined {
   const tenant = boundTenant();
@@ -31,7 +31,7 @@ export function isGatewayModelId(id: string): boolean {
 }
 
 export function gatewayModelsVersion(): number {
-  return version;
+  return registry()?.version ?? 0;
 }
 
 export function setGatewayModels(
@@ -40,13 +40,14 @@ export function setGatewayModels(
 ): void {
   const tenant = currentTenant();
   const serialized = JSON.stringify([next, aliases]);
-  if (registries.get(tenant)?.snapshot === serialized) return;
+  const previous = registries.get(tenant);
+  if (previous?.snapshot === serialized) return;
   registries.set(tenant, {
     models: new Map(next.map((model) => [model.id, model])),
     aliasedIds: new Set(aliases),
     snapshot: serialized,
+    version: (previous?.version ?? 0) + 1,
   });
-  version += 1;
 }
 
 export function resolveGatewayModel(id: string): GatewayModel | undefined {

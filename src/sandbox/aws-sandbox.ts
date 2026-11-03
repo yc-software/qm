@@ -1,3 +1,4 @@
+import { tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
@@ -129,10 +130,10 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const diskGb = opts.diskGb ?? 8;
   const credentialPaths = opts.credentialPaths ?? [];
 
-  const endpointById = new Map<string, string>();
-  const scopeByMicrovm = new Map<string, string>();
-  const scratchByKey = new Map<string, BodyRef>();
-  const activeByMicrovm = new Map<string, number>();
+  const endpointById = tenantKeyedMap<string>();
+  const scopeByMicrovm = tenantKeyedMap<string>();
+  const scratchByKey = tenantKeyedMap<BodyRef>();
+  const activeByMicrovm = tenantKeyedMap<number>();
 
   function reportError(category: string, code: string, message: string, scopeLabel?: string): void {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -502,7 +503,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       activeByMicrovm.delete(handle.id);
 
       if (handle.scratch) {
-        for (const [k, ref] of scratchByKey) if (ref.microvmId === handle.id) scratchByKey.delete(k);
+        for (const [k, ref] of scratchByKey.entries()) if (ref.microvmId === handle.id) scratchByKey.delete(k);
         if (tdOpts?.destroy) await api.terminate(handle.id);
         else await api.terminate(handle.id).catch(swallowAs("aws-sandbox: scratch terminate", undefined));
         client.evict(handle.id);

@@ -32,7 +32,10 @@ export function tenantSandboxBackends(
   settings: TenantSettings,
   constructed: readonly SandboxBackendName[],
 ): SandboxBackendName[] {
-  return constructed.filter((backend) => (TENANT_SANDBOX_KEYS[backend] ?? []).every((key) => settings.values[key]));
+  return constructed.filter((backend) => {
+    const keys = TENANT_SANDBOX_KEYS[backend];
+    return keys ? keys.every((key) => settings.values[key]) : settings.sandboxBackend === backend;
+  });
 }
 
 export function tenantDefaultSandboxBackend(

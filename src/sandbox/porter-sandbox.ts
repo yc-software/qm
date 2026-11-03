@@ -1,3 +1,4 @@
+import { tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
@@ -98,10 +99,10 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
     });
 
-  const bodies = new Map<string, BodyEntry>();
-  const scopeByBody = new Map<string, string>();
-  const scratchSlugByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
+  const bodies = tenantKeyedMap<BodyEntry>();
+  const scopeByBody = tenantKeyedMap<string>();
+  const scratchSlugByName = tenantKeyedMap<string>();
+  const activeScratch = tenantKeyedMap<number>();
 
   async function liveBody(slug: string): Promise<BodyEntry | null> {
     const cached = bodies.get(slug);

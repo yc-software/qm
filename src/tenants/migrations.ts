@@ -306,6 +306,45 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   },
 ];
 
+export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
+  id: "tenants/0002-feature-flags",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $qm_flags$ BEGIN
+       IF to_regclass('feature_flags') IS NOT NULL AND NOT EXISTS (
+         SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('feature_flags') AND attname = 'feature_name'
+       ) THEN
+         ALTER TABLE feature_flags RENAME TO feature_flags_json;
+       END IF;
+     END $qm_flags$`,
+    `CREATE TABLE IF NOT EXISTS feature_flags(
+       tenant_id UUID NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants ON DELETE CASCADE,
+       feature_name TEXT NOT NULL,
+       enabled_scopes TEXT[] NOT NULL DEFAULT '{}',
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       updated_by TEXT NOT NULL,
+       PRIMARY KEY (tenant_id, feature_name)
+     )`,
+    `DO $qm_flags_copy$ BEGIN
+       IF to_regclass('feature_flags_json') IS NOT NULL THEN
+         PERFORM qm_tenant_column('feature_flags_json');
+         INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
+           SELECT tenant_id, id,
+                  ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
+                  to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
+                  COALESCE(json->>'updatedBy', '')
+           FROM feature_flags_json
+           ON CONFLICT DO NOTHING;
+         DROP TABLE feature_flags_json;
+         IF to_regclass('durable_map_versions') IS NOT NULL THEN
+           DELETE FROM durable_map_versions WHERE tbl = 'feature_flags';
+         END IF;
+       END IF;
+     END $qm_flags_copy$`,
+    ...tenantPolicies("feature_flags"),
+  ],
+};
+
 export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
   id: "tenants/0001-settings",
   statements: [

@@ -10,7 +10,6 @@ import {
   resolveModel,
   type ModelProvider,
 } from "../model/pi-models.ts";
-import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import { SECURITY_SCREEN_MODES, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { TenantSettingValues } from "./settings.ts";
 
@@ -62,7 +61,9 @@ const SANDBOX_BACKEND_NAMES = [
   "do-managed-agents",
   "porter",
   "render",
-] as const satisfies readonly SandboxBackendName[];
+] as const;
+
+export type SandboxBackendName = (typeof SANDBOX_BACKEND_NAMES)[number];
 
 function parseSandboxBackend(name: string, value: string): SandboxBackendName {
   const backend = value.trim();

@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
-import { testMap } from "./support/test-database.ts";
+import { createFeatureFlagStore, postgresFeatureFlags, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import pg from "pg";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { FEATURE_FLAGS_MIGRATION, TENANCY_BASE } from "../src/tenants/migrations.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testDatabaseUrl, testMap, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
@@ -56,4 +61,43 @@ test("retired feature records are not offered as configurable flags", async () =
     (await store.list()).map((row) => row.featureName),
     ["inbox_loops"],
   );
+});
+
+test("each tenant keeps its own flags for the same person", async () => {
+  const store = createFeatureFlagStore(postgresFeatureFlags(testMigratedDatabaseUrl()));
+  await withTenant(TEST_TENANT, () => store.setEnabled("inbox_loops", "personal:ada", true, "operator"));
+  assert.equal(await withTenant(OTHER_TENANT, () => store.enabled("inbox_loops", "personal:ada")), false);
+  await withTenant(OTHER_TENANT, () => store.setEnabled("swarms", "personal:ada", true, "admin"));
+  assert.equal(await withTenant(TEST_TENANT, () => store.enabled("inbox_loops", "personal:ada")), true);
+  assert.equal(await withTenant(TEST_TENANT, () => store.enabled("swarms", "personal:ada")), false);
+  assert.deepEqual(await withTenant(OTHER_TENANT, () => store.get("swarms")), {
+    featureName: "swarms",
+    enabledScopes: ["personal:ada"],
+    updatedAt: (await withTenant(OTHER_TENANT, () => store.get("swarms")))!.updatedAt,
+    updatedBy: "admin",
+  });
+});
+
+test("upgrading moves the install's existing flags into its only tenant", async () => {
+  const url = testDatabaseUrl();
+  const raw = new pg.Client({ connectionString: url });
+  await raw.connect();
+  try {
+    await raw.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+    await raw.query("CREATE TABLE feature_flags (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await raw.query("INSERT INTO feature_flags VALUES ('inbox_loops', $1)", [
+      { featureName: "inbox_loops", enabledScopes: ["personal:ada"], updatedAt: 1_700_000_000_000, updatedBy: "admin" },
+    ]);
+    const owner = createPgPool(url, [TENANCY_BASE, FEATURE_FLAGS_MIGRATION]);
+    await owner.q("SELECT 1").finally(() => owner.close());
+    const { rows } = await raw.query(
+      "SELECT tenant_id::text AS tenant, feature_name, enabled_scopes, updated_by FROM feature_flags",
+    );
+    assert.deepEqual(rows, [
+      { tenant: TEST_TENANT, feature_name: "inbox_loops", enabled_scopes: ["personal:ada"], updated_by: "admin" },
+    ]);
+    assert.equal((await raw.query("SELECT to_regclass('feature_flags_json') AS t")).rows[0].t, null);
+  } finally {
+    await raw.end();
+  }
 });

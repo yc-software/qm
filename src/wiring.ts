@@ -248,11 +248,12 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
+import { tenantAllowsEmail } from "./tenants/settings-parse.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
+  postgresFeatureFlags,
   externalAppSharingAllowed,
-  type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
@@ -637,7 +638,7 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const featureFlags = createFeatureFlagStore(postgresFeatureFlags(databaseUrl));
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
@@ -1732,12 +1733,10 @@ export function buildApp(
     externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
     canManageEmail: async (email) => {
       await identity.refresh();
-      const { emailAuthPrincipals, emailAuthDomain } = await tenantSettings.get();
       return (
         identity.isInternal(identity.classify(email)) &&
         ((await directory.get(email))?.type === "internal" ||
-          emailAuthPrincipals.includes(email) ||
-          Boolean(emailAuthDomain && email.endsWith(`@${emailAuthDomain}`)) ||
+          tenantAllowsEmail(await tenantSettings.get(), email) ||
           identity.externalMember(email) !== undefined)
       );
     },
