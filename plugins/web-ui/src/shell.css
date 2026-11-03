@@ -3272,6 +3272,53 @@ qm-markdown .tok-in {
   position: relative;
   z-index: 4;
   min-width: 0;
+  anchor-scope: --qm-composer;
+}
+.chat-bottom-dock .composer-wrap {
+  anchor-name: --qm-composer;
+}
+.scroll-bottom-btn {
+  position: absolute;
+  position-anchor: --qm-composer;
+  right: max(16px, calc((100% - var(--content-w)) / 2));
+  right: anchor(right);
+  bottom: calc(100% + 8px);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.08);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 0s 160ms;
+}
+.scroll-bottom-btn:hover {
+  color: var(--foreground);
+}
+.chat-scroll[data-away-from-bottom] ~ .chat-bottom-dock .scroll-bottom-btn {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .scroll-bottom-btn,
+  .chat-scroll[data-away-from-bottom] ~ .chat-bottom-dock .scroll-bottom-btn {
+    transform: none;
+    transition: none;
+  }
 }
 .suggested-activities {
   display: grid;

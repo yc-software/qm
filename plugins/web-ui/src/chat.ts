@@ -34,6 +34,7 @@ import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
   Activity,
+  ArrowDown,
   Ban,
   BookOpen,
   Search,
@@ -1783,6 +1784,9 @@ export function createChatSurface(
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions}
+              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+                ${icon(ArrowDown, 16)}
+              </button>
             </div>
           </div>
           ${sideChats.view()}
