@@ -16,6 +16,7 @@ import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const policy = {
   companyDomains: ["company.example"],
@@ -393,27 +394,28 @@ test("external account poller neither claims default identity nor releases pre-p
   }
 });
 
-test("delegated human-origin runs cannot restart themselves as a person's private continuation", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const client = createSlackCoreClient({ runs } as SlackCoreClientDeps);
-  const request = {
-    surface: "slack",
-    actor: { id: "employee", type: "internal" as const },
-    conversation: { kind: "dm" as const, threadRef: "external:dm", audience: [] },
-    origin: { kind: "human" as const },
-    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
-    text: "continue privately",
-  };
-  const direct = await runs.enqueue({ sessionId: request.conversation.threadRef, request });
-  assert.ok(await client.privateContinuationSource!(direct.run.id));
-  for (const provenance of [{ sessionSenderId: "child" }, { delegatingRunId: direct.run.id }]) {
-    const delegated = await runs.enqueue({
-      sessionId: request.conversation.threadRef,
-      request: { ...request, ...provenance },
-    });
-    assert.equal(await client.privateContinuationSource!(delegated.run.id), null);
-  }
-});
+test("delegated human-origin runs cannot restart themselves as a person's private continuation", () =>
+  inTestTenant(async () => {
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const client = createSlackCoreClient({ runs } as SlackCoreClientDeps);
+    const request = {
+      surface: "slack",
+      actor: { id: "employee", type: "internal" as const },
+      conversation: { kind: "dm" as const, threadRef: "external:dm", audience: [] },
+      origin: { kind: "human" as const },
+      externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
+      text: "continue privately",
+    };
+    const direct = await runs.enqueue({ sessionId: request.conversation.threadRef, request });
+    assert.ok(await client.privateContinuationSource!(direct.run.id));
+    for (const provenance of [{ sessionSenderId: "child" }, { delegatingRunId: direct.run.id }]) {
+      const delegated = await runs.enqueue({
+        sessionId: request.conversation.threadRef,
+        request: { ...request, ...provenance },
+      });
+      assert.equal(await client.privateContinuationSource!(delegated.run.id), null);
+    }
+  }));
 
 test("private continuation extraction skips code, keeps the first directive, and stays linear-time on an opener flood", () => {
   assert.deepEqual(
