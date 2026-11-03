@@ -437,7 +437,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     claimDeliveries(type, claimMs) {
-      return deps.app.pendingDeliveries(type, claimMs);
+      return deps.app.claimDeliveriesAcrossTenants(type, claimMs);
     },
     holdDeliveryDispatch(fn) {
       return lease.hold("slack:delivery-dispatch", fn);

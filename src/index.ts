@@ -12,7 +12,6 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
 import { slackTeamTenant } from "./slack/slack-tables.ts";
-import { adoptEnvironmentSlack, slackWorkspaceOf } from "./slack/environment-install.ts";
 import { useOwnerDatabase } from "./tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
@@ -22,12 +21,6 @@ useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-await adoptEnvironmentSlack({
-  env: process.env,
-  databaseUrl: built.slackTables.databaseUrl,
-  installation: built.slackInstallation,
-  workspaceOf: slackWorkspaceOf(process.env),
-});
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);

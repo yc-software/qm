@@ -7,6 +7,9 @@ import {
   exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
+import { createAppLogin } from "./support/app-login.ts";
+import { testTenants } from "./support/test-tenants.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
@@ -100,3 +103,31 @@ test("pg delivery store: once-ever keys revive after a TTL drop instead of deadl
 test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
   await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });
+
+test(
+  "pg delivery store: the route claims only its tenant's rows and the poller claims every tenant's with their tenant",
+  { skip },
+  async () => {
+    const [tenant, other] = testTenants();
+    const login = await createAppLogin(URL!);
+    try {
+      const store = createPostgresDeliveryStore(login.url);
+      const enqueue = (owner: string, key: string) =>
+        withTenant(owner, () =>
+          store.enqueue({ destination: { type: "relay", target: key }, text: key, idempotencyKey: key }),
+        );
+      const mine = await enqueue(tenant, "relay-mine");
+      const theirs = await enqueue(other, "relay-theirs");
+      assert.deepEqual(
+        (await withTenant(tenant, () => store.claimPending("relay", 60_000))).map((d) => d.id),
+        [mine.id],
+      );
+      assert.deepEqual(
+        (await withoutTenant(() => store.claimPendingAcrossTenants("relay", 60_000))).map((d) => [d.id, d.tenantId]),
+        [[theirs.id, other]],
+      );
+    } finally {
+      await login.drop();
+    }
+  },
+);
