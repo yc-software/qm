@@ -52,7 +52,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage:
-  give the latest Haiku model the diff and every lens in the current
+  give the latest Haiku, a fast and cheap model, the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or
   not, keeping any lens it is unsure about. Lenses marked _always reviewed_ in the spec
   skip triage and always get a reviewer. Then dispatch a separate fresh-context
