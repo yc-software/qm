@@ -68,7 +68,9 @@ function problemOf(outcome: MemoryProviderOutcome, write: boolean): MemoryProvid
         code: "memory_provider_timeout",
         provider,
         detail: `Memory provider ${provider} timed out after ${ms}ms, so ${lost}.`,
-        fix: `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
+        fix: write
+          ? `Check ${provider}'s latency, and whether it stored the facts before sending them again.`
+          : `Raise ${provider}'s timeoutMs in MEMORY_PROVIDER_CONFIG or check its latency.`,
       };
     case "failed":
       return {

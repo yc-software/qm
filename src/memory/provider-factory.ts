@@ -1,7 +1,11 @@
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
-import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
+import {
+  MAX_PROVIDER_TIMEOUT_MS,
+  type MemoryProviderConfig,
+  type McpMemoryOperationConfig,
+} from "./provider-config.ts";
 import { createRoutedMemoryService } from "./provider-router.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createMemorableMemoryProvider } from "./memorable/provider.ts";
@@ -36,7 +40,7 @@ export function createConfiguredMemoryService(opts: {
     }
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs),
-      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
+      ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS) } : {}),
       attestActor: provider.attestActor,
     });
   }
