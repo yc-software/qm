@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
+import { useOwnerDatabase } from "../src/tenants/claim.ts";
+import { restoreFileOwner } from "./support/test-database.ts";
 import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import { DEPLOYMENT_LAYER, type StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
@@ -73,7 +75,7 @@ test("sandbox resources and defaults backfill from key-value rows onto the exist
 });
 
 test("sandbox resources and defaults stay inside their tenant", { skip }, async () => {
-  await withTypedTableDb(createSandboxResourceStores, async ({ store, tenant, otherTenant }) => {
+  await withTypedTableDb(createSandboxResourceStores, async ({ store, tenant, otherTenant, ownerUrl }) => {
     await withTenant(tenant, async () => {
       await store.records.put("a", resource("a", { holders: [] }));
       await store.records.put("job", resource("job", { jobOnly: true }));
@@ -82,7 +84,6 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
     await withTenant(otherTenant, async () => {
       assert.equal(await store.records.get("a"), null);
       assert.deepEqual(await store.records.owners(), []);
-      assert.deepEqual(await store.records.jobComputers(), []);
       assert.equal(await store.defaults.get("personal:alice"), null);
       await store.records.put("a", resource("a", { ownerScopeId: "personal:bob" }));
       assert.equal(await store.records.update("job", (r) => ({ ...r, state: "retired" })), null);
@@ -95,14 +96,16 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
         (await store.records.ownedBy(["personal:alice", "personal:bob"])).map((r) => r.id),
         ["a"],
       );
-      assert.deepEqual(
-        (await store.records.jobComputers()).map((r) => r.id),
-        ["job"],
-      );
       const held = await store.records.update("a", (r) => ({ ...r, holders: [...(r.holders ?? []), "run-2"] }));
       assert.deepEqual(held?.holders, ["run-2"]);
       assert.deepEqual((await store.records.get("a"))?.holders, ["run-2"]);
     });
+    useOwnerDatabase(ownerUrl);
+    assert.deepEqual(
+      (await store.records.jobComputers()).map((r) => [r.id, r.tenantId]),
+      [["job", tenant]],
+    );
+    restoreFileOwner();
   });
 });
 

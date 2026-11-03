@@ -11,7 +11,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/ad
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -22,7 +22,8 @@ const nonLeaderLease: LeaderLease = {
 };
 
 function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean } = {}) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managed ?? false },
@@ -36,7 +37,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "concurrency-")),
     ...(opts.lease ? { leaderLease: opts.lease } : {}),
     ...(opts.lock ? { advisoryLock: opts.lock } : {}),
@@ -118,7 +119,8 @@ test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex 
 });
 
 test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let active = 0;
   let maxActive = 0;
   const provider: DeployProvider = {
@@ -137,7 +139,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "serialize-")),
   });
   const d = await inTestTenant(() =>
@@ -155,8 +157,8 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
 
-function copyingDeployStore(): DeployStore {
-  return createDeployStore(testDeployBackings());
+function copyingDeployStore(url: string): DeployStore {
+  return createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
 }
 
 for (const [visit, stop, status] of [
@@ -165,7 +167,8 @@ for (const [visit, stop, status] of [
   ["keep-warm", "archive", "archived"],
 ] as const) {
   test(`withDeployLock: a ${visit} waiting on the ${stop} leaves the app ${status} and never re-applies it`, async () => {
-    const deployStore = copyingDeployStore();
+    const url = testDatabaseUrl();
+    const deployStore = copyingDeployStore(url);
     let applies = 0;
     const destroying = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -190,7 +193,7 @@ for (const [visit, stop, status] of [
       deployStore,
       provider,
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      acl: createAclStore(createPostgresGrantStore(url)),
       deployDir: mkdtempSync(join(tmpdir(), "reach-stop-")),
     });
     const d = await inTestTenant(() =>

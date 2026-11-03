@@ -5,7 +5,7 @@ import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import type { ProcessSandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 function fixture() {
   const exited = new Set<string>();
@@ -13,7 +13,7 @@ function fixture() {
   const finished: string[] = [];
   const errors: unknown[] = [];
   const old = new Date(Date.now() - 10 * 60_000).toISOString();
-  const computers: SandboxResource[] = ["job-a", "job-b", "job-new"].map((id) => ({
+  const computers: Array<SandboxResource & { tenantId: string }> = ["job-a", "job-b", "job-new"].map((id) => ({
     id,
     backend: "local",
     ownerScopeId: "channel:room",
@@ -24,6 +24,7 @@ function fixture() {
     legacy: false,
     state: "ready",
     jobOnly: true,
+    tenantId: testTenants()[0],
   }));
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const sandbox = {

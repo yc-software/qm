@@ -40,13 +40,20 @@ function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
 }
 
 let createdInTest: string[] | undefined;
+const openInTest: Array<{ close(): Promise<void> }> = [];
 beforeEach(() => {
   createdInTest = [];
 });
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(openInTest.splice(0).map((store) => store.close()));
   if (createdInTest?.length) startDatabaseWorker().worker.postMessage({ release: createdInTest });
   createdInTest = undefined;
 });
+
+function closedAfterTest<S extends { close(): Promise<void> }>(store: S): S {
+  if (createdInTest) openInTest.push(store);
+  return store;
+}
 
 function createDatabaseSync(request: { template?: string }, scope: "test" | "file" = "test"): string {
   const { worker, signal, port } = startDatabaseWorker();
@@ -166,19 +173,19 @@ export function testAdminGrantStore(
 }
 
 export function testRows<T, K extends string>(spec: RowTable<T, K>) {
-  return pgRows(tenantBoundUrl(testDatabaseUrl()), spec);
+  return closedAfterTest(pgRows(tenantBoundUrl(testDatabaseUrl()), spec));
 }
 
 export function testSandboxResourceStores() {
-  return createSandboxResourceStores(tenantBoundUrl(testDatabaseUrl()));
+  return closedAfterTest(createSandboxResourceStores(tenantBoundUrl(testDatabaseUrl())));
 }
 
-export function testDeploymentRows() {
-  return createPostgresDeploymentRows(tenantBoundUrl(testDatabaseUrl()));
+export function testDeploymentRows(url = testDatabaseUrl()) {
+  return createPostgresDeploymentRows(tenantBoundUrl(url));
 }
 
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  return { deployments: testDeploymentRows(), ...backings };
+  return { ...backings, deployments: backings.deployments ?? testDeploymentRows() };
 }
