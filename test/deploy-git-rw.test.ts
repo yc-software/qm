@@ -35,6 +35,7 @@ function tenantBound<T extends object>(store: T): T {
     },
   });
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-rw-secret".repeat(3);
@@ -335,7 +336,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
   const f = fixture();
   try {
     const d = await f.app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "x",
       files: [{ path: "server.js", data: "1" }],
@@ -350,7 +351,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
     assert.equal(((await member.json()) as { permission: string }).permission, "read");
 
     await f.acl.grant({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       ref: `deployment:${d.id}`,
       granteeScopeId: scopeId("personal", "U2"),
       permission: "write",

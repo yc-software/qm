@@ -15,6 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant-root.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
@@ -38,13 +39,14 @@ const whoami = (base: string, actor?: string): Promise<any> =>
 test("whoami reports an org_admin as admin with the org scope", async () => {
   const s = start();
   try {
-    const r = await whoami(s.base, "admin-alice@default-org");
+    const r = await whoami(s.base, "admin-alice");
     assert.equal(r.status, 200);
     assert.deepEqual(await r.json(), {
       isAdmin: true,
       role: "org_admin",
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -54,9 +56,13 @@ test("whoami reports an org_admin as admin with the org scope", async () => {
 test("whoami reports an ungranted actor as not-admin", async () => {
   const s = start();
   try {
-    const r = await whoami(s.base, "U-nobody@default-org");
+    const r = await whoami(s.base, "U-nobody");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+    });
   } finally {
     await s.close();
   }
@@ -67,7 +73,11 @@ test("whoami reports a foreign-org actor as not-admin (resolveActor null → 200
   try {
     const r = await whoami(s.base, "admin-alice@other-org");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+    });
   } finally {
     await s.close();
   }
@@ -78,7 +88,11 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
   try {
     const r = await whoami(s.base);
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), {
+      isAdmin: false,
+      permissions: [],
+      tenant: TEST_TENANT,
+    });
   } finally {
     await s.close();
   }
@@ -87,7 +101,7 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
 test("whoami is 404 when the admin plane is unwired", async () => {
   const s = start(false);
   try {
-    const r = await whoami(s.base, "admin-alice@default-org");
+    const r = await whoami(s.base, "admin-alice");
     assert.equal(r.status, 404);
   } finally {
     await s.close();
@@ -97,7 +111,7 @@ test("whoami is 404 when the admin plane is unwired", async () => {
 test("whoami audits an admin.whoami event for a resolved actor", async () => {
   const s = start();
   try {
-    await whoami(s.base, "admin-alice@default-org");
+    await whoami(s.base, "admin-alice");
     const actions = (await inTestTenant(() => s.built.auditLog.events())).map((e) => e.action);
     assert.ok(actions.includes("admin.whoami"), "the whoami read is audited");
   } finally {
@@ -109,7 +123,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
   const SECRET = "whoami-signing-secret".repeat(3);
   const s = start(true, SECRET);
   try {
-    const unsigned = await whoami(s.base, "admin-alice@default-org");
+    const unsigned = await whoami(s.base, "admin-alice");
     assert.equal(unsigned.status, 401);
 
     const ts = Math.floor(Date.now() / 1000);
@@ -118,7 +132,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     const forged = await fetch(`${s.base}/v1/admin/whoami`, {
       headers: {
         ...testTenantHeaders(),
-        "x-admin-actor": "admin-alice@default-org",
+        "x-admin-actor": "admin-alice",
         "x-timestamp": String(ts),
         "x-signature": badSig,
       },
@@ -129,7 +143,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     const ok = await fetch(`${s.base}/v1/admin/whoami`, {
       headers: {
         ...testTenantHeaders(),
-        "x-admin-actor": "admin-alice@default-org",
+        "x-admin-actor": "admin-alice",
         "x-timestamp": String(ts),
         "x-signature": goodSig,
       },
@@ -138,8 +152,9 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     assert.deepEqual(await ok.json(), {
       isAdmin: true,
       role: "org_admin",
-      scopeId: "org:default-org",
+      scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -148,12 +163,12 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
 
 test("adminStatusOf reads the grant list directly (org_admin reported; non-admin otherwise)", async () => {
   const svc = createAdminService(testAdminGrantStore());
-  const alice = inTestTenant(() => svc.resolveActor("admin-alice@default-org"))!;
+  const alice = inTestTenant(() => svc.resolveActor("admin-alice"))!;
   assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(alice)), {
     isAdmin: true,
     role: "org_admin",
-    scopeId: "org:default-org",
+    scopeId: TEST_ROOT_SCOPE,
   });
-  const nobody = inTestTenant(() => svc.resolveActor("U-nobody@default-org"))!;
+  const nobody = inTestTenant(() => svc.resolveActor("U-nobody"))!;
   assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(nobody)), { isAdmin: false });
 });

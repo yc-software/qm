@@ -8,13 +8,14 @@ import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { ownerUrlOf, testDatabaseUrl } from "./support/test-database.ts";
 import { tenantBoundUrl, inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
   type: "internal",

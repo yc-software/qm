@@ -21,126 +21,128 @@ import { inTestTenant } from "./support/test-tenants.ts";
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
 
-test("browser inference uses the company gateway with scoped model authorization", async (t) => {
-  const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
-  const contexts: Array<Record<string, unknown>> = [];
-  let status = 200;
-  const upstream = httpServer(async (req, res) => {
-    let raw = "";
-    for await (const chunk of req) raw += chunk;
-    calls.push({ url: req.url!, auth: req.headers.authorization, body: JSON.parse(raw) });
-    contexts.push(Object.fromEntries(Object.entries(req.headers).filter(([name]) => name.startsWith("x-qm-"))));
-    res.writeHead(status, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify(
-        status === 200 ? { choices: [{ message: { role: "assistant", content: "done" } }] } : { error: key },
-      ),
-    );
-  });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
-  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
-  const built = buildApp(config);
-  const routes: Record<string, string> = { [model]: "anthropic/claude-opus-5" };
-  const server = createServer(built.app, {
-    ...serverDeps(config, built),
-    modelGatewayTransport: {
-      url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
-      apiKey: `Bearer ${key}`,
-      apiKeyHeader: "Authorization",
-      models: routes,
-      actorKey: "test-actor-key",
-    },
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
-  const claims = {
-    actorId: "U1",
-    scopeId: "personal:U1" as const,
-    browserModel: model,
-    aud: BROWSER_MODEL_AUD,
-    browserAccount: "company" as const,
-    sessionId: "session-browser",
-    origin: "conversation" as const,
-    exp: Date.now() + 60_000,
-  };
-  const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
-  const post = (body: unknown, credential = token) =>
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": credential },
-      body: JSON.stringify(body),
+test("browser inference uses the company gateway with scoped model authorization", (t) =>
+  inTestTenant(async () => {
+    const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
+    const contexts: Array<Record<string, unknown>> = [];
+    let status = 200;
+    const upstream = httpServer(async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      calls.push({ url: req.url!, auth: req.headers.authorization, body: JSON.parse(raw) });
+      contexts.push(Object.fromEntries(Object.entries(req.headers).filter(([name]) => name.startsWith("x-qm-"))));
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify(
+          status === 200 ? { choices: [{ message: { role: "assistant", content: "done" } }] } : { error: key },
+        ),
+      );
     });
-  const body = { model, messages: [{ role: "user", content: "browse" }], response_format: { type: "json_object" } };
-  const response = await post(body);
-  assert.equal(response.status, 200, await response.clone().text());
-  assert.deepEqual(await response.json(), { choices: [{ message: { role: "assistant", content: "done" } }] });
-  assert.deepEqual(calls[0], {
-    url: "/v1/chat/completions",
-    auth: `Bearer ${key}`,
-    body: { ...body, model: "anthropic/claude-opus-5", stream: false },
-  });
-  assert.deepEqual(contexts[0], {
-    "x-qm-session-id": "session-browser",
-    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
-    "x-qm-scope": `personal:${gatewayActorId("U1", "test-actor-key")}`,
-    "x-qm-purpose": "browser",
-    "x-qm-origin": "conversation",
-  });
-  for (const invalid of [
-    { ...body, model: "other" },
-    { ...body, api_key: "override" },
-    { ...body, api_base: "https://attacker.invalid" },
-    { ...body, stream: true },
-  ])
-    assert.equal((await post(invalid)).status, 400);
-  assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET))).status,
-    403,
-  );
-  assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))).status,
-    401,
-  );
-  assert.equal(calls.length, 1);
-  assert.equal(
-    (
-      await post({
-        ...body,
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "image_url", image_url: { url: "data:image/png;base64," + "A".repeat(1_100_000) } }],
-          },
-        ],
-      })
-    ).status,
-    200,
-  );
-  status = 429;
-  const limited = await post(body);
-  assert.equal(limited.status, 429);
-  assert.ok(!(await limited.text()).includes(key));
-  await built.config.setSecurityPosture("personal:U1", "strict");
-  assert.equal((await post(body)).status, 403);
-  await built.config.setSecurityPosture("personal:U1", "auto");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  assert.equal((await post(body)).status, 409);
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: "subscription-test",
-    expiresAt: Date.now() + 3600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
-  const unsupported = await post(body, claudeToken);
-  assert.equal(unsupported.status, 422);
-  assert.match(await unsupported.text(), /Claude subscription/);
-  await built.config.setPersonalModelAuth("U1", false);
-  delete routes[model];
-  assert.equal((await post(body)).status, 503);
-  assert.equal(calls.length, 3);
-});
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+    const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
+    const built = buildApp(config);
+    const routes: Record<string, string> = { [model]: "anthropic/claude-opus-5" };
+    const server = createServer(built.app, {
+      ...serverDeps(config, built),
+      modelGatewayTransport: {
+        url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+        apiKey: `Bearer ${key}`,
+        apiKeyHeader: "Authorization",
+        models: routes,
+        actorKey: "test-actor-key",
+      },
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
+    const claims = {
+      actorId: "U1",
+      scopeId: "personal:U1" as const,
+      browserModel: model,
+      aud: BROWSER_MODEL_AUD,
+      browserAccount: "company" as const,
+      sessionId: "session-browser",
+      origin: "conversation" as const,
+      exp: Date.now() + 60_000,
+    };
+    const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
+    const post = (body: unknown, credential = token) =>
+      fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agent-capability": credential },
+        body: JSON.stringify(body),
+      });
+    const body = { model, messages: [{ role: "user", content: "browse" }], response_format: { type: "json_object" } };
+    const response = await post(body);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(await response.json(), { choices: [{ message: { role: "assistant", content: "done" } }] });
+    assert.deepEqual(calls[0], {
+      url: "/v1/chat/completions",
+      auth: `Bearer ${key}`,
+      body: { ...body, model: "anthropic/claude-opus-5", stream: false },
+    });
+    assert.deepEqual(contexts[0], {
+      "x-qm-session-id": "session-browser",
+      "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
+      "x-qm-scope": `personal:${gatewayActorId("U1", "test-actor-key")}`,
+      "x-qm-purpose": "browser",
+      "x-qm-origin": "conversation",
+    });
+    for (const invalid of [
+      { ...body, model: "other" },
+      { ...body, api_key: "override" },
+      { ...body, api_base: "https://attacker.invalid" },
+      { ...body, stream: true },
+    ])
+      assert.equal((await post(invalid)).status, 400);
+    assert.equal(
+      (await post(body, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
+        .status,
+      403,
+    );
+    assert.equal(
+      (await post(body, await mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))).status,
+      401,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(
+      (
+        await post({
+          ...body,
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "image_url", image_url: { url: "data:image/png;base64," + "A".repeat(1_100_000) } }],
+            },
+          ],
+        })
+      ).status,
+      200,
+    );
+    status = 429;
+    const limited = await post(body);
+    assert.equal(limited.status, 429);
+    assert.ok(!(await limited.text()).includes(key));
+    await built.config.setSecurityPosture("personal:U1", "strict");
+    assert.equal((await post(body)).status, 403);
+    await built.config.setSecurityPosture("personal:U1", "auto");
+    await built.config.setPersonalModelAuth("U1", true, "openai");
+    assert.equal((await post(body)).status, 409);
+    await built.userModelCredentials.setOAuth("U1", "anthropic", {
+      accessToken: "subscription-test",
+      expiresAt: Date.now() + 3600_000,
+    });
+    await built.config.setPersonalModelAuth("U1", true, "anthropic");
+    const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
+    const unsupported = await post(body, claudeToken);
+    assert.equal(unsupported.status, 422);
+    assert.match(await unsupported.text(), /Claude subscription/);
+    await built.config.setPersonalModelAuth("U1", false);
+    delete routes[model];
+    assert.equal((await post(body)).status, 503);
+    assert.equal(calls.length, 3);
+  }));
 
 test("gateway deployment provisions a browser token without exposing the company model key", () =>
   inTestTenant(async () => {
@@ -217,88 +219,89 @@ test("gateway browsing never selects a direct provider when callback signing or 
     }
   }));
 
-test("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
-  const calls: Array<{ key: string | undefined; model: string }> = [];
-  const upstream = httpServer(async (req, res) => {
-    let raw = "";
-    for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
-    calls.push({ key: req.headers["x-api-key"] as string, model: body.model });
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    const events = [
-      {
-        type: "message_start",
-        message: {
-          id: "test",
-          type: "message",
-          role: "assistant",
-          model,
-          content: [],
-          stop_reason: null,
-          stop_sequence: null,
-          usage: { input_tokens: 1, output_tokens: 0 },
+test("company browsing without a gateway uses current deployment credentials and endpoints", (t) =>
+  inTestTenant(async () => {
+    const calls: Array<{ key: string | undefined; model: string }> = [];
+    const upstream = httpServer(async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw);
+      calls.push({ key: req.headers["x-api-key"] as string, model: body.model });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "test",
+            type: "message",
+            role: "assistant",
+            model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
         },
-      },
-      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "DIRECT_OK" } },
-      { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
-      { type: "message_stop" },
-    ];
-    res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
-  });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
-  const config = testConfig({
-    signingSecret: "ingress-secret".repeat(3),
-    apiBaseUrl: "https://core.example.test",
-    anthropicApiKey: "deployment-key",
-    providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
-  });
-  const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
-  let captured: ProvisionOptions | undefined;
-  const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
-    captured = opts;
-    return provision(layers, opts);
-  };
-  await inTestTenant(() =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:direct" },
-      text: "!run echo direct",
-    }),
-  );
-  const env = captured!.env!;
-  assert.equal(env.BROWSE_LAB_MODEL_PROVIDER, "managed");
-  assert.equal(env.BROWSE_LAB_MODEL, model);
-  assert.ok(!Object.values(env).includes("deployment-key"));
-  const token = env.BROWSE_LAB_MODEL_TOKEN!;
-  assert.equal((await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET))?.browserAccount, "company");
-  const post = () =>
-    fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": token },
-      body: JSON.stringify({ model, messages: [{ role: "user", content: "direct browser test" }] }),
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "DIRECT_OK" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ];
+      res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
     });
-  const first = await post();
-  assert.equal(first.status, 200);
-  assert.equal(
-    ((await first.json()) as { choices: Array<{ message: { content: string } }> }).choices[0]?.message.content,
-    "DIRECT_OK",
-  );
-  await inTestTenant(() => built.modelCredentials.set("anthropic", "rotated-admin-key", "U1"));
-  assert.equal((await post()).status, 200);
-  assert.deepEqual(calls, [
-    { key: "deployment-key", model },
-    { key: "rotated-admin-key", model },
-  ]);
-  await inTestTenant(() => built.modelCredentials.delete("anthropic", "U1"));
-  assert.equal((await post()).status, 503);
-  assert.equal(calls.length, 2);
-});
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+    const config = testConfig({
+      signingSecret: "ingress-secret".repeat(3),
+      apiBaseUrl: "https://core.example.test",
+      anthropicApiKey: "deployment-key",
+      providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
+    });
+    const built = buildApp(config);
+    const server = createServer(built.app, serverDeps(config, built));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+    let captured: ProvisionOptions | undefined;
+    const provision = built.sandbox.provision.bind(built.sandbox);
+    built.sandbox.provision = (layers, opts) => {
+      captured = opts;
+      return provision(layers, opts);
+    };
+    await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:direct" },
+        text: "!run echo direct",
+      }),
+    );
+    const env = captured!.env!;
+    assert.equal(env.BROWSE_LAB_MODEL_PROVIDER, "managed");
+    assert.equal(env.BROWSE_LAB_MODEL, model);
+    assert.ok(!Object.values(env).includes("deployment-key"));
+    const token = env.BROWSE_LAB_MODEL_TOKEN!;
+    assert.equal((await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET))?.browserAccount, "company");
+    const post = () =>
+      fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agent-capability": token },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "direct browser test" }] }),
+      });
+    const first = await post();
+    assert.equal(first.status, 200);
+    assert.equal(
+      ((await first.json()) as { choices: Array<{ message: { content: string } }> }).choices[0]?.message.content,
+      "DIRECT_OK",
+    );
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "rotated-admin-key", "U1"));
+    assert.equal((await post()).status, 200);
+    assert.deepEqual(calls, [
+      { key: "deployment-key", model },
+      { key: "rotated-admin-key", model },
+    ]);
+    await inTestTenant(() => built.modelCredentials.delete("anthropic", "U1"));
+    assert.equal((await post()).status, 503);
+    assert.equal(calls.length, 2);
+  }));

@@ -6,6 +6,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
@@ -34,13 +35,10 @@ export function composeSoul(orgSoul: string | null, scopeSoul: string | null): s
 }
 
 export function createResolutionService(
-  orgId: string,
   config: ScopedConfigStore,
   acl: AclStore,
   screening: SecurityScreenMode = "enforce",
 ): ResolutionService {
-  const orgScope = scopeId("org", orgId);
-
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
     return conversationScope(conversation, actor.id);
   }
@@ -49,6 +47,7 @@ export function createResolutionService(
     scopeFor,
     async resolve(conversation, actor, external = false): Promise<Resolution> {
       const scope = scopeFor(conversation, actor);
+      const orgScope = tenantRootScope();
       const isDm = conversation.kind === "dm";
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);
       for (const principal of conversation.audience) {
@@ -57,10 +56,7 @@ export function createResolutionService(
       }
       await config.refreshSecurity([...liveConfigScopes]);
 
-      const layers: WorkspaceLayer[] = [
-        ...(!external ? [{ scopeId: orgScope, mountPath: "global", mode: "ro" as const }] : []),
-        { scopeId: scope, mountPath: "", mode: "rw" },
-      ];
+      const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
       if (!external) {
         for (const tid of (isDm ? actor.teamIds : conversation.teamIds) ?? []) {
           layers.push({ scopeId: scopeId("team", tid), mountPath: `team-${tid}`, mode: "ro" });

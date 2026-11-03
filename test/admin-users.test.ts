@@ -14,6 +14,7 @@ import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -26,7 +27,7 @@ test("computeUsers dedupes participants, credits in-window turns, and joins admi
     { principalId: "U2", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
     { principalId: "U1", sessionId: "s2", day: 0, turns: 1, firstAt: 250, lastAt: 250 },
   ];
-  const grants = [{ principalId: "U2", scopeId: "org:default-org", role: "org_admin" as const }];
+  const grants = [{ principalId: "U2", scopeId: TEST_ROOT_SCOPE, role: "org_admin" as const }];
   const rows = computeUsers({ participants, turns, grants });
   const byId: Record<string, any> = Object.fromEntries(rows.map((r) => [r.principalId, r]));
 
@@ -55,7 +56,7 @@ test("computeUsers includes a grant-holder who has never participated", () => {
   const rows = computeUsers({
     participants: [],
     turns: [],
-    grants: [{ principalId: "ghost-admin", scopeId: "org:default-org", role: "org_admin" as const }],
+    grants: [{ principalId: "ghost-admin", scopeId: TEST_ROOT_SCOPE, role: "org_admin" as const }],
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.principalId, "ghost-admin");
@@ -92,7 +93,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
     const r = await fetch(`${s.base}/v1/admin/users`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -106,7 +107,7 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     );
 
     const denied = await fetch(`${s.base}/v1/admin/users`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
     });
     assert.equal(denied.status, 403);
 
@@ -132,7 +133,7 @@ test("/v1/admin/users: each person carries the pseudonym the model gateway recei
       (
         (await (
           await fetch(`${base}/v1/admin/users`, {
-            headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+            headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
           })
         ).json()) as {
           users: Array<{ principalId: string; gatewayActor?: string }>;
@@ -175,7 +176,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     t.mock.method(s.built.app, "listDeployments", fail);
 
     const r = await fetch(`${s.base}/v1/admin/users/U1`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -185,7 +186,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     for (const key of ["conversations", "files", "crons", "deployments"]) assert.equal(key in d, false);
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
     });
     assert.equal(denied.status, 403);
 
@@ -205,12 +206,12 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
       text: "hi",
     };
     assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
-    const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+    const adminHdr = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
     const detail = async () =>
       (await (
         await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...adminHdr } })
       ).json()) as any;
-    const setOb = (status: string, actor = "admin-alice@default-org") =>
+    const setOb = (status: string, actor = "admin-alice") =>
       fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
         method: "PUT",
         headers: { ...testTenantHeaders(), "x-admin-actor": actor, "content-type": "application/json" },
@@ -226,7 +227,7 @@ test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, refl
     assert.equal((await detail()).onboarding, "not_started");
 
     assert.equal((await setOb("nope")).status, 400);
-    assert.equal((await setOb("completed", "user-uma@default-org")).status, 403);
+    assert.equal((await setOb("completed", "user-uma")).status, 403);
 
     assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "user.onboarding.set"));
   } finally {
@@ -244,7 +245,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
       text: "hi",
     };
     assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
-    const adminHdr = { "x-admin-actor": "admin-alice@default-org" };
+    const adminHdr = { "x-admin-actor": "admin-alice" };
     const detail = async () =>
       (await (
         await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...adminHdr } })
@@ -261,7 +262,7 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
       method: "POST",
-      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
     });
     assert.equal(denied.status, 403);
 
@@ -288,7 +289,7 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
   try {
     const d: any = await (
       await fetch(`${s.base}/v1/admin/users/${encodeURIComponent("admin-alice")}`, {
-        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
       })
     ).json();
     assert.equal(d.principalId, "admin-alice");
@@ -325,7 +326,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     );
 
     const r = await fetch(`${base}/v1/admin/directory?q=${encodeURIComponent("dana")}`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.equal(r.status, 200);
     const d: any = await r.json();
@@ -336,7 +337,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     assert.ok(!d.members.some((m: any) => m.principalId === "jane@example.com"), "non-matching member excluded");
 
     const onboarded = await fetch(`${base}/v1/admin/directory?q=${encodeURIComponent("new@example.com")}`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.equal(onboarded.status, 200);
     assert.deepEqual(((await onboarded.json()) as any).members, [
@@ -344,12 +345,12 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
     ]);
 
     const empty = await fetch(`${base}/v1/admin/directory`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.deepEqual(((await empty.json()) as any).members, [], "no query → no candidates");
 
     const denied = await fetch(`${base}/v1/admin/directory?q=dana`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
     });
     assert.equal(denied.status, 403);
   } finally {
@@ -371,14 +372,14 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
       method: "POST",
       headers: {
         ...testTenantHeaders(),
-        "x-admin-actor": "admin-alice@default-org",
+        "x-admin-actor": "admin-alice",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: "org:default-org" }),
+      body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: TEST_ROOT_SCOPE }),
     });
     const d: any = await (
       await fetch(`${s.base}/v1/admin/users`, {
-        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+        headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
       })
     ).json();
     const u9 = d.users.find((u: { principalId: string }) => u.principalId === "U9");
@@ -396,7 +397,7 @@ test("user detail resolves mixed-case email links to the canonical personal scop
       return 3;
     });
     const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "admin-alice" },
     });
     assert.equal(response.status, 200);
     const data = (await response.json()) as any;
@@ -424,7 +425,7 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
       );
       await inTestTenant(() => s.built.sessions.addParticipant(other.id, canonicalPrincipal));
       const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
-      const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+      const headers = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
       const detail = async () =>
         (await (await fetch(base, { headers: { ...testTenantHeaders(), ...headers } })).json()) as any;
       const update = await fetch(base + "/onboarding", {

@@ -12,7 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
-const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
+const ADMIN = { "x-admin-actor": "admin-alice", "content-type": "application/json" };
 
 function deployment(id: string, ownerScopeId: string, createdBy: string): Deployment {
   return {
@@ -250,7 +250,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
 test("offboarding refuses non-admins, the admin themselves, and unknown body fields", async () => {
   const s = await start();
   try {
-    const denied = await s.offboard("U1", { apply: true }, { "x-admin-actor": "user-uma@default-org" });
+    const denied = await s.offboard("U1", { apply: true }, { "x-admin-actor": "user-uma" });
     assert.equal(denied.status, 403);
     assert.equal(s.built.identity.classify("U1").type, "internal");
     const self = await s.offboard("admin-alice", { apply: true });
@@ -263,7 +263,7 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     assert.deepEqual(gone.changes, [], "someone already deactivated by hand gets an empty plan");
     const deniedReactivate = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
       method: "POST",
-      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
     });
     assert.equal(deniedReactivate.status, 403);
   } finally {

@@ -132,7 +132,7 @@ disposable test deployment: the test redeems real links for its configured admin
   under `/settings`, and every admin action is checked **per action** at the core — the live
   boundary. The portal itself needs admin status only for impersonation, operator admin login
   and the unconfigured-deployment redirect to `/settings/onboarding`. For those it calls core
-  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>@<org>` and the
+  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>` and the
   signed portal identity. It caches the answer ~60s, retries once, and **fails closed**: an
   outage or malformed answer counts as not-admin and is not cached. There is **no portal id
   list**; the only place an admin is named is the core's `ADMIN_GRANTS`.
@@ -234,7 +234,7 @@ garbage-collects an abandoned visitor's scope yet.
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
+`WEB_UI_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.

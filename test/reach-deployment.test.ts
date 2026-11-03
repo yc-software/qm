@@ -20,6 +20,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -53,7 +54,7 @@ test("reachDeployment: org → any non-empty principal; personal → owner only;
     const { app } = appWithFakeRuntime();
 
     const org = await app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "x",
       files: [],
@@ -332,7 +333,7 @@ test("reachDeployment: an org grant on a personal deployment opens it to any ver
     await acl.grant({
       ownerScopeId: scopeId("personal", "U1"),
       ref: `deployment:${personal.id}`,
-      granteeScopeId: scopeId("org", "default-org"),
+      granteeScopeId: TEST_ROOT_SCOPE,
       permission: "read",
       grantedBy: "U1",
     });

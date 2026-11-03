@@ -25,7 +25,6 @@ import {
   claimSlotPorts,
   claimSlotLock,
   heartbeatFresh,
-  leaseOrgId,
   leaseReclaimReason,
   leaseStale,
   listLeases,
@@ -374,25 +373,11 @@ test("envSha is order-independent and value-sensitive", () => {
   assert.notEqual(envSha({ A: "1" }), envSha({ A: "2" }));
 });
 
-test("leaseOrgId reads the stale lease's booted org", () => {
-  const store = tmpStore();
-  addSlot(store, 1);
-  claimSlotLock("pool1", store);
-  const lock = lockDir("pool1", store);
-  writeFileSync(join(lock, "boot-spec.json"), JSON.stringify({ callerEnv: { DEV_INSTANCE_ORG_ID: "beta" } }));
-  const lease = listLeases(store)[0]!;
-  assert.equal(leaseOrgId(lease), "beta");
-  rmSync(join(lock, "boot-spec.json"));
-  assert.equal(leaseOrgId(lease), "acme");
-  rmSync(store, { recursive: true, force: true });
-});
-
-test("supervised children share the selected dev org", () => {
+test("supervised siblings drop the core home and keep the portal bypass override", () => {
   const inputs: SpecInputs = {
     worktree: "/tmp/worktree",
     ports: slotPorts("pool1"),
     baseEnv: {
-      DEV_INSTANCE_ORG_ID: "beta",
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
     },
@@ -407,17 +392,13 @@ test("supervised children share the selected dev org", () => {
     sandboxEnv: {},
   };
   const specs = buildChildSpecs(inputs);
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
     assert.equal(spec.env.HOME, undefined);
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
-  for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
   assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
   assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
-  inputs.baseEnv = {};
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
 });
 
 test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
@@ -440,7 +421,6 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
   assert.equal(core.env.SLACK_APP_TOKEN, "");
   assert.equal(core.env.DEV_INTROSPECTION, undefined);
   assert.equal(core.env.DEV_HEALTH_PORT, undefined);
-  assert.equal(core.env.CORE_ORG_ID, "acme");
   inputs.web = false;
   inputs.slack = { botToken: "xoxb-test", appToken: "xapp-test" };
   const slackOnly = buildChildSpecs(inputs);

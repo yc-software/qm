@@ -181,7 +181,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const headers = {
     "content-type": "application/json",
-    "x-admin-actor": "admin-alice@default-org",
+    "x-admin-actor": "admin-alice",
     ...testTenantHeaders(),
   };
   const path = base + "/v1/admin/model-registry/" + spec.id;
@@ -189,17 +189,14 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
   const runtime = async () =>
     (
-      await fetch(
-        base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-        { headers },
-      )
+      await fetch(base + "/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice", { headers })
     ).json() as Promise<{
       effective: { modelId: string };
       modelCatalog: Record<string, unknown>;
       unavailableReason: string;
     }>;
   try {
-    assert.equal((await put({ ...spec, verify: true }, "bob@default-org")).status, 403);
+    assert.equal((await put({ ...spec, verify: true }, "bob")).status, 403);
     assert.equal((await put(spec)).status, 400);
     assert.equal(upstream.requests.length, 0);
     upstream.behavior.status = 403;
@@ -244,7 +241,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
     await inTestTenant(() =>
-      built.config.setRuntimeSelection("personal:admin-alice@default-org", {
+      built.config.setRuntimeSelection("personal:admin-alice", {
         modelId: spec.id,
       }),
     );

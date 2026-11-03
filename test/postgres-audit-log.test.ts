@@ -5,6 +5,7 @@ import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
 import { migrateTestDatabase } from "./support/test-database.ts";
 import { testTenants, inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -98,8 +99,8 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
     await ownerSql("TRUNCATE audit_log");
     const first = createPostgresAuditLog(URL!);
     const second = createPostgresAuditLog(URL!);
-    await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
-    await second.recordOnce!("deployment-layer:org:default-org:1", ev(2, "duplicate"));
+    await first.recordOnce!(`deployment-layer:${TEST_ROOT_SCOPE}:1`, ev(1, "layer-updated"));
+    await second.recordOnce!(`deployment-layer:${TEST_ROOT_SCOPE}:1`, ev(2, "duplicate"));
     const events = await first.events();
     assert.equal(events.length, 1);
     assert.equal(events[0]?.action, "layer-updated");

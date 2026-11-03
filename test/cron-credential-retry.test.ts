@@ -34,7 +34,6 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     credentialId: "dummy-credential",
     ownerId: "U_ALICE",
     requesterId: "U_ALICE",
-    orgId: "test",
     requesterScopeId: "personal:U_ALICE",
     requesterThreadRef: `cron:${cron.id}:fire:123456789abc`,
     requesterDestination: cron.destination,

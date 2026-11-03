@@ -126,7 +126,7 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
 
     const admin = (await (
       await fetch(`${s.base}/v1/admin/spend?${WINDOW}`, {
-        headers: { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() },
+        headers: { "x-admin-actor": "admin-alice", ...testTenantHeaders() },
       })
     ).json()) as any;
     const totals = ({ displayName: _name, ...row }: any) => row;

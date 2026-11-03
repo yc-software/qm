@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -71,7 +72,7 @@ async function fixture(t: TestContext) {
       ),
     );
   await roster(["alice", "bob"]);
-  await inTestTenant(() => b.config.setSharingPosture("org:default-org", "open"));
+  await inTestTenant(() => b.config.setSharingPosture(TEST_ROOT_SCOPE, "open"));
   const sharedSandbox = await inTestTenant(() =>
     b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof"),
   );
@@ -284,7 +285,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
 });
 
 for (const isPrivate of [false, true]) {
-  for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
+  for (const veto of [TEST_ROOT_SCOPE, "personal:alice", "channel:public-room"]) {
     test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
       const b = await fixture(t);
       const keychain = b.keychain;
@@ -349,7 +350,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
       ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
     ),
   );
-  await inTestTenant(() => b.config.setSharingPosture("org:default-org", "isolated"));
+  await inTestTenant(() => b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated"));
   const credential = await inTestTenant(() =>
     keychain.save({
       ownerId: "alice",

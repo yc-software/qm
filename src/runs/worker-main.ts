@@ -14,7 +14,7 @@ await built.config.hydrate?.();
 await built.identity.refresh();
 const { runtime } = built;
 runtime.start();
-console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);
+console.log(`[qm:worker] draining runs (workers=${config.workers})`);
 
 let shuttingDown = false;
 function shutdown(signal: string): void {

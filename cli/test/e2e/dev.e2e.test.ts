@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { repoRoot, rmDir, runCli, tmp, tmpGitRepo, writeConfig } from "./harness.ts";
+import { repoRoot, rmDir, runCli, tmp } from "./harness.ts";
 
 test("normal dev commands delegate to the canonical contributor CLI", () => {
   const result = runCli(["dev", "frobnicate"], { cwd: repoRoot });
@@ -53,59 +53,16 @@ test("delegated dev commands reject extra arguments and irrelevant flags before 
   assert.match(irrelevant.out, /status does not support --rotate/);
 });
 
-test("dev up forwards a Slack surface and org override to the canonical pool path", (t) => {
-  const store = tmp("dev-org-pool");
+test("dev up forwards a Slack surface to the canonical pool path", (t) => {
+  const store = tmp("dev-surface-pool");
   t.after(() => rmDir(store));
-  const result = runCli(["dev", "up", "--surface", "slack", "--org", "beta"], {
+  const result = runCli(["dev", "up", "--surface", "slack"], {
     cwd: repoRoot,
     env: { QM_POOL_STORE: store, DEV_INSTANCE_WAIT: "0" },
   });
   assert.notEqual(result.code, 0);
   assert.match(result.out, /no free pool app/);
-  assert.doesNotMatch(result.out, /does not support --org|unknown option/);
-
-  const invalid = runCli(["dev", "up", "--org", "beta\nINJECTED=1"], {
-    cwd: repoRoot,
-    env: { QM_POOL_STORE: store, DEV_INSTANCE_WAIT: "0" },
-  });
-  assert.equal(invalid.code, 2);
-  assert.match(invalid.out, /--org must be a lowercase DNS label/);
-  assert.doesNotMatch(invalid.out, /no free pool app/);
-
-  const empty = runCli(["dev", "up", "--org="], {
-    cwd: repoRoot,
-    env: { QM_POOL_STORE: store, DEV_INSTANCE_WAIT: "0" },
-  });
-  assert.equal(empty.code, 2);
-  assert.match(empty.out, /--org must be a lowercase DNS label/);
-});
-
-test("delegated dev resolves org overrides, config, and fallback", (t) => {
-  const withConfig = tmpGitRepo("dev-org-config");
-  const withInvalidConfig = tmpGitRepo("dev-org-invalid-config");
-  const withoutConfig = tmpGitRepo("dev-org-fallback");
-  t.after(() => {
-    rmDir(withConfig);
-    rmDir(withInvalidConfig);
-    rmDir(withoutConfig);
-  });
-  for (const root of [withConfig, withInvalidConfig, withoutConfig]) {
-    mkdirSync(join(root, "scripts/dev"), { recursive: true });
-    writeFileSync(join(root, "scripts/dev/cli.ts"), "console.log(process.env.DEV_INSTANCE_ORG_ID);\n");
-  }
-  writeConfig(withConfig, { orgId: "configured", target: "docker" });
-  writeFileSync(
-    join(withInvalidConfig, "qm.config.jsonc"),
-    '{ // deploy config may be broken\n  "orgId": "configured",\n  "target": "k8s"\n}\n',
-  );
-
-  assert.equal(runCli(["dev", "status"], { cwd: withConfig, withRepoEnv: false }).stdout.trim(), "configured");
-  assert.equal(runCli(["dev", "status"], { cwd: withInvalidConfig, withRepoEnv: false }).stdout.trim(), "configured");
-  assert.equal(
-    runCli(["dev", "up", "--org", "override"], { cwd: withConfig, withRepoEnv: false }).stdout.trim(),
-    "override",
-  );
-  assert.equal(runCli(["dev", "status"], { cwd: withoutConfig, withRepoEnv: false }).stdout.trim(), "acme");
+  assert.doesNotMatch(result.out, /unknown option/);
 });
 
 test("dev --ci with an unsupported subcommand is a clear usage error", () => {

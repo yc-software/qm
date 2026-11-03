@@ -36,6 +36,7 @@ import { inTestTenant } from "./support/test-tenants.ts";
 function test(name: string, fn: () => void | Promise<void>): void {
   nodeTest(name, () => inTestTenant(fn));
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -275,8 +276,8 @@ test('share endpoint: "everyone" grants org reach — a non-owner can reach it; 
 
   const r = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org" });
   assert.equal(r.status, 200);
-  assert.equal(r.body.target.scope, scopeId("org", "default-org"));
-  assert.match(r.body.reach, /everyone in default-org/);
+  assert.equal(r.body.target.scope, TEST_ROOT_SCOPE);
+  assert.match(r.body.reach, /everyone in the org/);
   assert.equal((await deploy.reachDeployment("dead-reckoning", "U2")).status, "ok");
 
   const off = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org", access: "none" });
@@ -387,7 +388,7 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
   const { app } = apiHarness(directory);
   assert.deepEqual(await resolveShareTarget(app, { scope: "org" }), {
     kind: "ok",
-    scope: "org:default-org",
+    scope: TEST_ROOT_SCOPE,
     label: "everyone in the org",
   });
   assert.deepEqual(await resolveShareTarget(app, { scope: "personal:U9" }), {
@@ -432,7 +433,7 @@ function toolCtx(deploy: DeployService): ToolContext {
     provision: async () => ({}) as SandboxHandle,
     layers: [
       { scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" },
-      { scopeId: scopeId("org", "default-org"), mountPath: "global", mode: "ro" },
+      { scopeId: TEST_ROOT_SCOPE, mountPath: "global", mode: "ro" },
     ],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
@@ -651,7 +652,7 @@ test("with external app sharing off, public links and outside emails are refused
   const org = await callShare(app, cap("U1"), "locked", { scope: "org" }, off);
   assert.equal(org.status, 200);
   assert.deepEqual((await deploy.deploymentGrantees("locked")).map((g) => g.scope).sort(), [
-    "org:default-org",
+    TEST_ROOT_SCOPE,
     "personal:teammate@acme.test",
   ]);
 
@@ -802,7 +803,7 @@ test("exact email read grants admit app-only login and guest reach without membe
   for (const grant of [
     { ref: `deployment:${d.id}`, granteeScopeId: `personal:${email}`, permission: "write" as const },
     { ref: "deployment:missing", granteeScopeId: `personal:${email}`, permission: "read" as const },
-    { ref: `deployment:${d.id}`, granteeScopeId: "org:default-org" as const, permission: "read" as const },
+    { ref: `deployment:${d.id}`, granteeScopeId: TEST_ROOT_SCOPE, permission: "read" as const },
   ])
     await acl.grant({ ownerScopeId: "personal:U1", grantedBy: "U1", ...grant });
   assert.deepEqual(

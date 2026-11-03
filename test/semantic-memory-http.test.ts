@@ -15,6 +15,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -124,10 +125,10 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
       "admin",
     );
     await built.config.setEmbeddingModel(embeddingId);
-    await built.memory.capture("org:default-org", [orgFact], Date.now());
+    await built.memory.capture(TEST_ROOT_SCOPE, [orgFact], Date.now());
     await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
     await built.memory.capture("personal:U2", [otherFact], Date.now());
-    await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+    await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, [TEST_ROOT_SCOPE, "personal:U1"]);
   });
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,

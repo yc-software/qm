@@ -20,6 +20,7 @@ import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -1636,7 +1637,7 @@ test("not-found read and denied command record isError + the faithful error text
     emit: (e) => {
       emitted.push(e as Emitted);
     },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
   };
   const [execute, , read] = createAgentTools(ref);
   await callWith(execute, "c1", { command: "rm -rf /", purpose: "Run test command" });
@@ -1666,7 +1667,7 @@ test("a denied command still emits a tool_result (denied), and a missing read re
     emit: (e) => {
       emitted.push(e as Emitted);
     },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
   };
   const [execute, , read] = createAgentTools(ref);
 
@@ -1713,7 +1714,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const org = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) }).find((tool) => tool.name === "apps"),
+      createAgentTools({ current: withAudience({ kind: "org" }) }).find((tool) => tool.name === "apps"),
       {
         action: "publish",
         entrypoint: "x",
@@ -1722,7 +1723,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
     ),
   );
   assert.match(org, /Owned by you/);
-  assert.match(org, /anyone at acme/);
+  assert.match(org, /anyone at your org/);
 
   const members = textOf(
     await call(
@@ -2441,7 +2442,7 @@ test("a blocking command approval terminates the agent loop and flags pausedOnAp
       throw new NeedsApproval("git push --force", "force push needs approval");
     },
   };
-  const ref: ToolContextRef = { current: pauseTC, pendingApprovals: [], scopeLabel: "org:default-org" };
+  const ref: ToolContextRef = { current: pauseTC, pendingApprovals: [], scopeLabel: TEST_ROOT_SCOPE };
   const [execute] = createAgentTools(ref);
   const r = (await callWith(execute, "c1", { command: "git push --force", purpose: "Run test command" })) as {
     terminate?: boolean;
@@ -3206,11 +3207,11 @@ test("agent mail is screened separately, logged privately, and delivered once ac
       pending = false;
     },
   };
-  tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
+  tc.read = async () => ({ content: "workspace data", sourceScopeId: TEST_ROOT_SCOPE });
   const ref: ToolContextRef = {
     current: tc,
     scopeLabel: "personal:U1",
-    orgScopeId: "org:default-org",
+    orgScopeId: TEST_ROOT_SCOPE,
     emit: (entry) => {
       emitted.push(entry as Emitted);
     },

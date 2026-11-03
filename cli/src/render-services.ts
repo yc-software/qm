@@ -100,7 +100,7 @@ export function renderServiceEnv(
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
-    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
+    ...orgEnv(service, config.publicUrl, brandEnvOf(config)),
     PORT: "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };

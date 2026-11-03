@@ -20,6 +20,7 @@ import { inTestTenant } from "./support/test-tenants.ts";
 function test(name: string, fn: () => void | Promise<void>): void {
   nodeTest(name, () => inTestTenant(fn));
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -255,7 +256,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-multi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await workspace.ensureScope(personal);
   await workspace.ensureScope(org);
   await memory.capture(personal, ["deploys happen on Fridays"], at);
@@ -279,7 +280,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   });
   assert.match(
     (await ctx.memoryRead(org)) ?? "",
-    /### org:default-org\n```untrusted-data\n#2 \(2026-05-31\) deploys are frozen in December/,
+    new RegExp(`### ${TEST_ROOT_SCOPE}\\n\`\`\`untrusted-data\\n#2 \\(2026-05-31\\) deploys are frozen in December`),
   );
   assert.equal(await ctx.memoryRead("personal:someone-else"), null);
   assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);

@@ -108,7 +108,13 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { brokerCredentialCheck, createStartup, seedCatalogs } from "./startup-work.ts";
+import {
+  brokerCredentialCheck,
+  createStartup,
+  seedCatalogs,
+  startTenantWork,
+  type TenantWork,
+} from "./startup-work.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -368,6 +374,8 @@ import {
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { composioNamespaceReader } from "./tenants/tenant-record.ts";
+import { currentTenant, tenantRootScope } from "./tenants/context.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
@@ -448,6 +456,7 @@ export interface BuiltApp {
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   startup: () => Promise<unknown>;
+  skillsReady: () => Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
@@ -460,6 +469,7 @@ export interface BuiltApp {
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
+  composioNamespace: () => Promise<string>;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
@@ -632,7 +642,7 @@ export function buildApp(
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
-  const configStore = createConfigStore(config.orgId, {
+  const configStore = createConfigStore({
     ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
@@ -646,10 +656,9 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags);
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
-    config.orgId,
     artifactMap("slack_installation"),
     config.connectorSecretKey ?? randomBytes(32),
   );
@@ -658,29 +667,27 @@ export function buildApp(
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
-  const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
     skills,
     skillBundles,
-    scopeId: orgScope,
     advisoryLock,
     auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+      auditLog.recordOnce!(`deployment-layer:${tenantRootScope()}:${record.version}`, {
         at: record.updatedAt,
         principalId: record.updatedBy,
         action: "deployment_layer.updated",
         resource: record.contentHash,
-        scopeLabel: orgScope,
+        scopeLabel: tenantRootScope(),
       }),
     ...(config.seedSkills && layerSkillsDir
       ? {
           seedFallback: () =>
             installSeedSkills(skills, {
               dir: layerSkillsDir,
-              scopeId: orgScope,
+              scopeId: tenantRootScope(),
               createdBy: LAYER_CREATED_BY,
               reviewer: LAYER_REVIEWER,
             }),
@@ -700,7 +707,6 @@ export function buildApp(
       ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
       : undefined;
   const resolution = createResolutionService(
-    config.orgId,
     configStore,
     acl,
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
@@ -1182,7 +1188,6 @@ export function buildApp(
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(
     createConnectorClientResolver({
       reader: configStore,
-      orgScopeId: (o) => scopeId("org", o),
       secrets: secretSource,
     }),
   );
@@ -1240,11 +1245,7 @@ export function buildApp(
   });
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
-  const serviceCreds = withDeploymentCredentials(
-    credentialStore,
-    scopeId("org", config.orgId),
-    config.brokerCredentials ?? [],
-  );
+  const serviceCreds = withDeploymentCredentials(credentialStore, config.brokerCredentials ?? []);
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
@@ -1386,9 +1387,10 @@ export function buildApp(
     const subscription = codexSubscriptionModelId(id);
     return resolveModel(subscription) ? subscription : id;
   };
-  const runtimeOrgScope = scopeId("org", config.orgId);
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+    configStore.getRuntimeSelection(tenantRootScope())?.modelId ??
+    configStore.getBaseModel(tenantRootScope()) ??
+    undefined;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -1421,7 +1423,7 @@ export function buildApp(
         ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
+            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(tenantRootScope(), slug))
             : null;
           return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
@@ -1438,7 +1440,7 @@ export function buildApp(
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoice(
         configStore,
-        runtimeOrgScope,
+        tenantRootScope(),
         input.scopeLabel,
         fallback,
         requested,
@@ -1557,7 +1559,7 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
@@ -1592,30 +1594,40 @@ export function buildApp(
   const startup = createStartup({
     identity,
     configStore,
-    deploymentLayer: deploymentLayerStore,
     mcp: mcpToolService,
     blobTransfer,
     listen: () => runStreamEvents.subscribe(syncRunStream),
-    ...(config.seedSkills
-      ? {
-          seedCatalogs: seedCatalogs(skills, {
-            seedDir: config.skillsSeedDir,
-            pluginDirs: config.pluginSkillDirs,
-            ...(layerSkillsDir ? { layerSkillsDir } : {}),
-            scopeId: orgScope,
-          }),
-        }
-      : {}),
-    ...(config.brokerCredentials?.length
-      ? {
-          checkBrokerCredentials: brokerCredentialCheck(
-            credentialStore,
-            orgScope,
-            config.brokerCredentials.map((c) => c.slug),
-          ),
-        }
-      : {}),
   });
+  const tenantWork = new Map<string, TenantWork>();
+  const skillsReady = (): Promise<void> => {
+    let work = tenantWork.get(currentTenant());
+    if (!work) {
+      work = startTenantWork({
+        deploymentLayer: deploymentLayerStore,
+        ...(config.seedSkills
+          ? {
+              seedCatalogs: seedCatalogs(skills, {
+                seedDir: config.skillsSeedDir,
+                pluginDirs: config.pluginSkillDirs,
+                ...(layerSkillsDir ? { layerSkillsDir } : {}),
+                scopeId: tenantRootScope(),
+              }),
+            }
+          : {}),
+        ...(config.brokerCredentials?.length
+          ? {
+              checkBrokerCredentials: brokerCredentialCheck(
+                credentialStore,
+                tenantRootScope(),
+                config.brokerCredentials.map((c) => c.slug),
+              ),
+            }
+          : {}),
+      });
+      tenantWork.set(currentTenant(), work);
+    }
+    return work.skills;
+  };
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
   const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
@@ -1748,7 +1760,7 @@ export function buildApp(
     );
   }
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
-    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+    seed: () => parseAdminGrants(config.adminGrants, tenantRootScope()) ?? [],
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
@@ -1812,7 +1824,7 @@ export function buildApp(
     ...(deployGitSecret && deployGitBase
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const orgScope = scopeId("org", config.orgId);
+            const orgScope = tenantRootScope();
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
@@ -2032,7 +2044,7 @@ export function buildApp(
       if (Object.keys(requested).length === 0) {
         await resolveRuntimeChoice(
           configStore,
-          runtimeOrgScope,
+          tenantRootScope(),
           scope,
           fallback,
           requested,
@@ -2112,7 +2124,7 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: () => startup.begin().skills,
+    skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -2162,7 +2174,7 @@ export function buildApp(
               {
                 serviceCredential: async (slug) => {
                   const record = nonDeploymentCredential(
-                    await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+                    await serviceCreds.getServiceCredentialSecret(tenantRootScope(), slug),
                   );
                   return record && record.delivery !== "env" ? record : undefined;
                 },
@@ -2945,13 +2957,14 @@ export function buildApp(
 
   return {
     app,
+    startup: async () => startup.begin(),
+    skillsReady,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    startup: () => startup.begin().deploymentLayer,
     deploymentLayerRefresh,
     sessions,
     runs,
@@ -2964,6 +2977,7 @@ export function buildApp(
     config: configStore,
     connectorTokens,
     slackInstallation,
+    composioNamespace: composioNamespaceReader(pgArtifactMap?.pool ?? null),
     resolveClient,
     consentLinks,
     oauthFlows,
@@ -3058,6 +3072,7 @@ export function serverDeps(
   const subscriptionAuth = companySubscriptionAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
+    composioNamespace: built.composioNamespace,
     modelGatewayTransport: built.modelGatewayTransport,
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,

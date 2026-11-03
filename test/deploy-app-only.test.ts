@@ -31,7 +31,7 @@ const guest = "guest@partner.test";
 const key = deriveKey(secret, "portal.session.v1");
 function token(appOnly: unknown = true) {
   const now = Math.floor(Date.now() / 1000);
-  return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
+  return seal({ k: "session", sub: guest, iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
   assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });

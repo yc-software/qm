@@ -6,6 +6,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -22,11 +23,7 @@ type SlackSetupStatus = {
 
 async function fixture(t: test.TestContext) {
   const map = testMap();
-  const store = createSlackInstallationStore(
-    "test",
-    map as Parameters<typeof createSlackInstallationStore>[1],
-    "test-key",
-  );
+  const store = createSlackInstallationStore(map as Parameters<typeof createSlackInstallationStore>[0], "test-key");
   const calls: Array<{ path: string; body?: string }> = [];
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({
@@ -76,49 +73,52 @@ async function fixture(t: test.TestContext) {
   };
 }
 
-test("admin status supplies stable links before creation without enabling installation", async (t) => {
-  const f = await fixture(t);
-  const first = (await (await f.request()).json()) as SlackSetupStatus;
-  const second = (await (await f.request()).json()) as SlackSetupStatus;
-  assert.ok(first.setup);
-  assert.ok(second.setup);
-  assert.deepEqual(first.setup, second.setup);
-  assert.equal(first.setup.submitUrl, "https://agent.example/settings/slack-settings?slack=setup");
-  assert.equal(first.setup.installUrl, "https://agent.example/settings/slack-settings?slack=install");
-  assert.equal(first.setup.tokenUrl, "https://api.slack.com/apps");
-  assert.equal(first.setup.connected, false);
-  assert.equal((await f.store.status()).managed, false);
-  assert.ok(!JSON.stringify(first).includes("SENTINEL"));
-  assert.equal((await f.request("GET", undefined, "member")).status, 403);
-  assert.equal(f.calls.length, 2);
-});
+test("admin status supplies stable links before creation without enabling installation", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const first = (await (await f.request()).json()) as SlackSetupStatus;
+    const second = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.ok(first.setup);
+    assert.ok(second.setup);
+    assert.deepEqual(first.setup, second.setup);
+    assert.equal(first.setup.submitUrl, "https://agent.example/settings/slack-settings?slack=setup");
+    assert.equal(first.setup.installUrl, "https://agent.example/settings/slack-settings?slack=install");
+    assert.equal(first.setup.tokenUrl, "https://api.slack.com/apps");
+    assert.equal(first.setup.connected, false);
+    assert.equal((await f.store.status()).managed, false);
+    assert.ok(!JSON.stringify(first).includes("SENTINEL"));
+    assert.equal((await f.request("GET", undefined, "member")).status, 403);
+    assert.equal(f.calls.length, 2);
+  }));
 
-test("environment-backed bot skips service lookup and missing service status remains unknown", async (t) => {
-  const f = await fixture(t);
-  f.deps.slackEnvironmentState = "configured";
-  const installed = (await (await f.request()).json()) as SlackSetupStatus;
-  assert.equal(installed.configured, true);
-  assert.equal(installed.source, "environment");
-  assert.equal(installed.setup, undefined);
-  assert.equal(f.calls.length, 0);
-  f.deps.slackEnvironmentState = "none";
-  f.remote(new Response("", { status: 503 }));
-  const failed = (await (await f.request()).json()) as SlackSetupStatus;
-  assert.equal(failed.setupUnavailable, true);
-  assert.equal(failed.setup, undefined);
-  f.remote(new Response("", { status: 404 }));
-  const legacy = (await (await f.request()).json()) as SlackSetupStatus;
-  assert.equal(legacy.setup, undefined);
-  assert.equal(legacy.installAvailable, true);
-});
+test("environment-backed bot skips service lookup and missing service status remains unknown", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    f.deps.slackEnvironmentState = "configured";
+    const installed = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.equal(installed.configured, true);
+    assert.equal(installed.source, "environment");
+    assert.equal(installed.setup, undefined);
+    assert.equal(f.calls.length, 0);
+    f.deps.slackEnvironmentState = "none";
+    f.remote(new Response("", { status: 503 }));
+    const failed = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.equal(failed.setupUnavailable, true);
+    assert.equal(failed.setup, undefined);
+    f.remote(new Response("", { status: 404 }));
+    const legacy = (await (await f.request()).json()) as SlackSetupStatus;
+    assert.equal(legacy.setup, undefined);
+    assert.equal(legacy.installAvailable, true);
+  }));
 
-test("explicit browser start selects setup or installation and rejects arbitrary steps", async (t) => {
-  const f = await fixture(t);
-  assert.equal((await f.request("POST", { step: "setup" }, "member")).status, 403);
-  assert.equal((await f.request("POST", { step: "other" })).status, 400);
-  assert.equal(f.calls.length, 0);
-  for (const step of ["setup", "install"]) {
-    assert.equal((await f.request("POST", { step })).status, 200);
-    assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
-  }
-});
+test("explicit browser start selects setup or installation and rejects arbitrary steps", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    assert.equal((await f.request("POST", { step: "setup" }, "member")).status, 403);
+    assert.equal((await f.request("POST", { step: "other" })).status, 400);
+    assert.equal(f.calls.length, 0);
+    for (const step of ["setup", "install"]) {
+      assert.equal((await f.request("POST", { step })).status, 200);
+      assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
+    }
+  }));

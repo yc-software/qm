@@ -1,4 +1,4 @@
-import { parseScopeId, scopeId as toScopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 import type { SpendRow } from "../sessions/session-store.ts";
 
 export interface SpendLimit {
@@ -16,7 +16,7 @@ export interface SpendLimitStatus {
 }
 
 interface SpendLimitDeps {
-  orgId: () => string;
+  rootScope: () => ScopeId;
   getSpendLimit: (scope: ScopeId) => Promise<SpendLimit | null>;
   spendReport: (range: { from: number; to: number }) => Promise<{ rows: SpendRow[] }>;
   now?: () => number;
@@ -87,7 +87,7 @@ export function createSpendLimits(deps: SpendLimitDeps) {
     const own = await deps.getSpendLimit(scopeId);
     if (own) return { limit: own, orgDefault: false };
     if (parseScopeId(scopeId).kind !== "personal") return null;
-    const fallback = await deps.getSpendLimit(toScopeId("org", deps.orgId()));
+    const fallback = await deps.getSpendLimit(deps.rootScope());
     return fallback ? { limit: fallback, orgDefault: true } : null;
   };
 

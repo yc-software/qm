@@ -43,7 +43,6 @@ import { bestEffort, errMessage, formatAge, nowEpoch, sleep, swallowAs } from ".
 import { runDoctor } from "./commands/doctor.ts";
 import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
-import { validOrgId } from "../../cli/src/config.ts";
 
 function parseCli() {
   try {
@@ -61,7 +60,6 @@ function parseCli() {
         surface: { type: "string" },
         "no-slack": { type: "boolean", default: false },
         "no-watch": { type: "boolean", default: false },
-        org: { type: "string" },
       },
     });
   } catch (error) {
@@ -116,7 +114,6 @@ function emitJson(payload: unknown): void {
   if (opts.json) console.log(JSON.stringify(payload, null, 2));
 }
 
-const orgId = opts.org ?? process.env.DEV_INSTANCE_ORG_ID ?? "acme";
 const requestedSurface =
   opts.surface ?? (opts["no-slack"] || process.env.DEV_INSTANCE_NO_SLACK === "1" ? "web" : undefined);
 if (requestedSurface !== undefined && !["web", "slack", "both"].includes(requestedSurface)) {
@@ -129,7 +126,6 @@ if (opts.surface && opts["no-slack"] && opts.surface !== "web") {
 }
 let withSlack = requestedSurface === "slack" || requestedSurface === "both";
 let withWeb = requestedSurface !== "slack";
-const devCallerEnv = (): Record<string, string> => ({ ...callerEnvSnapshot(), DEV_INSTANCE_ORG_ID: orgId });
 
 async function legacyTeardown(lease: LeaseInfo): Promise<void> {
   for (const name of ["portal", "web", "web-build", "slack", "core", "tunnel", "supervisor"]) {
@@ -238,7 +234,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
     if (swept.swept.length) out(`swept ${swept.swept.length} orphaned process(es) holding ${slot}'s Slack app token`);
   }
 
-  const callerEnv = devCallerEnv();
+  const callerEnv = callerEnvSnapshot();
   const canaryChannel = (tokens?.canaryChannel ?? "") || callerEnv.DEV_INSTANCE_CANARY_CHANNEL || "";
   writeFileSync(
     join(lock, "boot-spec.json"),
@@ -313,7 +309,7 @@ function printSuccess(result: BootResult, branch: string): void {
     out(
       `   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and settings at /settings`,
     );
-  out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
+  out(`   core   : http://localhost:${ports.core}`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
   if (result.webEnabled !== false)
     out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
@@ -349,7 +345,7 @@ async function cmdUp(): Promise<number> {
           sock,
           "POST",
           "/reload",
-          { callerEnv: devCallerEnv(), force: opts.force },
+          { callerEnv: callerEnvSnapshot(), force: opts.force },
           300_000,
         );
         emitJson(res.body);
@@ -642,10 +638,6 @@ async function cmdLogs(): Promise<number> {
 }
 
 async function main(): Promise<number> {
-  if (!validOrgId(orgId)) {
-    console.error("dev: --org must be a lowercase DNS label (a-z, 0-9, and hyphens between)");
-    return EXIT.usage;
-  }
   switch (command) {
     case "up":
       return await cmdUp();

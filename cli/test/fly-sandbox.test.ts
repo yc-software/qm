@@ -98,7 +98,6 @@ test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", 
   assert.match(toml, /app = "qm-linear"/, "app is <appPrefix>-<name>");
   assert.match(toml, /primary_region = "sjc"/);
   assert.match(toml, /CORE_API_URL = "http:\/\/qm-core\.internal:8080"/, "plugin reaches core over 6PN");
-  assert.match(toml, /CORE_ORG_ID = "acme"/);
   assert.match(toml, /PORT = "8080"/);
   assert.match(toml, /LINEAR_REGION = "us"/, "the entry's non-secret env is forwarded");
   assert.match(
@@ -152,7 +151,6 @@ test("a coreless plugin gets no core endpoint", () => {
   };
   const toml = derivedPluginTomlFor(config, plugin);
   assert.doesNotMatch(toml, /CORE_API_URL/);
-  assert.match(toml, /CORE_ORG_ID = "acme"/);
 });
 
 test("a plugin env value with quotes/backslashes is escaped into valid TOML", () => {

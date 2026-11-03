@@ -10,7 +10,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
   req.on("end", () => {
     if (req.url?.startsWith("/v1/admin/whoami")) {
       res.writeHead(200, { "content-type": "application/json" });
-      return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
+      return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin" }));
     }
     res.writeHead(200, { "content-type": "application/json", vary: "accept-encoding" });
     res.end(JSON.stringify({ url: req.url, method: req.method, cookie: req.headers.cookie ?? null }));
@@ -40,12 +40,12 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("api-cors-test-portal-secret-0123456789", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 function impersonating(actor: string, target: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, org: "acme", iat, exp: iat + 3600 }, impersonateKey))}`;
+  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, iat, exp: iat + 3600 }, impersonateKey))}`;
 }
 
 test.after(() => {

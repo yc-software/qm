@@ -19,7 +19,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin } from "../shared.ts";
 import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
 import { type ApiCtx } from "../route.ts";
 import {
@@ -31,6 +31,7 @@ import {
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
 import { scopeActivity } from "./scope-activity.ts";
+import { currentTenant, tenantRootScope } from "../../../tenants/context.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
@@ -55,7 +56,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       parsed?.policy ??
       deps.config.getCommandPolicy(targetScope) ??
       (targetKind === "org" ? defaultOrgPolicy() : { mode: "denylist" as const, rules: [] });
-    const orgPolicy = deps.config.getCommandPolicy(orgScope(deps)) ?? defaultOrgPolicy();
+    const orgPolicy = deps.config.getCommandPolicy(tenantRootScope()) ?? defaultOrgPolicy();
     const effective = targetKind === "org" ? target : composePolicy(orgPolicy, target);
     const result = evaluateCommand(command, effective);
     const effectiveRuleIndex = result.approvalKey
@@ -102,7 +103,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
 export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenantRootScope();
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   await deps.refreshModels?.();
@@ -114,8 +115,9 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
+  const tenant = { tenant: currentTenant() };
   if (!actor || !(await activePrincipal(deps, actor.id)))
-    return sendJson(res, 200, { isAdmin: false, permissions: [] });
+    return sendJson(res, 200, { isAdmin: false, permissions: [], ...tenant });
   const status = await deps.admin.adminStatusOf(actor);
   const permissions = status.isAdmin ? ["admin"] : [];
   audit(deps, {
@@ -124,12 +126,12 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
     resource: "whoami",
     scopeLabel: status.scopeId ?? actor.id,
   });
-  return sendJson(res, 200, { ...status, permissions });
+  return sendJson(res, 200, { ...status, permissions, ...tenant });
 }
 
 export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenantRootScope();
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
@@ -302,7 +304,7 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config!.getEgress(orgScope(deps));
+  const orgEgress = deps.config!.getEgress(tenantRootScope());
   const targetEgress = deps.config!.getEgress(targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
@@ -468,7 +470,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
 
 export async function retention(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const scope = url.searchParams.get("scope") ?? orgScope(deps);
+  const scope = url.searchParams.get("scope") ?? tenantRootScope();
   if (parseScopeId(scope).kind !== "org") {
     return sendJson(res, 400, { error: "bad_request", message: "retention is org-wide; request an org scope" });
   }

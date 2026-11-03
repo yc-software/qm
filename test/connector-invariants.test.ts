@@ -72,41 +72,6 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
-  let exchanged = false;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
-    signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
-    oauthFetch: async () => {
-      exchanged = true;
-      return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
-    },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        orgId: "other",
-      },
-      { secret: SECRET },
-    );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
-    assert.equal(res.status, 400);
-    assert.match(await res.text(), /different org/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
-    assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
-
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
   const server = createServer(built.app, {

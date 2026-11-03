@@ -4,7 +4,6 @@ import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
 import { entryFromItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
 import { conversationWriteAccess } from "./conversation-write-access.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
@@ -37,6 +36,7 @@ const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 const USER_STOP = "by user";
 
@@ -127,7 +127,7 @@ export function createTurnMethods(
         sessionParticipantIds = [actor.id];
       }
 
-      const orgRuntimeScope = scopeId("org", orgIdOf());
+      const orgRuntimeScope = tenantRootScope();
       const turnRuntimeScope =
         req.conversation.kind === "dm"
           ? scopeId("personal", actor.id)
@@ -182,7 +182,7 @@ export function createTurnMethods(
       }
       let requestedModel = req.model;
       if (req.surface === "web") {
-        const org = scopeId("org", orgIdOf());
+        const org = tenantRootScope();
         const targetScope = conversationScope(req.conversation, actor.id);
         const runtimeFallback = deps.runtimeFallback ?? { modelId: defaultModel() };
         if (individualAuth && req.model) {

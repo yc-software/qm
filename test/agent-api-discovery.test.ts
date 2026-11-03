@@ -14,9 +14,10 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 
 async function start(swarmsEnabled = true) {
   const built = buildApp(

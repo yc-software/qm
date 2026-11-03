@@ -198,17 +198,6 @@ export function configPathInDir(dir: string): string | undefined {
   return existsSync(candidate) ? candidate : undefined;
 }
 
-export function findConfigPath(start = process.cwd()): string | undefined {
-  let dir = resolve(start);
-  for (;;) {
-    const candidate = configPathInDir(dir);
-    if (candidate) return candidate;
-    const parent = resolve(dir, "..");
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
-
 export function loadConfigInDir(dir: string, overrides?: { target?: Target }): { config: QmConfig; path: string } {
   const path = configPathInDir(dir);
   if (!path) {
@@ -507,16 +496,6 @@ function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfi
     );
   }
   return { mode: raw.mode, classifier, provider: raw.provider, endpoint: raw.endpoint };
-}
-
-export function readConfigOrgId(path: string): string | undefined {
-  try {
-    const raw = parseConfigJson(readFileSync(path, "utf8"));
-    const orgId = isPlainObject(raw) ? raw.orgId : undefined;
-    return typeof orgId === "string" && validOrgId(orgId) ? orgId : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([

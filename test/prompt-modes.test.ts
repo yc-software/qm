@@ -28,7 +28,7 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from ".
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-const ORG = "default-org";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
@@ -78,9 +78,9 @@ async function buildOrchestrator(
     config?: ReturnType<typeof testConfigStore>;
   } = {},
 ) {
-  const config = opts.config ?? testConfigStore(ORG);
-  if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
-  if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
+  const config = opts.config ?? testConfigStore();
+  if (opts.orgSoul !== undefined) await config.setSoul(TEST_ROOT_SCOPE, opts.orgSoul);
+  if (opts.branding) await config.setBranding(TEST_ROOT_SCOPE, opts.branding);
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -94,7 +94,7 @@ async function buildOrchestrator(
     auditLog,
     acl,
   });
-  const resolution = createResolutionService(ORG, config, acl);
+  const resolution = createResolutionService(config, acl);
 
   if (opts.scopeSoulFor) {
     const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);
@@ -505,7 +505,7 @@ test("web group conversations are not described as private 1:1s", () =>
 
 test("a guidance change from another session is announced on this session's next turn, once", () =>
   inTestTenant(async () => {
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     const orch = await buildOrchestrator({ config, scopeSoulFor: { conversation: dmConversation, soul: "Be brief." } });
     assert.doesNotMatch(await sysprompt(orch, slackDm("")), /standing guidance/);
     await config.setSoul(

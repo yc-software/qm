@@ -6,10 +6,8 @@ import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
-import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
-import { orgId } from "../../config.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -17,17 +15,18 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import type { ServerDeps } from "../deps.ts";
+import { composioUserId } from "../../tenants/tenant-record.ts";
+import { tenantRootScope } from "../../tenants/context.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
-export function composioUserId(org: string, principal: string): string {
-  return `qm_${createHash("sha256")
-    .update(JSON.stringify([org, principal]))
-    .digest("hex")}`;
-}
+const composioNamespace = (deps: ServerDeps): Promise<string> =>
+  deps.composioNamespace?.() ?? Promise.reject(new Error("Composio user namespace is not configured"));
 
-export function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
+export async function composioUserIds(deps: ServerDeps, principal: string): Promise<string[]> {
+  const namespace = await composioNamespace(deps);
+  return [...new Set(personIds(principal).map((id) => composioUserId(namespace, id)))];
 }
 
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
@@ -101,7 +100,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
     sendJson(ctx.res, 503, { error: "credential_unavailable" });
     return null;
   }
-  const org = scopeId("org", orgId());
+  const org = tenantRootScope();
   const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
   const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
   if (!audience?.length || audience.some((member) => member.type !== "internal")) {
@@ -236,7 +235,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(await composioNamespace(ctx.deps), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -278,7 +277,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
           {
             purpose: "slack-account-link",
             principal: access.principal,
-            org: orgId(),
+            org: tenantRootScope(),
             accountId: link.connected_account_id,
             exp: Date.now() + 20 * 60_000,
           },
@@ -310,7 +309,7 @@ export async function ownedAccount(
   const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
   return account.id === accountId &&
     typeof account.user_id === "string" &&
-    composioUserIds(access.principal).includes(account.user_id) &&
+    (await composioUserIds(ctx.deps, access.principal)).includes(account.user_id) &&
     toolkit &&
     toolkit !== "composio"
     ? { account, toolkit }
@@ -352,7 +351,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   if (!access) return;
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
-  const userIds = composioUserIds(access.principal);
+  const userIds = await composioUserIds(ctx.deps, access.principal);
   const query = new URLSearchParams({ user_ids: userIds.join(","), statuses: "ACTIVE", limit: "100" });
   if (cursor) query.set("cursor", cursor);
   try {
@@ -504,7 +503,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(String(account.user_id)))
+    if (!(await composioUserIds(ctx.deps, access.principal)).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx.deps, {
       principalId: access.principal,
@@ -574,7 +573,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     connectFailed();
     return sendJson(ctx.res, 400, { error: "invalid_session" });
   }
-  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  const userId = composioUserId(await composioNamespace(ctx.deps), canonicalPerson(access.principal));
   let accountId: string;
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
@@ -615,7 +614,7 @@ async function identity(ctx: ApiCtx): Promise<void> {
   const principal = ctx.actor?.p ?? ctx.capability?.actorId;
   if (!principal || !(await activePrincipal(ctx.deps, principal)))
     return sendJson(ctx.res, 403, { error: "forbidden" });
-  const userIds = composioUserIds(principal);
+  const userIds = await composioUserIds(ctx.deps, principal);
   return sendJson(ctx.res, 200, { userId: userIds[0], userIds });
 }
 
@@ -667,7 +666,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
       const toolkit = account.toolkit as { slug?: string } | undefined;
       if (
         account.id === record.accountId &&
-        composioUserIds(access.principal).includes(String(account.user_id)) &&
+        (await composioUserIds(ctx.deps, access.principal)).includes(String(account.user_id)) &&
         toolkit?.slug === "slack" &&
         account.status === "ACTIVE" &&
         account.is_disabled !== true
@@ -701,7 +700,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
   if (
     !proof ||
     proof.purpose !== "slack-account-link" ||
-    proof.org !== orgId() ||
+    proof.org !== tenantRootScope() ||
     proof.principal !== access.principal ||
     typeof proof.exp !== "number" ||
     proof.exp <= Date.now() ||
@@ -718,7 +717,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     const toolkit = account.toolkit as { slug?: string } | undefined;
     if (
       account.id !== proof.accountId ||
-      !composioUserIds(access.principal).includes(String(account.user_id)) ||
+      !(await composioUserIds(ctx.deps, access.principal)).includes(String(account.user_id)) ||
       toolkit?.slug !== "slack" ||
       account.is_disabled === true
     )
@@ -791,10 +790,10 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     if (!samePerson(member.principalId, access.principal)) {
       const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
       const projectKeys = new Set([access.key]);
-      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
+      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(tenantRootScope())) ?? [];
       for (const candidate of companyCredentials) {
         if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
-        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
+        const material = await deps.serviceCreds!.getServiceCredentialSecret(tenantRootScope(), candidate.slug);
         if (!material?.secret) throw Error("Could not inspect existing connections");
         projectKeys.add(material.secret);
       }
@@ -803,7 +802,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         const priorAccounts = await request(
           ctx,
           projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
+          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(await composioNamespace(ctx.deps), member.principalId), limit: "1" })}`,
         );
         if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
         hasPriorAccounts ||= priorAccounts.items.length > 0;
@@ -831,7 +830,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         principalId: access.principal,
         action: "principal_link.create",
         resource: `${member.principalId} -> ${access.principal}`,
-        scopeLabel: scopeId("org", orgId()),
+        scopeLabel: tenantRootScope(),
       });
     }
     await deps.slackAccounts.put(access.principal, {

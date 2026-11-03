@@ -15,6 +15,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
@@ -72,7 +73,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
       { authorization: `Bearer ${exportToken}x` },
       { authorization: exportToken },
       { authorization: `Bearer ${sourceSecret}` },
-      { "x-admin-actor": "admin-alice@default-org" },
+      { "x-admin-actor": "admin-alice" },
       { "x-timestamp": String(ts), "x-signature": signRequest(sourceSecret, ts, `GET\n${path}\n`) },
     ];
     for (const headers of refused) {
@@ -116,7 +117,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
     const res = await s.get(`/v1/spend/export?${window}`);
     assert.equal(res.status, 200);
     const body: any = await res.json();
-    assert.equal(body.scopeId, "org:default-org");
+    assert.equal(body.scopeId, TEST_ROOT_SCOPE);
     assert.deepEqual(body.window, { from: iso(today - DAY), to: iso(today + DAY) });
     assert.deepEqual(
       body.rows.map((r: any) => [

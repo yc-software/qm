@@ -29,7 +29,6 @@ const migrate = (url: string) =>
       NODE_ENV: "test",
       DATABASE_URL: url,
       SANDBOX_BACKEND: "local",
-      ORG_ID: "o",
       CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
     },
   });

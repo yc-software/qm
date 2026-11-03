@@ -20,7 +20,6 @@ Object.assign(process.env, {
   NODE_ENV: "test",
   PORTAL_PUBLIC_URL: origin,
   PORTAL_SESSION_SECRET: secret,
-  CORE_ORG_ID: "logout",
   CORE_API_URL: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,
   OIDC_ISSUER: issuer,
   OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
@@ -38,7 +37,7 @@ test.after(() => {
 });
 function cookie(extra: Record<string, unknown> = {}) {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: "fixture", org: "logout", iat: now, exp: now + 3600, ...extra }, deriveKey(secret, "portal.session.v1"))}`;
+  return `portal_session=${seal({ k: "session", sub: "fixture", iat: now, exp: now + 3600, ...extra }, deriveKey(secret, "portal.session.v1"))}`;
 }
 async function logout(extra: Record<string, unknown> = {}, html = false) {
   return fetch(`${base}/auth/logout?returnTo=https://evil.example`, {

@@ -6,13 +6,14 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", () =>
   inTestTenant(async () => {
     const sessions = createPostgresSessionStore(testDatabaseUrl());
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     const threadRef = "ch:C_UUID_FIXTURE:100.1";
-    const session = await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
+    const session = await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
 
     const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
     const claimed = await runs.claimById(run.id, "w1", 60_000);
@@ -36,7 +37,7 @@ test("getRun omits the admin link when no portal (publicWebUrl) is configured", 
     const sessions = createPostgresSessionStore(testDatabaseUrl());
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     const threadRef = "ch:C2:2.2";
-    await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
+    await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
     const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
     const claimed = await runs.claimById(run.id, "w1", 60_000);
     await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });

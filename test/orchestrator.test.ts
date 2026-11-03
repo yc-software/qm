@@ -27,6 +27,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -121,7 +122,7 @@ async function grantCred(acl: AclStore, org: ScopeId, slug: string, grantee: Sco
     ref: encodeRef(serviceCredRef(slug)),
     granteeScopeId: grantee,
     permission: "read",
-    grantedBy: "admin@default-org",
+    grantedBy: "admin",
   });
 }
 
@@ -662,7 +663,7 @@ test("Composio backend access is announced without delivering the project key", 
     captured = opts;
     return provision(layers, opts);
   };
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "composio",
     name: "Composio",
@@ -713,7 +714,7 @@ test("Composio backend access is announced without delivering the project key", 
   assert.match(brokerDelivery, /Composio is configured in the backend/);
   assert.doesNotMatch(brokerDelivery, /`composio`|Shared org credentials available to you/);
   serviceCreds.listServiceCredentials = listServiceCredentials;
-  await inTestTenant(() => acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org"));
+  await inTestTenant(() => acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin"));
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
   await inTestTenant(() => grantCred(acl, org, "composio"));
   await serviceCreds.setServiceCredential(org, {
@@ -735,7 +736,7 @@ test("org credentials are delivered only when requested and read live after rota
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
     name: "Steel",
@@ -801,7 +802,7 @@ test("a disabled or broker-delivery credential never rides provision env", async
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await inTestTenant(() => grantCred(acl, org, "x-firehose"));
   await inTestTenant(() => grantCred(acl, org, "browse-steel"));
   await serviceCreds.setServiceCredential(org, {
@@ -846,7 +847,7 @@ test("a credential flipped away from env between the metadata read and the secre
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
     name: "Steel",
@@ -888,7 +889,7 @@ test("env-delivery credentials are not offered to an external audience", async (
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
     name: "Steel",
@@ -930,7 +931,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl, deliveries, identity } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
     name: "Steel",
@@ -1022,7 +1023,7 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, serviceCreds, acl } = buildApp(config);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
     name: "Steel",
@@ -1104,8 +1105,8 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
-  await inTestTenant(() => built.config.setBrowseMaxSteps("org:default-org", 120));
-  await inTestTenant(() => built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6"));
+  await inTestTenant(() => built.config.setBrowseMaxSteps(TEST_ROOT_SCOPE, 120));
+  await inTestTenant(() => built.config.setBrowseModel(TEST_ROOT_SCOPE, "claude-sonnet-4-6"));
   const res2 = await inTestTenant(() => app.turn(dm("!run echo steps again")));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
@@ -1119,7 +1120,6 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
 test("a legacy browse-only model cannot strand managed default-model browsing", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
-    orgId: "acme",
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
@@ -1166,7 +1166,7 @@ test("browse follows a live org base model change, not the process-start default
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "claude-opus-5", "starts on the deployment default");
 
-  await inTestTenant(() => built.config.setBaseModel("org:default-org", "gpt-5.6-sol"));
+  await inTestTenant(() => built.config.setBaseModel(TEST_ROOT_SCOPE, "gpt-5.6-sol"));
   res = await inTestTenant(() =>
     app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live2" } })),
   );
@@ -1182,7 +1182,6 @@ test("browse follows a live org base model change, not the process-start default
 test("an OpenAI deployment provisions managed browser access without its provider key", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
-    orgId: "acme",
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
     modelId: "gpt-5.6-sol",
@@ -1265,13 +1264,13 @@ for (const hours of [undefined, "72", "0", "none"]) {
       apiBaseUrl: "https://core.example.com",
       sandboxCapabilityTtlMs: ttl,
     });
-    await serviceCreds.setServiceCredential("org:default-org", {
+    await serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
       slug: "test-service",
       name: "Test service",
       secret: "synthetic",
       host: "api.example.com",
     });
-    await inTestTenant(() => grantCred(acl, "org:default-org", "test-service"));
+    await inTestTenant(() => grantCred(acl, TEST_ROOT_SCOPE, "test-service"));
     let captured: ProvisionOptions | undefined;
     let executed: Record<string, string> | undefined;
     const provision = sandbox.provision.bind(sandbox);
@@ -1508,7 +1507,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
 
   assert.equal((await inTestTenant(() => app.turn(adminTurn()))).status, "ok");
   const adminClaims = await verifyCapabilityToken(captured!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(adminClaims!.memory!.orgWrite, scopeId("org", "default-org"));
+  assert.equal(adminClaims!.memory!.orgWrite, TEST_ROOT_SCOPE);
   assert.ok(adminClaims!.memory!.write, "the turn's own writable notebook is still claimed");
   assert.equal(adminClaims!.liveActor, true, "a human-initiated turn attests liveness in the token");
 
@@ -2897,7 +2896,7 @@ test("an admin-registered rule grants by rule across turns; the approval is keye
   const { app, config } = freshApp();
   const pattern = "\\bzz-tool\\s+\\S+";
   await inTestTenant(() =>
-    config.setCommandPolicy(scopeId("org", "default-org"), {
+    config.setCommandPolicy(TEST_ROOT_SCOPE, {
       mode: "denylist",
       rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
     }),
@@ -2921,7 +2920,7 @@ test("an admin-registered rule grants by rule across turns; the approval is keye
 
 test("Dangerous posture keeps predeclared command approvals and hard denials", async () => {
   const { app, config } = freshApp();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await inTestTenant(() => config.setSecurityPosture(org, "dangerous"));
   await inTestTenant(() =>
     config.setCommandPolicy(org, {
@@ -2950,7 +2949,7 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
 
 test("an admin-removed grant mode is refused, filters the offer, and leaves the approval pending", async () => {
   const { app, config } = freshApp();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await inTestTenant(() => config.setApprovalGrantModes(org, { session: false, always: true }));
 
   const first = await inTestTenant(() => app.turn(dm("!run git push --force origin main")));
@@ -2990,7 +2989,7 @@ test("an admin-removed grant mode is refused, filters the offer, and leaves the 
 
 test("a grant mode disabled after an approval was issued is filtered from the re-presented card", async () => {
   const { app, config } = freshApp();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
 
   const first = await inTestTenant(() => app.turn(dm("!run git push --force origin main")));
   assert.equal(first.status, "pending_approval");
@@ -3011,7 +3010,7 @@ test("a grant mode disabled after an approval was issued is filtered from the re
 
 test("disabling a grant mode suspends existing grants until it is re-enabled", async () => {
   const { app, config } = freshApp();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
 
   const first = await inTestTenant(() => app.turn(dm("!run git push --force origin main")));
   assert.equal(first.status, "pending_approval");
@@ -3081,7 +3080,7 @@ test("a tool that declares approval runs once for the exact approved arguments",
 
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {
   const built = freshApp();
-  await inTestTenant(() => built.config.setSecurityPosture(scopeId("org", "default-org"), "strict"));
+  await inTestTenant(() => built.config.setSecurityPosture(TEST_ROOT_SCOPE, "strict"));
 
   const first = await inTestTenant(() => built.app.turn(dm("!write notes.md strict-hello")));
   assert.equal(first.status, "pending_approval", "a plain workspace write pauses under strict");
@@ -3119,7 +3118,7 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
 
 test("Strict posture layers predeclared command approvals on top of the tool gate", async () => {
   const built = freshApp();
-  await inTestTenant(() => built.config.setSecurityPosture(scopeId("org", "default-org"), "strict"));
+  await inTestTenant(() => built.config.setSecurityPosture(TEST_ROOT_SCOPE, "strict"));
 
   const first = await inTestTenant(() => built.app.turn(dm("!run git push --force origin main")));
   assert.equal(first.status, "pending_approval");
@@ -3533,7 +3532,7 @@ test("a thread image is ingested into a session once; later turns that re-send i
 test("an approved automation replay preserves and re-screens its external event provenance", async () => {
   const built = freshApp();
   await inTestTenant(() =>
-    built.config.setCommandPolicy(scopeId("org", "default-org"), {
+    built.config.setCommandPolicy(TEST_ROOT_SCOPE, {
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval", reason: "confirm automation" }],
     }),
@@ -3792,7 +3791,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
 test("allow once authorizes a single use of the rule, not the rest of the session", async () => {
   const { app, config } = freshApp();
   await inTestTenant(() =>
-    config.setCommandPolicy(scopeId("org", "default-org"), {
+    config.setCommandPolicy(TEST_ROOT_SCOPE, {
       mode: "denylist",
       rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
     }),

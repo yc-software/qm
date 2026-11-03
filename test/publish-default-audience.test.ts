@@ -14,9 +14,9 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = "default-org";
-const orgScope = scopeId("org", ORG);
+const orgScope = TEST_ROOT_SCOPE;
 const internal = (id: string): Principal => ({ id, type: "internal" });
 
 function svc() {
@@ -110,7 +110,7 @@ const channel = (
 test("D1: a channel publish is owned by personal:<initiator>, channel recorded as origin", () =>
   inTestTenant(async () => {
     const { deploy, deployStore, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     const r = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
       entrypoint: "node server.js",
       name: "site",
@@ -124,7 +124,7 @@ test("D1: a channel publish is owned by personal:<initiator>, channel recorded a
 test("D1: owner always reaches their own app; canManage recognizes the owner acting from the channel", () =>
   inTestTenant(async () => {
     const { deploy, deployStore, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
       entrypoint: "node server.js",
       name: "site",
@@ -142,7 +142,7 @@ test("D1: owner always reaches their own app; canManage recognizes the owner act
 test("D1: a member acting in the creation channel may manage the app (recover/re-share)", () =>
   inTestTenant(async () => {
     const { deploy, deployStore, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
       entrypoint: "node server.js",
       name: "site",
@@ -164,7 +164,7 @@ test("D1: a member acting in the creation channel may manage the app (recover/re
 test("Defect-2: acting in a different channel than the one the app was created in does not confer manage", () =>
   inTestTenant(async () => {
     const { deploy, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
       entrypoint: "node server.js",
       name: "site",
@@ -186,7 +186,7 @@ test("Defect-2: acting in a different channel than the one the app was created i
 test("first publish grants channel read access but keeps group DMs private", () =>
   inTestTenant(async () => {
     const { deploy, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     const cases = [
       channel(deploy, acl, config, "U1", "C1", { isPrivate: false }),
       channel(deploy, acl, config, "U1", "C2", { isPrivate: true, members: [internal("U1"), internal("U2")] }),
@@ -212,7 +212,7 @@ test("first publish grants channel read access but keeps group DMs private", () 
 test("publish refuses visibility inputs and points to the share action", () =>
   inTestTenant(async () => {
     const { deploy, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     const ctx = channel(deploy, acl, config, "U1", "C1", { isPrivate: false });
     for (const extra of [
       { public: true },
@@ -231,7 +231,7 @@ test("publish refuses visibility inputs and points to the share action", () =>
 test("sharing after publish grants access separately", () =>
   inTestTenant(async () => {
     const { deploy, acl } = svc();
-    const config = testConfigStore(ORG);
+    const config = testConfigStore();
     await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
       entrypoint: "node server.js",
       name: "site",

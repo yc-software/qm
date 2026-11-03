@@ -72,7 +72,6 @@ export function voiceRequestAllowed(req: IncomingMessage, publicUrl: string, por
 
 interface Caller {
   user: string;
-  org: string;
   apiKey: string;
   signal: AbortSignal;
 }
@@ -88,7 +87,7 @@ async function openai(path: string, body: ReadableStream | string, headers: Reco
         ...headers,
         authorization: `Bearer ${caller.apiKey}`,
         "OpenAI-Safety-Identifier": createHash("sha256")
-          .update(JSON.stringify([caller.org, caller.user]))
+          .update(JSON.stringify([caller.user]))
           .digest("hex"),
       },
       body,

@@ -26,7 +26,6 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from ".
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = {
   kind: "channel",
@@ -81,7 +80,7 @@ function buildScenario(turnResult?: Partial<AgentTurnResult>) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

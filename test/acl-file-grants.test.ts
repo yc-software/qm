@@ -9,10 +9,11 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const owner = "personal:alice";
 const recipient = "personal:bob";
-const org = "org:default-org";
+const org = TEST_ROOT_SCOPE;
 const bob: Principal = { id: "bob", type: "internal", teamIds: [] };
 const grant: Grant = {
   ownerScopeId: owner,

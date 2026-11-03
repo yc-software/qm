@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-scopes-")) }));
@@ -25,7 +26,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE_ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE_ADMIN = { "x-admin-actor": "admin-alice" };
 const json = async (r: Response): Promise<any> => r.json();
 
 test("the scope directory starts independent resource reads together", async () => {
@@ -89,7 +90,7 @@ test("the admin scope directory lists every known scope with labels and counts (
     assert.equal(typeof d.activityAsOf, "number", "a later read serves the counts the background refresh computed");
     const byId = new Map(d.scopes.map((row: any) => [row.scopeId, row]));
 
-    assert.ok(byId.has("org:default-org"), "the org scope is always listed");
+    assert.ok(byId.has(TEST_ROOT_SCOPE), "the org scope is always listed");
     assert.ok(byId.has("channel:C9"), "session scopes are listed");
     assert.ok(byId.has("personal:U1"), "every participant gets a personal-scope row");
     assert.ok(byId.has("personal:admin-alice"), "grant holders are listed even if they never spoke");
@@ -107,7 +108,7 @@ test("the admin scope directory lists every known scope with labels and counts (
     assert.equal(
       (
         await fetch(`${s.base}/v1/admin/scopes`, {
-          headers: { ...testTenantHeaders(), "x-admin-actor": "nobody@default-org" },
+          headers: { ...testTenantHeaders(), "x-admin-actor": "nobody" },
         })
       ).status,
       403,

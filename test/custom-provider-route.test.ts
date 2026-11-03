@@ -16,10 +16,10 @@ import { testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
-  "x-admin-actor": "admin-alice@default-org",
+  "x-admin-actor": "admin-alice",
   ...testTenantHeaders(),
 };
-const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org", ...testTenantHeaders() };
+const USER = { "content-type": "application/json", "x-admin-actor": "bob", ...testTenantHeaders() };
 
 afterEach(() => setCustomProviders([]));
 

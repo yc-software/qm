@@ -4,7 +4,6 @@ import { deploymentCredentialSlugs } from "../src/deploy/deployment-credentials.
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { scopeId } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
@@ -19,8 +18,9 @@ function tenantBound<T extends object>(store: T): T {
     },
   });
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({
   slug,
   name: slug,

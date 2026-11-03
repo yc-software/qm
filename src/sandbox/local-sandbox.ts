@@ -1,6 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile as fsReadFile } from "node:fs/promises";
@@ -263,8 +262,6 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "--label",
       "qm.sandbox=1",
       ...(scope ? ["--label", `qm.scope=${scope}`] : []),
-      "--label",
-      `qm.org=${configOrgId()}`,
       "--label",
       "agent_env=dev",
       "--network",

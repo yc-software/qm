@@ -1,6 +1,5 @@
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
-import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
   exchangeCode,
@@ -161,9 +160,6 @@ async function completeOAuthCallback(
   const oauthRoute = parseOAuthRoute(pathname)!;
   try {
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.orgId !== undefined && state.orgId !== configOrgId()) {
-      throw new Error("OAuth state is for a different org");
-    }
     if (
       !deps.replayDedupe ||
       !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
@@ -179,7 +175,7 @@ async function completeOAuthCallback(
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    const stamped = { ...token, clientRef: client.clientRef, accountType };
     for (const host of hosts) await connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
       principalId: state.principalId,
@@ -227,7 +223,6 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { status: peeked.reason === "expired" ? "expired" : "invalid" });
   }
   const rec = peeked.rec;
-  if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
@@ -258,7 +253,6 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      orgId: configOrgId(),
       ...tenantClaim(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
@@ -343,7 +337,6 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     safeReturnTo(typeof b.returnTo === "string" ? b.returnTo : null) ?? (deps.portalUrl ? "/connectors" : undefined);
   const { linkId } = await deps.consentLinks.mint({
     principalId: capability.actorId,
-    orgId: configOrgId(),
     provider,
     accountType,
     redirectUri,
@@ -390,7 +383,6 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       provider: oauthRoute.provider,
       principalId,
       redirectUri,
-      orgId: configOrgId(),
       ...tenantClaim(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,

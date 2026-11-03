@@ -1,13 +1,12 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
-import { isTenantId } from "../tenants/context.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { tenantClaim } from "../tenants/context.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { publicFetch } from "../util/network.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -593,7 +592,6 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  orgId?: string;
   tenant?: string;
   accountType?: AccountType;
   clientRef?: string;
@@ -611,7 +609,6 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
     (s.tenant === undefined || isTenantId(s.tenant)) &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&

@@ -11,6 +11,7 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
@@ -43,7 +44,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
       const computer = await built.sandboxResources.create(actor, scope, "sprites", "default");
       await built.sandboxResources.setDefault(actor, scope, computer.id);
     }
-    await built.config.setSharingPosture("org:default-org", "open");
+    await built.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
   });
   const turn = async (text: string, room = false, actor = "U1", extra: Partial<TurnRequest> = {}) => {
     const result = await built.app.turn({
@@ -299,7 +300,7 @@ fixtureTest(
 fixtureTest("sharing e2e: Isolated preserves local skills and explicit grants without implicit carry", async (b) => {
   await b.skill("personal:U1", "personal-helper", "PERSONAL");
   const s = await b.skill("personal:U2", "explicit-helper", "EXPLICIT");
-  await b.config.setSharingPosture("org:default-org", "isolated");
+  await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
   await b.acl.grant(
     {
       ownerScopeId: "personal:U2",
@@ -400,7 +401,7 @@ fixtureTest("sharing e2e: explicit text-file grants survive Isolated and revoke 
     },
     "U2",
   );
-  await b.config.setSharingPosture("org:default-org", "isolated");
+  await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
   assert.equal(await b.turn("!read shared/shared-note.txt"), "EXPLICIT_TEXT");
   assert.match(await b.turn("!read shared/shared-note.txt", true), /no file/);
   await b.acl.revoke("personal:U2", "shared-note", "personal:U1", "U2", "U2");
@@ -608,10 +609,10 @@ fixtureTest(
     await assert.rejects(denied(), /credential handle is not available on this turn/);
     await assert.rejects(denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
     await b.config.setSharingPosture("channel:C1", "open");
-    await b.config.setSharingPosture("org:default-org", "isolated");
+    await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
     await assert.rejects(denied(), /credential handle is not available on this turn/);
     await assert.rejects(denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
-    await b.config.setSharingPosture("org:default-org", "open");
+    await b.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     await assert.rejects(denied({ kind: "automation" }), /credential handle is not available on this turn/);
     await assert.rejects(denied({ kind: "ambient" }), /credential handle is not available on this turn/);
     await assert.rejects(denied({ kind: "ambient", live: false }), /credential handle is not available on this turn/);
@@ -653,7 +654,7 @@ fixtureTest(
   "shared conversations run named credentials on the turn's scratch computer and never stage them on the room computer",
   async (b) => {
     assert.ok(b.keychain);
-    await b.config.setSharingPosture("org:default-org", "isolated");
+    await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
     const granted = await b.keychain.save({
       ownerId: "U2",
       service: "npm",
@@ -677,7 +678,7 @@ fixtureTest(
       ["org-env", "env"],
       ["org-broker", "broker"],
     ] as const) {
-      await b.serviceCreds.setServiceCredential("org:default-org", {
+      await b.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
         slug,
         name: slug,
         delivery,
@@ -686,9 +687,9 @@ fixtureTest(
         host: delivery === "env" ? "" : "api.example.test",
       });
       await b.acl.grant({
-        ownerScopeId: "org:default-org",
+        ownerScopeId: TEST_ROOT_SCOPE,
         ref: encodeRef(serviceCredRef(slug)),
-        granteeScopeId: "org:default-org",
+        granteeScopeId: TEST_ROOT_SCOPE,
         permission: "read",
         grantedBy: "U1",
       });
@@ -788,7 +789,7 @@ for (const [where, room, actor] of [
 ] as const) {
   fixtureTest(`a login refreshed through its grant in ${where} saves only for its owner`, async (b) => {
     assert.ok(b.keychain);
-    await b.config.setSharingPosture("org:default-org", "isolated");
+    await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
     const login = await b.keychain.save({
       ownerId: "U1",
       service: "custom-cli",

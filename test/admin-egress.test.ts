@@ -11,6 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
@@ -26,7 +27,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE = { "x-admin-actor": "admin-alice" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await fetch(base + path, { headers: { ...testTenantHeaders(), ...headers } })).json();
 
@@ -54,8 +55,8 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
     );
 
     await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 2);
-    const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
-    assert.equal(d.scopeId, "org:default-org");
+    const d = await getJson(s.base, `/v1/admin/egress?scope=${TEST_ROOT_SCOPE}`);
+    assert.equal(d.scopeId, TEST_ROOT_SCOPE);
     assert.equal(d.total, 2, "both brokered calls counted");
     assert.equal(d.denied, 1, "the denied call is tallied");
     assert.equal(d.hosts, 1, "distinct host count");
@@ -111,7 +112,7 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
 
     await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 1);
     await settle(async () => (await inTestTenant(() => s.built.egressAudit.list())).length >= 1);
-    const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
+    const d = await getJson(s.base, `/v1/admin/egress?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(d.total, 2, "both sources counted in one feed");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
     assert.equal(d.denied, 1, "the firewall block is tallied as denied");
@@ -202,8 +203,8 @@ test("egress: authz is the boundary (scope grant required, scope required)", asy
   try {
     assert.equal(
       (
-        await fetch(s.base + "/v1/admin/egress?scope=org:default-org", {
-          headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
+        await fetch(s.base + `/v1/admin/egress?scope=${TEST_ROOT_SCOPE}`, {
+          headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma" },
         })
       ).status,
       403,
@@ -234,7 +235,7 @@ test("egress-audit ingest: proxy-relayed decisions land as firewall rows in the 
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { accepted: 2, rejected: 1 });
 
-    const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
+    const d = await getJson(s.base, `/v1/admin/egress?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(d.bySource.firewall, 2);
     const denied = d.records.find((r: any) => r.host === "pastebin.com");
     assert.equal(denied.source, "proxy", "ingested rows are attributed to the proxy regardless of body");
@@ -256,7 +257,7 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
       }),
     });
     assert.deepEqual(await res.json(), { accepted: 1, rejected: 0 });
-    const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
+    const d = await getJson(s.base, `/v1/admin/egress?scope=${TEST_ROOT_SCOPE}`);
     assert.equal(d.records[0].host.length, 512, "the row survives, truncated");
   } finally {
     await s.close();

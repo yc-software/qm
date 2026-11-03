@@ -19,6 +19,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 15, 12);
@@ -41,7 +42,7 @@ const row = (scopeId: string, day: number, costUsd: number): SpendRow => ({
 function limits(configured: Record<string, SpendLimit>, rows: SpendRow[], now = () => NOW) {
   const reads: { from: number; to: number }[] = [];
   const tracker = createSpendLimits({
-    orgId: () => "acme",
+    rootScope: () => "org:acme",
     getSpendLimit: async (scope) => configured[scope] ?? null,
     spendReport: async (range) => {
       reads.push(range);
@@ -121,12 +122,12 @@ test("a person over their spend limit is refused; under it, the turn sees where 
   });
 
   await inTestTenant(async () => {
-    await built.config.setSpendLimit("org:default-org", { dailyUsd: 25 });
+    await built.config.setSpendLimit(TEST_ROOT_SCOPE, { dailyUsd: 25 });
     const ok = await built.app.turn(dm("hello", 1));
     assert.equal(ok.status, "ok");
     assert.match(environments.at(-1) ?? "", /the org's per-person default\): \$0\.00 of \$25\.00 today/);
 
-    await built.config.setSpendLimit("org:default-org", { dailyUsd: 0 });
+    await built.config.setSpendLimit(TEST_ROOT_SCOPE, { dailyUsd: 0 });
     const refused = await built.app.turn(dm("again", 2));
     assert.equal(refused.status, "refused");
     assert.equal(refused.refusalKind, "model_budget");

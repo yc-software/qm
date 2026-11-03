@@ -13,6 +13,8 @@ import {
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("security posture parses only the three named modes", () => {
   assert.equal(parseSecurityPosture("dangerous"), "dangerous");
@@ -146,68 +148,70 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
   );
 });
 
-test("scoped postures persist and resolve against the org floor", async () => {
-  const backing = testMap<PersistedSecurityPosture>();
-  const org = scopeId("org", "default-org");
-  const channel = scopeId("channel", "C1");
-  const first = testConfigStore("default-org", {
-    securityPostures: backing,
-    defaultSecurityPosture: "dangerous",
-  });
-  await first.setSecurityPosture(org, "auto");
-  await first.setSecurityPosture(channel, "strict");
+test("scoped postures persist and resolve against the org floor", () =>
+  inTestTenant(async () => {
+    const backing = testMap<PersistedSecurityPosture>();
+    const org = TEST_ROOT_SCOPE;
+    const channel = scopeId("channel", "C1");
+    const first = testConfigStore({
+      securityPostures: backing,
+      defaultSecurityPosture: "dangerous",
+    });
+    await first.setSecurityPosture(org, "auto");
+    await first.setSecurityPosture(channel, "strict");
 
-  const restarted = testConfigStore("default-org", {
-    securityPostures: backing,
-    defaultSecurityPosture: "dangerous",
-  });
-  await restarted.hydrate?.();
-  assert.equal(await restarted.getSecurityPostureDurable(org), "auto");
-  assert.equal(await restarted.getSecurityPostureDurable(channel), "strict");
+    const restarted = testConfigStore({
+      securityPostures: backing,
+      defaultSecurityPosture: "dangerous",
+    });
+    await restarted.hydrate?.();
+    assert.equal(await restarted.getSecurityPostureDurable(org), "auto");
+    assert.equal(await restarted.getSecurityPostureDurable(channel), "strict");
 
-  await restarted.setSecurityPosture(channel, "dangerous");
-  assert.equal(await restarted.getSecurityPostureDurable(channel), "auto", "a scope cannot weaken the org floor");
-  assert.equal((await backing.get(channel))?.posture, "auto", "the store does not retain a latent weaker preference");
-});
+    await restarted.setSecurityPosture(channel, "dangerous");
+    assert.equal(await restarted.getSecurityPostureDurable(channel), "auto", "a scope cannot weaken the org floor");
+    assert.equal((await backing.get(channel))?.posture, "auto", "the store does not retain a latent weaker preference");
+  }));
 
-test("approval grant modes default to all-on and compose tighten-only", async () => {
-  const backing = testMap<PersistedApprovalGrantModes>();
-  const org = scopeId("org", "acme");
-  const channel = scopeId("channel", "C1");
-  const store = testConfigStore("acme", { approvalGrantModes: backing });
+test("approval grant modes default to all-on and compose tighten-only", () =>
+  inTestTenant(async () => {
+    const backing = testMap<PersistedApprovalGrantModes>();
+    const org = TEST_ROOT_SCOPE;
+    const channel = scopeId("channel", "C1");
+    const store = testConfigStore({ approvalGrantModes: backing });
 
-  assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
-  assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
+    assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
+    assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
 
-  await store.setApprovalGrantModes(org, { session: true, always: false });
-  assert.deepEqual(
-    await store.getApprovalGrantModesDurable(channel),
-    { session: true, always: false },
-    "an org removal reaches every scope",
-  );
+    await store.setApprovalGrantModes(org, { session: true, always: false });
+    assert.deepEqual(
+      await store.getApprovalGrantModesDurable(channel),
+      { session: true, always: false },
+      "an org removal reaches every scope",
+    );
 
-  await store.setApprovalGrantModes(channel, { session: false, always: true });
-  assert.deepEqual(
-    await store.getApprovalGrantModesDurable(channel),
-    { session: false, always: false },
-    "a scope may tighten but cannot re-enable what the org removed",
-  );
-  assert.deepEqual(
-    await store.getApprovalGrantModesDurable(org),
-    { session: true, always: false },
-    "the scope's tightening never leaks back to the org",
-  );
+    await store.setApprovalGrantModes(channel, { session: false, always: true });
+    assert.deepEqual(
+      await store.getApprovalGrantModesDurable(channel),
+      { session: false, always: false },
+      "a scope may tighten but cannot re-enable what the org removed",
+    );
+    assert.deepEqual(
+      await store.getApprovalGrantModesDurable(org),
+      { session: true, always: false },
+      "the scope's tightening never leaks back to the org",
+    );
 
-  const restarted = testConfigStore("acme", { approvalGrantModes: backing });
-  await restarted.hydrate?.();
-  assert.deepEqual(
-    await restarted.getApprovalGrantModesDurable(channel),
-    { session: false, always: false },
-    "modes survive a restart",
-  );
+    const restarted = testConfigStore({ approvalGrantModes: backing });
+    await restarted.hydrate?.();
+    assert.deepEqual(
+      await restarted.getApprovalGrantModesDurable(channel),
+      { session: false, always: false },
+      "modes survive a restart",
+    );
 
-  await restarted.setApprovalGrantModes(org, { session: true, always: true });
-});
+    await restarted.setApprovalGrantModes(org, { session: true, always: true });
+  }));
 
 test("tool results carry a provenance class and only external content reaches the classifier", () => {
   for (const tool of ["finish_silently", "update_goal", "create_goal", "background", "cron", "write", "guidance"]) {

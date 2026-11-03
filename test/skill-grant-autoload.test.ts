@@ -13,8 +13,9 @@ import { inTestTenant } from "./support/test-tenants.ts";
 function test(name: string, fn: () => void | Promise<void>): void {
   nodeTest(name, () => inTestTenant(fn));
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 const JOSH = scopeId("personal", "josh");
 const ERIC = scopeId("personal", "eric");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });

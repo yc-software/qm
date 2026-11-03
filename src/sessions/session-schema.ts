@@ -1,5 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { TENANT_ROOT_SCOPE } from "../tenants/root-scope-migration.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -377,4 +378,5 @@ export const SESSION_MIGRATIONS = [
   TENANT_BACKFILL,
   SESSION_TABLES,
   TENANT_ROW_SECURITY,
+  TENANT_ROOT_SCOPE,
 ];

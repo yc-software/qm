@@ -2,7 +2,8 @@ import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj } from "../shared.ts";
+import { tenantRootScope } from "../../../tenants/context.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
 import { syncLoopSchedule } from "../loops.ts";
@@ -72,7 +73,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
 
 export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenantRootScope());
   if (!actor) return;
   const input = body ?? {};
   if (
@@ -98,7 +99,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
         principalId: actor.id,
         action: `user.offboard.${change.kind}.${change.action}`,
         resource: change.id,
-        scopeLabel: orgScope(deps),
+        scopeLabel: tenantRootScope(),
         status: change.result,
         detail: [principalId, change.error].filter(Boolean).join(": "),
       });
@@ -110,7 +111,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenantRootScope());
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -119,7 +120,7 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
     principalId: actor.id,
     action: "principal.reactivate",
     resource: principalId,
-    scopeLabel: orgScope(deps),
+    scopeLabel: tenantRootScope(),
   });
   return sendJson(res, 200, { principalId, active: true });
 }

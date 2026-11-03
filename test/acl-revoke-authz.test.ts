@@ -17,10 +17,11 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const grant = (over: Partial<Grant> = {}): Grant => ({
   ownerScopeId: owner,
   ref: "F1",

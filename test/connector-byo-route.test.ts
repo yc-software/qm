@@ -20,9 +20,10 @@ import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
-  "x-admin-actor": "admin-alice@default-org",
+  "x-admin-actor": "admin-alice",
   ...testTenantHeaders(),
 };
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
@@ -67,7 +68,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
 }
 
 const putConnector = (base: string, b: object) =>
-  fetch(`${base}/v1/admin/scopes/org:default-org/connectors`, {
+  fetch(`${base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/connectors`, {
     method: "PUT",
     headers: ADMIN,
     body: JSON.stringify(b),
@@ -88,7 +89,7 @@ test("the slack-installation createUrl adopts the live branding label", async ()
     assert.equal(await nameFrom(), "qm");
     assert.equal(
       (
-        await fetch(`${srv.base}/v1/admin/scopes/org:default-org/branding`, {
+        await fetch(`${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/branding`, {
           method: "PUT",
           headers: ADMIN,
           body: JSON.stringify({ selfLabel: "straylight" }),
@@ -118,9 +119,9 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
     });
     assert.equal(putRes.status, 200);
 
-    const denied = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/connectors`, {
+    const denied = await fetch(`${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/connectors`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org", ...testTenantHeaders() },
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody", ...testTenantHeaders() },
       body: JSON.stringify({ provider: "google", clientId: "x", clientSecret: "y" }),
     });
     assert.equal(denied.status, 403);
@@ -130,7 +131,7 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
     const body = (await startRes.json()) as { authorizeUrl: string };
     assert.equal(new URL(body.authorizeUrl).searchParams.get("client_id"), "byo-cid");
 
-    const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
+    const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}`, { headers: ADMIN })).json()) as {
       connectors: Array<{ provider: string; clientId: string; hasSecret: boolean }>;
     };
     const google = cfg.connectors.find((c) => c.provider === "google");

@@ -55,7 +55,7 @@ import type {
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
-import { orgId } from "../config.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -270,7 +270,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
   const spendLimits =
     config && spendReport
-      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
+      ? createSpendLimits({
+          rootScope: tenantRootScope,
+          getSpendLimit: (scope) => config.getSpendLimitDurable(scope),
+          spendReport,
+        })
       : undefined;
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
@@ -623,7 +627,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenantRootScope()) : false));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -1531,7 +1535,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
+        const browseSteps = deps.config?.getBrowseMaxSteps(tenantRootScope());
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }

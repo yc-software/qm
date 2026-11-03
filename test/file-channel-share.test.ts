@@ -14,8 +14,8 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = "default-org";
 const initiator = "U1";
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -41,7 +41,7 @@ function registration(
   const grantees = defaultPublishAudience({
     kind,
     ...(isPrivate !== undefined ? { isPrivate } : {}),
-    orgScopeId: scopeId("org", ORG),
+    orgScopeId: TEST_ROOT_SCOPE,
     ownerId: initiator,
   }).grantees;
   return {

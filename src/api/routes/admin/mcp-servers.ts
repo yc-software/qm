@@ -15,13 +15,14 @@ import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../.
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
+import { tenantRootScope } from "../../../tenants/context.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
 
 async function actor(ctx: ApiCtx) {
-  const scope = orgScope(ctx.deps);
+  const scope = tenantRootScope();
   return authorizeAdmin(ctx, scope);
 }
 
@@ -41,7 +42,7 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "mcp-servers.read",
     resource: "mcp-servers",
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   const servers = await ctx.deps.mcpServers.list();
   return sendJson(ctx.res, 200, {
@@ -235,7 +236,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "mcp-servers.update",
     resource: id,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   return sendJson(ctx.res, 200, { ok: true, server: redact(server), ...(toolNames ? { tools: toolNames } : {}) });
 }
@@ -251,7 +252,7 @@ export async function deleteMcpServer(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "mcp-servers.delete",
     resource: id,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenantRootScope(),
   });
   return sendJson(ctx.res, 200, { ok: true });
 }

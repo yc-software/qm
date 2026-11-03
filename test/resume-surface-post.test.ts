@@ -28,7 +28,6 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from ".
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 
 function fakeSandbox(): Sandbox {
@@ -58,7 +57,7 @@ function buildOrchestrator(
   sessions: ReturnType<typeof createPostgresSessionStore>,
   deliveries: DeliveryStore,
 ) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rsp-")));
@@ -73,7 +72,7 @@ function buildOrchestrator(
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

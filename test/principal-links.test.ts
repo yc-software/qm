@@ -33,6 +33,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -221,7 +222,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   it("an admin grant held by either id makes the person an admin, and the users list shows one row", async () => {
     await installed();
-    const grants = [{ principalId: OIDC, scopeId: scopeId("org", "acme"), role: "org_admin" as const }];
+    const grants = [{ principalId: OIDC, scopeId: TEST_ROOT_SCOPE, role: "org_admin" as const }];
     assert.equal(adminStatusFromGrants(grants, EMAIL).isAdmin, true);
     const users = computeUsers({
       grants,
@@ -257,7 +258,7 @@ describe("linked sign-ins across the HTTP surface", () => {
       ...(body ? { body } : {}),
     });
   };
-  const admin = { "x-admin-actor": "admin-alice@default-org" };
+  const admin = { "x-admin-actor": "admin-alice" };
   const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
     inTestTenant(() => mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET));
 
@@ -292,7 +293,7 @@ describe("linked sign-ins across the HTTP surface", () => {
   it("only an org admin manages links, the agent never does, and a directory member stays canonical", async () => {
     const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
     assert.equal(
-      (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER@default-org" })).status,
+      (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER" })).status,
       403,
     );
     const agent = await fetch(`${base}/v1/admin/principal-links`, {

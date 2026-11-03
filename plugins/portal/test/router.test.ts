@@ -74,8 +74,8 @@ const upstream = createServer((req: IncomingMessage, res) => {
     lastWhoamiActor = typeof req.headers["x-admin-actor"] === "string" ? req.headers["x-admin-actor"] : null;
     lastWhoamiSigned = typeof req.headers["x-signature"] === "string" && typeof req.headers["x-timestamp"] === "string";
     res.writeHead(200, { "content-type": "application/json" });
-    const canonicalActor = lastWhoamiActor === "U-admin-alias@acme" ? "U-admin@acme" : lastWhoamiActor;
-    return void res.end(JSON.stringify({ isAdmin: canonicalActor === "U-admin@acme" }));
+    const canonicalActor = lastWhoamiActor === "U-admin-alias" ? "U-admin" : lastWhoamiActor;
+    return void res.end(JSON.stringify({ isAdmin: canonicalActor === "U-admin" }));
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/admin/impersonate")) {
     lastImpersonateIdentity =
@@ -84,7 +84,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
     req.on("data", (c) => (body += c));
     return void req.on("end", () => {
       const actor = req.headers["x-admin-actor"];
-      const ok = typeof actor === "string" && actor.startsWith("U-admin@");
+      const ok = actor === "U-admin";
       res.writeHead(ok ? 200 : 403, { "content-type": "application/json" });
       res.end(
         JSON.stringify(
@@ -131,7 +131,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {
@@ -680,7 +680,7 @@ test("admin status comes from a signed core whoami for the session subject, memo
     assert.equal(r.status, 403);
   }
   assert.equal(whoamiProbes - before, 1, "the sub is probed once then served from the 60s cache");
-  assert.equal(lastWhoamiActor, "U-fresh-ttl@acme");
+  assert.equal(lastWhoamiActor, "U-fresh-ttl");
   assert.equal(lastWhoamiSigned, true);
 });
 

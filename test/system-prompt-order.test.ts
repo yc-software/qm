@@ -48,8 +48,8 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 
 function fakeSandbox(): Sandbox {
@@ -110,7 +110,7 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
@@ -128,7 +128,7 @@ function buildOrchestrator(
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files,
@@ -256,7 +256,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
     const isolated = await orchestrator.handleTurn(channel("C1:isolated", "!sysprompt", { kind: "human" }));
     assert.doesNotMatch(isolated.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
 
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     const open = await orchestrator.handleTurn(
       channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
     );
@@ -290,7 +290,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
       },
     });
     assert.doesNotMatch(incompleteRoster.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
-    await config.setExternalSlackParticipants(scopeId("org", ORG), true);
+    await config.setExternalSlackParticipants(TEST_ROOT_SCOPE, true);
     const external = await orchestrator.handleTurn({
       surface: "slack",
       actor,
@@ -335,7 +335,7 @@ test("Open advertises the source and audits a carried skill read without grantin
       skills,
       isCurrentSharedScopeMember: async () => true,
     });
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     const result = await orchestrator.handleTurn({
       surface: "test",
       actor,
@@ -387,7 +387,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     });
     const personal = scopeId("personal", actor.id);
     const channelScope = scopeId("channel", "C1");
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     await memory.capture(personal, ["PERSONAL_OPEN_MEMORY"], Date.now(), actor.id);
     const channelConversation: Conversation = {
       kind: "channel",
@@ -655,7 +655,7 @@ for (const mode of ["off", "writable", "skip"] as const) {
         memoryPolicy: { recall: mode === "skip" ? "visible" : mode, capture: "off" },
         isCurrentSharedScopeMember: async () => true,
       });
-      await config.setSharingPosture(scopeId("org", ORG), "open");
+      await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
       await memory.capture(scopeId("personal", actor.id), ["DO_NOT_RECALL_PRIVATE_NOTE"], Date.now(), actor.id);
       for (const text of [
         "!sysprompt",
@@ -702,7 +702,7 @@ test("Open source memory is never exported into a reusable sandbox bearer token"
     });
     const personal = scopeId("personal", actor.id);
     const room = scopeId("channel", "C1");
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     await memory.capture(personal, ["OPEN_TOKEN_PRIVATE"], Date.now(), actor.id);
     const result = await orchestrator.handleTurn({
       surface: "test",
@@ -803,7 +803,7 @@ for (const location of [
         sandbox,
         isCurrentSharedScopeMember: async () => true,
       });
-      await config.setSharingPosture(scopeId("org", ORG), "open");
+      await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
       const result = await orchestrator.handleTurn({
         surface: "test",
         actor,
@@ -889,7 +889,7 @@ test("carried skill and steer screens tell the model gateway which session they 
       agent,
       isCurrentSharedScopeMember: async () => true,
     });
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     const conversation: Conversation = {
       kind: "channel",
       channelRef: "C1",
@@ -1042,7 +1042,7 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
       securityScreener,
       isCurrentSharedScopeMember: async () => true,
     });
-    await config.setSharingPosture(scopeId("org", ORG), "open");
+    await config.setSharingPosture(TEST_ROOT_SCOPE, "open");
     const result = await orchestrator.handleTurn({
       surface: "test",
       actor,
@@ -1094,7 +1094,7 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
       return { reply: "done" };
     };
     const { orchestrator, config, files } = buildOrchestrator({ agent, sandbox, blobTransfer });
-    await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    await config.setSecurityPosture(TEST_ROOT_SCOPE, "dangerous");
     const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
     assert.equal(result.status, "ok", result.reason);
     const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
@@ -1129,7 +1129,7 @@ test("read-only turns report steered files as unavailable without provisioning a
       return { reply: "done" };
     };
     const { orchestrator, config } = buildOrchestrator({ agent });
-    await config.setSecurityPosture(scopeId("org", ORG), "strict");
+    await config.setSecurityPosture(TEST_ROOT_SCOPE, "strict");
     const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
     assert.equal(result.status, "ok", result.reason);
     assert.deepEqual(prepared?.attachments, []);
@@ -1281,7 +1281,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
         return { reply: "done" };
       };
       const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
-      await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+      await config.setSecurityPosture(TEST_ROOT_SCOPE, "dangerous");
       const result = await orchestrator.handleTurn({
         ...dm(`steer-budget-${budget}`, "hello"),
         attachments: Array.from({ length: budget === "count" ? 10 : 1 }, (_, i) => ({
@@ -1376,7 +1376,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
       return { reply: "read after switching" };
     };
     const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
-    await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+    await config.setSecurityPosture(TEST_ROOT_SCOPE, "dangerous");
     const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
     assert.equal(result.status, "ok", result.reason);
     assert.equal(segments, 2);
@@ -1494,7 +1494,7 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
         },
       };
       const { orchestrator, config } = buildOrchestrator({ agent, securityScreener });
-      if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
+      if (mode === "observe") await config.setSecurityPosture(TEST_ROOT_SCOPE, "dangerous");
       const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
       assert.equal(result.status, "ok", result.reason);
       if (mode === "safe" || mode === "observe") assert.match(prepared!.text, /UPDATED_INBOX_SNAPSHOT/);

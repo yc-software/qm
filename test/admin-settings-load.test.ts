@@ -10,8 +10,9 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "x-admin-actor": "admin-alice" };
 
 function start(overrides: Partial<ServerDeps> = {}) {
   const config = testConfig();
@@ -23,7 +24,7 @@ function start(overrides: Partial<ServerDeps> = {}) {
   return { built, deps, base, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-const scopePath = "/v1/admin/scopes/org%3Adefault-org";
+const scopePath = `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`;
 
 async function warm(base: string) {
   await (
@@ -35,7 +36,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
   const srv = start();
   t.after(srv.close);
   await inTestTenant(() =>
-    srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" }),
+    srv.built.config.setBranding(TEST_ROOT_SCOPE, { selfLabel: "Test assistant", accent: "#445566" }),
   );
   await inTestTenant(() => srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]));
   const full = (await (
@@ -148,7 +149,7 @@ test("each settings projection retains authorization before reading configuratio
     "onboarding",
   ]) {
     const response = await fetch(srv.base + scopePath + "?view=" + view, {
-      headers: { ...testTenantHeaders(), "x-admin-actor": "nobody@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "nobody" },
     });
     assert.equal(response.status, 403);
   }
@@ -171,7 +172,7 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openrouter: true,
   }));
   await inTestTenant(() =>
-    srv.built.config.setRuntimeSelection("org:default-org", {
+    srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
       modelId: "settings/previously-saved-model",
     }),
   );
@@ -205,7 +206,7 @@ test("a configured base model the cold catalog cannot resolve stays listed witho
     openrouter: true,
   }));
   for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
-    await inTestTenant(() => srv.built.config.setBaseModel("org:default-org", modelId));
+    await inTestTenant(() => srv.built.config.setBaseModel(TEST_ROOT_SCOPE, modelId));
     const response = await fetch(srv.base + scopePath + "?view=models", {
       headers: { ...testTenantHeaders(), ...ADMIN },
     });

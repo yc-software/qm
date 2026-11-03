@@ -1,6 +1,5 @@
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
-import { orgId as configOrgId } from "../config.ts";
 import { isTenantId, tenantClaim } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
@@ -89,7 +88,7 @@ export async function mintCapabilityToken(
   secret: string,
   compressionEnabled = false,
 ): Promise<string> {
-  const value = { orgId: configOrgId(), ...claims, ...tenantClaim() };
+  const value = { ...claims, ...tenantClaim() };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(

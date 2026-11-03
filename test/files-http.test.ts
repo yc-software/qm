@@ -10,8 +10,8 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
 
@@ -179,7 +179,7 @@ test("an org grant surfaces the file to any org member", () =>
     await acl.grant({
       ownerScopeId: owner,
       ref: id,
-      granteeScopeId: scopeId("org", ORG),
+      granteeScopeId: TEST_ROOT_SCOPE,
       permission: "read",
       grantedBy: "U1",
     });
@@ -189,36 +189,41 @@ test("an org grant surfaces the file to any org member", () =>
     assert.ok(await app.openFileForViewer(id, "U9"));
   }));
 
-test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
-  const owner = scopeId("personal", "U1");
-  const id = "backfill-1";
-  const row = {
-    id,
-    ownerScopeId: owner,
-    createdBy: "U1",
-    name: "old.png",
-    path: "old.png",
-    mimetype: "image/png",
-    sizeBytes: 10,
-    blobKey: null,
-    sha256: null,
-    direction: "out" as const,
-    source: "backfill" as const,
-    createdAt: 1,
-    updatedAt: 1,
-    enabled: true,
-  };
-  const files = {
-    get: async () => row,
-    open: async () => null,
-  } as unknown as FileArtifactStore;
-  const app = makeApp(
-    files,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
-  );
+test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", () =>
+  inTestTenant(async () => {
+    const owner = scopeId("personal", "U1");
+    const id = "backfill-1";
+    const row = {
+      id,
+      ownerScopeId: owner,
+      createdBy: "U1",
+      name: "old.png",
+      path: "old.png",
+      mimetype: "image/png",
+      sizeBytes: 10,
+      blobKey: null,
+      sha256: null,
+      direction: "out" as const,
+      source: "backfill" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      enabled: true,
+    };
+    const files = {
+      get: async () => row,
+      open: async () => null,
+    } as unknown as FileArtifactStore;
+    const app = makeApp(
+      files,
+      createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+    );
 
-  assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
-});
+    assert.equal(
+      await app.openFileForViewer(id, "U1"),
+      null,
+      "owner is authorized but the bytes are unavailable → 404",
+    );
+  }));
 
 test("uploadFileForViewer stores a personal inbound file", () =>
   inTestTenant(async () => {

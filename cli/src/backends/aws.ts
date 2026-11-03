@@ -389,7 +389,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }
       : {};
   const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
+    ...orgEnv(service, config.publicUrl, brandEnvOf(config)),
     ...(service === "core"
       ? {}
       : {
@@ -471,7 +471,7 @@ function workloadEnvironment(
       ...(plugin?.coreAccess === false
         ? {}
         : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...orgEnv(workload, config.orgId, config.publicUrl, brandEnvOf(config)),
+      ...orgEnv(workload, config.publicUrl, brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),

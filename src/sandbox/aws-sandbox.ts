@@ -1,6 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -60,7 +59,6 @@ export interface StoredMicrovm {
   lastActivityMs?: number;
   homeDirty?: boolean;
   provisioning?: boolean;
-  orgId?: string;
 }
 
 export interface AwsSandboxOptions extends BlobStagingOptions {
@@ -228,7 +226,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           microvmId: run.microvmId,
           endpoint: run.endpoint ?? "",
           createdAtMs: Date.now(),
-          orgId: configOrgId(),
           provisioning: true,
         });
       const ready = await api.waitForState(run.microvmId, "RUNNING");
@@ -294,7 +291,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
         createdAtMs: Date.now(),
         ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
-        orgId: configOrgId(),
       });
       return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
     });
@@ -552,7 +548,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         await withScopeLock(scope, async () => {
           const rec = await store.get(scope);
           if (!rec || rec.microvmId !== candidate.microvmId) return;
-          if (rec.orgId && rec.orgId !== configOrgId()) return;
           if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
           if (activeByMicrovm.has(rec.microvmId)) return;
           const desc = await api.tryGetMicrovm(rec.microvmId);

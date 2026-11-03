@@ -36,7 +36,6 @@ const core = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
-process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = "loops-web-route-test";
 process.env.WEB_UI_PRINCIPALS = "Alice@example.com,bob@example.com";
 process.env.LOOPS_USERS = " other@example.com, ALICE@EXAMPLE.COM ";

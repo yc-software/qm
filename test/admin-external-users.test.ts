@@ -19,12 +19,13 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ALICE = "admin-alice@default-org";
-const NOBODY = "user-uma@default-org";
+const ALICE = "admin-alice";
+const NOBODY = "user-uma";
 const SECRET = "external-users-test-secret".repeat(2);
 const PORTAL = "https://portal.example.com";
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type Sent = { to: string; subject: string; text: string; html: string };
@@ -321,7 +322,7 @@ test("an expired external org admin no longer passes the admin authorizer", asyn
         .status,
       200,
     );
-    const boss = { "x-admin-actor": "boss@partner.example@default-org" };
+    const boss = { "x-admin-actor": "boss@partner.example" };
     assert.equal(
       (await fetch(`${s.base}/v1/admin/users`, { headers: { ...testTenantHeaders(), ...boss } })).status,
       200,
@@ -349,7 +350,7 @@ test("revoking the last org admin is refused and leaves the external record unto
     await inTestTenant(() => s.built.admin.revokeGrant(alice, "admin-bob", ORG, "org_admin"));
     await inTestTenant(() => s.built.admin.revokeGrant(alice, "admin-alice", ORG, "org_admin"));
 
-    const boss = { "x-admin-actor": "boss@partner.example@default-org" };
+    const boss = { "x-admin-actor": "boss@partner.example" };
     const r = await revoke(s.base, "boss@partner.example", boss);
     assert.equal(r.status, 400);
     assert.match(((await r.json()) as any).message, /last org admin/);

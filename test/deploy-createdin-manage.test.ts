@@ -33,6 +33,7 @@ function tenantBound<T extends object>(store: T): T {
     },
   });
 }
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -194,7 +195,7 @@ test("principalGitPermission: org-owned deployment is not manageable by membersh
   const f = await fixture();
   try {
     const d = await f.app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('v1')" }],
@@ -294,7 +295,7 @@ test("an org write grant gives active org members git write and manage authority
     await f.acl.grant({
       ownerScopeId: d.ownerScopeId,
       ref: `deployment:${d.id}`,
-      granteeScopeId: scopeId("org", "default-org"),
+      granteeScopeId: TEST_ROOT_SCOPE,
       permission: "write",
       grantedBy: "U1",
     });
@@ -378,7 +379,7 @@ test("authority follows the person: a creation-channel member manages the app fr
     });
     assert.equal(denied.status, 403);
     await assert.rejects(
-      f.deploy.shareDeployment(d.id, scopeId("org", "default-org"), "read", { createdBy: "U3" }),
+      f.deploy.shareDeployment(d.id, TEST_ROOT_SCOPE, "read", { createdBy: "U3" }),
       /only the owner/,
     );
   } finally {

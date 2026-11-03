@@ -19,7 +19,7 @@ import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
-  "x-admin-actor": "admin-alice@default-org",
+  "x-admin-actor": "admin-alice",
   ...testTenantHeaders(),
 };
 
@@ -69,7 +69,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
     (
       await put(
         { credentialScope: "per-user", credentialHost: "accounts.example.com" },
-        { ...ADMIN, "x-admin-actor": "nobody@default-org" },
+        { ...ADMIN, "x-admin-actor": "nobody" },
       )
     ).status,
     403,

@@ -72,7 +72,6 @@ import {
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
@@ -270,7 +269,7 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
     const path = withSourceAuthNonce("/v1/admin/whoami", CORE_SIGNING_SECRET);
     const headers = {
       ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      "x-admin-actor": `${sub}@${ORG}`,
+      "x-admin-actor": sub,
       ...portalIdentityHeaders(sub),
     };
     const r = await fetch(`${CORE}${path}`, { headers, signal: ctrl.signal });
@@ -435,12 +434,12 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
   return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
+    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), SESSION_MAX_TTL_S) ??
     localDevSession(req)
   );
 }
@@ -619,7 +618,6 @@ async function handleConsentRedeem(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
     "x-consent-clicker": o.session.sub,
-    "x-consent-clicker-org": o.session.org,
   };
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
@@ -690,7 +688,6 @@ async function handleSecretDrop(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, isPost ? "POST" : "GET", path, rawBody),
     "x-drop-owner": o.session.sub,
-    "x-drop-owner-org": o.session.org,
   };
   let r: Response;
   try {
@@ -758,7 +755,7 @@ async function coreImpersonate(
   const body = JSON.stringify({ target });
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-    "x-admin-actor": `${admin}@${ORG}`,
+    "x-admin-actor": admin,
     ...portalIdentityHeaders(admin),
   };
   try {
@@ -873,7 +870,6 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   const session: SessionClaims = {
     k: "session",
     sub: `playground-${randomToken(8)}`,
-    org: ORG,
     name: "Guest",
     anon: true,
     auth: now,
@@ -889,7 +885,6 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
     readCookie(req.headers.cookie, "portal_session"),
     sessionKey,
     Date.now(),
-    ORG,
     SESSION_MAX_TTL_S,
   );
   if (!session) return null;
@@ -1099,7 +1094,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       k: "impersonate",
       actor: session.sub,
       target,
-      org: session.org,
       iat: now,
       exp: now + IMPERSONATE_TTL_S,
     };
@@ -1309,7 +1303,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   let impersonator: string | undefined;
   if (!crossOrigin) {
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
-    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
+    if (imp && imp.actor === session.sub && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
     }
@@ -1350,7 +1344,6 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       body.get("state") ?? "",
       SESSION_SECRET,
       ORIGIN,
-      ORG,
       SESSION_MAX_TTL_S,
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
@@ -1563,7 +1556,6 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           core: CORE,
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
-          org: ORG,
           issuer: trustedOidc!.issuer,
         },
         identity.subject,
@@ -1590,7 +1582,6 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   const session: SessionClaims = {
     k: "session",
     sub,
-    org: ORG,
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -1868,7 +1859,7 @@ export async function startServer(): Promise<void> {
     server.listen(PORT, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
       if (!SECURE_COOKIES)

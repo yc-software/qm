@@ -7,6 +7,7 @@ import test from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function fresh() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
@@ -141,7 +142,7 @@ test("private matches beyond the candidate cap reveal no search metadata", async
 test("published skill search resolves shadowing without calling the full visible-skills API", async () => {
   const { app, skills } = fresh();
   await inTestTenant(async () => {
-    for (const home of ["org:default-org", "personal:U1"] as const) {
+    for (const home of [TEST_ROOT_SCOPE, "personal:U1"] as const) {
       const skill = await skills.create({
         scopeId: home,
         createdBy: "author",

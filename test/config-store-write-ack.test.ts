@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const channel = scopeId("channel", "C1");
 
@@ -11,29 +12,31 @@ function withPut<T>(map: DurableMap<T>, put: DurableMap<T>["put"]): DurableMap<T
   return new Proxy(map, { get: (target, key) => (key === "put" ? put : Reflect.get(target, key)) });
 }
 
-test("a config write resolves only after another instance can read it from the store", async () => {
-  const orgAmbient = testMap<{ scopeId: ScopeId; on: boolean }>();
-  const slow = withPut(orgAmbient, async (key, value) => {
-    await sleep(20);
-    return orgAmbient.put(key, value);
-  });
-  const writer = testConfigStore("default-org", { orgAmbient: slow });
-  const reader = testConfigStore("default-org", { orgAmbient });
+test("a config write resolves only after another instance can read it from the store", () =>
+  inTestTenant(async () => {
+    const orgAmbient = testMap<{ scopeId: ScopeId; on: boolean }>();
+    const slow = withPut(orgAmbient, async (key, value) => {
+      await sleep(20);
+      return orgAmbient.put(key, value);
+    });
+    const writer = testConfigStore({ orgAmbient: slow });
+    const reader = testConfigStore({ orgAmbient });
 
-  await writer.setOrgAmbient(false);
+    await writer.setOrgAmbient(false);
 
-  assert.equal(await reader.getOrgAmbientDurable(), false);
-});
+    assert.equal(await reader.getOrgAmbientDurable(), false);
+  }));
 
-test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
-  const egressPolicies = testMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
-  const failing = withPut(egressPolicies, async () => {
-    throw new Error("database unavailable");
-  });
-  const config = testConfigStore("default-org", { egressPolicies: failing });
+test("a failed config write rejects and leaves this instance's cache on the stored value", () =>
+  inTestTenant(async () => {
+    const egressPolicies = testMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
+    const failing = withPut(egressPolicies, async () => {
+      throw new Error("database unavailable");
+    });
+    const config = testConfigStore({ egressPolicies: failing });
 
-  await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
+    await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
 
-  assert.equal(config.getEgress(channel), null);
-  assert.equal(await egressPolicies.get(channel), null);
-});
+    assert.equal(config.getEgress(channel), null);
+    assert.equal(await egressPolicies.get(channel), null);
+  }));

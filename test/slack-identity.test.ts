@@ -157,18 +157,18 @@ test("isMpim / isExternallyShared / externalMarker", () => {
 test("groupDmDisplayName renders Slack group DMs from internal member display names", () => {
   assert.equal(
     groupDmDisplayName([
-      { externalId: "eric@acme", displayName: "eric" },
-      { externalId: "eve@acme", displayName: "eve" },
-      { externalId: "katherine@acme", displayName: "katherine" },
-      { externalId: "lucas@acme", displayName: "lucas" },
-      { externalId: "sean@acme", displayName: "sean" },
+      { externalId: "eric", displayName: "eric" },
+      { externalId: "eve", displayName: "eve" },
+      { externalId: "katherine", displayName: "katherine" },
+      { externalId: "lucas", displayName: "lucas" },
+      { externalId: "sean", displayName: "sean" },
     ]),
     "eric, eve, katherine, lucas, sean",
   );
   assert.equal(
     groupDmDisplayName([
-      { externalId: "eric@acme", displayName: "eric" },
-      { externalId: "eric@acme", displayName: "eric" },
+      { externalId: "eric", displayName: "eric" },
+      { externalId: "eric", displayName: "eric" },
       { externalId: "guest", isExternalGuest: true, displayName: "guest" },
     ]),
     "eric",

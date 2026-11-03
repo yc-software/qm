@@ -10,8 +10,8 @@ import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
-const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
-const runtimePath = "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org";
+const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+const runtimePath = "/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice";
 
 async function start(databaseUrl: string, upstream: string) {
   const child = fork(new URL("./support/model-overlay-server.ts", import.meta.url), {

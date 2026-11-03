@@ -24,6 +24,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -48,9 +49,7 @@ const SESSION_DEPS = {
 function mintPortalSession(sub: string): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 })).toString(
-    "base64url",
-  );
+  const body = Buffer.from(JSON.stringify({ k: "session", sub, iat: now, exp: now + 3600 })).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 
@@ -82,7 +81,7 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
   const { deploy, deployStore } = serviceWithProvider(provider);
   const d = await inTestTenant(() =>
     deploy.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "x",
       files: [],
@@ -116,7 +115,7 @@ test("reachDeployment: a null resolveEndpoint re-applies the current version fro
   const { deploy } = serviceWithProvider(provider);
   const d = await inTestTenant(() =>
     deploy.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "x",
       files: [],
@@ -139,7 +138,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
   const { deploy } = serviceWithProvider(provider);
   const d = await inTestTenant(() =>
     deploy.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
+      ownerScopeId: TEST_ROOT_SCOPE,
       createdBy: "U1",
       entrypoint: "x",
       files: [],

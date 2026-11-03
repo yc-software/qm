@@ -3,12 +3,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { CliError, bold, dim, errMessage, note, ok, red } from "./log.ts";
 import {
-  findConfigPath,
   isEmailTransport,
   isModelProvider,
   loadConfigAt,
   loadConfigInDir,
-  readConfigOrgId,
   EMAIL_TRANSPORTS,
   MODEL_PROVIDERS,
   type EmailTransport,
@@ -181,7 +179,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
 ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
-  dev up [--surface web|slack|both] [--org <id>] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
+  dev up [--surface web|slack|both] · dev down · dev status · dev restart · dev canary · dev logs · dev doctor [options]
                                            run the supervised contributor engine in scripts/dev/
   dev --ci [up|down]                       CI mode: core only (Slack in-process), no pool lease (live-e2e)
 
@@ -326,17 +324,13 @@ async function dispatch(argv: string[]): Promise<void> {
         "surface",
         "no-slack",
         "no-watch",
-        "org",
       ]);
       if (!["up", "down", "status", "restart", "canary", "logs", "doctor"].includes(positionals[0] ?? "up"))
         rejectExtraPositionals(positionals, 1);
       const root = gitTopLevel();
-      const configPath = findConfigPath(root);
-      const orgId = strFlag(flags, "org") ?? (configPath && readConfigOrgId(configPath)) ?? "acme";
       const result = spawnSync(process.execPath, [join(root, "scripts/dev/cli.ts"), ...argv.slice(1)], {
         cwd: root,
         stdio: "inherit",
-        env: { ...process.env, DEV_INSTANCE_ORG_ID: orgId },
       });
       if (result.error) throw result.error;
       process.exitCode = result.status ?? 1;

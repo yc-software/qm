@@ -52,7 +52,7 @@ built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+    `[qm] listening on :${config.port} (` +
       `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });

@@ -13,6 +13,7 @@ import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
 import { createMirror } from "../src/slack/mirror.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -652,7 +653,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setBaseModel(TEST_ROOT_SCOPE, "gpt-5.6-sol");
   built.runtime.start();
   try {
     await inTestTenant(async () => {

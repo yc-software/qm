@@ -46,7 +46,7 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
   client = undefined;
   sent.clear();
   lastCapturedView = undefined;
-  if (!me.analytics?.apiKey || me.impersonatedBy) return;
+  if (!me.analytics?.apiKey || me.impersonatedBy || !me.org) return;
   try {
     const { default: posthog } = await import("posthog-js");
     if (current !== generation) return;

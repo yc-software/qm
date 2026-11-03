@@ -14,7 +14,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
   }
   if (req.url?.startsWith("/v1/admin/whoami")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
+    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin" }));
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url }));
@@ -36,7 +36,7 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("onboarding-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 28800 }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat: now, exp: now + 28800 }, sessionKey))}`;
 }
 
 test.after(() => {

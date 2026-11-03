@@ -16,15 +16,12 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
-  const config = testConfigStore("test", { defaultSharingPosture: "open" });
+  const config = testConfigStore({ defaultSharingPosture: "open" });
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   let member = true;
   const resolution = {
-    layers: [
-      { scopeId: "personal:alice", mode: "rw", mountPath: "" },
-      { scopeId: "org:test", mode: "ro", mountPath: "global" },
-    ],
+    layers: [{ scopeId: "personal:alice", mode: "rw", mountPath: "" }],
     orgScopeId: "org:test",
     sharingPosture: "open",
     grantedHandles: [],

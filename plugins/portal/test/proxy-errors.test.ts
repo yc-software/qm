@@ -65,7 +65,7 @@ const base = `http://localhost:${port}`;
 const sessionKey = deriveKey("proxy-errors-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, name?: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat: now, exp: now + 3600, ...(name ? { name } : {}) }, sessionKey))}`;
 }
 
 test.after(() => {
@@ -197,7 +197,7 @@ test("the admin probe asks core with source auth, the admin actor and the signed
   whoamiMode = "ok";
   const ok = await startImpersonation("U-admin-headers");
   assert.equal(ok.status, 200);
-  assert.equal(lastWhoamiHeaders["x-admin-actor"], "U-admin-headers@acme");
+  assert.equal(lastWhoamiHeaders["x-admin-actor"], "U-admin-headers");
   assert.match(String(lastWhoamiHeaders["x-signature"] ?? ""), /^v0=/);
   assert.equal(
     verifyPortalIdentity(

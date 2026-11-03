@@ -12,6 +12,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cache-obs-")) }));
@@ -26,7 +27,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() };
+const ALICE = { "x-admin-actor": "admin-alice", ...testTenantHeaders() };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await fetch(base + path, { headers })).json();
 
@@ -49,10 +50,10 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
     };
     assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
-    const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
+    const sess = await getJson(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}`);
     const conv = sess.sessions[0];
 
-    const d = await getJson(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=org:default-org`);
+    const d = await getJson(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?scope=${TEST_ROOT_SCOPE}`);
     assert.ok(d.requests.length >= 1, "at least one captured request");
     const req = d.requests[0]!;
     assert.ok(req.usage && typeof req.usage === "object", "the captured request carries provider usage");

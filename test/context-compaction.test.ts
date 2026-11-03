@@ -45,8 +45,8 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
@@ -109,7 +109,7 @@ function buildOrchestrator(
   teams?: TeamStore,
   runs?: RunStore,
 ) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -127,7 +127,7 @@ function buildOrchestrator(
     ...singleProcessDeps(),
     config,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     ...(runs ? { runs } : {}),
     workspace,
@@ -1114,7 +1114,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     const router = withResolvedRuntime(adapter, (input) =>
       resolveRuntimeChoice(
         built.config,
-        "org:default-org",
+        TEST_ROOT_SCOPE,
         input.scopeLabel,
         category,
         input.runtime,
@@ -1156,7 +1156,7 @@ test("human child continuations respect non-fast category defaults", () =>
     const router = withResolvedRuntime(adapter, (input) =>
       resolveRuntimeChoice(
         built.config,
-        "org:default-org",
+        TEST_ROOT_SCOPE,
         input.scopeLabel,
         category,
         input.runtime,
@@ -1213,7 +1213,7 @@ test("verified swarm workers resolve their own defaults instead of copying the r
       const router = withResolvedRuntime(adapter, (input) =>
         resolveRuntimeChoice(
           built.config,
-          "org:default-org",
+          TEST_ROOT_SCOPE,
           input.scopeLabel,
           inherited,
           input.runtime,
@@ -1297,7 +1297,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         const router = withResolvedRuntime(adapter, (input) =>
           resolveRuntimeChoice(
             built.config,
-            "org:default-org",
+            TEST_ROOT_SCOPE,
             input.scopeLabel,
             inherited,
             input.runtime,

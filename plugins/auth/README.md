@@ -53,7 +53,7 @@ Fully supplied email configuration is validated at boot.
 | `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider                                                                                               |
 | `AUTH_LINK_TTL_S`, `AUTH_CODE_TTL_S`, `AUTH_ACCESS_TTL_S`, `AUTH_REQUEST_TTL_S` | optional, capped                                                                                                            |
 | `AUTH_SEND_WINDOW_S`, `AUTH_SEND_LIMIT_PER_EMAIL`, `AUTH_SEND_LIMIT_PER_IP`     | optional                                                                                                                    |
-| `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the chassis core block                                                                                                      |
+| `CORE_API_URL`, `CORE_SIGNING_SECRET`                                           | the chassis core block                                                                                                      |
 
 The signing key is single, not a set: rotating it means redeploying, and links
 minted by the previous key stop verifying at that moment.

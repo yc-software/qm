@@ -15,9 +15,10 @@ import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
-  "x-admin-actor": "admin-alice@default-org",
+  "x-admin-actor": "admin-alice",
   ...testTenantHeaders(),
 };
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "policy-route-")) }));
@@ -32,7 +33,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
 }
 
 const putPolicy = (base: string, b: unknown) =>
-  fetch(`${base}/v1/admin/scopes/org:default-org/command-policy`, {
+  fetch(`${base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/command-policy`, {
     method: "PUT",
     headers: ADMIN,
     body: JSON.stringify(b),

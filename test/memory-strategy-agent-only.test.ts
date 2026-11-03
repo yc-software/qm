@@ -35,8 +35,7 @@ test("createMemoryStrategy('agent-only') returns the agent-only strategy", () =>
 
 test("resolution systemPrompt no longer embeds the memory section — it moved to shared-core + the orchestrator strategy block", async () => {
   const resolution = createResolutionService(
-    "default-org",
-    testConfigStore("default-org"),
+    testConfigStore(),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   const res = await inTestTenant(() => resolution.resolve(conversation, actor));

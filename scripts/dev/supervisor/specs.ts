@@ -23,7 +23,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
   const siblingBase = Object.fromEntries(
     Object.entries(base).filter(([key]) => key !== "HOME" && key !== "CODEX_HOME"),
   );
-  const orgId = i.baseEnv.DEV_INSTANCE_ORG_ID || "acme";
   const signing: Record<string, string> = i.coreSigningSecret ? { CORE_SIGNING_SECRET: i.coreSigningSecret } : {};
   const specs: ChildSpec[] = [
     {
@@ -32,7 +31,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       argv: ["node", "--env-file-if-exists=.env", ...watchArgs, "src/index.ts"],
       env: {
         ...base,
-        ORG_ID: orgId,
         PORT: String(i.ports.core),
         ...(i.databaseUrl ? { DATABASE_URL: i.databaseUrl } : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
@@ -46,7 +44,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
             }
           : { SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: "" }),
         DEV_INSTANCE_NO_SLACK: i.slack ? "0" : "1",
-        CORE_ORG_ID: orgId,
         SHUTDOWN_DRAIN_MS: "2000",
       },
       port: i.ports.core,
@@ -65,7 +62,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         CORE_API_URL: `http://localhost:${i.ports.core}`,
         WEB_UI_BASE: i.webUiBasePath,
         ...(i.watch ? { WEB_UI_DEV: "1" } : {}),
-        CORE_ORG_ID: orgId,
         WEB_UI_PRINCIPALS: "",
         WEB_UI_PUBLIC_URL: `http://localhost:${i.ports.portal}`,
       },
@@ -84,7 +80,6 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
         PORT: String(i.ports.portal),
         PORTAL_PUBLIC_URL: `http://localhost:${i.ports.portal}`,
         CORE_API_URL: `http://localhost:${i.ports.core}`,
-        CORE_ORG_ID: orgId,
         WEB_UI_UPSTREAM: `http://localhost:${i.ports.web}`,
         PORTAL_SESSION_SECRET: i.portalSessionSecret,
         NODE_ENV: "development",

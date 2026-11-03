@@ -14,6 +14,7 @@ import {
 import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -379,7 +380,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
     ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
       { body, capability, deps: { decisions } } as never,
       { id: "admin@x.com" },
-      "org:default-org",
+      TEST_ROOT_SCOPE,
     );
   assert.match(err(await apply({ rule: route() })), /m-deep is not in this deployment's model catalog/);
   assert.deepEqual(await apply({ rule }, { actorId: "admin@x.com" }), { ok: true });
