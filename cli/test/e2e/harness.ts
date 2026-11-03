@@ -92,7 +92,7 @@ export function writeConfig(
 
 const STANDIN_DOCKERFILE = `FROM alpine:latest
 ARG WEB_UI_BASE
-CMD ["sh","-c","echo 'listening on :8080'; echo 'connected as @e2ebot'; echo 'surface on http://localhost'; echo '[admin-plugin] http'; echo 'public front door on'; echo 'tail sentinel'; while true; do sleep 3600; done"]
+CMD ["sh","-c","echo 'listening on :8080'; echo 'connected as @e2ebot'; echo 'surface on http://localhost'; echo 'public front door on'; echo 'tail sentinel'; while true; do sleep 3600; done"]
 `;
 
 export function standInCheckout(services: readonly string[]): string {

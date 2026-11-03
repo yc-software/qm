@@ -494,6 +494,22 @@ test("steering splits visible work without breaking a tool that completes across
   );
 });
 
+test("assistant text between steps splits visible work like a steer does", () => {
+  const work: WorkBlock = {
+    status: "working",
+    activity: [
+      act(1, "tool_call", { tool: "execute", callId: "a", command: "first" }),
+      act(2, "tool_result", { tool: "execute", callId: "a", code: 0 }),
+      act(3, "text", { text: "On it.", phase: "commentary" }),
+      act(4, "tool_call", { tool: "execute", callId: "b", command: "second" }),
+    ],
+  };
+  assert.deepEqual(
+    workTimelineSegments(buildTimeline(work)).map((items) => items.map((item) => item.kind)),
+    [["tool"], ["text"], ["tool"]],
+  );
+});
+
 test("ordinary and hidden user events do not become steering markers", () => {
   const work: WorkBlock = {
     status: "complete",

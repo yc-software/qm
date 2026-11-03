@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ScopeId } from "../types.ts";
 import type { SecurityScreenVerdict } from "./security-posture.ts";
 import { swallow } from "../util/errors.ts";
 import { retryAfterMs } from "../util/async.ts";
@@ -14,19 +13,6 @@ export interface SecurityScreenClassification {
   threshold: number;
   outcome?: string;
 }
-
-/**
- * Run one screening with an explicit flagger configuration, outside any turn. Used by the Auto
- * flagger test run to replay past screenings through a candidate rubric.
- */
-export type SecurityScreenProbe = (input: {
-  payload: string;
-  modelId: string;
-  systemPrompt: string;
-  actorId: string;
-  scopeLabel: ScopeId;
-  signal: AbortSignal;
-}) => Promise<SecurityScreenVerdict | undefined>;
 
 export interface SecurityScreener {
   readonly provider: string;

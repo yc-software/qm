@@ -132,7 +132,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
           html`<span class="work-step" data-step=${label} ${ref(step ? easeWidth : undefined)}
             >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(
               label,
-              animating && !step,
+              animating,
             )}</span
           >`,
         )}</span

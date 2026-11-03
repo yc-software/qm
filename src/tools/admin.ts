@@ -87,7 +87,6 @@ export const adminOperations = {
     "/sessions/:id/llm",
     scopedId,
   ),
-  runs: operation("Read run history.", "GET", "/runs", scope),
   files: operation("List stored files, optionally matching q.", "GET", "/files", { ...scope, q: optionalString }),
   file: operation("Read a stored text file.", "GET", "/files/read", scopedId),
   upload_file: operation("Register a staged blob as a scope file.", "POST", "/files/upload", {
@@ -217,12 +216,6 @@ export const adminOperations = {
     "PUT",
     "/model-registry/:id",
     { id: string, value: object },
-  ),
-  auto_flagger_test: operation(
-    "Test a candidate security screener on recent samples (billable).",
-    "POST",
-    "/scopes/:scope/auto-flagger/test",
-    { ...scope, value: object },
   ),
   shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),

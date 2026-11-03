@@ -63,8 +63,8 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // deployment secret and points the base model at that vendor: \`qm setup\`
   // collects the key, \`qm doctor\` proves the provider accepts it, and \`qm up\`
   // refuses a stack that cannot serve an agent turn. Delete this line to leave
-  // the base model unset and have an administrator add the key from the Admin
-  // page after deploy instead.
+  // the base model unset and have an administrator add the key from the web UI
+  // settings after deploy instead.
   "modelProvider": ${JSON.stringify(values.modelProvider)},
 
   // Optional base model id (e.g. "claude-opus-4-6").
@@ -74,7 +74,7 @@ function renderConfig(orgId: string, values: ConfigValues): string {
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
   // always required), "slack" (the Slack surface, runs inside the core process),
-  // "web-ui" (a browser chat UI), "admin" (the operator dashboard), "portal"
+  // "web-ui" (a browser chat UI with the operator settings at /settings), "portal"
   // (the public sign-in front door), "auth" (the built-in sign-in broker that
   // emails one-time links; drop it to sign in through an external OIDC provider),
   // and "egress-proxy" (the TLS proxy that enforces sandbox egress policy).
@@ -195,7 +195,7 @@ export const flyScaffold: ProviderScaffold = {
   "region": "sjc",
   "flyOrg": "personal",
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
+      services: ["core", "slack", "web-ui", "portal", "auth"],
       env: `{ "core": { "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
@@ -247,7 +247,7 @@ export const awsScaffold: ProviderScaffold = {
     "services": ${JSON.stringify(services, null, 6).replace(/^/gm, "    ").trimStart()}
   },
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
+      services: ["core", "slack", "web-ui", "portal", "auth"],
       env: `{ "core": { "AWS_DEPLOY_IMAGE": ${JSON.stringify(`${cluster}-sandbox`)}, "AWS_PUBLIC_ORIGIN_URL": "http://replace-with-alb-hostname" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
@@ -312,7 +312,7 @@ export const renderScaffold: ProviderScaffold = {
     "storage": { "plan": "0.5c-512mb", "diskSizeGB": 10 }
   },
 `,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
+      services: ["core", "slack", "web-ui", "portal", "auth"],
       env: `{ "core": { "SANDBOX_BACKEND": "render", "DEPLOY_PROVIDER": "render", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 

@@ -220,7 +220,7 @@ test(
         adminOnboardingUrl?: string;
       };
       assert.equal(outputs.webUiUrl, "https://acme-portal.fly.dev");
-      assert.equal(outputs.adminOnboardingUrl, "https://acme-portal.fly.dev/admin/onboarding");
+      assert.equal(outputs.adminOnboardingUrl, "https://acme-portal.fly.dev/settings/onboarding");
       execFileSync(bin, ["slack", "render"], { cwd: deployment, stdio: "pipe", env });
       execFileSync(bin, ["conformance", "--static"], { cwd: deployment, stdio: "pipe", env });
       assert.match(execFileSync(awsBin, ["check"], { cwd: awsDeployment, encoding: "utf8", env }), /check passed/);

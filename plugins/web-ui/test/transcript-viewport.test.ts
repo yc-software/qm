@@ -391,6 +391,27 @@ test("resizing a settled transcript updates the prompt expansion control", () =>
   }
 });
 
+test("leaving the bottom by more than a glance marks the transcript until the reader jumps back", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.scroll(700);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.scroll(500);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), true);
+    f.viewport.follow(true);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    f.scroll(300);
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), true);
+    f.viewport.dispose();
+    assert.equal(f.s.hasAttribute("data-away-from-bottom"), false);
+  } finally {
+    f.close();
+  }
+});
+
 test("even a small upward scroll stops following; returning to the bottom resumes it", () => {
   const f = fixture();
   try {

@@ -1680,16 +1680,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       });
     },
 
-    async screenSecurity({
-      payload,
-      modelId: configuredScreenModel,
-      systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-      signal,
-      recordModelCall,
-      recordLlmRequest,
-    }) {
+    async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
+      const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
       try {
-        const route = await utilityRoute(configuredScreenModel ?? opts?.detectModelId);
+        const route = await utilityRoute(opts?.detectModelId);
         if (!route) return undefined;
         recordModelCall({
           model: route.modelId,

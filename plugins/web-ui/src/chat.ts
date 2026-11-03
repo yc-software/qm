@@ -10,7 +10,6 @@ import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
-import { ADMIN_BASE } from "./shell";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -28,12 +27,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
   Activity,
+  ArrowDown,
   Ban,
   BookOpen,
   Search,
@@ -44,6 +45,7 @@ import {
   ChevronRight,
   ChevronUp,
   Clock3,
+  Cog,
   Copy,
   FileImage,
   FileText,
@@ -377,7 +379,9 @@ export function createChatSurface(
     const speakerId = (message as { speakerId?: string }).speakerId;
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
-    return project?.members.find((m) => m.principalId === speakerId);
+    const member = project?.members.find((m) => m.principalId === speakerId);
+    if (member?.avatarUrl) return member;
+    return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -795,8 +799,14 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
   }
 
+  const stopAvatarWatch = onSpeakerAvatars(() => {
+    if (chatState.agent) drawActiveChat();
+    else readonlyRedraw?.();
+  });
+
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    stopAvatarWatch();
     stopPrefsWatch();
     teardownActiveChat();
   }
@@ -1261,7 +1271,7 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack")}
+            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack", shownMessages)}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1445,7 +1455,6 @@ export function createChatSurface(
             .onMoreIdeas=${showWelcomeIdeas}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
-            .adminBase=${ADMIN_BASE}
           ></qm-onboarding-welcome>
         </div>
       </article>
@@ -1775,6 +1784,9 @@ export function createChatSurface(
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions}
+              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+                ${icon(ArrowDown, 16)}
+              </button>
             </div>
           </div>
           ${sideChats.view()}
@@ -1838,13 +1850,43 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
+  type Participant = { key: string; name: string; avatarUrl?: string };
+
+  function conversationParticipants(messages: AgentMessage[]): Participant[] {
+    const seen = new Map<string, Participant>();
+    for (const message of messages) {
+      const name = (message as { speaker?: string }).speaker?.trim();
+      if (!name) continue;
+      const member = speakerMember(message);
+      const key = member?.principalId ?? name;
+      if (!seen.has(key)) seen.set(key, { key, name, avatarUrl: member?.avatarUrl });
+    }
+    return [...seen.values()];
+  }
+
+  function participantStack(people: Participant[]): TemplateResult | typeof nothing {
+    if (!people.length) return nothing;
+    const shown = people.slice(0, 5);
+    const rest = people.slice(5);
+    return html`<div class="chat-participants" role="list" aria-label=${`${people.length} participants`}>
+      ${shown.map((person) => html`<span role="listitem" class="chat-participant">${avatarTpl(person)}</span>`)}
+      ${rest.length ? html`<span class="chat-participant-more" ${tip(rest.map((p) => p.name).join(", "))}>+${rest.length}</span>` : nothing}
+    </div>`;
+  }
+
+  function chatHeader(
+    title: string | TemplateResult,
+    detail: string,
+    readOnly: boolean,
+    messages: AgentMessage[] = [],
+  ): TemplateResult {
     return html`
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title" dir="auto">${title}</div>
           <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
         </div>
+        ${participantStack(conversationParticipants(messages))}
       </header>
     `;
   }
@@ -2337,7 +2379,6 @@ export function createChatSurface(
               html`<qm-onboarding-welcome
                 .me=${appState.me}
                 .base=${withBase("")}
-                .adminBase=${ADMIN_BASE}
                 .widget=${part.type === "setup" ? "apps" : part.type}
                 .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
                 .onConnected=${continueAfterConnection}
@@ -2598,7 +2639,9 @@ export function createChatSurface(
           aria-expanded=${String(bgPanel.open)}
           @click=${toggleBackgroundPanel}
         >
-          ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+          ${icon((live ?? row)?.jobs ? Cog : Activity, 13)}<span class="bg-activity-label"
+            >${label ?? "Background activity"}</span
+          >
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${bgPanel.open ? backgroundPanelBody() : nothing}
@@ -3055,6 +3098,7 @@ export function createChatSurface(
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: string[] = [];
       const timeline = segment.filter((item) => {
@@ -3116,7 +3160,7 @@ export function createChatSurface(
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1) return renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -3136,12 +3180,16 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
               </div>
             </details>`
           : nothing;
       if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      const said = tail.trim()
+        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+            ${markdown(tail, animating, streamedAnswer(baseline, work))}
+          </div>`
+        : nothing;
+      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     })}`;
   }
 
@@ -3230,14 +3278,14 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "text") return interimReply(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function messageRow(activity: ToolActivity): TemplateResult {
+  function interimReply(activity: ToolActivity): TemplateResult {
     const text = (activity.payload as { text?: string } | null)?.text ?? "";
-    return html`<div class="work-message">${markdown(text)}</div>`;
+    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {

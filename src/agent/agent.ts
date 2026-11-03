@@ -45,8 +45,6 @@ export interface TurnLlmRequestRecord {
 
 export interface ScreenSecurityInput {
   payload: string;
-  modelId?: string;
-  systemPrompt?: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;

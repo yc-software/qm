@@ -23,6 +23,7 @@ type ReachBody = {
   unfurlLinks?: unknown;
   react?: unknown;
   delete?: unknown;
+  edit?: unknown;
   files?: unknown;
   sandbox_id?: unknown;
 };
@@ -42,6 +43,8 @@ function parseDelete(v: unknown): { messageTs: string } | undefined {
   return { messageTs: ts };
 }
 
+const SLACK_TS = /^\d+\.\d+$/;
+
 async function reachNow(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
   if (!capability)
@@ -55,9 +58,18 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   else if (typeof b.message === "string") text = b.message;
   const react = parseReact(b.react);
   const del = parseDelete(b.delete);
+  const editTs = isObj(b.edit) ? (b.edit as { ts?: unknown }).ts : undefined;
+  if (b.edit !== undefined && (typeof editTs !== "string" || !SLACK_TS.test(editTs.trim()))) {
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: 'edit needs { ts } — the ts string of your own message, e.g. "1723497600.123456"',
+    });
+  }
+  const edit = typeof editTs === "string" ? { messageTs: editTs.trim() } : undefined;
+  const action = react ?? del ?? edit;
   let threadTs: string | undefined;
   if (b.threadTs !== undefined) {
-    if (typeof b.threadTs !== "string" || !/^\d+\.\d+$/.test(b.threadTs.trim())) {
+    if (typeof b.threadTs !== "string" || !SLACK_TS.test(b.threadTs.trim())) {
       return sendJson(res, 400, {
         error: "bad_request",
         message:
@@ -65,19 +77,19 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       });
     }
     threadTs = b.threadTs.trim();
-    if (react || del) {
+    if (action) {
       return sendJson(res, 400, {
         error: "bad_request",
-        message: "threadTs threads a text post — react/delete already name their target message ts",
+        message: "threadTs threads a text post — react/edit/delete already name their target message ts",
       });
     }
   }
   const hasNamedTarget =
     typeof b.recipient === "string" || typeof b.channel === "string" || Array.isArray(b.participants);
-  if (react && del) {
+  if ([react, del, edit].filter(Boolean).length > 1) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "react and delete are separate actions — send one at a time",
+      message: "react, edit and delete are separate actions — send one at a time",
     });
   }
   const filesParsed = parseOutboundFiles(b.files);
@@ -90,26 +102,28 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     }
     if (files.some((f) => typeof f === "string")) requestedSandboxId = b.sandbox_id.trim();
   }
-  if (files.length && (react || del)) {
+  if (files.length && action) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "files compose into a text post — a react/delete carries no attachments",
+      message: "files compose into a text post — a react/edit/delete carries no attachments",
     });
   }
-  if (!react && !del && (text === undefined || text.trim() === "")) {
+  if (!(react || del) && (text === undefined || text.trim() === "")) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "text (the exact message to send), react ({ ts, emoji }), or delete ({ ts }) required",
+      message: edit
+        ? "an edit needs top-level text — the complete new message (edit carries only the ts)"
+        : "text (the exact message to send), react ({ ts, emoji }), or delete ({ ts }) required",
     });
   }
-  if ((react || del) && typeof b.recipient === "string") {
+  if (action && typeof b.recipient === "string") {
     return sendJson(res, 400, {
       error: "bad_request",
       message:
-        "react/delete targets a message in a channel, group DM, or this conversation — name a channel or participants, not a recipient",
+        "react/edit/delete targets a message in a channel, group DM, or this conversation — name a channel or participants, not a recipient",
     });
   }
-  if (!del && !hasNamedTarget) {
+  if (!del && !edit && !hasNamedTarget) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: react
@@ -217,6 +231,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     senderId: capability.actorId,
     senderScope: capability.scopeId,
     ...(text !== undefined ? { text } : {}),
+    ...(edit ? { edit } : {}),
     ...(threadTs !== undefined ? { threadTs } : {}),
     ...(react ? { react } : {}),
     ...(del ? { delete: del } : {}),

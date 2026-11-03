@@ -67,13 +67,13 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return { kind: "playground", artifactId: "playground-1", title: input.title };
     },
     async memorySearch(q) {
-      return q.includes("billing") ? ["(2026-05-31) Owns the billing service"] : [];
+      return { hits: q.includes("billing") ? ["(2026-05-31) Owns the billing service"] : [], problems: [] };
     },
     async memoryRead() {
       return "# Memory\n- (2026-05-31) Owns the billing service\n";
     },
     async memoryAdd(facts) {
-      return facts.length;
+      return { added: facts.length, outcomes: [], problems: [] };
     },
     async memoryEdit() {
       return true;

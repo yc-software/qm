@@ -729,3 +729,43 @@ test("shared conversations run named credentials on the turn's scratch computer 
   );
   assert.ok(provisions.slice(attached).some((key) => key.startsWith("turn:")));
 });
+
+for (const [where, room, actor] of [
+  ["their own DM", false, "U1"],
+  ["a room", true, "U1"],
+  ["a room, used by someone else", true, "U2"],
+] as const) {
+  test(`a login refreshed through its grant in ${where} saves only for its owner`, async (t) => {
+    const b = await fixture(t);
+    assert.ok(b.keychain);
+    await b.config.setSharingPosture("org:default-org", "isolated");
+    const login = await b.keychain.save({
+      ownerId: "U1",
+      service: "custom-cli",
+      files: [{ path: ".custom-cli/auth", contentBase64: Buffer.from("expired").toString("base64") }],
+    });
+    await b.keychain.createGrant({
+      credentialId: login.id,
+      ownerId: "U1",
+      audienceScopeId: room ? "channel:C1" : "personal:U1",
+      mode: "standing",
+      purpose: "earlier job",
+    });
+    const out = await b.turn(
+      `!execute ${JSON.stringify({
+        command: `python3 -c 'import pathlib; p=pathlib.Path.home()/".custom-cli/auth"; assert p.read_text()=="expired"; p.write_text("refreshed")'`,
+        credentials: [credentialHandle(login)],
+      })}`,
+      room,
+      actor,
+    );
+    assert.equal(out, "(exit 0)");
+    const saved = await b.keychain.materializeOwnById("U1", login.id, "personal:U1");
+    assert.equal(saved.kind, "file");
+    if (saved.kind === "file")
+      assert.equal(
+        Buffer.from(saved.files[0]!.contentBase64, "base64").toString(),
+        actor === "U1" ? "refreshed" : "expired",
+      );
+  });
+}

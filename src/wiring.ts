@@ -131,8 +131,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
-import type { SecurityScreenProbe } from "./security/security-screener.ts";
+import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
@@ -438,7 +437,6 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
@@ -2237,18 +2235,6 @@ export function buildApp(
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = agent.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
-        agent.screenSecurity!({
-          payload,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
-          },
-        })
-    : undefined;
   const app = createApp({
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
@@ -2319,7 +2305,6 @@ export function buildApp(
     ...(agent.judge
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
       : {}),
-    ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
@@ -2959,7 +2944,6 @@ export function buildApp(
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
-    ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
@@ -3092,7 +3076,6 @@ export function serverDeps(
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
-    ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
     modelProviders: providerKeysPresent(config),
     providerKeys: providerKeysPresent(config),

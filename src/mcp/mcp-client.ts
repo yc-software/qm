@@ -1,18 +1,77 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 
 const MAX_TOOLS = 64;
 const CALL_TIMEOUT_MS = 300_000;
+const OAUTH_DENIALS: ReadonlySet<string> = new Set([
+  "invalid_client",
+  "invalid_grant",
+  "unauthorized_client",
+  "invalid_token",
+  "insufficient_scope",
+  "access_denied",
+]);
+
+export class McpCallError extends Error {
+  readonly status: number | undefined;
+  readonly code: string | undefined;
+  constructor(message: string, detail: { status?: number; code?: string; cause?: unknown }) {
+    super(message, { cause: detail.cause });
+    this.status = detail.status;
+    this.code = detail.code;
+  }
+}
 
 export function mcpResultText(result: CallToolResult): string {
   return result.content
     .flatMap((c) => (c.type === "text" ? [c.text] : []))
     .join("\n")
     .trim();
+}
+
+export interface McpEnvelope {
+  code?: string;
+  status?: string;
+}
+
+function envelopeOf(value: unknown): McpEnvelope {
+  if (!value || typeof value !== "object") return {};
+  const { code, status, error } = value as { code?: unknown; status?: unknown; error?: { code?: unknown } };
+  const nested = error && typeof error === "object" ? error.code : undefined;
+  const found = typeof code === "string" ? code : nested;
+  return {
+    ...(typeof found === "string" && /^[\w.:-]{1,64}$/.test(found) ? { code: found } : {}),
+    ...(typeof status === "string" ? { status } : {}),
+  };
+}
+
+export const mcpEnvelope = (result: CallToolResult): McpEnvelope => envelopeOf(result.structuredContent);
+
+function jsonOf(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function errorCode(result: CallToolResult): string | undefined {
+  return [result.structuredContent, ...result.content.map((c) => (c.type === "text" ? jsonOf(c.text) : undefined))]
+    .map((value) => envelopeOf(value).code)
+    .find((code) => code !== undefined);
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (error instanceof StreamableHTTPError && (error.code ?? 0) > 0) return error.code;
+  if (error instanceof UnauthorizedError) return 401;
+  if (error instanceof OAuthError && OAUTH_DENIALS.has(error.errorCode)) return 401;
+  return undefined;
 }
 
 interface McpRemoteTool {
@@ -67,8 +126,12 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
       await client.connect(transport);
       return await work(client);
     } catch (e) {
-      const status = e instanceof StreamableHTTPError && (e.code ?? 0) > 0 ? ` (HTTP ${e.code})` : "";
-      throw new Error(`mcp ${op} failed${status}`, { cause: e });
+      const status = httpStatus(e);
+      throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
+        ...(status ? { status } : {}),
+        ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        cause: e,
+      });
     } finally {
       await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
       await client.close();
@@ -107,7 +170,13 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
         (client) => client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
         headers,
       )) as CallToolResult;
-      if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
+      if (result.isError) {
+        const code = errorCode(result);
+        const detail =
+          mcpResultText(result) ||
+          (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
+        throw new McpCallError(`mcp tool ${name} error: ${detail}`, code ? { code } : {});
+      }
       return result;
     },
   };

@@ -1,5 +1,6 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
+import { attestableActor, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -204,8 +205,9 @@ export async function brokerCredentialCall(opts: {
   ) {
     return deny(400, "reserved_header", "x-qm-actor is set only by the broker", rec.host);
   }
-  if (rec.injection?.actor && (typeof claims.actorId !== "string" || !/^[\x21-\x7e]{1,256}$/.test(claims.actorId))) {
-    return deny(403, "invalid_actor", "actor identity cannot be attested", rec.host);
+  const actor = attestableActor(claims.actorId);
+  if (rec.injection?.actor && !actor) {
+    return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
   }
   let parsed: URL;
   try {
@@ -254,7 +256,7 @@ export async function brokerCredentialCall(opts: {
   }
 
   const headers = brokerRequestHeaders(rec, callerHeaders(body.headers));
-  if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
+  if (rec.injection?.actor && actor) headers["x-qm-actor"] = actor;
 
   let resp: BrokerFetchResponse;
   try {

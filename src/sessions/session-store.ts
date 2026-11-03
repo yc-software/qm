@@ -212,15 +212,6 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
-export interface ScreenSample {
-  id: string;
-  sessionId: string;
-  scopeLabel: ScopeId;
-  createdAt: number;
-  model: string;
-  payload: string;
-}
-
 export interface NewLlmRequest {
   turnSeq: number | null;
   step: number;
@@ -374,7 +365,7 @@ export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall"]),
+  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall", "memoryRecallOutcomes"]),
   thinking: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
@@ -535,7 +526,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  listScreenSamples(limit: number): Promise<ScreenSample[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
