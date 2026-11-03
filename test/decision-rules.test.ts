@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -11,6 +12,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
@@ -207,13 +209,25 @@ test("gateway provider sends the native typesafe body to the model gateway", asy
   });
   const backend = createDecisionBackend({
     providers: () => PROVIDERS,
-    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key" },
+    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key", actorKey: "test-actor-key" },
     credential: async () => null,
     fetch: fetchImpl,
   });
-  assert.deepEqual(await ask(backend, { provider: "gw", model: "example/decision-model" }), { yes: 0.8, no: 0.2 });
+  const context = { sessionId: "session-1", actorId: "U1", scopeId: "channel:C1", origin: "cron" as const };
+  assert.deepEqual(
+    await withModelRequestContext(context, () => ask(backend, { provider: "gw", model: "example/decision-model" })),
+    { yes: 0.8, no: 0.2 },
+  );
   assert.equal(calls[0]!.url, "http://gateway:8080/chat/completions");
-  assert.equal(calls[0]!.headers["api-key"], "gk");
+  assert.deepEqual(calls[0]!.headers, {
+    "content-type": "application/json",
+    "api-key": "gk",
+    "x-qm-session-id": "session-1",
+    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
+    "x-qm-scope": "channel:C1",
+    "x-qm-purpose": "decision",
+    "x-qm-origin": "cron",
+  });
   assert.equal(calls[0]!.body.model, "example/decision-model");
   assert.deepEqual(calls[0]!.body.typesafe, {
     questions: { decision: { type: "choice", instructions: "q?", criteria: { yes: "a", no: "b" } } },

@@ -32,6 +32,25 @@ const turn = (text: string): OrchestratorInput => ({
   text,
 });
 
+test("sessions inherit the origin of their nearest automated ancestor ", { skip }, async () => {
+  {
+    const store = createPostgresSessionStore(URL!);
+    const run = randomUUID();
+    const scope = scopeId("channel", "C1");
+    const cron = await store.getOrCreateByThread(`agent:main:cron:${run}`, "channel", scope);
+    const child = await store.getOrCreateByThread(`subagent:${run}:1`, "channel", scope);
+    const grandchild = await store.getOrCreateByThread(`subagent:${run}:2`, "channel", scope);
+    const orphan = await store.getOrCreateByThread(`subagent:${run}:3`, "channel", scope);
+    await store.setParentSession(child.id, cron.id);
+    await store.setParentSession(grandchild.id, child.id);
+    await store.setParentSession(orphan.id, `missing-${run}`);
+    const origin = async (id: string) => store.inheritedOrigin((await store.get(id))!);
+    assert.equal(await origin(grandchild.id), "cron");
+    assert.equal(await origin(cron.id), "cron");
+    assert.equal(await origin(orphan.id), "conversation");
+  }
+});
+
 test("pg session row mapping ignores incomplete fork provenance", () => {
   const session = rowToSession({
     id: "fork",

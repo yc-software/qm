@@ -592,7 +592,10 @@ export function buildApp(
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
   const gatewayCatalog = config.modelGateway
-    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
+    ? createGatewayCatalog(
+        { ...config.modelGateway, actorKey: config.capabilitySecret },
+        overrides.modelCredentialFetch,
+      )
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
@@ -1451,15 +1454,7 @@ export function buildApp(
     overrides.decisionBackend ??
       createDecisionBackend({
         providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway?.apiKey
-          ? {
-              gateway: {
-                url: config.modelGateway.url,
-                apiKey: config.modelGateway.apiKey,
-                ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-              },
-            }
-          : {}),
+        ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
             ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
@@ -2310,7 +2305,9 @@ export function buildApp(
     surfaceCache,
     channelPolicy,
     ...(agent.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
+      ? {
+          ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
+        }
       : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
