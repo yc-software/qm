@@ -190,24 +190,53 @@ test(
   },
 );
 
-test("an aborted query closes its connection while the backend is still blocked", { skip }, async () => {
+test(
+  "an aborted query cancels its backend and closes its connection while the table stays locked",
+  { skip },
+  async () => {
+    const store = createPgPool(url!);
+    const clients = await tracedClients(store, () => undefined);
+    const locker = new pg.Client({ connectionString: url });
+    await locker.connect();
+    try {
+      await store.q("DROP TABLE IF EXISTS locked_rows");
+      await store.q("CREATE TABLE locked_rows(n int)");
+      await locker.query("BEGIN");
+      await locker.query("LOCK TABLE locked_rows IN ACCESS EXCLUSIVE MODE");
+      const controller = new AbortController();
+      const reading = store.q("SELECT * FROM locked_rows", [], { signal: controller.signal });
+      const pid = await lockWaiter(locker, "SELECT * FROM locked_rows");
+      controller.abort();
+      await assert.rejects(reading, { name: "AbortError" });
+      await until(
+        async () =>
+          (await locker.query("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'", [pid]))
+            .rowCount === 0,
+        "the aborted backend to stop waiting",
+      );
+      await until(async () => clients[0]!.connection.stream.destroyed, "the connection to close");
+    } finally {
+      await locker.end();
+      await store.close();
+    }
+  },
+);
+
+test("caught database errors keep the pooled connection", { skip }, async () => {
   const store = createPgPool(url!);
-  const clients = await tracedClients(store, () => undefined);
-  const locker = new pg.Client({ connectionString: url });
-  await locker.connect();
   try {
-    await store.q("DROP TABLE IF EXISTS locked_rows");
-    await store.q("CREATE TABLE locked_rows(n int)");
-    await locker.query("BEGIN");
-    await locker.query("LOCK TABLE locked_rows IN ACCESS EXCLUSIVE MODE");
-    const controller = new AbortController();
-    const reading = store.q("SELECT * FROM locked_rows", [], { signal: controller.signal });
-    await lockWaiter(locker, "SELECT * FROM locked_rows");
-    controller.abort();
-    await assert.rejects(reading, { name: "AbortError" });
-    await until(async () => clients[0]!.connection.stream.destroyed, "the connection to close");
+    await store.q("DROP TABLE IF EXISTS unique_rows");
+    await store.q("CREATE TABLE unique_rows(n int PRIMARY KEY)");
+    await store.q("INSERT INTO unique_rows VALUES (1)");
+    const pids = new Set<number>();
+    for (let i = 0; i < 6; i++) {
+      const options = i % 2 ? { timeoutMs: 1000, signal: new AbortController().signal } : { timeoutMs: 1000 };
+      await assert.rejects(store.q("INSERT INTO unique_rows VALUES (1)", [], options), { code: "23505" });
+      pids.add((await store.q("SELECT pg_backend_pid() AS pid", [], options))[0]!.pid as number);
+    }
+    assert.equal(pids.size, 1);
+    assert.equal((await connectionState(store)).status, "I");
   } finally {
-    await locker.end();
     await store.close();
   }
 });

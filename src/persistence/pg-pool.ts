@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { connect } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
@@ -33,6 +34,7 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 }
 
 const migrationQueue = createKeyedQueue();
+const connectionTimeoutMs = 10_000;
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
@@ -56,9 +58,9 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     new pg.Pool({
       ...connection,
       max,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: connectionTimeoutMs,
       allowExitOnIdle: true,
-      pipeline: kind === "query",
+      pipeline: true,
     }),
   );
   sharedPools.set(key, { pool, users: 1 });
@@ -145,18 +147,39 @@ async function pipelinedTransaction(
 ): Promise<QueryResult> {
   if (!settings.length) return withAbort(() => client.query({ text, values }), signal);
   const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
-  const [result] = await withAbort(() => {
-    const prefix = [client.query("BEGIN"), client.query(`SELECT ${assignments.join(", ")}`, settings.flat())];
-    const query = client.query({ text, values });
-    return Promise.all([query, ...prefix, ...(signal ? [] : [client.query("COMMIT")])]);
+  const settled = await withAbort(() => {
+    const statements = [
+      client.query("BEGIN"),
+      client.query(`SELECT ${assignments.join(", ")}`, settings.flat()),
+      client.query({ text, values }),
+    ];
+    return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
   }, signal);
   if (signal) {
     signal.throwIfAborted();
-    await client.query("COMMIT");
+    settled.push(...(await Promise.allSettled([client.query("COMMIT")])));
   }
+  const failed = settled.find((outcome) => outcome.status === "rejected");
+  if (failed) throw failed.reason;
   const status = client.getTransactionStatus();
   if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
-  return result;
+  return (settled[2] as PromiseFulfilledResult<QueryResult>).value;
+}
+
+function cancelThenClose(client: PoolClient): void {
+  const { processID, secretKey } = client as PoolClient & { processID: number; secretKey: number };
+  const request = Buffer.alloc(16);
+  request.writeInt32BE(16, 0);
+  request.writeInt32BE(80877102, 4);
+  request.writeInt32BE(processID, 8);
+  request.writeInt32BE(secretKey, 12);
+  const cancel = client.host.startsWith("/")
+    ? connect(`${client.host}/.s.PGSQL.${client.port}`)
+    : connect(client.port, client.host);
+  cancel.once("connect", () => cancel.end(request));
+  cancel.setTimeout(connectionTimeoutMs, () => cancel.destroy());
+  cancel.once("error", () => cancel.destroy());
+  cancel.once("close", () => client.connection.stream.destroy());
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -494,16 +517,19 @@ export function createPgPool(
       );
       throw error;
     }
-    let queryError: Error | undefined;
+    let discard: Error | undefined;
     try {
       const res = await pipelinedTransaction(client, settings, text, params, signal);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
-      queryError = error instanceof Error ? error : new Error(String(error));
-      if (signal?.aborted && error === signal.reason) client.connection.stream.destroy();
+      const aborted = signal?.aborted === true && error === signal.reason;
+      if (aborted) cancelThenClose(client);
+      const { DatabaseError } = (await import("pg")).default;
+      if (aborted || !(error instanceof DatabaseError) || error.code === "57014")
+        discard = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
-      client.release(queryError);
+      client.release(discard);
     }
   }
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
