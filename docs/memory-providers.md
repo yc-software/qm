@@ -185,3 +185,54 @@ with the same `MEMORABLE_BACKEND=qm` and `MEMORABLE_DB_URL`. It sees only an all
 left to the notebook. A consent refusal from the CLI is reported as a capture error; like any
 external route it fails open by default, so the notebook write still lands and the refusal is logged. The provider never exposes a notebook, so keep `manage: false` and let
 `default` handle editing.
+
+## Memory registry
+
+Org admins can register brains and bind scopes to them at runtime, without a redeploy. QM keeps every brain, every binding and the org switch in one Postgres record (table `memory_registry`, row `org`), so a change reaches every instance, blue-green included, on its next memory operation. Each operation reads the record's version and holds one snapshot for the whole operation, so a released binding is never served from a cache.
+
+`MEMORY_PROVIDER_CONFIG` keeps its grammar and meaning. It becomes a read-only overlay: the API can't change it, and a registry brain can't reuse one of its provider ids. Routes run in this order: the env var's routes (or, with no env var, the default notebook route for every scope kind, with automatic capture, editing and fail-closed recall), then registry bindings. Registry bindings never manage a notebook, so a first binding never takes notebook memory away from anyone.
+
+### Brains and bindings
+
+A brain is one MCP endpoint plus one OAuth client-credentials pair, used for reads and writes. Its `preset` names the provider contract; this build knows `gbrain-v1`, gbrain's frozen v1 contract, which serves personal scopes only. A `personal` brain must attest the member (`attestActor: true`) and binds personal scopes, or the kind `personal`, with no source. A `scopes` brain carries a `pool` of operator-provisioned gbrain sources, each limited to scope kinds, and binds an exact channel, team, org or group scope id to one pool source. A `scopes` brain and a `personal` brain must be different gbrain clients with disjoint read grants: otherwise a personal read searches every pooled scope source.
+
+A binding's (endpoint, source) pair is claimed once, ever. Releasing a binding keeps its reservation, so only the same scope can bind that source again, through the same binding. A scope binds at most one source per brain, a binding's brain, source and scope can't change, and a brain can't change kind or address while it has bindings. Capture is `off` or `explicit`; automatic capture into a brain isn't available yet. The record holds at most 2,000 bindings.
+
+Write gbrain scope memory only to path-less (database-only) sources. On a repo-backed source, gbrain renders the scope page into git, where anyone with repo access can read it.
+
+| gbrain mode   | Fits                                                                 | Doesn't fit                                                                          |
+| ------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Repo + PGLite | Personal brains, single-instance QM, dev instances and evals         | A gbrain beside each QM instance (each would be a separate brain), high availability |
+| Postgres      | A company brain behind multi-instance, blue-green QM, as one service | Several gbrain hosts on one database (undocumented)                                  |
+| MCP, remote   | A company brain run outside QM's deploy, a member's personal brain   | Nothing on QM's side, but QM can't fix its uptime                                    |
+
+QM is always an MCP client of gbrain and never gets gbrain's database URL or its owner admin token. The brain's operator provisions sources, clients, the attest right and member links; QM only binds scopes to what was provisioned.
+
+### API
+
+Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; changing a brain's `url` clears its secret.
+
+| Route                                           | Body or result                                                                                                                         |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/admin/memory-registry`                 | `memberBrains`, `brains`, `bindings`, `disabled` (each binding that isn't serving, with its code) and `overlay` (the env provider ids) |
+| `PUT /v1/admin/memory-registry/brains/:id`      | `kind`, `preset`, `url`, `clientId`, `clientSecret`, `label`, and optionally `attestActor`, `timeoutMs`, `pool`, `enabled`             |
+| `DELETE /v1/admin/memory-registry/brains/:id`   | Refused while the brain serves a bound binding                                                                                         |
+| `PUT /v1/admin/memory-registry/bindings/:id`    | `brain`, `scope`, `source` (scopes brains only), and optionally `capture`, `recall`, `failOpen`, `label`                               |
+| `DELETE /v1/admin/memory-registry/bindings/:id` | Releases the binding and keeps its reservation                                                                                         |
+
+`GET` on `/brains/:id` and `/bindings/:id` returns one entry with its `disabled` rows.
+
+### Disabled bindings
+
+A bound binding that QM can't serve contributes nothing, and every recall, search or explicit write for its scope records outcome `disabled` with one of these codes (problem `memory_provider_disabled`):
+
+| Code                       | Cause                                                                                             | Fix                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `brain_off`                | The brain is switched off (`enabled: false`).                                                     | Switch it on, or release the binding.                                       |
+| `secret_missing`           | The brain has no client secret, for example after its `url` changed.                              | Set `clientSecret` on the brain.                                            |
+| `preset_unknown`           | This QM build doesn't know the brain's preset, for example during a rollback.                     | Upgrade QM, or change the preset.                                           |
+| `id_taken`                 | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                              | Re-register the brain under another id.                                     |
+| `scope_recall_unsupported` | A `scopes` brain's preset can't yet read a shared scope as the scope.                             | Nothing yet: shared-scope recall needs a newer gbrain preset.               |
+| `invalid_config`           | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting). | `GET /v1/admin/memory-registry`, then fix the brain or release the binding. |
+
+A stored record this build can't read leaves the last valid snapshot serving; an instance that starts on such a record serves the env routes only. To roll back, release registry bindings first, then revert QM; the table and its reservations are never dropped.

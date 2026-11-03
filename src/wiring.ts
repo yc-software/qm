@@ -188,7 +188,8 @@ import {
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
-import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
+import { createRegistryMemoryService } from "./memory/registry-memory.ts";
+import { createMemoryRegistryStore, type MemoryRegistry, type MemoryRegistryStore } from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
@@ -469,6 +470,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  memoryRegistry: MemoryRegistryStore;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -776,10 +778,16 @@ export function buildApp(
     createSweeper,
   });
   const memorySessions: { store?: SessionStore } = {};
+  const memoryRegistry = createMemoryRegistryStore({
+    map: artifactMap<MemoryRegistry>("memory_registry"),
+    pg: pgArtifactMap.pool,
+    ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+  });
   const baseMemory: MemoryService = withMemoryTidy(
-    createConfiguredMemoryService({
+    createRegistryMemoryService({
       defaultMemory: semanticMemory.memory,
-      config: config.memoryProviderConfig,
+      ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
+      registry: memoryRegistry,
       sessionEntries: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
         return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
@@ -2969,6 +2977,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    memoryRegistry,
     acl,
     skills,
     skillBundles,
@@ -3081,6 +3090,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    memoryRegistry: built.memoryRegistry,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
     connectorTokens: built.connectorTokens,

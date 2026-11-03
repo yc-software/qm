@@ -20,6 +20,7 @@ import type { ModelProvider, ModelProviderAvailability } from "../model/pi-model
 import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
+import type { MemoryRegistryStore } from "../memory/registry.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReplayDedupe } from "../auth/replay-dedupe.ts";
 import type { FetchLike, OAuthClientResolver } from "../connectors/oauth.ts";
@@ -137,6 +138,7 @@ export interface ServerDeps {
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
+  memoryRegistry?: MemoryRegistryStore;
   modelCredentialFetch?: typeof fetch;
   modelRegistry?: ModelOverlayStore;
   modelVerifier?: ModelVerifier;

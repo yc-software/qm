@@ -16,12 +16,12 @@ export interface MemoryProviderRoute {
   failOpen?: boolean;
 }
 
-function matches(route: MemoryProviderRoute, scopeId: ScopeId): boolean {
+export function routeMatches(route: Pick<MemoryProviderRoute, "scopes">, scopeId: ScopeId): boolean {
   const kind = parseScopeId(scopeId).kind;
   return route.scopes.some((scope) => scope === scopeId || scope === kind);
 }
 
-function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
+export function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit" | "automatic"): boolean {
   if (policy === "automatic") return true;
   return policy === "explicit" && mode === "explicit";
 }
@@ -31,7 +31,8 @@ export function createRoutedMemoryService(opts: {
   routes: readonly MemoryProviderRoute[];
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
-  const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] => opts.routes.filter((route) => matches(route, scopeId));
+  const routesFor = (scopeId: ScopeId): MemoryProviderRoute[] =>
+    opts.routes.filter((route) => routeMatches(route, scopeId));
   const providerFor = (route: MemoryProviderRoute): MemoryService => {
     const provider = opts.providers[route.provider];
     if (!provider) throw new Error(`unknown memory provider: ${route.provider}`);

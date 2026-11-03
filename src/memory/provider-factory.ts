@@ -26,16 +26,15 @@ function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: numbe
   };
 }
 
-export function createConfiguredMemoryService(opts: {
-  defaultMemory: MemoryService;
-  config?: MemoryProviderConfig;
-  /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
-  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
-}): MemoryService {
-  if (!opts.config) return opts.defaultMemory;
-  const providers: Record<string, MemoryService> = { default: opts.defaultMemory };
-  for (const provider of opts.config.providers) {
+export const logMemoryProviderError = (error: unknown, provider: string, operation: string): void =>
+  console.error(`[memory] ${provider} ${operation} failed: ${errMessage(error)}`);
+
+export function createMemoryProviders(
+  configs: MemoryProviderConfig["providers"],
+  opts: { sessionEntries?: (sessionId: string) => Promise<SessionEntry[]> } = {},
+): Record<string, MemoryService> {
+  const providers: Record<string, MemoryService> = {};
+  for (const provider of configs) {
     if (provider.type === "memorable") {
       if (!opts.sessionEntries)
         throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
@@ -55,11 +54,20 @@ export function createConfiguredMemoryService(opts: {
       attestActor: provider.attestActor,
     });
   }
+  return providers;
+}
+
+export function createConfiguredMemoryService(opts: {
+  defaultMemory: MemoryService;
+  config?: MemoryProviderConfig;
+  /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
+  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
+}): MemoryService {
+  if (!opts.config) return opts.defaultMemory;
   return createRoutedMemoryService({
-    providers,
+    providers: { default: opts.defaultMemory, ...createMemoryProviders(opts.config.providers, opts) },
     routes: opts.config.routes,
-    onError:
-      opts.onError ??
-      ((error, provider, operation) => console.error(`[memory] ${provider} ${operation} failed: ${errMessage(error)}`)),
+    onError: opts.onError ?? logMemoryProviderError,
   });
 }

@@ -53,6 +53,15 @@ import {
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
+import {
+  deleteMemoryBrain,
+  getMemoryBinding,
+  getMemoryBrain,
+  getMemoryRegistry,
+  putMemoryBinding,
+  putMemoryBrain,
+  releaseMemoryBinding,
+} from "./admin/memory-registry.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
@@ -327,6 +336,36 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: { privateRead: "unless-org-scope" },
       handle: adminMemory,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryRegistry,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/brains/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBrain,
+    },
+    { method: "PUT", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: putMemoryBrain },
+    { method: "DELETE", path: "/v1/admin/memory-registry/brains/:id", auth: "either", handle: deleteMemoryBrain },
+    {
+      method: "GET",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: getMemoryBinding,
+    },
+    { method: "PUT", path: "/v1/admin/memory-registry/bindings/:id", auth: "either", handle: putMemoryBinding },
+    {
+      method: "DELETE",
+      path: "/v1/admin/memory-registry/bindings/:id",
+      auth: "either",
+      handle: releaseMemoryBinding,
     },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
