@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
+import {
+  createPgPool,
+  withPgTransaction,
+  type PgMigrationDefinition,
+  type PoolClient,
+} from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -16,26 +21,22 @@ const absent = (error: unknown): null => {
   throw error;
 };
 
-export function createRenderWorkspaceStore(rootDir: string, connectionString: string): WorkspaceStore {
-  const local = createLocalWorkspaceStore(rootDir);
-  const queue = createKeyedQueue<string>();
-  const synced = new Map<string, number>();
-  const db = createPgPool(connectionString, [
-    TENANCY_BASE,
-    {
-      id: "render/workspace/v1",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS render_workspace_files (
+export const RENDER_WORKSPACE_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
+  {
+    id: "render/workspace/v1",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS render_workspace_files (
           scope_id TEXT NOT NULL,
           path TEXT NOT NULL,
           data BYTEA NOT NULL,
           PRIMARY KEY (scope_id, path)
         )`,
-        `CREATE TABLE IF NOT EXISTS render_workspace_scopes (
+      `CREATE TABLE IF NOT EXISTS render_workspace_scopes (
           scope_id TEXT PRIMARY KEY,
           revision BIGINT NOT NULL
         )`,
-        `CREATE OR REPLACE FUNCTION render_workspace_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      `CREATE OR REPLACE FUNCTION render_workspace_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
         BEGIN
           IF TG_OP <> 'INSERT' THEN
             INSERT INTO render_workspace_scopes(scope_id, revision) VALUES (OLD.scope_id, 1)
@@ -48,21 +49,21 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
           RETURN NULL;
         END
         $fn$`,
-        `DROP TRIGGER IF EXISTS render_workspace_bump ON render_workspace_files`,
-        `CREATE TRIGGER render_workspace_bump
+      `DROP TRIGGER IF EXISTS render_workspace_bump ON render_workspace_files`,
+      `CREATE TRIGGER render_workspace_bump
           AFTER INSERT OR UPDATE OR DELETE ON render_workspace_files
           FOR EACH ROW EXECUTE FUNCTION render_workspace_bump()`,
-      ],
-    },
-    tenantTables(
-      "render/workspace/v2-tenants",
-      [
-        { table: "render_workspace_files", primaryKey: "scope_id, path" },
-        { table: "render_workspace_scopes", primaryKey: "scope_id" },
-      ],
-      {
-        after: [
-          `CREATE OR REPLACE FUNCTION render_workspace_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
+    ],
+  },
+  tenantTables(
+    "render/workspace/v2-tenants",
+    [
+      { table: "render_workspace_files", primaryKey: "scope_id, path" },
+      { table: "render_workspace_scopes", primaryKey: "scope_id" },
+    ],
+    {
+      after: [
+        `CREATE OR REPLACE FUNCTION render_workspace_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
         BEGIN
           IF TG_OP <> 'INSERT' THEN
             INSERT INTO render_workspace_scopes(tenant_id, scope_id, revision) VALUES (OLD.tenant_id, OLD.scope_id, 1)
@@ -75,10 +76,16 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
           RETURN NULL;
         END
         $fn$`,
-        ],
-      },
-    ),
-  ]);
+      ],
+    },
+  ),
+];
+
+export function createRenderWorkspaceStore(rootDir: string, connectionString: string): WorkspaceStore {
+  const local = createLocalWorkspaceStore(rootDir);
+  const queue = createKeyedQueue<string>();
+  const synced = new Map<string, number>();
+  const db = createPgPool(connectionString, RENDER_WORKSPACE_MIGRATIONS);
   const pathFor = (scope: ScopeId, input: string): string => {
     const base = local.scopeDir(scope);
     const path = relative(base, safeJoin(base, input));

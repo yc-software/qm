@@ -472,9 +472,12 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
+export function registerPgMigrations(connectionString: string, definitions: readonly PgMigrationDefinition[]): void {
+  for (const definition of definitions) registerPgMigration(connectionString, definePgMigration(definition));
+}
+
 export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[] = []): PgPool {
-  const migrations = definitions.map(definePgMigration);
-  for (const migration of migrations) registerPgMigration(connectionString, migration);
+  registerPgMigrations(connectionString, definitions);
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;

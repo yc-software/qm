@@ -13,7 +13,7 @@ import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/re
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createRenderWorkspaceStore } from "./workspace/render-workspace-store.ts";
+import { createRenderWorkspaceStore, RENDER_WORKSPACE_MIGRATIONS } from "./workspace/render-workspace-store.ts";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
@@ -60,7 +60,7 @@ import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import {
   createSandboxResources,
   type SandboxResource,
@@ -112,7 +112,7 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -734,6 +734,7 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
+  registerPgMigrations(databaseUrl, [...RENDER_WORKSPACE_MIGRATIONS, ...FILE_UPLOAD_MIGRATIONS]);
   const workspace =
     config.workspaceStore === "postgres"
       ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
@@ -1293,8 +1294,9 @@ export function buildApp(
         }
       : {}),
   });
+  const browserSessions = artifactMap<StoredBrowserSession>("browser_sessions");
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
+    ? createBrowserSessionStore({ sessions: browserSessions, key: credentialKey })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));

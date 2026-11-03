@@ -1,4 +1,4 @@
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
@@ -48,13 +48,12 @@ const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 const HOLDS_QUOTA =
   "actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)";
 
-export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
-  const db = createPgPool(connectionString, [
-    TENANCY_BASE,
-    {
-      id: "files/uploads/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS file_uploads (
+export const FILE_UPLOAD_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
+  {
+    id: "files/uploads/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS file_uploads (
       id TEXT PRIMARY KEY,
       actor_id TEXT NOT NULL,
       state TEXT NOT NULL,
@@ -62,19 +61,22 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       expires_at BIGINT NOT NULL,
       data JSONB NOT NULL
     )`,
-        `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
-        `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
-      ],
-    },
-    {
-      id: "files/uploads/0002",
-      statements: [
-        "ALTER TABLE file_uploads ADD COLUMN IF NOT EXISTS next_attempt_at BIGINT NOT NULL DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
-      ],
-    },
-    tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
-  ]);
+      `CREATE INDEX IF NOT EXISTS file_uploads_actor_state ON file_uploads(actor_id, state)`,
+      `CREATE INDEX IF NOT EXISTS file_uploads_expiry ON file_uploads(expires_at) WHERE state NOT IN ('complete', 'aborted')`,
+    ],
+  },
+  {
+    id: "files/uploads/0002",
+    statements: [
+      "ALTER TABLE file_uploads ADD COLUMN IF NOT EXISTS next_attempt_at BIGINT NOT NULL DEFAULT 0",
+      "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
+    ],
+  },
+  tenantTables("files/uploads/0003-tenants", [{ table: "file_uploads", primaryKey: "id" }]),
+];
+
+export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
+  const db = createPgPool(connectionString, FILE_UPLOAD_MIGRATIONS);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
     ...rowTenant(row),
