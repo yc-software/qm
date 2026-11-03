@@ -48,6 +48,7 @@ export function createPostgresMap<T>(
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
       `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS rv BIGINT NOT NULL DEFAULT 0`,
+      `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 0) ON CONFLICT (tbl) DO NOTHING`,
       `CREATE OR REPLACE FUNCTION durable_map_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
       DECLARE
         bumped BIGINT;
@@ -120,12 +121,11 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
-  async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+  const versionLockSql = `SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}' FOR UPDATE`;
+  async function withVersionLock<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
-      await client.query(bumpSql);
+      await client.query(versionLockSql);
       return fn(client);
     });
   }
@@ -212,7 +212,7 @@ export function createPostgresMap<T>(
       return rows.length ? (rows[0]!.json as T) : null;
     },
     async put(id, value) {
-      await withBump((client) =>
+      await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
@@ -221,7 +221,7 @@ export function createPostgresMap<T>(
       );
     },
     async putIfAbsent(id, value) {
-      const res = await withBump((client) =>
+      const res = await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = ${table}.json
@@ -232,7 +232,7 @@ export function createPostgresMap<T>(
       return res.rows[0]!.json as T;
     },
     async insertIfAbsent(id, value) {
-      const inserted = await withBump((client) =>
+      const inserted = await withVersionLock((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO NOTHING`,
@@ -245,7 +245,7 @@ export function createPostgresMap<T>(
       const entries = Object.entries(patch);
       const removeKeys = entries.filter(([, v]) => v === undefined).map(([k]) => k);
       const set = Object.fromEntries(entries.filter(([, v]) => v !== undefined));
-      const res = await withBump((client) =>
+      const res = await withVersionLock((client) =>
         client.query(`UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`, [
           id,
           removeKeys,
@@ -255,7 +255,7 @@ export function createPostgresMap<T>(
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
     async update(id, fn) {
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0]) return null;
         const next = fn(current.rows[0].json as T);
@@ -265,7 +265,7 @@ export function createPostgresMap<T>(
     },
     async mutateMany(updates) {
       if (!updates.length) return [];
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const rows = await client.query(
           `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
           [updates.map(({ id }) => id)],
@@ -286,7 +286,7 @@ export function createPostgresMap<T>(
       });
     },
     async deleteIf(id, predicate) {
-      return withBump(async (client) => {
+      return withVersionLock(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0] || !predicate(current.rows[0].json as T)) return false;
         await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
@@ -294,10 +294,12 @@ export function createPostgresMap<T>(
       });
     },
     async delete(id) {
-      await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
+      await withVersionLock((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
     },
     async take(id) {
-      const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));
+      const res = await withVersionLock((client) =>
+        client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]),
+      );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
   };
