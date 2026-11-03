@@ -8,11 +8,13 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
@@ -29,7 +31,9 @@ function start(withAdmin = true, signingSecret?: string) {
 }
 
 const whoami = (base: string, actor?: string): Promise<any> =>
-  fetch(`${base}/v1/admin/whoami`, { headers: actor ? { "x-admin-actor": actor } : {} });
+  fetch(`${base}/v1/admin/whoami`, {
+    headers: { ...testTenantHeaders(), ...(actor ? { "x-admin-actor": actor } : {}) },
+  });
 
 test("whoami reports an org_admin as admin with the org scope", async () => {
   const s = start();
@@ -94,7 +98,7 @@ test("whoami audits an admin.whoami event for a resolved actor", async () => {
   const s = start();
   try {
     await whoami(s.base, "admin-alice@default-org");
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await inTestTenant(() => s.built.auditLog.events())).map((e) => e.action);
     assert.ok(actions.includes("admin.whoami"), "the whoami read is audited");
   } finally {
     await s.close();
@@ -109,15 +113,26 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     assert.equal(unsigned.status, 401);
 
     const ts = Math.floor(Date.now() / 1000);
-    const badSig = signRequest("not-the-secret", ts, `GET\n/v1/admin/whoami\n`);
+    const canonical = canonicalPayload("GET", "/v1/admin/whoami", "", testTenants()[0]);
+    const badSig = signRequest("not-the-secret", ts, canonical);
     const forged = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice@default-org", "x-timestamp": String(ts), "x-signature": badSig },
+      headers: {
+        ...testTenantHeaders(),
+        "x-admin-actor": "admin-alice@default-org",
+        "x-timestamp": String(ts),
+        "x-signature": badSig,
+      },
     });
     assert.equal(forged.status, 401);
 
-    const goodSig = signRequest(SECRET, ts, `GET\n/v1/admin/whoami\n`);
+    const goodSig = signRequest(SECRET, ts, canonical);
     const ok = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice@default-org", "x-timestamp": String(ts), "x-signature": goodSig },
+      headers: {
+        ...testTenantHeaders(),
+        "x-admin-actor": "admin-alice@default-org",
+        "x-timestamp": String(ts),
+        "x-signature": goodSig,
+      },
     });
     assert.equal(ok.status, 200);
     assert.deepEqual(await ok.json(), {
@@ -133,8 +148,12 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
 
 test("adminStatusOf reads the grant list directly (org_admin reported; non-admin otherwise)", async () => {
   const svc = createAdminService(testAdminGrantStore());
-  const alice = svc.resolveActor("admin-alice@default-org")!;
-  assert.deepEqual(await svc.adminStatusOf(alice), { isAdmin: true, role: "org_admin", scopeId: "org:default-org" });
-  const nobody = svc.resolveActor("U-nobody@default-org")!;
-  assert.deepEqual(await svc.adminStatusOf(nobody), { isAdmin: false });
+  const alice = inTestTenant(() => svc.resolveActor("admin-alice@default-org"))!;
+  assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(alice)), {
+    isAdmin: true,
+    role: "org_admin",
+    scopeId: "org:default-org",
+  });
+  const nobody = inTestTenant(() => svc.resolveActor("U-nobody@default-org"))!;
+  assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(nobody)), { isAdmin: false });
 });

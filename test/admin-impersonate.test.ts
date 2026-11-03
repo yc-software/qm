@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-impersonate-")) }));
@@ -28,13 +29,13 @@ const NOBODY = "user-uma@default-org";
 const startImp = (base: string, actor: string, target: string) =>
   fetch(`${base}/v1/admin/impersonate`, {
     method: "POST",
-    headers: { "x-admin-actor": actor, "content-type": "application/json" },
+    headers: { "x-admin-actor": actor, "content-type": "application/json", ...testTenantHeaders() },
     body: JSON.stringify({ target }),
   });
 const stopImp = (base: string, actor: string, target: string) =>
   fetch(`${base}/v1/admin/impersonate/stop`, {
     method: "POST",
-    headers: { "x-admin-actor": actor, "content-type": "application/json" },
+    headers: { "x-admin-actor": actor, "content-type": "application/json", ...testTenantHeaders() },
     body: JSON.stringify({ target }),
   });
 
@@ -47,7 +48,7 @@ test("an org admin can start impersonating a user; audited", async () => {
     assert.equal(body.ok, true);
     assert.equal(body.target, "U-target");
     assert.ok(
-      (await s.built.auditLog.events()).some(
+      (await inTestTenant(() => s.built.auditLog.events())).some(
         (e) => e.action === "impersonate.start" && e.resource === "U-target" && e.principalId === "admin-alice",
       ),
       "the start is recorded in the durable audit log",
@@ -91,7 +92,9 @@ test("stopping impersonation is audited", async () => {
     const r = await stopImp(s.base, ALICE, "U-target");
     assert.equal(r.status, 200);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "impersonate.stop" && e.resource === "U-target"),
+      (await inTestTenant(() => s.built.auditLog.events())).some(
+        (e) => e.action === "impersonate.stop" && e.resource === "U-target",
+      ),
       "the stop is recorded in the durable audit log",
     );
   } finally {
