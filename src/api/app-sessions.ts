@@ -356,7 +356,9 @@ export function createSessionMethods(
           const run = latestRuns.get(s.threadRef);
           const since = run?.startedAt ?? run?.createdAt;
           if (!since) return;
-          const recent = await deps.sessions.getEntries(s.id, { limit: 8 }).catch(() => []);
+          const recent = await deps.sessions
+            .getEntries(s.id, { limit: 8 })
+            .catch(swallowAs("app sessions: subagent purpose", []));
           const purpose = recent
             .filter((e) => e.type === "tool_call" && e.createdAt >= since)
             .map((e) => (e.payload as { purpose?: unknown } | null)?.purpose)
