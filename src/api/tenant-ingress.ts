@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
 import { isTenantId, withTenant } from "../tenants/context.ts";
+import { tenantSettings } from "../tenants/settings.ts";
 import { requestHost, type RowTable, type Tenancy } from "../tenants/tenancy.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { sendJson, tenantHeader } from "./http.ts";
@@ -47,6 +48,13 @@ async function claimedTenant(
   return claims.tenant ? { tenant: claims.tenant } : {};
 }
 
+function bindTenant(tenant: string, next: () => Promise<void> | void): Promise<void> {
+  return withTenant(tenant, async () => {
+    await tenantSettings();
+    await next();
+  });
+}
+
 const rowExpectations = new WeakMap<IncomingMessage, string>();
 
 function refuse(req: IncomingMessage, res: ServerResponse, status: number, error: string, message: string): void {
@@ -74,7 +82,7 @@ export async function withRequestTenant(
     if (tenant) rowExpectations.set(req, tenant);
     return next();
   }
-  if (tenant) return withTenant(tenant, next);
+  if (tenant) return bindTenant(tenant, next);
   if (host.multi) return refuse(req, res, 421, "unknown_host", "this host does not belong to a known tenant");
   return next();
 }
@@ -89,7 +97,7 @@ export async function withRowTenant(
   if (!tenancy) return next();
   const tenant = await tenancy.rowTenant(row.table, row.id);
   const expected = rowExpectations.get(req);
-  if (tenant && (!expected || expected === tenant)) return withTenant(tenant, next);
+  if (tenant && (!expected || expected === tenant)) return bindTenant(tenant, next);
   if (!tenant && !expected && !(await tenancy.multi())) return next();
   return refuse(req, res, 404, "not_found", `${req.method} ${(req.url ?? "").split("?")[0]}`);
 }

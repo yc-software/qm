@@ -19,14 +19,24 @@ export const tenantSettingsSchema = z
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 
 let loader: ((tenant: string) => Promise<TenantSettings>) | undefined;
+const loaded = new Map<string, TenantSettings>();
 
 export function configureTenantSettings(load: ((tenant: string) => Promise<TenantSettings>) | undefined): void {
   loader = load;
+  loaded.clear();
 }
 
 export async function tenantSettings(): Promise<TenantSettings> {
   const tenant = boundTenant();
-  return tenant && loader ? loader(tenant) : {};
+  if (!tenant || !loader) return {};
+  const settings = await loader(tenant);
+  loaded.set(tenant, settings);
+  return settings;
+}
+
+export function loadedTenantSettings(): TenantSettings {
+  const tenant = boundTenant();
+  return (tenant && loaded.get(tenant)) || {};
 }
 
 export async function tenantSetting<K extends keyof TenantSettings>(key: K): Promise<TenantSettings[K]> {
