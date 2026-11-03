@@ -12,6 +12,7 @@ import {
   tracePhase,
   traceQueued,
 } from "../plugins/chassis/src/error-reporting.ts";
+import { pipelinedQuery } from "../src/persistence/pg-pipeline.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
@@ -54,6 +55,12 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
         pool.query("SELECT pg_sleep(0.05)"),
         pool.query("UPDATE pg_settings SET setting = setting WHERE false"),
       ]);
+      const client = await pool.connect();
+      try {
+        await pipelinedQuery(client, [["statement_timeout", "1000"]], "SELECT $1::text AS piped", ["private-piped"]);
+      } finally {
+        client.release();
+      }
     });
     await detached;
     for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "probe"); i++) {
@@ -75,7 +82,7 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
     assert.ok(descriptions.includes("pg-pool.connect"), "pool checkout time is visible");
     assert.deepEqual(
       descriptions.filter((d: string) => !d.endsWith(".connect")),
-      ["SELECT", "query", "query", "SELECT", "UPDATE"],
+      ["SELECT", "query", "query", "SELECT", "UPDATE", "SELECT"],
     );
     for (const span of db) {
       assert.equal(span.data["db.statement"], undefined);

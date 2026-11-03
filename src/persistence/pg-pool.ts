@@ -4,6 +4,7 @@ import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { pipelinedQuery, type PgSetting } from "./pg-pipeline.ts";
 
 export type { Pool, PoolClient };
 
@@ -120,23 +121,10 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
-async function withStatementTimeout<T>(
-  client: PoolClient,
-  timeoutMs: number | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (timeoutMs === undefined) return run();
+function querySettings(timeoutMs: number | undefined): PgSetting[] {
+  if (timeoutMs === undefined) return [];
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
-  await client.query("BEGIN");
-  try {
-    await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
-    const result = await run();
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query timeout", undefined));
-    throw error;
-  }
+  return [["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -456,8 +444,9 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
+    const settings = querySettings(timeoutMs);
     const p = await pool();
-    if (!signal && timeoutMs === undefined) {
+    if (!signal && !settings.length) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
@@ -475,14 +464,8 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      return await withAbort(
-        () =>
-          withStatementTimeout(client, timeoutMs, async () => {
-            const res = await client.query({ text, values: params });
-            return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
-          }),
-        signal,
-      );
+      const res = await withAbort(() => pipelinedQuery(client, settings, text, params), signal);
+      return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;
