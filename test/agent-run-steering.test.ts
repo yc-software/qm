@@ -633,7 +633,7 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
 });
 
 for (const abort of ["shutdown", "stop"] as const) {
-  test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and leaves its call open" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
+  test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and replays its cause" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
     const agent = createAgent({ apiKey: "sk-test" });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
@@ -698,7 +698,7 @@ for (const abort of ["shutdown", "stop"] as const) {
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
       assert.equal(
         resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        abort === "shutdown" ? "retry" : "continue",
+        "continue",
       );
     } finally {
       globalThis.fetch = realFetch;

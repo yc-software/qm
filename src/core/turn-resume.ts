@@ -138,6 +138,7 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   if (
     payload?.retrySafe !== true ||
     typeof payload.callId !== "string" ||
+    withResult.has(payload.callId) ||
     typeof rerun?.tool !== "string" ||
     rerun.input === null ||
     typeof rerun.input !== "object" ||
