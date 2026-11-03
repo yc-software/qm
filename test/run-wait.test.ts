@@ -14,56 +14,56 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { RUN_WAIT_FALLBACK_MS } from "../src/runs/run-store.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
-test("a synchronous turn waiting on a run another worker holds does not poll claims", { timeout: 30_000 }, async () => {
-  const built = buildApp(
-    testConfig({
-      runWaitMs: 5_000,
-      dataDir: mkdtempSync(join(tmpdir(), "inline-wait-")),
-    }),
-  );
-  try {
-    const request: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `inline-wait-${randomUUID()}` },
-      text: "hello",
-      idempotencyKey: `held-${randomUUID()}`,
-    };
-    const queued = await built.app.turn({ ...request, async: true });
-    const held = await built.runs.claimById(queued.runId!, "other-worker", 60_000);
-    assert.ok(held?.leaseToken);
-    let claims = 0;
-    const claimForSession = built.runs.claimForSession.bind(built.runs);
-    built.runs.claimForSession = async (...args) => {
-      claims += 1;
-      return claimForSession(...args);
-    };
-    const waiting = built.app.turn(request);
-    await sleep(500);
-    assert.equal(claims, 0);
-    await built.runs.complete(held.id, held.leaseToken, { status: "ok", reply: "done elsewhere" });
-    const result = await waiting;
-    assert.equal(result.status, "ok");
-    assert.equal(result.reply, "done elsewhere");
-  } finally {
-    await built.runtime.stop();
-  }
+const turnRequest = (): TurnRequest => ({
+  surface: "test",
+  actor: { externalId: "U1" },
+  conversation: { kind: "dm", threadRef: `run-wait-${randomUUID()}` },
+  text: "hello",
+  idempotencyKey: `run-wait-${randomUUID()}`,
+});
+
+test("a synchronous turn on a process that does not claim runs leaves its run queued", async () => {
+  const built = buildApp(testConfig({ runWaitMs: 300, backgroundWorkEnabled: false }));
+  const request = turnRequest();
+  await assert.rejects(built.app.turn(request), /did not finish within 300ms/);
+  const [run] = await built.runs.inFlightForThread(request.conversation.threadRef);
+  assert.equal(run?.status, "pending");
+  assert.equal(run?.attempts, 0);
+  assert.equal(built.modelCalls.length, 0);
+});
+
+test("a synchronous turn respects its timeout without clearing a retry deadline", async () => {
+  const built = buildApp(testConfig({ runWaitMs: 100, backgroundWorkEnabled: false }));
+  const request = turnRequest();
+  const queued = await built.app.turn({ ...request, async: true });
+  const claimed = await built.runs.claimById(queued.runId!, "setup", 60_000);
+  await built.runs.fail(claimed!.id, claimed!.leaseToken!, "temporary", { retryAfterMs: 30_000 });
+  await assert.rejects(built.app.turn(request), /did not finish within 100ms/);
+  assert.equal(await built.runs.claimById(claimed!.id, "other", 60_000), null);
+});
+
+test("a synchronous turn returns the result of the worker that ran it", async () => {
+  const built = buildApp(testConfig({ runWaitMs: 5_000, backgroundWorkEnabled: false }));
+  const request = turnRequest();
+  const queued = await built.app.turn({ ...request, async: true });
+  const claimed = await built.runs.claimById(queued.runId!, "other", 60_000);
+  const pending = built.app.turn(request);
+  await sleep(50);
+  await built.runs.complete(claimed!.id, claimed!.leaseToken!, { status: "ok", reply: "other worker" });
+  assert.equal((await pending).reply, "other worker");
+  const run = await built.runs.get(claimed!.id);
+  assert.equal(run?.attempts, 1);
+  assert.equal(run?.workerId, "other");
 });
 
 test("a synchronous turn wakes when another instance finishes its run, without polling the run", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
   const built = buildApp(
-    testConfig({ databaseUrl, runWaitMs: 10_000, dataDir: mkdtempSync(join(tmpdir(), "inline-wake-")) }),
+    testConfig({ databaseUrl, runWaitMs: 10_000, dataDir: mkdtempSync(join(tmpdir(), "run-wait-wake-")) }),
   );
   const elsewhere = createPostgresRunStore(databaseUrl);
   try {
-    const request: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `inline-wake-${randomUUID()}` },
-      text: "hello",
-      idempotencyKey: `wake-${randomUUID()}`,
-    };
+    const request = turnRequest();
     const queued = await built.app.turn({ ...request, async: true });
     const held = await elsewhere.runs.claimById(queued.runId!, "other-instance", 60_000);
     assert.ok(held?.leaseToken);
@@ -92,17 +92,11 @@ test("a synchronous turn wakes when another instance finishes its run, without p
 test("a synchronous turn still finishes when the completion notification never arrives", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
   const built = buildApp(
-    testConfig({ databaseUrl, runWaitMs: 10_000, dataDir: mkdtempSync(join(tmpdir(), "inline-fallback-")) }),
+    testConfig({ databaseUrl, runWaitMs: 10_000, dataDir: mkdtempSync(join(tmpdir(), "run-wait-fallback-")) }),
   );
   const raw = new pg.Pool({ connectionString: databaseUrl });
   try {
-    const request: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `inline-fallback-${randomUUID()}` },
-      text: "hello",
-      idempotencyKey: `fallback-${randomUUID()}`,
-    };
+    const request = turnRequest();
     const queued = await built.app.turn({ ...request, async: true });
     assert.ok(await built.runs.claimById(queued.runId!, "silent-instance", 60_000));
     const waiting = built.app.turn(request);

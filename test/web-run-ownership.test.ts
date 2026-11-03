@@ -53,7 +53,7 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
   const submit = async (text: string): Promise<string> => {
     const r = await fetch(
       `${webBase}/api/turn`,
-      as("alice", { method: "POST", body: JSON.stringify({ text, threadRef }) }),
+      as("alice", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
     );
     const runId = ((await r.json()) as { runId?: string }).runId;
     assert.ok(runId);

@@ -81,6 +81,7 @@ import type {
 } from "../surface-cache/surface-cache.ts";
 import { type BotPolicy, type ChannelPolicy, type ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
@@ -307,7 +308,6 @@ export interface App {
     finishedAt: number | null;
   } | null>;
   getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
-  stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
     viewer?: string,
@@ -323,7 +323,7 @@ export interface App {
     runId: string,
     signal: RunSignal,
     viewer?: string,
-  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
+  ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,
@@ -556,7 +556,7 @@ export interface App {
     patch: { description?: string; body?: string },
     opts?: { liveActor?: boolean },
   ): Promise<Skill | "trigger_blocked" | null>;
-  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | null>;
+  restoreOwnedSkill(id: string, principalId: string): Promise<Skill | "exists" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -647,7 +647,6 @@ export interface AppDeps {
   sessions: SessionStore;
   orchestrator: Orchestrator;
   runs: RunStore;
-  leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
   turnStream?: TurnStream;
@@ -695,6 +694,7 @@ export interface AppDeps {
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
   surfaceCache?: SurfaceCache;
+  surfaces: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;

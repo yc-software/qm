@@ -15,9 +15,6 @@ import {
   createDeduper,
   dedupedRun,
   dedupeKey,
-  isBareStop,
-  maybeInterceptStop,
-  createInFlightThreadMap,
 } from "../src/slack/lib.ts";
 
 test("shouldProcessMessage allows file_share and thread_broadcast but drops other subtypes and the bot's own", () => {
@@ -200,109 +197,4 @@ test("createDeduper suppresses a redelivery of the same message with a different
   const d = createDeduper(10);
   assert.equal(d.seen(dedupeKey({ event_id: "Ev1", client_msg_id: "CM", channel: "D0", ts: "111.222" })), false);
   assert.equal(d.seen(dedupeKey({ event_id: "Ev2", channel: "D0", ts: "111.222" })), true);
-});
-
-test("isBareStop accepts case-insensitive stop with optional trailing . or !", () => {
-  for (const t of ["stop", "Stop", "STOP", " stop ", "stop.", "stop!"]) assert.equal(isBareStop(t), true, t);
-  for (const t of ["please stop the job", "stop it", "stop?", "stopping", ""]) assert.equal(isBareStop(t), false, t);
-  for (const t of ["@qm stop", "@qm Stop!"]) assert.equal(isBareStop(t, "qm"), true, t);
-  for (const t of ["@qm stop it", "@qmstop", "@alice stop", "@here stop"]) assert.equal(isBareStop(t, "qm"), false, t);
-});
-
-test("maybeInterceptStop: bare stop with in-flight run signals abort and suppresses the turn", async () => {
-  const signaled: string[] = [];
-  const runs = createInFlightThreadMap();
-  runs.set("dm:C1", "run-1");
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: (ref) => runs.get(ref),
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, true);
-  assert.deepEqual(signaled, ["run-1"]);
-});
-
-test("maybeInterceptStop: stop with no in-flight run flows through as a normal turn", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: () => undefined,
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, false);
-  assert.deepEqual(signaled, []);
-});
-
-test("maybeInterceptStop: async getInFlightRun fallback (map miss) still aborts and intercepts", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: async (ref) => (ref === "dm:C1" ? "run-async" : undefined),
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, true);
-  assert.deepEqual(signaled, ["run-async"]);
-});
-
-test("maybeInterceptStop: async getInFlightRun resolving undefined flows through as a normal turn", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:C1",
-    getInFlightRun: async () => undefined,
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, false);
-  assert.deepEqual(signaled, []);
-});
-
-test("maybeInterceptStop: non-bare stop text flows through even with an in-flight run", async () => {
-  const signaled: string[] = [];
-  const intercepted = await maybeInterceptStop({
-    text: "please stop the job",
-    threadRef: "dm:C1",
-    getInFlightRun: () => "run-1",
-    signalAbort: async (runId) => {
-      signaled.push(runId);
-    },
-  });
-  assert.equal(intercepted, false);
-  assert.deepEqual(signaled, []);
-});
-
-test("createInFlightThreadMap: clear is runId-guarded so a finished run can't unpin a newer one", () => {
-  const runs = createInFlightThreadMap();
-  runs.set("dm:C1", "run-1");
-  runs.set("dm:C1", "run-2");
-  runs.clear("dm:C1", "run-1");
-  assert.equal(runs.get("dm:C1"), "run-2");
-  runs.clear("dm:C1", "run-2");
-  assert.equal(runs.get("dm:C1"), undefined);
-});
-
-test("stop checks the conversation tree even when the coordinator is idle", async () => {
-  const calls: string[] = [];
-  const stopped = await maybeInterceptStop({
-    text: "stop",
-    threadRef: "dm:D1",
-    getInFlightRun: () => undefined,
-    signalAbort: async () => assert.fail("must stop the tree"),
-    stopConversation: async (threadRef) => {
-      calls.push(threadRef);
-      return true;
-    },
-  });
-  assert.equal(stopped, true);
-  assert.deepEqual(calls, ["dm:D1"]);
 });

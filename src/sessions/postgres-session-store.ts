@@ -1,3 +1,4 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { likeContains } from "../persistence/like.ts";
@@ -99,6 +100,10 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
+    ...((r.slack_binding as { author?: unknown } | null)?.author
+      ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
+      : {}),
+    ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
   };
 }
 
@@ -491,7 +496,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -501,6 +506,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         if (surface && !s.surface) {
           await q("UPDATE sessions SET surface = $2 WHERE id = $1", [s.id, surface]);
           s.surface = surface;
+        }
+        if (facts?.surfaceBinding && !s.surfaceBinding) {
+          await q("UPDATE sessions SET slack_binding = $2::jsonb WHERE id = $1 AND slack_binding IS NULL", [
+            s.id,
+            JSON.stringify(facts.surfaceBinding),
+          ]);
+          s.surfaceBinding = facts.surfaceBinding;
+        }
+        if (facts?.context && canonicalJson(s.spawnMeta) !== canonicalJson(facts.context)) {
+          await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [s.id, JSON.stringify(facts.context)]);
+          s.spawnMeta = facts.context;
         }
         return s;
       };
@@ -585,6 +601,26 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async setSpawnMeta(sessionId, meta): Promise<void> {
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
+    },
+
+    async setRuntime(sessionId, runtime): Promise<void> {
+      await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1 AND runtime IS DISTINCT FROM $2::jsonb", [
+        sessionId,
+        JSON.stringify(runtime),
+      ]);
+    },
+
+    async endedInFailure(sessionIds): Promise<Set<string>> {
+      if (!sessionIds.length) return new Set();
+      const rows = await q(
+        `SELECT ids.id FROM unnest($1::text[]) AS ids(id)
+         CROSS JOIN LATERAL (
+           SELECT kind FROM items WHERE tenant_id = ${TENANT} AND session_id = ids.id ORDER BY seq DESC LIMIT 1
+         ) last
+         WHERE last.kind = 'Error'`,
+        [[...new Set(sessionIds)]],
+      );
+      return new Set(rows.map((row) => row.id as string));
     },
 
     async childrenOf(parentSessionId): Promise<Session[]> {

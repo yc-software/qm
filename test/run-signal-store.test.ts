@@ -73,6 +73,59 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   );
 });
 
+test("startSignalPoll: a stop waiting behind a slow steer is delivered first", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await store.send("r-order", { kind: "steer", text: "screen me slowly" });
+  await store.send("r-order", { kind: "abort" });
+  const stop = startSignalPoll(
+    store,
+    "r-order",
+    {
+      onSteer: async () => {
+        order.push("steer");
+        await gate;
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.length === 2, 500);
+    assert.deepEqual(order, ["abort", "steer"]);
+  } finally {
+    release();
+    await stop();
+  }
+});
+
+test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of the next steer", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  await store.send("r-late", { kind: "steer", text: "first" });
+  await store.send("r-late", { kind: "steer", text: "second" });
+  const stop = startSignalPoll(
+    store,
+    "r-late",
+    {
+      onSteer: async (text) => {
+        order.push(text);
+        if (text === "first") await store.send("r-late", { kind: "abort" });
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.includes("second"), 500);
+    assert.deepEqual(order.slice(0, 3), ["first", "abort", "second"]);
+  } finally {
+    await stop();
+  }
+});
+
 test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
   const store = signalStore();
   const steered: string[] = [];
@@ -96,13 +149,14 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
     await until(() => steered.length === 1);
     await store.send("r1", { kind: "abort" });
     await store.send("r1", { kind: "abort" });
-    releaseFirst();
     await until(() => aborts === 1, 500);
     await sleep(50);
-    assert.equal(aborts, 1, "one drain delivers a batch of stops once");
+    assert.equal(aborts, 1, "one drain delivers a batch of stops once, without waiting for the steer in progress");
+    releaseFirst();
+    await until(() => aborts === 2, 500);
     await store.send("r1", { kind: "steer", text: "second" });
     await until(() => steered.length === 2, 500);
-    await until(() => aborts === 2, 500);
+    await until(() => aborts === 3, 500);
     assert.deepEqual(steered, ["first", "second"], "steers still flow while a stop is pending");
   } finally {
     await stop();
@@ -394,13 +448,13 @@ test("store: a dedupe key collapses a redelivered steer to one row", async () =>
   }
 });
 
-test("store: hasDedupeKey answers for keys already recorded", async () => {
+test("store: runForDedupeKey names the run a recorded key went to", async () => {
   const store = signalStore();
   const key = `slack:B:C1:${Date.now()}:has`;
   try {
-    assert.equal(await store.hasDedupeKey(key), false);
+    assert.equal(await store.runForDedupeKey(key), undefined);
     await store.send("r-has", { kind: "steer", text: "go", dedupeKey: key });
-    assert.equal(await store.hasDedupeKey(key), true);
+    assert.equal(await store.runForDedupeKey(key), "r-has");
   } finally {
     await store.close?.();
   }

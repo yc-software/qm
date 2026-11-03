@@ -334,7 +334,7 @@ function excerptReply(s: string): string {
 
 function transientOutcome(outcome: TriggerOutcome): boolean {
   if (outcome.authzFailed || !outcome.ran) return false;
-  return outcome.status === "queued" || (outcome.status === "failed" && isTransientErrorCode(outcome.errorCode));
+  return outcome.status === "failed" && isTransientErrorCode(outcome.errorCode);
 }
 
 function notRunnable(loop: Loop): LoopFireResult {

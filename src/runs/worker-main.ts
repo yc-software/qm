@@ -9,6 +9,7 @@ const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.refresh();

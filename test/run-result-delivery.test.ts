@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   runResultDelivery,
   wireRunResultDeliveries,
@@ -78,19 +79,17 @@ test("runResultDelivery carries the reply's attachments so recovery can replay t
 test("runResultDelivery retains the Slack policy used for private admission", () => {
   const request = {
     ...turn("hi", "DPRIVATE"),
-    slackSource: {
+    surfaceOrigin: slackSurfaceOrigin({
       accountId: "partner",
       teamId: "TPARTNER",
       userId: "U1",
-      externalPolicyNamespace: "external-slack:TPARTNER:policy",
-    },
+      policyNamespace: "external-slack:TPARTNER:policy",
+    }),
   };
   assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
     type: "slack",
     target: "DPRIVATE",
-    slackAccountId: "partner",
-    slackTeamId: "TPARTNER",
-    slackPolicyNamespace: request.slackSource.externalPolicyNamespace,
+    account: { id: "partner", workspace: "TPARTNER", policyNamespace: "external-slack:TPARTNER:policy" },
   });
 });
 
@@ -209,12 +208,6 @@ test("runResultDelivery keeps unprompted failures quiet, like the live path", ()
   assert.equal(runResultDelivery(ok)?.text, "the reply", "an unprompted reply the agent chose to send still recovers");
 });
 
-test("runResultDelivery recognizes legacy queued ambient turns", () => {
-  const failed = run({ status: "failed", result: { status: "failed", reason: "boom" } });
-  failed.request = { ...failed.request, origin: undefined, unprompted: true } as unknown as OrchestratorInput;
-  assert.equal(runResultDelivery(failed), null);
-});
-
 test("runResultDelivery skips terminal results that cannot be safely replayed", () => {
   assert.equal(runResultDelivery(run({ request: turn("hi") })), null);
   assert.equal(runResultDelivery(run({ result: { status: "refused", reason: "not allowed" } })), null);
@@ -280,7 +273,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
     const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(threadRef, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply });
     return run;
   };
@@ -288,7 +281,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const live = await finish("sB", "delivered live");
   await deliveries.ackByKey(`run:${live.id}`, Date.now());
   const silent = (await runs.enqueue({ sessionId: "sC", request: turn("c", "C9:171.001") })).run;
-  await runs.complete(silent.id, (await runs.claimForSession("sC", "w1", 5_000))?.leaseToken ?? "", {
+  await runs.complete(silent.id, (await runs.claimById(silent.id, "w1", 5_000))?.leaseToken ?? "", {
     status: "silent",
   });
   await new Promise((r) => setTimeout(r, 0));
@@ -318,7 +311,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
     finished.add(`run:${run.id}`);
   }
@@ -434,6 +427,16 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
+test("a withheld-steer note in the transcript does not suppress the run's failure entry", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { steerWithheldItem } = await import("../src/core/turn-error.ts");
+  const { sessions, session } = await failureSessions();
+  await sessions.append({ sessionId: session.id }, steerWithheldItem("U2"));
+
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
+  assert.equal((await sessions.getItems(session.id)).length, 2);
+});
+
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
@@ -526,3 +529,11 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
+  const d = runResultDelivery(
+    run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
+  );
+  assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
+  assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});

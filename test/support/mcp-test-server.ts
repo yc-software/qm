@@ -63,6 +63,7 @@ export async function startMcpTestServer(
       name: string,
       args: Record<string, unknown>,
       authorization?: string,
+      actor?: string,
     ) => CallToolResult | Promise<CallToolResult>;
     description?: string;
     instructions?: string;
@@ -93,10 +94,15 @@ export async function startMcpTestServer(
       const { name } = req.params;
       if (!tools.some((tool) => tool.name === name))
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
-      const authorization = extra.requestInfo?.headers.authorization;
+      const { authorization, "x-qm-actor": actor } = extra.requestInfo?.headers ?? {};
       const args = req.params.arguments ?? {};
       return (
-        opts.call?.(name, args, typeof authorization === "string" ? authorization : undefined) ?? {
+        opts.call?.(
+          name,
+          args,
+          typeof authorization === "string" ? authorization : undefined,
+          typeof actor === "string" ? actor : undefined,
+        ) ?? {
           content: [{ type: "text", text: `ran ${name}` }],
         }
       );

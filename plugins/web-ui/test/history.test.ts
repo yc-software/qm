@@ -531,6 +531,20 @@ test("a durable turn_failure entry renders like the live inline error (survives 
   assert.equal(err.errorMessage, "API integrators: you can reduce refusals…");
 });
 
+test("a mid-turn withheld-message note renders as a system note, not a turn failure", () => {
+  const items: Item[] = [
+    item("UserMessage", { createdAt: 100, text: "prepare the report" }),
+    item("Error", { createdAt: 110, errorCode: "steer_withheld", text: "A message from U2 was withheld." }),
+  ];
+  const msgs = itemsToMessages(items, MODEL);
+  assert.deepEqual(msgs[1], {
+    role: "system-note",
+    note: "notice",
+    content: "A message from U2 was withheld.",
+    timestamp: 110,
+  });
+});
+
 test("user items carry the stored speaker identity, name and slack ts onto the rebuilt message", () => {
   const items: Item[] = [
     item("UserMessage", {

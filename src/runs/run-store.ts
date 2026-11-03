@@ -2,7 +2,7 @@ import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 import { sleep } from "../util/async.ts";
 
@@ -20,7 +20,7 @@ export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
   if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
-  return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
+  return isPersonAuthored(request.origin.kind) ? 0 : 2;
 }
 
 export interface ReapEvent {
@@ -44,6 +44,11 @@ export type RunStop =
   | { kind: "error"; code?: string; status?: number };
 
 export const PARKED: RunStop = { kind: "parked" };
+
+export interface TurnPark {
+  requested(): boolean;
+  now(): void;
+}
 
 export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
   return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
@@ -114,9 +119,9 @@ export interface RunStore {
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
-  claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
-
   personWaiting(createdBefore: number): Promise<boolean>;
+
+  personWaitingIn(sessionIds: readonly string[], createdBefore: number): Promise<Set<string>>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
@@ -135,11 +140,7 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
-  latestForThreads(
-    threadRefs: readonly string[],
-    opts?: { excludePrivateMessages?: boolean },
-  ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;

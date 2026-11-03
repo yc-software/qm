@@ -31,6 +31,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { allGrants } from "./support/acl-grants.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -40,8 +41,9 @@ function makeDeploy(
   canManageEmail?: (email: string) => Promise<boolean>,
   externalSharing = true,
   publicLinksAvailable = true,
-): { deploy: DeployService; acl: AclStore } {
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+): { deploy: DeployService; acl: AclStore; aclUrl: string } {
+  const aclUrl = testDatabaseUrl();
+  const acl: AclStore = createAclStore(createPostgresGrantStore(aclUrl));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -57,7 +59,7 @@ function makeDeploy(
     publicLinksAvailable,
     deployDir: mkdtempSync(join(tmpdir(), "share-api-")),
   });
-  return { deploy, acl };
+  return { deploy, acl, aclUrl };
 }
 
 function apiHarness(directory?: Dir) {
@@ -532,7 +534,7 @@ test("transferDeploymentOwner is home authority — a write ('manage') grantee c
 });
 
 test("transferDeploymentOwner to the current home is a no-op", async () => {
-  const { deploy, acl } = makeDeploy();
+  const { deploy, aclUrl } = makeDeploy();
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -543,7 +545,7 @@ test("transferDeploymentOwner to the current home is a no-op", async () => {
   await deploy.transferDeploymentOwner("same", scopeId("personal", "U1"), { callerId: "U1" });
   const after = (await deploy.listDeployments()).find((x) => x.id === d.id)!;
   assert.equal(after.ownerScopeId, scopeId("personal", "U1"));
-  assert.equal((await acl.list()).length, 0, "no self-grant sprayed by a no-op transfer");
+  assert.deepEqual(await allGrants(aclUrl), [], "no self-grant sprayed by a no-op transfer");
 });
 
 test("deployment public access is explicit, owner-only, and reversible", async () => {

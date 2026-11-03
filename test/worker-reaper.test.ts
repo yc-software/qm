@@ -796,7 +796,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
   }
 });
 
-test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
+test("synchronous turns remain admitted through pause and queued intake survives rollback", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
@@ -809,6 +809,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     () => admitted,
     () => admitted,
   );
+  built.runtime.startBackground();
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -829,7 +830,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
       text: "hello",
       async,
     });
-  const running = turn("inline-before-pause");
+  const running = turn("sync-before-pause");
   try {
     await completing.promise;
     admitted = false;
@@ -840,7 +841,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     });
     await sleep(10);
     assert.equal(drained, false);
-    assert.equal((await turn("inline-after-pause")).status, "refused");
+    assert.equal((await turn("sync-after-pause")).status, "refused");
     const queued = await turn("queued-after-pause", true);
     assert.equal(queued.status, "queued");
     assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
@@ -850,7 +851,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     admitted = true;
     built.runtime.startBackground();
     assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
-    assert.equal((await turn("inline-after-resume")).status, "ok");
+    assert.equal((await turn("sync-after-resume")).status, "ok");
   } finally {
     release.resolve();
     await running;
@@ -939,7 +940,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
           actor: { externalId: "U1" },
           conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
           text: "test message",
-          liveActor: true,
+          origin: { kind: "human" },
           async: true,
           [flag]: true,
         });
@@ -956,7 +957,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   }
 });
 
-test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
+test("final shutdown holds a synchronous turn's lease until the step unwinds, then hands the run back", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")),
     workers: 1,
@@ -990,7 +991,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
       stopped = true;
     });
     await sleep(300);
-    assert.equal(stopped, false, "stop waits for the inline step to unwind");
+    assert.equal(stopped, false, "stop waits for the running step to unwind");
     assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
     assert.equal((await built.runs.claim("replacement", 5_000))[0] ?? null, null);
     gate.resolve();
@@ -1069,4 +1070,31 @@ test("runtime shutdown contains store close failures and waits for remaining sto
     release.resolve();
     await stopping;
   }
+});
+
+test("a deploy during a park wait stops the turn as a deploy", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const enq = (await runs.enqueue({ sessionId: "t-park", request: turn, maxAttempts: 3 })).run;
+  const started = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      started.resolve();
+      await new Promise((resolve) => input.shutdown!.addEventListener("abort", resolve, { once: true }));
+      return { status: "silent" as const, sessionId: "t-park", stopped: true };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started.promise;
+  worker.held()[0]!.parkRequested = true;
+  await sleep(50);
+  assert.equal((await runs.get(enq.id))!.status, "running", "a park waits for the step to end");
+  await worker.stop(1);
+  const releasedAt = Date.now();
+  await worker.releaseInFlight();
+  assert.ok(Date.now() - releasedAt < SHUTDOWN_SETTLE_MS, "the deploy does not wait for the step");
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
+  assert.equal(handedBack.preemptions, 0);
 });
