@@ -1,11 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { z } from "zod";
 
-const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const TENANT_ID = z.uuid().lowercase();
 
 const binding = new AsyncLocalStorage<string | undefined>();
 
 export function isTenantId(value: unknown): value is string {
-  return typeof value === "string" && TENANT_ID.test(value);
+  return TENANT_ID.safeParse(value).success;
 }
 
 export function withTenant<T>(id: string, fn: () => T): T {

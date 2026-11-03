@@ -175,10 +175,8 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
 
 async function beginTransaction(client: PoolClient): Promise<void> {
   const settings = tenantSettings();
-  const begin = client.query("BEGIN");
-  if (!settings.length) return void (await begin);
-  if (!(client as PoolClient & { pipeline: boolean }).pipeline) await begin;
-  await Promise.all([begin, client.query(settingsQuery(settings))]);
+  await client.query("BEGIN");
+  if (settings.length) await client.query(settingsQuery(settings));
 }
 
 export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {

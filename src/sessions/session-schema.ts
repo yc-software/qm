@@ -303,4 +303,20 @@ const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
 };
 
-export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA, MESSAGE_SEARCH_INDEX, DROP_ITEMS_SEARCH];
+const TENANT_BACKFILL: PgMigrationDefinition = {
+  id: "sessions/store/0050-tenant-backfill",
+  statements: [
+    `INSERT INTO tenants(id, slug, name)
+     SELECT id, id::text, id::text FROM qm_tenant
+      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
+     ON CONFLICT (id) DO NOTHING`,
+  ],
+};
+
+export const SESSION_MIGRATIONS = [
+  TENANCY_BASE,
+  SESSION_SCHEMA,
+  MESSAGE_SEARCH_INDEX,
+  DROP_ITEMS_SEARCH,
+  TENANT_BACKFILL,
+];
