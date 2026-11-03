@@ -235,13 +235,15 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("direct cron reads and mutations require the portal actor as principalId", async () => {
-    const cron = await built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "private task",
-    });
+    const cron = await inTestTenant(() =>
+      built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "private task",
+      }),
+    );
     const path = `/v1/crons/${encodeURIComponent(cron.id)}`;
     const alice = await token("U1");
     for (const [method, suffix] of [

@@ -1,5 +1,6 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -113,39 +114,54 @@ const MAX_ID_LENGTH = 255;
 const MAX_EVIDENCE_LENGTH = 500;
 const REFRESH_TTL_MS = 10_000;
 
+interface TenantLinks {
+  byAlias: Map<string, PrincipalLink>;
+  byCanonical: Map<string, PrincipalLink[]>;
+  refresh(force?: boolean): Promise<void>;
+}
+
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
 export function createPrincipalLinkService(store: PrincipalLinkStore, lock: AdvisoryLock): PrincipalLinkService {
-  const byAlias = new Map<string, PrincipalLink>();
-  const byCanonical = new Map<string, PrincipalLink[]>();
+  const tenants = new Map<string, TenantLinks>();
 
-  function index(rows: PrincipalLink[]): void {
-    byAlias.clear();
-    byCanonical.clear();
-    for (const row of rows) {
-      byAlias.set(foldPrincipalId(row.principalId), row);
-      const key = foldPrincipalId(row.canonicalId);
-      const list = byCanonical.get(key) ?? [];
-      list.push(row);
-      byCanonical.set(key, list);
-    }
+  function tenantLinks(): TenantLinks {
+    const tenant = currentTenant();
+    const existing = tenants.get(tenant);
+    if (existing) return existing;
+    const created: TenantLinks = {
+      byAlias: new Map(),
+      byCanonical: new Map(),
+      refresh: createTtlRefresh(REFRESH_TTL_MS, async () => {
+        const rows = await store.list();
+        created.byAlias.clear();
+        created.byCanonical.clear();
+        for (const row of rows) {
+          created.byAlias.set(foldPrincipalId(row.principalId), row);
+          const key = foldPrincipalId(row.canonicalId);
+          created.byCanonical.set(key, [...(created.byCanonical.get(key) ?? []), row]);
+        }
+      }),
+    };
+    tenants.set(tenant, created);
+    return created;
   }
 
-  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.list()));
+  const refresh = (force?: boolean): Promise<void> => tenantLinks().refresh(force);
 
   return {
     canonical(key) {
-      return byAlias.get(key)?.canonicalId;
+      return tenantLinks().byAlias.get(key)?.canonicalId;
     },
     aliases(key) {
-      return (byCanonical.get(key) ?? []).map((row) => row.principalId);
+      return (tenantLinks().byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
     async list() {
       await refresh(true);
-      return [...byAlias.values()].sort(
+      return [...tenantLinks().byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
     },
@@ -165,6 +181,7 @@ export function createPrincipalLinkService(store: PrincipalLinkStore, lock: Advi
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
+        const { byAlias, byCanonical } = tenantLinks();
         const existing = byAlias.get(aliasKey);
         if (existing) {
           if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
