@@ -264,7 +264,7 @@ async function ensurePostgres(ctx: DockerCtx, dryRun: boolean): Promise<string> 
   return withDeploymentLock(join(deploymentDir(ctx.config.deploymentId), "up.lock"), async () => {
     const state = readDeploymentState(ctx.config.deploymentId);
     let password: string;
-    const existing = pgContainerPassword(pgName);
+    const existing = containerExists(pgName) ? pgContainerPassword(pgName) : undefined;
     if (existing) {
       password = existing;
     } else if (volumeExists(pgVolume(ctx))) {

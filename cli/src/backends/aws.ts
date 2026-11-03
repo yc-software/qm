@@ -402,13 +402,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       S3_REGION: aws.region,
     };
     if (sandboxBackend && sandboxBackend !== "aws") {
-      Object.assign(env, sandboxCoreEnv(config).env, {
-        SANDBOX_BACKEND: sandboxBackend,
-        ...stores,
-      });
+      Object.assign(env, sandboxCoreEnv(config).env, stores);
     } else {
       Object.assign(env, {
-        SANDBOX_BACKEND: "aws",
         AWS_SANDBOX_REGION: aws.region,
         AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
         AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",

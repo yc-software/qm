@@ -150,8 +150,10 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
+const brokerIssuer = (publicUrl: string): string => `${publicUrl.replace(/\/$/, "")}${AUTH_PATH_PREFIX}`;
+
 export function portalBrokerSignIn(publicUrl: string, allowedEmailDomain?: string): Record<string, string> {
-  const issuer = `${publicUrl.replace(/\/$/, "")}${AUTH_PATH_PREFIX}`;
+  const issuer = brokerIssuer(publicUrl);
   return {
     OIDC_CLIENT_ID: AUTH_CLIENT_ID,
     OIDC_ISSUER: issuer,
@@ -167,7 +169,7 @@ export function portalBrokerSignIn(publicUrl: string, allowedEmailDomain?: strin
 
 export function brokerWiring(service: string, o: { publicUrl: string; authBaseUrl: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
-  const issuer = `${base}${AUTH_PATH_PREFIX}`;
+  const issuer = brokerIssuer(base);
   if (service === "portal") {
     return {
       AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
@@ -261,23 +263,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
         ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
       }),
-      stackKeys: [
-        "PORTAL_PUBLIC_URL",
-        "OIDC_CLIENT_ID",
-        "OIDC_ALLOWED_EMAILS",
-        "OIDC_ALLOWED_EMAIL_DOMAIN",
-        "PORTAL_EXPECTED_TEAM_ID",
-        "OIDC_AUTH_ENDPOINT",
-        "OIDC_TOKEN_ENDPOINT",
-        "OIDC_USERINFO_ENDPOINT",
-        "OIDC_ISSUER",
-        "OIDC_JWKS_URI",
-        "OIDC_SCOPES",
-        "OIDC_PRINCIPAL_CLAIM",
-        "OIDC_PROMPT",
-        "AUTH_BROKER_UPSTREAM",
-        "AUTH_BROKER_PREFIX",
-      ],
+      stackKeys: ["PORTAL_PUBLIC_URL", "AUTH_BROKER_UPSTREAM", "AUTH_BROKER_PREFIX"],
       deployFlags: ["--ha=false"],
     },
   },

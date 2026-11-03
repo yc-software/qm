@@ -60,13 +60,9 @@ export function externalDockerOwnerUrl(envFile: string | undefined): string | un
 }
 
 export function pgContainerPassword(container: string): string | undefined {
-  try {
-    return capture("docker", ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container])
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.startsWith("POSTGRES_PASSWORD="))
-      ?.slice("POSTGRES_PASSWORD=".length);
-  } catch {
-    return undefined;
-  }
+  return capture("docker", ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container])
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("POSTGRES_PASSWORD="))
+    ?.slice("POSTGRES_PASSWORD=".length);
 }

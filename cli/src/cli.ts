@@ -202,13 +202,9 @@ ${dim("status/logs/down act on the configured target. Fly uses Fly Machines; AWS
 const deploymentBackend = (ctx: DeployContext) => hostingProvider(ctx.target).createBackend(ctx);
 
 function configDeploymentId(path: string): string | undefined {
-  try {
-    const raw: unknown = parseConfigJson(readFileSync(path, "utf8"));
-    const id = raw && typeof raw === "object" ? (raw as Record<string, unknown>).deploymentId : undefined;
-    return typeof id === "string" && validDeploymentId(id) ? id : undefined;
-  } catch {
-    return undefined;
-  }
+  const raw: unknown = parseConfigJson(readFileSync(path, "utf8"));
+  const id = raw && typeof raw === "object" ? (raw as Record<string, unknown>).deploymentId : undefined;
+  return typeof id === "string" && validDeploymentId(id) ? id : undefined;
 }
 
 const settingsTarget = (provider: HostingProvider, ctx: DeployContext): TenantSettingsTarget => ({
