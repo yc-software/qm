@@ -97,7 +97,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       idempotencyKey,
     };
   }
-  if (webhook && run.result)
+  const nothingToShow = !provenance.sourceRequestId && (run.result?.status === "ok" || run.result?.status === "silent");
+  if (webhook && run.result && !nothingToShow)
     return { destination, text: standaloneFailureText(run.result) ?? "", provenance, idempotencyKey };
   return null;
 }

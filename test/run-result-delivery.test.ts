@@ -520,10 +520,8 @@ test("bound webhook results identify every terminal outcome for native receiver 
       pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
     },
     { status: "react", reactions: ["thumbsup"] },
-    { status: "silent" },
     { status: "refused", reason: "not permitted" },
     { status: "failed", reason: "connection failed" },
-    { status: "ok", reply: "" },
   ];
   for (const result of results) {
     const request = {
@@ -535,6 +533,26 @@ test("bound webhook results identify every terminal outcome for native receiver 
     assert.equal(delivery?.provenance.sourceRunId, "r-1");
     assert.equal(delivery?.text, "");
     assert.equal(delivery?.destination.type, "webhook");
+  }
+  for (const result of [{ status: "silent" }, { status: "ok", reply: "" }] as TurnResult[]) {
+    const bound = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
+    };
+    assert.equal(
+      runResultDelivery(run({ request: bound, result })),
+      null,
+      "a background run with nothing to show sends nothing",
+    );
+    const waiting = { ...bound, origin: { kind: "human" as const }, idempotencyKey: "external-request-123" };
+    const closing = runResultDelivery(run({ request: waiting, result, dedupKey: "external-request-123" }));
+    assert.equal(
+      closing?.provenance.sourceRequestId,
+      "external-request-123",
+      "a waiting caller still gets its terminal delivery",
+    );
+    assert.equal(closing?.text, "");
   }
   const failed = runResultDelivery(
     run({
