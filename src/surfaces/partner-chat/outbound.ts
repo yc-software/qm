@@ -188,7 +188,8 @@ export function createPartnerChatDeliveries(deps: {
 
   async function deliver(d: Delivery): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
-    const body = d.text.trim();
+    const text = d.text.trim();
+    const body = text && d.destination.editNote ? `${text}\n\n${d.destination.editNote}` : text;
     if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
     if (d.destination.react || d.destination.delete || d.destination.pin || d.attachments?.length || !body)
       throw new PartnerChatHttpError(400, "only non-empty text posts and edits are supported");

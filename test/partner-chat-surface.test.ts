@@ -368,7 +368,12 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
     );
     assert.deepEqual(fake.slots, [[R1, { editRef: "43" }]]);
     await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER, editRef: "43" },
+      destination: {
+        type: "partner-chat",
+        target: CONTAINER,
+        editRef: "43",
+        editNote: "Edited after a reply check: em dash",
+      },
       text: "Here is the full answer",
       idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:0`,
     });
@@ -381,7 +386,7 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
     assert.deepEqual(
       partnerChat.received.slice(2).map((r) => [r.path, r.body]),
       [
-        ["/qm_surface/messages/43/update", { body: "Here is the full answer" }],
+        ["/qm_surface/messages/43/update", { body: "Here is the full answer\n\nEdited after a reply check: em dash" }],
         ["/qm_surface/messages/1021/update", { body: "edited by ref" }],
       ],
     );
@@ -394,7 +399,7 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
       [
         ["42", "1009", "scheduled hello", true, false],
         ["43", null, "Looking into it", true, false],
-        ["43", null, "Here is the full answer", true, true],
+        ["43", null, "Here is the full answer\n\nEdited after a reply check: em dash", true, true],
       ],
     );
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
@@ -672,7 +677,18 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
       result: { status: "refused", reason: "project membership changed; retry from the current project" },
     }),
   );
-  await settle(async () => (await deliveries.pending("partner-chat")).length === 3);
+  live.settle(run(6, { editRef: "42", result: { status: "pending_approval" } }));
+  live.unanswered(
+    {
+      status: "pending_approval",
+      reason: "This conversation is waiting for someone else to resolve a pending approval.",
+    },
+    destination,
+    "notice:m7",
+  );
+  live.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
+  live.unanswered({ status: "silent" }, destination, "notice:m9");
+  await settle(async () => (await deliveries.pending("partner-chat")).length === 6);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
@@ -682,6 +698,9 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
         destination.target,
         "⚠️ I couldn't finish that turn: project membership changed; retry from the current project",
       ],
+      [`notice:${id(6)}`, destination.target, "This conversation is waiting on a pending approval."],
+      ["notice:m7", destination.target, "This conversation is waiting for someone else to resolve a pending approval."],
+      ["notice:m8", destination.target, "⚠️ I couldn't finish that turn: empty message"],
       [`placeholder:${R1}`, destination.target, "…"],
       [`settle:${id(4)}`, destination.target, "✓"],
     ],

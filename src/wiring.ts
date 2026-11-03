@@ -2465,6 +2465,7 @@ export function buildApp(
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
           followReply: partnerChatLiveReply.follow,
+          unansweredReply: partnerChatLiveReply.unanswered,
         })
       : null;
   const partnerChatOutbound = config.partnerChat

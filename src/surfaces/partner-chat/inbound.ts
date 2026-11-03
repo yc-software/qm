@@ -1,6 +1,6 @@
 import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
-import type { Destination } from "../../types.ts";
+import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../context-window.ts";
@@ -26,6 +26,7 @@ export function createPartnerChatInbound(deps: {
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
   followReply: (runId: string, destination: Destination) => void;
+  unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => void;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -151,12 +152,14 @@ export function createPartnerChatInbound(deps: {
       async: true,
       redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });
-    if (queued.runId && !queued.steered)
-      deps.followReply(queued.runId, {
-        type: SURFACE,
-        target: replyTarget,
-        account: { id: event.account, workspace: event.account },
-      });
+    const destination = {
+      type: SURFACE,
+      target: replyTarget,
+      account: { id: event.account, workspace: event.account },
+    };
+    if (queued.runId && !queued.steered) deps.followReply(queued.runId, destination);
+    else if (!queued.runId)
+      deps.unansweredReply(queued, destination, `notice:${SURFACE}:${event.account}:${chat.id}:${message.id}`);
     return { status: 200, body: { ok: true } };
   }
 
