@@ -13,6 +13,7 @@ import {
 import { withTenant } from "../src/tenants/context.ts";
 import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -89,6 +90,34 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
       (await s.built.auditLog.events()).filter((e) => e.action === "spend.export"),
       [],
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("spend export: an offline-minted token needs aud, actorId of a current org admin, scopeId and a future exp, and no tenant", async () => {
+  const s = fixture();
+  const handoff = {
+    orgId: "default-org",
+    actorId: "admin-alice",
+    scopeId: "org:default-org",
+    aud: SPEND_EXPORT_AUD,
+    exp: Date.now() + DAY,
+  };
+  const status = async (claims: Record<string, unknown>) =>
+    (
+      await s.get(`/v1/spend/export?${window}`, {
+        authorization: `Bearer ${await mintSignedPayload(claims, capabilitySecret)}`,
+      })
+    ).status;
+  try {
+    assert.equal(await status(handoff), 200);
+    for (const claim of ["aud", "actorId", "scopeId", "exp"] as const) {
+      const { [claim]: _dropped, ...without } = handoff;
+      assert.notEqual(await status(without), 200, `without ${claim}`);
+    }
+    assert.equal(await status({ ...handoff, actorId: "rando" }), 401, "not an admin");
+    assert.equal(await status({ ...handoff, exp: Date.now() - 1 }), 401, "expired");
   } finally {
     await s.close();
   }
