@@ -173,6 +173,7 @@ test("allow-listed calls relay their method, query and body", async () => {
     ["GET", "memory?scope=org%3Aacme", undefined],
     ["POST", "grants", { principalId: "U1", role: "org_admin", scopeId: "org:acme" }],
     ["DELETE", "skill-packs/s1", undefined],
+    ["DELETE", "memory?scope=personal%3AU1", { ids: ["3"] }],
   ] as const) {
     const { response, hops } = await call(method, `/api/admin/${path}`, body);
     assert.equal(response.status, 200, `${method} ${path}`);

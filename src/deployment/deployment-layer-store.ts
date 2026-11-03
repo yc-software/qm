@@ -3,13 +3,14 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ScopeId } from "../types.ts";
 import {
+  foreignSkillCollision,
   safeSkillFilePath,
   type Skill,
   type SkillFile,
   type SkillManifest,
   type SkillStore,
 } from "../skills/skill-store.ts";
-import { foreignSkillCollision, parseSeedSkill, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
+import { parseSeedSkill, sameManifest, upsertSeedSkill } from "../skills/seed.ts";
 import {
   bundleFilePaths,
   detectPathCollisions,
