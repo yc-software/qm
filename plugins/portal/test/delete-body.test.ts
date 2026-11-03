@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
 const upstream = createServer(async (req: IncomingMessage, res) => {
@@ -12,9 +13,10 @@ const upstream = createServer(async (req: IncomingMessage, res) => {
 await new Promise<void>((r) => upstream.listen(0, r));
 const upstreamUrl = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 
-process.env.PORTAL_PUBLIC_URL = "http://localhost:18198";
-process.env.PORTAL_SESSION_SECRET = "body-framing-test-portal-secret";
-process.env.CORE_SIGNING_SECRET = "body-framing-test-core-secret";
+const origin = "http://localhost:18198";
+process.env.PORTAL_PUBLIC_URL = origin;
+process.env.PORTAL_SESSION_SECRET = randomUUID();
+process.env.CORE_SIGNING_SECRET = randomUUID();
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
@@ -34,7 +36,7 @@ const forget = JSON.stringify({ ids: ["78"] });
 test("forgetting a memory fact reaches the web UI with its body", async () => {
   const res = await fetch(`http://localhost:${port}/api/memory`, {
     method: "DELETE",
-    headers: { "content-type": "application/json", origin: process.env.PORTAL_PUBLIC_URL ?? "" },
+    headers: { "content-type": "application/json", origin },
     body: forget,
   });
   assert.equal(res.status, 200);
@@ -51,7 +53,7 @@ test("a chunked DELETE body reaches the web UI whole", async () => {
         headers: {
           "content-type": "application/json",
           "transfer-encoding": "chunked",
-          origin: process.env.PORTAL_PUBLIC_URL ?? "",
+          origin,
         },
       },
       (res) => {
