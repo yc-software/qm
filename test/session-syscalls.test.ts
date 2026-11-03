@@ -14,11 +14,11 @@ import {
   SUBAGENT_TREE_RUN_CAP,
   requiresDelegation,
   sessionTreeRunCount,
-  delegatedAuthorizationOrigin,
-  heldAuthority,
   stopSessionTree,
   sessionContextOf,
 } from "../src/sessions/session-syscalls.ts";
+import { delegatedAuthorizationOrigin, heldAuthority } from "../src/sessions/delegated-authority.ts";
+import { isSessionTurn } from "../src/core/turn-origin.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -1228,7 +1228,10 @@ test("no wake once the parent already consumed the completion", async () => {
 });
 
 async function liveTurnApi(r: Rig, session: Session, run: Run) {
-  const authority = await heldAuthority(run.request, r);
+  const authority = heldAuthority(
+    run.request,
+    isSessionTurn(run.request) ? await delegatedAuthorizationOrigin(run.request, r) : undefined,
+  );
   return createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session,
     scopeId: scope,

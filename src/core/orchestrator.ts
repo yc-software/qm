@@ -17,12 +17,8 @@ import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import {
-  requiresDelegation,
-  delegatedAuthorizationOrigin,
-  ownsSessionContext,
-  sessionContextOf,
-} from "../sessions/session-syscalls.ts";
+import { requiresDelegation, ownsSessionContext, sessionContextOf } from "../sessions/session-syscalls.ts";
+import { delegatedAuthorizationOrigin, heldAuthority } from "../sessions/delegated-authority.ts";
 import {
   documentText,
   type DocumentInput,
@@ -505,6 +501,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external &&
         ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
         allInternal;
+      const turnAuthority = liveAuthorTurn ? heldAuthority(input, delegatedOrigin) : undefined;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -2570,7 +2567,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
-                  ...(liveAuthorTurn ? { authority: delegatedOrigin ?? input.origin } : {}),
+                  ...(turnAuthority ? { authority: turnAuthority } : {}),
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }

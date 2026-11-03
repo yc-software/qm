@@ -5,7 +5,6 @@ import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
-import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -16,8 +15,9 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { delegatedAuthorizationOrigin, heldAuthority } from "./delegated-authority.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 
@@ -39,67 +39,6 @@ export function requiresDelegation(
   );
 }
 
-export async function delegatedAuthorizationOrigin(
-  request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
-): Promise<OrchestratorInput["origin"] | undefined> {
-  if (
-    request.origin.kind === "automation" ||
-    request.readOnly ||
-    request.privateSessionMessage ||
-    request.swarm ||
-    !request.delegatingRunId ||
-    !request.sessionSenderId
-  )
-    return;
-  const source = await deps.runs.get(request.delegatingRunId);
-  if (!source)
-    console.warn(
-      `[authority] delegating run ${request.delegatingRunId} of ${request.conversation.threadRef} is gone; no inherited authority`,
-    );
-  const sender = await deps.sessions.getForParticipant(request.sessionSenderId, request.actor.id);
-  const child = await deps.sessions.getByThread(request.conversation.threadRef);
-  if (!source || !sender || !child) return;
-  const delegated =
-    isSubagentThreadRef(child.threadRef) &&
-    child.parentSessionId === sender.id &&
-    source.sessionId === sender.threadRef;
-  const continued =
-    isSubagentThreadRef(sender.threadRef) &&
-    sender.parentSessionId === child.id &&
-    source.sessionId === child.threadRef;
-  const started =
-    request.surface === "web" &&
-    !child.parentSessionId &&
-    !isSubagentThreadRef(child.threadRef) &&
-    source.sessionId === sender.threadRef;
-  if (!delegated && !continued && !started) return;
-  const parent = source.request;
-  if (!authorityReaches(parent, request, sender, child)) return;
-  if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
-  if (!delegated && !continued) return;
-  const claim = request.delegatedAuthority;
-  if (!claim || claim.kind !== request.origin.kind) return;
-  if (!(await treeIntact(deps.sessions, delegated ? child : sender))) return;
-  const granted = { conversation: parent.conversation, origin: claim };
-  return humanAuthored(granted) ? claim : undefined;
-}
-
-async function treeIntact(sessions: Pick<SessionStore, "get">, subagent: Session): Promise<boolean> {
-  const chain = [subagent, ...(await sessionAncestors(sessions, subagent))];
-  return (
-    !isSubagentThreadRef(chain.at(-1)!.threadRef) && chain.every((session) => session.scopeId === subagent.scopeId)
-  );
-}
-
-export async function heldAuthority(
-  request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
-): Promise<OrchestratorInput["origin"] | undefined> {
-  if (isSessionTurn(request)) return delegatedAuthorizationOrigin(request, deps);
-  return humanAuthored(request) ? request.origin : undefined;
-}
-
 function automationContext(base: SpawnMeta, actor: OrchestratorInput["actor"]): SpawnMeta {
   return {
     ...base,
@@ -112,39 +51,6 @@ function automationContext(base: SpawnMeta, actor: OrchestratorInput["actor"]): 
     },
     unattendedGrants: undefined,
   };
-}
-
-function authorityReaches(
-  parent: Pick<OrchestratorInput, "actor" | "conversation" | "readOnly" | "privateSessionMessage" | "swarm">,
-  request: OrchestratorInput,
-  sender: Session,
-  child: Session,
-): boolean {
-  const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
-  return !(
-    parent.actor.id !== request.actor.id ||
-    parent.actor.type !== "internal" ||
-    parent.readOnly ||
-    parent.privateSessionMessage ||
-    parent.swarm ||
-    sender.scopeId !== child.scopeId ||
-    child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
-    child.scopeId !== conversationScope(request.conversation, request.actor.id) ||
-    request.conversation.audience.some((person) => !audience.has(person.id))
-  );
-}
-
-function humanAuthored(parent: Pick<OrchestratorInput, "conversation" | "origin">): boolean {
-  const internal =
-    parent.conversation.audience.every((person) => person.type === "internal") &&
-    (parent.conversation.kind === "dm" ||
-      (!!parent.conversation.publishMembers?.length &&
-        parent.conversation.publishMembers.every((person) => person.type === "internal")));
-  return (
-    internal &&
-    (parent.origin.kind === "human" ||
-      (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
-  );
 }
 
 export function ownsSessionContext(
@@ -471,7 +377,7 @@ function assertAudienceCompatible(
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
-async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
+export async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
   const ancestors: Session[] = [];
   let current = session;
   const seen = new Set<string>();
@@ -543,17 +449,21 @@ async function sessionRunCancelled(
   signals: Pick<RunSignalStore, "pending">,
   runId: string | undefined,
 ): Promise<boolean> {
+  if (!runId) return false;
+  const current = await runs.get(runId);
+  if (!current) return true;
+  let run: Run = current;
   const seen = new Set<string>();
-  while (runId) {
-    if (seen.has(runId)) return true;
-    const run = await runs.get(runId);
-    if (!run) return seen.size === 0;
-    seen.add(runId);
-    if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
+  for (;;) {
+    if (seen.has(run.id)) return true;
+    seen.add(run.id);
+    if (run.result?.stopped || (await signals.pending(run.id)).some(({ signal }) => signal.kind === "abort"))
       return true;
-    runId = run.request.delegatingRunId;
+    if (run.id !== runId && isTerminal(run.status)) return false;
+    const next: Run | null = run.request.delegatingRunId ? await runs.get(run.request.delegatingRunId) : null;
+    if (!next) return false;
+    run = next;
   }
-  return false;
 }
 
 export async function stopSessionTree(
@@ -1175,16 +1085,21 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
   });
-  const inherited = { ...meta } as typeof meta & { openFingerprint?: string; delegatedAuthority?: TurnOrigin };
-  delete inherited.openFingerprint;
-  delete inherited.delegatedAuthority;
+  const inherited = { ...meta };
+  delete (inherited as Partial<SpawnMeta>).openFingerprint;
   const delegatedAuthority =
-    initiatingRun && deps.runs.get
-      ? await heldAuthority(initiatingRun.request, { runs: { get: deps.runs.get }, sessions: deps.sessions })
-      : undefined;
+    initiatingRun &&
+    heldAuthority(
+      initiatingRun.request,
+      deps.runs.get && isSessionTurn(initiatingRun.request)
+        ? await delegatedAuthorizationOrigin(initiatingRun.request, {
+            runs: { get: deps.runs.get },
+            sessions: deps.sessions,
+          })
+        : undefined,
+    );
   const request: OrchestratorInput = {
     ...inherited,
-    ...(delegatedAuthority ? { delegatedAuthority } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,
@@ -1210,6 +1125,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "privateSessionMessage",
     "sessionMessageDepth",
     "delegatingRunId",
+    "delegatedAuthority",
     "swarm",
     "approval",
     "proactiveOpener",
@@ -1223,6 +1139,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "conversationHeader",
   ] as const)
     delete request[key];
+  if (delegatedAuthority) request.delegatedAuthority = delegatedAuthority;
   if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(run.request, prepared);
