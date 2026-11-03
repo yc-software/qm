@@ -496,6 +496,67 @@ for (const stopBeforeIntake of [false, true]) {
   });
 }
 
+test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const agent = createAgent({ apiKey: "sk-test", signals });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 2) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: `poll-job-${calls}`, name: "background", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ action: "poll", process_id: "job-1", wait_seconds: calls === 1 ? 30 : 1 }),
+      },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  const waits: Array<number | undefined> = [];
+  try {
+    const started = Date.now();
+    const result = await agent.runTurn(
+      turnInput("steer-poll", sink, {
+        runId: "steer-poll",
+        tools: {
+          backgroundPoll: async (processId: string, opts?: { waitSeconds?: number }) => {
+            waits.push(opts?.waitSeconds);
+            if (opts?.waitSeconds === 30) {
+              await signals.send("steer-poll", { kind: "steer", text: "check the other job", ts: "poll.1" });
+              await new Promise((resolve) => setTimeout(resolve, 30_000).unref());
+            }
+            if (opts?.waitSeconds === 1) await new Promise((resolve) => setTimeout(resolve, 1_000));
+            return { processId, chunks: "still building", cursor: 14, status: { state: "running" } };
+          },
+        } as unknown as AgentTurnInput["tools"],
+      }),
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 10_000, "the steer does not wait out the 30 s poll");
+    assert.ok(elapsed >= 1_000, "a wait after the steer landed is not woken again");
+    assert.equal(result.reply, "done");
+    assert.deepEqual(waits, [30, undefined, 1]);
+    assert.deepEqual(
+      sink.entries.map((entry) => entry.type),
+      ["user", "tool_call", "tool_result", "user", "tool_call", "tool_result", "assistant"],
+    );
+    assert.equal((sink.entries[3]!.payload as { ts?: string }).ts, "poll.1");
+    assert.match(String((sink.entries[2]!.payload as { result?: unknown }).result), /still building/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
+  }
+});
+
 test("a consumed steer is recorded when its acknowledgement fails", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   signals.acknowledge = async () => {

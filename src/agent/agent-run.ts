@@ -1137,6 +1137,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         let thinkTail: Promise<unknown> = Promise.resolve();
         let triggerSeen = continueTurn;
         const toolAbort = new AbortController();
+        let steerWake = new AbortController();
+        entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
@@ -1164,6 +1166,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             const text = textFromContent((message as { content?: unknown }).content);
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
+              steerWake = new AbortController();
+              entry.ref.steered = steerWake.signal;
+            }
             persist(() =>
               steer
                 ? recordSteerIntake(turn, steer)
@@ -1292,6 +1298,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                           data: image.dataBase64,
                         })),
                       );
+                      steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
                       if (at >= 0) pendingSteers.splice(at, 1);
@@ -1524,6 +1531,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
+          entry.ref.steered = undefined;
           entry.ref.screenToolResult = undefined;
         }
         if (persistError) throw persistError;
