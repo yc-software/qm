@@ -334,7 +334,7 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployDeps = { ...singleProcessDeps(), acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())) };
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
@@ -469,7 +469,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     });
     assert.equal(forgedApproval.status, "refused");
     const deploy = createDeployService({
-      ...singleProcessDeps(),
+      ...deployDeps,
       deployStore: createDeployStore(testDeployBackings()),
       provider: {
         profile: { managedScaleToZero: false },
@@ -477,7 +477,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         destroy: async () => {},
       },
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: deployAcl,
       deployDir: mkdtempSync(join(tmpdir(), "project-deploy-")),
       canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),
     });
@@ -487,7 +486,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('ready')" }],
     });
-    await deployAcl.grant({
+    await deployDeps.acl.grant({
       ownerScopeId: "personal:owner",
       ref: `deployment:${deployment.id}`,
       granteeScopeId: scope,

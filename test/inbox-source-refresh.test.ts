@@ -703,44 +703,44 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
     assert.equal(events[0]!.scopeLabel, "personal:owner");
   }));
 
-test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
-  const flags = testFeatureFlagStore();
-  await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
-  for (const mode of [undefined, "avatars"] as const) {
-    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-    const before = structuredClone(item);
-    const calls: string[] = [];
-    let credentials = 0;
-    const refresh = createInboxSourceRefresh({
-      items,
-      featureFlags: flags,
-      tokens: {
-        connectorAccessToken: async () => {
-          credentials++;
-          return "synthetic-token";
+test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", () =>
+  inTestTenant(async () => {
+    const flags = testFeatureFlagStore();
+    await flags.setEnabled("inbox_loops", "personal:someone-else", true, "admin");
+    for (const mode of [undefined, "avatars"] as const) {
+      const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+      const before = structuredClone(item);
+      const calls: string[] = [];
+      let credentials = 0;
+      const refresh = createInboxSourceRefresh({
+        items,
+        featureFlags: flags,
+        tokens: {
+          connectorAccessToken: async () => {
+            credentials++;
+            return "synthetic-token";
+          },
         },
-      },
-      directory,
-      fetchImpl: slackFetch(calls),
-    });
-    await refresh("owner", [item], mode);
-    assert.equal(credentials, 0);
-    assert.deepEqual(calls, []);
-    assert.deepEqual(await items.get(item.id), before);
-    await flags.setEnabled("inbox_loops", "personal:owner", true, "admin");
-    await refresh("owner", [item], mode);
-    assert.equal(credentials > 0 && calls.length > 0, mode === undefined);
-    const enriched = (await items.get(item.id))!;
-    assert.ok(enriched.sourcePayload?.participants);
-    await flags.setEnabled("inbox_loops", "personal:owner", false, "admin");
-    credentials = 0;
-    calls.length = 0;
-    await refresh("owner", [{ ...enriched, sourceAt: 3000 }], mode);
-    assert.equal(credentials, 0);
-    assert.deepEqual(calls, []);
-    assert.deepEqual(await items.get(item.id), enriched);
-  }
-});
+        directory,
+        fetchImpl: slackFetch(calls),
+      });
+      await refresh("owner", [item], mode);
+      assert.equal(credentials, 0);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(await items.get(item.id), before);
+      await flags.setEnabled("inbox_loops", "personal:owner", true, "admin");
+      await refresh("owner", [item], mode);
+      assert.equal(credentials > 0 && calls.length > 0, mode === undefined);
+      const enriched = (await items.get(item.id))!;
+      assert.ok(enriched.sourcePayload?.participants);
+      await flags.setEnabled("inbox_loops", "personal:owner", false, "admin");
+      calls.length = credentials = 0;
+      await refresh("owner", [{ ...enriched, sourceAt: 3000 }], mode);
+      assert.equal(credentials, 0);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(await items.get(item.id), enriched);
+    }
+  }));
 
 test("Slack-id principals and items without a known sender use only the directory", async () => {
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
