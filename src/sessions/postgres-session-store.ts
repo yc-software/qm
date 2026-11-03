@@ -6,7 +6,7 @@ import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
-import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
+import type { Session, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import type {
   NewSessionPin,
@@ -19,10 +19,9 @@ import type {
   ParticipantPageQuery,
   ParticipantScope,
   SessionDescendant,
-  GetEntriesOptions,
+  GetItemsOptions,
   SessionWriter,
   LlmRequestRecord,
-  NewEntry,
   NewLlmRequest,
   ParticipantWindow,
   SessionOrigin,
@@ -42,19 +41,18 @@ import {
   sessionOrigin,
   userMessagePreview,
   isWebThread,
-  isOverheardEntry,
   DuplicateCallError,
 } from "./session-store.ts";
 import {
-  entryFromItem,
-  itemFromEntry,
   ITEM_COLUMNS,
-  type ItemRow,
+  type Item,
+  type NewItem,
+  storedItem,
   msOf,
   AGENT_REPLY_ITEM,
   SEARCHABLE_ITEM,
   searchTypeExpr,
-  USER_ITEM_KINDS,
+  isUserItem,
   USER_KINDS,
 } from "./items.ts";
 import { TENANT } from "../tenants/migrations.ts";
@@ -149,23 +147,22 @@ function rowToParticipantWindow(r: Record<string, unknown>): ParticipantWindow {
   };
 }
 
-function rowToEntry(r: Record<string, unknown>): SessionEntry {
-  return entryFromItem({
+function rowToItem(r: Record<string, unknown>): Item {
+  return {
     sessionId: r.session_id as string,
     seq: Number(r.seq),
-    ...(Object.fromEntries(
+    createdAt: Number(r.created_at),
+    ...Object.fromEntries(
       ITEM_COLUMNS.map(([, key, type]) => [
         key,
         type === "bigint" && r[key] != null ? Number(r[key]) : (r[key] ?? null),
       ]),
-    ) as unknown as ItemRow),
-    scopeLabel: r.scope_label as ScopeId,
-    createdAt: Number(r.created_at),
-  });
+    ),
+  } as Item;
 }
 
-const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
-const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
+const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
+const ITEM_FROM = "items i";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -198,7 +195,7 @@ const ADMIN_READ_TIMEOUT_MS = 10_000;
 const FIRST_PREVIEW_LEN = 160;
 const LAST_PREVIEW_LEN = 100;
 
-const storedPreview = (payload: unknown, maxLen: number): string => pgTextSafe(userMessagePreview(payload, maxLen));
+const storedPreview = (item: Item, maxLen: number): string => pgTextSafe(userMessagePreview(item.text ?? "", maxLen));
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -429,12 +426,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return fn(client);
     });
 
-  const insertEntries = async (
+  const insertItems = async (
     client: PoolClient,
     sessionId: string,
-    entries: readonly NewEntry[],
+    entries: readonly NewItem[],
     turnId?: string,
-  ): Promise<SessionEntry[]> => {
+  ): Promise<Item[]> => {
     if (!entries.length) return [];
     const max = await client.query(
       `SELECT GREATEST(
@@ -444,20 +441,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     );
     const startSeq = Number(max.rows[0]!.n);
     const createdAt = now();
-    const items = entries.map((entry, index) => {
-      const seq = startSeq + index;
-      const item = itemFromEntry(entry.type, JSON.parse(jsonbStringify(entry.payload ?? null)), {
-        turnId: turnId ?? null,
-        author: entry.author ?? null,
-      });
-      return {
-        ...item,
-        seq,
-        scopeLabel: entry.scopeLabel as ScopeId,
-      };
-    });
-    const full = items.map((item) => entryFromItem({ sessionId, createdAt, ...item }));
-    const userTurns = full.filter((entry) => entry.type === "user" && !isOverheardEntry(entry));
+    const items = entries.map((entry, index) =>
+      storedItem(JSON.parse(jsonbStringify(entry)) as NewItem, { sessionId, seq: startSeq + index, createdAt, turnId }),
+    );
+    const userTurns = items.filter((item) => isUserItem(item) && item.body.overheard !== true);
     const firstUser = userTurns[0];
     const lastUser = userTurns[userTurns.length - 1];
     await client
@@ -484,12 +471,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [
           sessionId,
           createdAt,
-          startSeq + full.length,
+          startSeq + items.length,
           userTurns.length,
           startSeq,
-          firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
-          lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
-          items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
+          firstUser ? storedPreview(firstUser, FIRST_PREVIEW_LEN) : null,
+          lastUser ? storedPreview(lastUser, LAST_PREVIEW_LEN) : null,
+          items.some(isUserItem),
           jsonbStringify(items),
         ],
       )
@@ -502,7 +489,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           { cause: err },
         );
       });
-    return full;
+    return items;
   };
 
   return {
@@ -609,15 +596,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async append(writer: SessionWriter, entry: NewEntry): Promise<SessionEntry> {
-      return (await this.appendMany(writer, [entry]))[0]!;
+    async append(writer: SessionWriter, item: NewItem): Promise<Item> {
+      return (await this.appendMany(writer, [item]))[0]!;
     },
 
-    async appendMany(writer: SessionWriter, entries: readonly NewEntry[]): Promise<SessionEntry[]> {
-      return withSessionLock(writer, (client) => insertEntries(client, writer.sessionId, entries, writer.turnId));
+    async appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]> {
+      return withSessionLock(writer, (client) => insertItems(client, writer.sessionId, items, writer.turnId));
     },
 
-    async countEntriesBefore(sessionId, beforeSeq, principalId) {
+    async countItemsBefore(sessionId, beforeSeq, principalId) {
       const rows =
         principalId === undefined
           ? await q(
@@ -645,7 +632,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return new Map(rows.map((r) => [r.turn_id as string, r.purpose as string]));
     },
 
-    async latestEntrySeq(sessionId): Promise<number> {
+    async latestItemSeq(sessionId): Promise<number> {
       const rows = await q(
         `SELECT COALESCE(MAX(seq), -1) AS n FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,
         [sessionId],
@@ -663,7 +650,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async setGoal(writer, goal, notices = []) {
       await withSessionLock(writer, async (client) => {
-        await insertEntries(client, writer.sessionId, notices, writer.turnId);
+        await insertItems(client, writer.sessionId, notices, writer.turnId);
         await client.query(
           `INSERT INTO session_goals(session_id, objective, status, floor, token_cap, tokens_used, active_ms,
                                      active_since, completion_note, cancel_note, governor, pause_reason,
@@ -704,7 +691,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.length > 0;
     },
 
-    async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
+    async getItems(sessionId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
       if (opts?.messagesOnly)
@@ -723,7 +710,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params.push(opts.limit);
         sql += ` LIMIT $${params.length}`;
       }
-      return (await q(sql, params)).map(rowToEntry).reverse();
+      return (await q(sql, params)).map(rowToItem).reverse();
     },
 
     async getContextWindow(sessionId) {
@@ -743,15 +730,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2 ORDER BY i.seq`,
         [sessionId, sinceSeq],
       );
-      return { entries: rows.map(rowToEntry), totalEntries: Number(meta[0]?.total ?? 0) };
+      return { items: rows.map(rowToItem), totalItems: Number(meta[0]?.total ?? 0) };
     },
 
-    async getEntry(sessionId, seq): Promise<SessionEntry | undefined> {
+    async getItem(sessionId, seq): Promise<Item | undefined> {
       const rows = await q(
         `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq = $2`,
         [sessionId, seq],
       );
-      return rows[0] ? rowToEntry(rows[0]) : undefined;
+      return rows[0] ? rowToItem(rows[0]) : undefined;
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
@@ -1035,7 +1022,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return res.length > 0;
     },
 
-    async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
+    async visibleItems(sessionId, principalId, opts?: GetItemsOptions): Promise<Item[]> {
       const params: unknown[] = [sessionId, principalId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
@@ -1053,7 +1040,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params.push(opts.limit);
         sql += ` LIMIT $${params.length}`;
       }
-      return (await q(sql, params)).map(rowToEntry).reverse();
+      return (await q(sql, params)).map(rowToItem).reverse();
     },
 
     async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {

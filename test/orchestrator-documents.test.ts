@@ -63,19 +63,21 @@ test("compaction stops automatic document replay while preserving the original f
       attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     }),
   );
-  const entries = await inTestTenant(() => built.sessions.getEntries(first.sessionId!));
+  const items = await inTestTenant(() => built.sessions.getItems(first.sessionId!));
   const attachment = (
-    entries.find((entry) => entry.type === "user")!.payload as {
+    items.find((item) => item.kind === "UserMessage")!.body as {
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
-  const writer = { sessionId: first.sessionId! };
   await inTestTenant(() =>
-    built.sessions.append(writer, {
-      type: "system",
-      payload: { kind: "context_summary", text: "Earlier user supplied a document.", throughSeq: entries.at(-1)!.seq },
-      scopeLabel: entries[0]!.scopeLabel,
-    }),
+    built.sessions.append(
+      { sessionId: first.sessionId! },
+      {
+        kind: "ContextCompaction",
+        text: "Earlier user supplied a document.",
+        throughSeq: items.at(-1)!.seq,
+      },
+    ),
   );
   const result = await inTestTenant(() => built.app.turn({ ...request, text: "what was in the document?" }));
   assert.equal(result.status, "ok");
@@ -90,8 +92,8 @@ test("compaction stops automatic document replay while preserving the original f
   const chunks = [];
   for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
   assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await inTestTenant(() => built.sessions.getEntry(first.sessionId!, entries[0]!.seq));
-  assert.deepEqual(original, entries[0]);
+  const original = await inTestTenant(() => built.sessions.getItem(first.sessionId!, items[0]!.seq));
+  assert.deepEqual(original, items[0]);
 });
 
 test("compaction during a turn stops document replay immediately", async () => {
@@ -109,9 +111,9 @@ test("compaction during a turn stops document replay immediately", async () => {
       attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     }),
   );
-  const entries = await inTestTenant(() => built.sessions.getEntries(first.sessionId!));
+  const items = await inTestTenant(() => built.sessions.getItems(first.sessionId!));
   const attachment = (
-    entries.find((entry) => entry.type === "user")!.payload as {
+    items.find((item) => item.kind === "UserMessage")!.body as {
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
@@ -119,20 +121,15 @@ test("compaction during a turn stops document replay immediately", async () => {
   for (let i = 0; i < 8; i++) {
     await inTestTenant(() =>
       built.sessions.append(writer, {
-        type: i % 2 === 0 ? "user" : "assistant",
-        payload: { text: "Synthetic conversation context. ".repeat(2000) },
-        scopeLabel: entries[0]!.scopeLabel,
+        kind: i % 2 === 0 ? "UserMessage" : "AgentMessage",
+        text: "Synthetic conversation context. ".repeat(2000),
       }),
     );
   }
   const result = await inTestTenant(() => built.app.turn({ ...request, text: "what was in the document?" }));
   assert.equal(result.status, "ok");
-  const compacted = await inTestTenant(() => built.sessions.getEntries(first.sessionId!));
-  assert.ok(
-    compacted.some(
-      (entry) => entry.type === "system" && (entry.payload as { kind?: string }).kind === "context_summary",
-    ),
-  );
+  const compacted = await inTestTenant(() => built.sessions.getItems(first.sessionId!));
+  assert.ok(compacted.some((item) => item.kind === "ContextCompaction"));
   const calls = (await inTestTenant(() => built.sessions.listLlmRequests(result.sessionId!))).filter(
     (record) => record.model === "mock",
   );
@@ -144,8 +141,8 @@ test("compaction during a turn stops document replay immediately", async () => {
   const chunks = [];
   for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
   assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
-  const original = await inTestTenant(() => built.sessions.getEntry(first.sessionId!, entries[0]!.seq));
-  assert.deepEqual(original, entries[0]);
+  const original = await inTestTenant(() => built.sessions.getItem(first.sessionId!, items[0]!.seq));
+  assert.deepEqual(original, items[0]);
 });
 
 for (const extension of ["docx", "pdf"]) {

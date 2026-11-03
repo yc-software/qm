@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { entryFromItem, type Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -55,7 +56,18 @@ test("forking copies the transcript into a fresh independent web session", async
 
     const mine = await app.listSessions("U1");
     assert.ok(mine.some((s) => s.id === fork.session.id));
-    assert.deepEqual(await sessions.getEntries(fork.session.id), fork.entries);
+    const forkItems = await sessions.getItems(fork.session.id);
+    assert.deepEqual(
+      forkItems.map((item) => entryFromItem(item, fork.session.scopeId)),
+      fork.entries,
+    );
+    const columns = ({ sessionId: _sessionId, createdAt: _createdAt, ...item }: Item) => item;
+    const sourceItems = await sessions.getItems(sid);
+    assert.deepEqual(forkItems.map(columns), sourceItems.map(columns), "the fork copies every stored column");
+    assert.ok(
+      forkItems.some((item) => item.kind === "UserMessage" && item.author === "U1"),
+      "the fork keeps message authors",
+    );
   });
 });
 
@@ -159,11 +171,11 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
     assert.equal(await app.expandSideChat("stranger", fork.session.id), null);
     const page = await app.listSessionPage("U1", { limit: 50 });
     assert.ok(!page.sessions.some((session) => session.id === fork.session.id));
-    const before = await sessions.getEntries(fork.session.id);
+    const before = await sessions.getItems(fork.session.id);
     const expanded = await app.expandSideChat("U1", fork.session.id);
     assert.equal(expanded?.id, fork.session.id);
     assert.equal(expanded?.sideChat?.expanded, true);
-    assert.deepEqual(await sessions.getEntries(fork.session.id), before);
+    assert.deepEqual(await sessions.getItems(fork.session.id), before);
     assert.ok(
       (await app.listSessionPage("U1", { limit: 50 })).sessions.some((session) => session.id === fork.session.id),
     );

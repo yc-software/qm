@@ -86,6 +86,16 @@ function ownedDatabaseUrl(name: string): string {
   return url;
 }
 
+export function pointOwnerAtSchema(schema: string): void {
+  const owner = new URL(process.env.DATABASE_OWNER_URL!);
+  owner.searchParams.set("options", `-c search_path=${schema}`);
+  useOwnerDatabase(owner.toString());
+}
+
+export function restoreFileOwner(): void {
+  useOwnerDatabase(process.env.DATABASE_OWNER_URL);
+}
+
 export function testDatabaseUrl(): string {
   return ownedDatabaseUrl(createDatabaseSync({}));
 }

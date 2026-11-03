@@ -90,8 +90,8 @@ describe("agent conversations self-API", async () => {
       const [run] = await built.runs.inFlightForThread(out.session.threadRef);
       assert.equal(run?.request.text, "investigate the flaky test");
       assert.equal(run?.request.surface, "web");
-      const entries = await built.sessions.getEntries(out.session.id);
-      assert.ok(!entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+      const entries = await built.sessions.getItems(out.session.id);
+      assert.ok(!entries.some((e) => e.text?.includes("plan the launch")));
       const listed = await built.app.listSessions("U1");
       assert.ok(listed.some((s) => s.id === out.session.id));
     }));
@@ -277,8 +277,8 @@ describe("agent conversations self-API", async () => {
       });
       assert.ok("session" in out);
       assert.notEqual(out.session.id, mineId);
-      const entries = await built.sessions.getEntries(out.session.id);
-      assert.ok(entries.some((e) => JSON.stringify(e.payload).includes("plan the launch")));
+      const entries = await built.sessions.getItems(out.session.id);
+      assert.ok(entries.some((e) => e.text?.includes("plan the launch")));
       assert.ok((await built.app.listSessions("U1")).some((s) => s.id === out.session.id));
     }));
 

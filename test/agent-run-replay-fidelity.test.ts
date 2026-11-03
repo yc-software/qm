@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { type RunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -137,18 +137,11 @@ async function runTurn(
       } as unknown as ToolContext,
       scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-      emit: async (e: NewEntry) => {
-        const appended: SessionEntry = {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: jsonb(e.payload),
-          scopeLabel: e.scopeLabel,
-          createdAt: Date.now(),
-        };
-        emitted.push(appended);
-        return appended;
+      emit: async (item) => {
+        const body = jsonb(item.body ?? {}) as Record<string, unknown>;
+        const stored = storedItem({ ...item, body }, { sessionId: "fidelity", seq: seq++, createdAt: Date.now() });
+        emitted.push(entryFromItem(stored, "personal:tester"));
+        return stored;
       },
       recordModelCall: () => {},
       ...overrides,
@@ -464,17 +457,9 @@ test("a tool result that cannot be recorded stops the turn with that error befor
         },
       ],
       {
-        emit: async (e: NewEntry) => {
-          if (e.type === "tool_result") throw failing;
-          return {
-            sessionId: "fidelity",
-            seq: 1,
-            parentSeq: null,
-            type: e.type,
-            payload: e.payload,
-            scopeLabel: e.scopeLabel,
-            createdAt: 0,
-          };
+        emit: async (item) => {
+          if (item.kind === "ToolResult") throw failing;
+          return storedItem(item, { sessionId: "fidelity", seq: 1, createdAt: 0 });
         },
       },
     ),
@@ -484,7 +469,7 @@ test("a tool result that cannot be recorded stops the turn with that error befor
 });
 
 test("a parallel call's result is recorded as soon as its tool returns, while a sibling is still running", async () => {
-  const recorded: Array<{ type: string; callId?: unknown }> = [];
+  const recorded: Array<{ kind: string; callId?: unknown }> = [];
   let seenBeforeSlowFinished: string[] = [];
   let seq = 1;
   const result = await runTurn(
@@ -506,22 +491,14 @@ test("a parallel call's result is recorded as soon as its tool returns, while a 
         async history(query: string) {
           if (query === "slow") {
             await new Promise((resolve) => setTimeout(resolve, 100));
-            seenBeforeSlowFinished = recorded.filter((e) => e.type === "tool_result").map((e) => String(e.callId));
+            seenBeforeSlowFinished = recorded.filter((e) => e.kind === "ToolResult").map((e) => String(e.callId));
           }
           return [`result for ${query}`];
         },
       } as unknown as ToolContext,
-      emit: async (e: NewEntry) => {
-        recorded.push({ type: e.type, callId: (e.payload as { callId?: unknown }).callId });
-        return {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: e.payload,
-          scopeLabel: e.scopeLabel,
-          createdAt: 0,
-        };
+      emit: async (item) => {
+        recorded.push({ kind: item.kind, callId: item.callId });
+        return storedItem(item, { sessionId: "fidelity", seq: seq++, createdAt: 0 });
       },
     },
   );
@@ -590,7 +567,8 @@ async function withPgSession(
         bytesFor: () => createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
-      history: async () => forModelContext(await store.getEntries(session.id)),
+      history: async () =>
+        forModelContext((await store.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId))),
     });
   } finally {
     await raw.end();
@@ -634,8 +612,7 @@ test(
           [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
           { emit, tools },
         );
-        const scopeLabel = "personal:tester" as SessionEntry["scopeLabel"];
-        await emit({ type: "assistant", payload: { text: "Daily digest", via: "cron" }, scopeLabel });
+        await emit({ kind: "AgentMessage", text: "Daily digest", body: { via: "cron" } });
         const second = await runTurn(
           "and Q3?",
           await history(),

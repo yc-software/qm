@@ -14,7 +14,8 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { itemFromEntry, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -61,31 +62,14 @@ function buildScenario(interruptAfterToolResult = false) {
       turns.push(turn.input);
       continued.push(turn.continueTurn);
       environments.push(turn.environment);
-      if (!turn.continueTurn)
-        await turn.emit({
-          type: "user",
-          payload: { text: turn.input },
-          scopeLabel: turn.scopeLabel,
-        });
+      if (!turn.continueTurn) await turn.emit({ kind: "UserMessage", text: turn.input });
       if (interruptAfterToolResult && turns.length === 1) {
-        await turn.emit({
-          type: "tool_call",
-          payload: { tool: "execute", callId: "c1", command: "ls" },
-          scopeLabel: turn.scopeLabel,
-        });
-        await turn.emit({
-          type: "tool_result",
-          payload: { tool: "execute", callId: "c1", result: "a.txt" },
-          scopeLabel: turn.scopeLabel,
-        });
+        await turn.emit({ kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } });
+        await turn.emit({ kind: "ToolResult", tool: "execute", callId: "c1", text: "a.txt" });
         throw new Error("interrupted after recording a tool result");
       }
       const reply = "it runs on this conversation's computer";
-      await turn.emit({
-        type: "assistant",
-        payload: { text: reply },
-        scopeLabel: turn.scopeLabel,
-      });
+      await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };
     },
     async screenSecurity() {
@@ -128,10 +112,10 @@ function buildScenario(interruptAfterToolResult = false) {
     text,
     ...extra,
   });
-  const asks = async (): Promise<SessionEntry[]> => {
+  const asks = async (): Promise<Item[]> => {
     const session = (await sessions.getByThread(conversation.threadRef))!;
-    return (await sessions.getEntries(session.id, { limit: 200 })).filter(
-      (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
+    return (await sessions.getItems(session.id, { limit: 200 })).filter(
+      (item) => USER_ITEM_KINDS.includes(item.kind) && (item.text ?? "").startsWith(ASK),
     );
   };
   return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
@@ -189,17 +173,9 @@ test("a retry does not claim a later message's answer as its own", () =>
     const mine = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
     const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
     const writer = { sessionId: session.id };
-    const boundary = await sessions.append(writer, {
-      type: "user",
-      payload: { text: ASK },
-      scopeLabel: session.scopeId,
-    });
-    await sessions.append(writer, { type: "user", payload: { text: "a later ask" }, scopeLabel: session.scopeId });
-    await sessions.append(writer, {
-      type: "assistant",
-      payload: { text: "answering the later ask" },
-      scopeLabel: session.scopeId,
-    });
+    const boundary = await sessions.append(writer, { kind: "UserMessage", text: ASK });
+    await sessions.append(writer, { kind: "UserMessage", text: "a later ask" });
+    await sessions.append(writer, { kind: "AgentMessage", text: "answering the later ask" });
     await runs.noteTurnUserSeq(mine.id, boundary.seq);
 
     const retry = await orchestrator.handleTurn(input(ASK, { runId: mine.id, attempt: 2 }));
@@ -217,7 +193,7 @@ async function seedTurn(
   const writer = { sessionId: session.id };
   let first = -1;
   for (const e of entries) {
-    const appended = await sessions.append(writer, { type: e.type, payload: e.payload, scopeLabel: session.scopeId });
+    const appended = await sessions.append(writer, itemFromEntry(e));
     if (first < 0) first = appended.seq;
   }
   return first;
@@ -289,11 +265,11 @@ test("a resume whose last tool call has no recorded result settles it and contin
     assert.equal(retry.status, "ok");
     assert.deepEqual(continued, [true]);
     assert.equal(turns[0], ASK, "only the original request travels, as the agent's fallback");
-    const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
-      (e) => e.type === "tool_result",
+    const settled = (await sessions.getItems((await sessions.getByThread(conversation.threadRef))!.id)).find(
+      (item) => item.kind === "ToolResult",
     );
     assert.ok(settled);
-    assert.match(String((settled.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
+    assert.match(settled.text ?? "", /^\[system\] This call was interrupted/);
   }));
 
 test("a first attempt and a no-work retry are never asked to continue", () =>

@@ -33,6 +33,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
+import { entryFromItem, itemFromEntry, type Item } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -56,7 +57,6 @@ const budgetWhoseKeepWindowFits = (keepTokens: number): number => Math.ceil(keep
 const actor: Principal = { id: "U1", type: "internal", teamIds: ["eng"] };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 const PERSONAL = scopeId("personal", "U1");
-const TEAM = scopeId("team", "eng");
 
 function spyAgent(opts: { withSummarizer?: boolean } = {}) {
   const base = createMockAgent();
@@ -160,15 +160,14 @@ function liveTurnProbe() {
   return { runs, busyThreads };
 }
 
-async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>>): Promise<string> {
+async function seed(
+  sessions: SessionStore,
+  entries: Array<Partial<Pick<SessionEntry, "type" | "payload">>>,
+): Promise<string> {
   const session = await sessions.getOrCreateByThread(conv.threadRef, "dm", PERSONAL);
   const writer = { sessionId: session.id };
   for (const e of entries) {
-    await sessions.append(writer, {
-      type: e.type ?? "user",
-      payload: e.payload ?? { text: "x" },
-      scopeLabel: (e.scopeLabel ?? PERSONAL) as never,
-    });
+    await sessions.append(writer, itemFromEntry({ type: e.type ?? "user", payload: e.payload ?? { text: "x" } }));
   }
   return session.id;
 }
@@ -189,11 +188,11 @@ const spineTurn = (text: string): OrchestratorInput => ({
   surfaceTools: true,
 });
 
-async function summaryEntries(sessions: SessionStore, sessionId: string): Promise<SessionEntry[]> {
-  return (await sessions.getEntries(sessionId)).filter((e) => contextSummaryPayload(e));
+async function summaryEntries(sessions: SessionStore, sessionId: string): Promise<Item[]> {
+  return (await sessions.getItems(sessionId)).filter((e) => e.kind === "ContextCompaction");
 }
 
-async function waitForSummary(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<SessionEntry[]> {
+async function waitForSummary(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<Item[]> {
   const deadline = Date.now() + deadlineMs;
   for (;;) {
     const found = await summaryEntries(sessions, sessionId);
@@ -224,7 +223,7 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
     );
 
     const summaries = await summaryEntries(sessions, sid);
-    assert.equal(contextSummaryPayload(summaries[0]!)!.throughSeq, 4, "summary throughSeq must advance to seq 4");
+    assert.equal(summaries[0]!.throughSeq, 4, "summary throughSeq must advance to seq 4");
 
     assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
 
@@ -265,7 +264,7 @@ test("a prior summary that still fits is reused, not regenerated", () =>
       { payload: { text: "old 1" } },
       { payload: { text: "old 2" } },
       { payload: { text: "old 3" } },
-      { type: "system", payload: createContextSummaryPayload(3, "prior summary"), scopeLabel: PERSONAL },
+      { type: "system", payload: createContextSummaryPayload(3, "prior summary") },
       { payload: { text: "new 5" } },
     ]);
 
@@ -333,7 +332,7 @@ test("a tool_call at the summarize/keep boundary whose result is KEPT is not sum
       "the boundary tool_call (seq 4) must be held back with its kept result, not summarized",
     );
     const summaries = await summaryEntries(sessions, sid);
-    assert.doesNotMatch(contextSummaryPayload(summaries[0]!)!.text, /interrupted/, "no false interrupted marker");
+    assert.doesNotMatch(summaries[0]!.text!, /interrupted/, "no false interrupted marker");
   }));
 
 test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", () =>
@@ -355,34 +354,7 @@ test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupt
 
     const summaries = await summaryEntries(sessions, sid);
     assert.ok(summaries.length >= 1);
-    assert.match(
-      contextSummaryPayload(summaries[0]!)!.text,
-      /interrupted/,
-      "interrupted call must be flagged, not invented",
-    );
-  }));
-
-test("a summary uses the session scope regardless of the source entry scopes", () =>
-  inTestTenant(async () => {
-    const { agent, compactCalls } = spyAgent();
-    const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("team 4", "recent 5"));
-
-    const sid = await seed(sessions, [
-      { payload: { text: "team 0" }, scopeLabel: TEAM },
-      { payload: { text: "team 1" }, scopeLabel: TEAM },
-      { payload: { text: "team 2" }, scopeLabel: TEAM },
-      { payload: { text: "team 3" }, scopeLabel: TEAM },
-      { payload: { text: "team 4" }, scopeLabel: TEAM },
-      { payload: { text: "recent 5" } },
-    ]);
-
-    const res = await orch.handleTurn(turn("!histcount"));
-    assert.equal(res.status, "ok");
-    assert.ok(compactCalls.length >= 1, "the team-data overflow is still summarized");
-
-    const summaries = await summaryEntries(sessions, sid);
-    assert.ok(summaries.length >= 1);
-    assert.equal(summaries[0]!.scopeLabel, PERSONAL, "compaction does not inherit source entry scopes");
+    assert.match(summaries[0]!.text!, /interrupted/, "interrupted call must be flagged, not invented");
   }));
 
 const mkEntry = (over: Partial<SessionEntry> & { seq: number }): SessionEntry => ({
@@ -606,7 +578,9 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
     assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
     assert.equal(compactCalls.length, 1);
 
-    const expectedHistory = forModelContext(await sessions.getEntries(sid));
+    const expectedHistory = forModelContext(
+      (await sessions.getItems(sid)).map((item) => entryFromItem(item, PERSONAL)),
+    );
     assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
     assert.ok(expectedHistory.some((entry) => entry.type === "user"));
     delete agent.compactHistory;
@@ -660,7 +634,7 @@ test("a session parked over soft with a too-large prior summary re-summarizes (B
       budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
     );
     await seed(sessions, [
-      { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
+      { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap") },
       ...msgTexts(8).map((text) => ({ payload: { text } })),
     ]);
 
@@ -903,21 +877,21 @@ test("a turn landing mid-summarization does not disturb the fold: it covers a pr
 
     assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
     await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-    const beforeTurn = ((await sessions.getEntries(sid)).at(-1)?.seq ?? -1) + 1;
+    const beforeTurn = ((await sessions.getItems(sid)).at(-1)?.seq ?? -1) + 1;
 
     assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
-    const appended = (await sessions.getEntries(sid)).filter((e) => e.seq >= beforeTurn);
+    const appended = (await sessions.getItems(sid)).filter((e) => e.seq >= beforeTurn);
     assert.ok(appended.length > 0, "the turn really did write while the summarizer was parked");
 
     open();
     const summaries = await waitForSummary(sessions, sid);
     assert.ok(summaries.length >= 1);
-    const throughSeq = contextSummaryPayload(summaries[0]!)!.throughSeq;
+    const throughSeq = summaries[0]!.throughSeq!;
     assert.ok(
       throughSeq < appended[0]!.seq,
       `the fold covers only the prefix it summarized (through ${throughSeq}, turn started at ${appended[0]!.seq})`,
     );
-    const survivors = await sessions.getEntries(sid);
+    const survivors = await sessions.getItems(sid);
     for (const entry of appended) {
       assert.ok(
         survivors.some((e) => e.seq === entry.seq),
@@ -939,17 +913,13 @@ test("a summary that landed while the pass was summarizing makes it drop its own
     await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
 
     const rival = { sessionId: sid };
-    await sessions.append(rival, {
-      type: "system",
-      payload: createContextSummaryPayload(6, "a rival fold"),
-      scopeLabel: PERSONAL,
-    });
+    await sessions.append(rival, { kind: "ContextCompaction", throughSeq: 6, text: "a rival fold" });
 
     open();
     await new Promise((r) => setTimeout(r, 300));
     const summaries = await summaryEntries(sessions, sid);
     assert.equal(summaries.length, 1, "only the rival fold — the stale one was dropped");
-    assert.equal(contextSummaryPayload(summaries[0]!)?.text, "a rival fold");
+    assert.equal(summaries[0]!.text, "a rival fold");
     assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
   }));
 
@@ -983,17 +953,12 @@ test("runtime handoff continues once with saved results under the original run a
       runTurn: async (input) => {
         seen.push(input);
         if (seen.length === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({ kind: "UserMessage", text: input.input });
           await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
+            kind: "ToolResult",
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
           });
           await new Promise((resolve) => setTimeout(resolve, 5));
           return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
@@ -1002,7 +967,7 @@ test("runtime handoff continues once with saved results under the original run a
         assert.equal(input.runId, "runtime-run");
         assert.ok(input.history.some((e) => e.type === "tool_result"));
         assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
-        await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
+        await input.emit({ kind: "AgentMessage", text: "continued" });
         return { reply: "continued", modelCalls: 1 };
       },
     };
@@ -1011,9 +976,9 @@ test("runtime handoff continues once with saved results under the original run a
     assert.equal(seen.length, 2);
     assert.equal(resets, 1);
     const session = await sessions.getByThread(conv.threadRef);
-    const entries = await sessions.getEntries(session!.id);
+    const entries = await sessions.getItems(session!.id);
     assert.deepEqual(
-      entries.filter((e) => e.type === "assistant").map((e) => (e.payload as { text: string }).text),
+      entries.filter((e) => e.kind === "AgentMessage").map((e) => e.text),
       ["continued"],
     );
   }));
@@ -1051,17 +1016,12 @@ test("a retry restores a committed runtime decision after reset crashes, without
       runTurn: async (input) => {
         calls++;
         if (calls === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({ kind: "UserMessage", text: input.input });
           await input.emit({
-            type: "tool_result",
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: { choice, lifetime: "task" },
-            },
-            scopeLabel: input.scopeLabel,
+            kind: "ToolResult",
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
           });
           return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
         }
@@ -1093,15 +1053,10 @@ test("only a cron automation receives task-runtime authority and each fire start
         outcomes.push({ surface: input.input, ok: result.ok });
         if (result.ok && result.handoff) {
           await input.emit({
-            type: "tool_result",
-            scopeLabel: input.scopeLabel,
-            payload: {
-              tool: "runtime",
-              callId: `runtime-${input.runId}`,
-              runId: input.runId,
-              actorId: actor.id,
-              runtimeHandoff: result.handoff,
-            },
+            kind: "ToolResult",
+            tool: "runtime",
+            callId: `runtime-${input.runId}`,
+            body: { runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
           });
           return { reply: "", runtimeHandoff: result.handoff };
         }
@@ -1382,28 +1337,17 @@ for (const explicit of [false, true]) {
         runTurn: async (input) => {
           seen.push(input);
           if (explicit && seen.length === 1) {
-            await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-            await input.emit({
-              type: "tool_call",
-              payload: { tool: "files", callId: "effect", action: "write" },
-              scopeLabel: input.scopeLabel,
-            });
+            await input.emit({ kind: "UserMessage", text: input.input });
+            await input.emit({ kind: "ToolCall", tool: "files", callId: "effect", body: { action: "write" } });
             effects++;
+            await input.emit({ kind: "ToolResult", tool: "files", callId: "effect", text: "stored" });
             await input.emit({
-              type: "tool_result",
-              payload: { tool: "files", callId: "effect", result: "stored" },
-              scopeLabel: input.scopeLabel,
+              kind: "ToolCall",
+              tool: "context",
+              callId: "reduce",
+              body: { action: "compact", mode: "recent" },
             });
-            await input.emit({
-              type: "tool_call",
-              payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
-              scopeLabel: input.scopeLabel,
-            });
-            await input.emit({
-              type: "tool_result",
-              payload: { tool: "context", callId: "reduce", result: "requested" },
-              scopeLabel: input.scopeLabel,
-            });
+            await input.emit({ kind: "ToolResult", tool: "context", callId: "reduce", text: "requested" });
             return { reply: "not final", runtimeHandoff: { context: "recent" } };
           }
           if (seen.length === (explicit ? 2 : 1)) {
@@ -1416,7 +1360,7 @@ for (const explicit of [false, true]) {
             assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
             if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
           }
-          await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
+          await input.emit({ kind: "AgentMessage", text: "finished" });
           return { reply: "finished" };
         },
       };
@@ -1425,14 +1369,14 @@ for (const explicit of [false, true]) {
         sessions,
         explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
       );
-      const before = await sessions.getEntries(sid);
+      const before = await sessions.getItems(sid);
       const result = await orch.handleTurn({ ...turn("finish the request"), surfaceTools: false });
       assert.equal(result.status, "ok");
       assert.equal(result.reply, "finished");
       assert.equal(seen.length, explicit ? 2 : 1);
       assert.equal(summaries, explicit ? 0 : 1);
       assert.equal(effects, explicit ? 1 : 0);
-      assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
+      assert.deepEqual((await sessions.getItems(sid)).slice(0, before.length), before);
       assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
       assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
     }));
@@ -1452,7 +1396,7 @@ test("retry recovery supplies an excluded request without rerunning its complete
         assert.equal(input.input, "finish the stored request");
         assert.equal(input.continueTurn, undefined);
         assert.ok(!input.history.some((e) => e.type === "user"));
-        await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
+        await input.emit({ kind: "AgentMessage", text: "resumed" });
         return { reply: "resumed" };
       },
     };

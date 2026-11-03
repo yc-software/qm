@@ -96,18 +96,19 @@ async function assertSubscriptionTurn(built: ReturnType<typeof buildApp>, seen: 
     assert.match(JSON.stringify(call.body.system), /You are Claude Code/);
   }
   const session = await built.sessions.getByThread(finished.sessionId);
-  const entries = session ? await built.sessions.getEntries(session.id) : [];
+  const items = session ? await built.sessions.getItems(session.id) : [];
   assert.ok(
-    entries.some((e) => e.type === "tool_result" && (e.payload as { tool?: string }).tool === "history"),
+    items.some((item) => item.kind === "ToolResult" && item.tool === "history"),
     "the history tool ran",
   );
   assert.ok(
-    entries.some(
-      (e) =>
-        e.type === "assistant" &&
-        /pong from the Claude subscription/.test(String((e.payload as { text?: string }).text)),
+    items.some(
+      (item) =>
+        item.kind === "AgentMessage" &&
+        item.variant === null &&
+        /pong from the Claude subscription/.test(item.text ?? ""),
     ),
-    JSON.stringify(entries.map((e) => e.type)),
+    JSON.stringify(items.map((item) => item.kind)),
   );
 }
 

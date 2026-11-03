@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createGoalRecord, openGoal } from "../src/agent/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
+import { entryFromItem } from "../src/sessions/items.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -66,19 +67,22 @@ for (const status of ["active", "paused"] as const) {
 
       assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
 
-      const entries = await built.sessions.getEntries(session.id);
-      assert.deepEqual(entries.at(-1)?.payload, {
-        kind: "goal_cancelled",
-        cause: "system",
-        objective: "old outreach goal",
-        cancelledBy: "U1",
-      });
+      const entries = await built.sessions.getItems(session.id);
+      const last = entries.at(-1)!;
+      assert.deepEqual(
+        { kind: last.kind, wakeCause: last.wakeCause, body: last.body },
+        {
+          kind: "Wake",
+          wakeCause: "system",
+          body: { kind: "goal_cancelled", objective: "old outreach goal", cancelledBy: "U1" },
+        },
+      );
       const goal = await sessionGoal(built, session.id);
       assert.equal(goal?.status, "cancelled");
       assert.equal(goal?.completionNote, undefined, "cancelling is not completing");
       assert.equal(openGoal(goal), null, "later turns start with no goal to enforce");
       assert.match(
-        JSON.stringify(reconstructMessagesFromHistory(entries)),
+        JSON.stringify(reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, session.scopeId)))),
         /The user cancelled this goal/,
         "the model is told the goal was cancelled",
       );
@@ -128,7 +132,7 @@ for (const status of ["active", "paused"] as const) {
       assert.equal(goal?.status, "cancelled");
       assert.equal(goal?.tokensUsed, 77, "the cancel builds on the turn's final save");
       assert.deepEqual(
-        (await built.sessions.getEntries(session.id)).map((e) => (e.payload as { kind?: string }).kind),
+        (await built.sessions.getItems(session.id)).map((e) => e.body.kind),
         ["goal_cancelled"],
       );
     });

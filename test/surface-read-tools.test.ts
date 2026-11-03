@@ -54,9 +54,9 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   while (Date.now() < deadline) {
     const sub = await inTestTenant(() => built.sessions.getByThread(`ch:${root}`));
     if (sub) {
-      const entries = await inTestTenant(() => built.sessions.getEntries(sub.id));
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const items = await inTestTenant(() => built.sessions.getItems(sub.id));
+      const hit = items.find((item: any) => item.kind === "AgentMessage" && item.variant === null && item.text);
+      if (hit) return hit.text as string;
     }
     await sleep(50);
   }

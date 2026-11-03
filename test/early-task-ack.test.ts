@@ -5,6 +5,7 @@ import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { emitEntry } from "../src/agent/turn-support.ts";
 import { settle } from "./support/settle.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -95,10 +96,9 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
       turn.onDelta?.("Building the website now.");
       turn.onToolCallStart?.("slack");
       assert.equal((await built.deliveries.pending("slack")).length, 0);
-      await turn.emit({
+      await emitEntry(turn, {
         type: "tool_call",
         payload: { tool: "slack", callId: `slack-${action}`, action: action === "delegated-read" ? "read" : action },
-        scopeLabel: turn.scopeLabel,
       });
       started();
       await block;

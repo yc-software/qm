@@ -28,15 +28,13 @@ test("session search reuses indexed search with participant intersection, tenure
     await sessions.addParticipant(source.id, alice.id, undefined, { includeHistory: true });
     const writer = { sessionId: source.id };
     await sessions.append(writer, {
-      type: "user",
-      payload: { text: "memo before Bob joined" },
-      scopeLabel: source.scopeId,
+      kind: "UserMessage",
+      text: "memo before Bob joined",
     });
     await sessions.addParticipant(source.id, bob.id);
     const shared = await sessions.append(writer, {
-      type: "user",
-      payload: { text: "memo shared" },
-      scopeLabel: source.scopeId,
+      kind: "UserMessage",
+      text: "memo shared",
     });
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     let members: Principal[] | undefined;

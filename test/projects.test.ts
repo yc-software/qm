@@ -769,7 +769,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
       await turnPaused;
       const session = await built.sessions.getByThread(threadRef);
       assert.ok(session);
-      assert.match(JSON.stringify(await built.sessions.getEntries(session.id)), /old-roster-prompt/);
+      assert.match(JSON.stringify(await built.sessions.getItems(session.id)), /old-roster-prompt/);
 
       const added = await built.app.addProjectMember(project.id, "owner", "late-member");
       assert.equal(added.status, "ok");
@@ -786,7 +786,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
         false,
       );
       assert.equal(
-        (await built.sessions.getEntries(session.id)).some((entry) => entry.type === "assistant"),
+        (await built.sessions.getItems(session.id)).some((entry) => entry.kind === "AgentMessage"),
         false,
       );
     } finally {
@@ -887,7 +887,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     const session = await built.sessions.getByThread(threadRef);
     assert.ok(session);
     assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));
-    const entriesBeforeRace = await built.sessions.getEntries(session.id);
+    const entriesBeforeRace = await built.sessions.getItems(session.id);
     const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
     const originalGetOrCreate = built.sessions.getOrCreateByThread.bind(built.sessions);
@@ -906,12 +906,9 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
       assert.equal(raced.status, "refused");
       assert.match(raced.reason ?? "", /membership changed/);
       assert.equal(changed, true);
-      assert.deepEqual(await built.sessions.getEntries(session.id), entriesBeforeRace);
+      assert.deepEqual(await built.sessions.getItems(session.id), entriesBeforeRace);
       assert.deepEqual(await built.sessions.listLlmRequests(session.id), llmRequestsBeforeRace);
-      assert.doesNotMatch(
-        JSON.stringify(await built.sessions.visibleEntries(session.id, "late-member")),
-        /race-marker/,
-      );
+      assert.doesNotMatch(JSON.stringify(await built.sessions.visibleItems(session.id, "late-member")), /race-marker/);
       assert.deepEqual(
         new Set(await built.sessions.participantsOf(session.id)),
         new Set(["owner", "member", "late-member"]),

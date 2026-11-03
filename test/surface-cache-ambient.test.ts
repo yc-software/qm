@@ -499,10 +499,8 @@ test("the ambient wake prompt is structured XML (<wake>/<message trigger>), untr
       await pollDeliveries(built.deliveries);
       const sub = await built.sessions.getByThread(`slack:${container}:ambient:300.1`);
       assert.ok(sub, "the ambient worker session exists");
-      const entries = await built.sessions.getEntries(sub!.id);
-      const wake = (
-        entries.find((e) => e.type === "user" && typeof (e.payload as any)?.text === "string")?.payload as any
-      )?.text as string;
+      const entries = await built.sessions.getItems(sub!.id);
+      const wake = entries.find((e) => e.kind === "UserMessage" && e.text !== null)?.text as string;
       assert.ok(wake, "the worker's wake prompt was recorded");
       assert.match(wake, /^<wake reason="ambient" surface="slack" channel="C-xml"/);
       assert.match(wake, /<message [^>]*id="300\.1"[^>]*trigger="true"[^>]*>/);
@@ -722,10 +720,8 @@ test("worker seed is the trigger plus the 3 messages before it (§2.4)", async (
       await pollDeliveries(built.deliveries);
       const sub = await built.sessions.getByThread(`slack:${container}:ambient:406.0`);
       assert.ok(sub, "the ambient worker session exists");
-      const entries = await built.sessions.getEntries(sub!.id);
-      const wake = (
-        entries.find((e) => e.type === "user" && typeof (e.payload as any)?.text === "string")?.payload as any
-      )?.text as string;
+      const entries = await built.sessions.getItems(sub!.id);
+      const wake = entries.find((e) => e.kind === "UserMessage" && e.text !== null)?.text as string;
       assert.ok(
         wake.includes(`id="406.0"`) && wake.includes(`id="403.0"`),
         "the trigger and the 3 before it are seeded",

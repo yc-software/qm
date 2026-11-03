@@ -10,6 +10,7 @@ import { testConfig } from "./support/test-config.ts";
 import { messageRevision } from "../src/slack/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { entryFromItem } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor = { externalId: "U1", displayName: "Ada" };
@@ -46,15 +47,17 @@ test("an edit the ingest path could not record is caught up at the end of the ne
       ]),
     );
     assert.equal(
-      (await inTestTenant(() => built.sessions.getEntries(session!.id))).filter((e) => messageRevision(e)).length,
+      (await inTestTenant(() => built.sessions.getItems(session!.id))).filter((e) =>
+        messageRevision(entryFromItem(e, session!.scopeId)),
+      ).length,
       0,
       "nothing has recorded the edit yet",
     );
 
     const second = await inTestTenant(() => built.app.turn(channelTurn("and again", slackTs())));
     assert.equal(second.status, "ok");
-    const marks = (await inTestTenant(() => built.sessions.getEntries(session!.id))).flatMap((e) => {
-      const r = messageRevision(e);
+    const marks = (await inTestTenant(() => built.sessions.getItems(session!.id))).flatMap((e) => {
+      const r = messageRevision(entryFromItem(e, session!.scopeId));
       return r ? [r] : [];
     });
     assert.deepEqual(
@@ -73,11 +76,15 @@ test("an edit the ingest path could not record is caught up at the end of the ne
     const third = await inTestTenant(() => built.app.turn(channelTurn("once more", slackTs())));
     assert.equal(third.status, "ok");
     assert.equal(
-      (await inTestTenant(() => built.sessions.getEntries(session!.id))).filter((e) => messageRevision(e)).length,
+      (await inTestTenant(() => built.sessions.getItems(session!.id))).filter((e) =>
+        messageRevision(entryFromItem(e, session!.scopeId)),
+      ).length,
       1,
       "the catch-up does not re-record on later turns",
     );
-    const marker = (await inTestTenant(() => built.sessions.getEntries(session!.id))).find((e) => messageRevision(e))!;
+    const marker = (await inTestTenant(() => built.sessions.getItems(session!.id))).find((e) =>
+      messageRevision(entryFromItem(e, session!.scopeId)),
+    )!;
     assert.equal(asked.length, 1);
     assert.ok(asked[0]! <= marker.createdAt, "the turn right after a marker still re-checks it");
     const fourth = await inTestTenant(() => built.app.turn(channelTurn("and once more", slackTs())));

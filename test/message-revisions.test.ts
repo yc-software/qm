@@ -19,6 +19,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
+import { entryFromItem, itemFromEntry } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function test(name: string, fn: () => void | Promise<void>): void {
@@ -38,7 +39,7 @@ async function seedSession(
 ) {
   const session = await sessions.getOrCreateByThread(threadRef, type, SCOPE, undefined, "slack");
   const writer = { sessionId: session.id };
-  for (const payload of userPayloads) await sessions.append(writer, { type: "user", payload, scopeLabel: SCOPE });
+  for (const payload of userPayloads) await sessions.append(writer, itemFromEntry({ type: "user", payload }));
   return session;
 }
 
@@ -48,6 +49,10 @@ function edit(over: Partial<IngestEvent> = {}): IngestEvent {
 
 function del(over: Partial<IngestEvent> = {}): IngestEvent {
   return { container: DM, ts: "100.1", deleted: true, ...over };
+}
+
+async function history(sessions: SessionStore, sessionId: string): Promise<SessionEntry[]> {
+  return (await sessions.getItems(sessionId)).map((item) => entryFromItem(item, SCOPE));
 }
 
 function revisions(entries: readonly SessionEntry[]): MessageRevisionPayload[] {
@@ -65,7 +70,7 @@ test("an edit of a recorded DM message appends one marker entry the model sees",
 
   await recordMessageRevisions(sessions, runs, [edit()]);
 
-  const entries = await sessions.getEntries(session.id);
+  const entries = await history(sessions, session.id);
   const marks = revisions(entries);
   assert.equal(marks.length, 1);
   assert.deepEqual(marks[0], {
@@ -88,7 +93,7 @@ test("edits and deletions of messages never recorded in the session append nothi
   await recordMessageRevisions(sessions, runs, [edit({ ts: "999.9" }), del({ ts: "999.9" })]);
   await recordMessageRevisions(sessions, runs, [edit({ container: "D999" })]);
 
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 0);
+  assert.equal(revisions(await history(sessions, session.id)).length, 0);
 });
 
 test("repeated edit events with the same text dedupe to one marker; a real re-edit appends another", async () => {
@@ -99,10 +104,10 @@ test("repeated edit events with the same text dedupe to one marker; a real re-ed
 
   await recordMessageRevisions(sessions, runs, [edit()]);
   await recordMessageRevisions(sessions, runs, [edit()]);
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
+  assert.equal(revisions(await history(sessions, session.id)).length, 1);
 
   await recordMessageRevisions(sessions, runs, [edit({ text: "fixed again" })]);
-  const marks = revisions(await sessions.getEntries(session.id));
+  const marks = revisions(await history(sessions, session.id));
   assert.equal(marks.length, 2);
   assert.equal(marks[1]!.text, "fixed again");
 });
@@ -114,7 +119,7 @@ test("an unfurl-style edit event carrying the unchanged original text is a no-op
   ]);
 
   await recordMessageRevisions(sessions, runs, [edit({ text: "original text" })]);
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 0);
+  assert.equal(revisions(await history(sessions, session.id)).length, 0);
 });
 
 test("an edit back to the original text after a real edit is recorded", async () => {
@@ -125,7 +130,7 @@ test("an edit back to the original text after a real edit is recorded", async ()
 
   await recordMessageRevisions(sessions, runs, [edit()]);
   await recordMessageRevisions(sessions, runs, [edit({ text: "original text" })]);
-  const marks = revisions(await sessions.getEntries(session.id));
+  const marks = revisions(await history(sessions, session.id));
   assert.equal(marks.length, 2);
   assert.equal(marks[1]!.text, "original text");
 });
@@ -139,7 +144,7 @@ test("a deletion after an edit appends a second marker; repeated deletions dedup
   await recordMessageRevisions(sessions, runs, [edit()]);
   await recordMessageRevisions(sessions, runs, [del()]);
   await recordMessageRevisions(sessions, runs, [del()]);
-  const marks = revisions(await sessions.getEntries(session.id));
+  const marks = revisions(await history(sessions, session.id));
   assert.deepEqual(
     marks.map((m) => m.action),
     ["edited", "deleted"],
@@ -154,7 +159,7 @@ test("self events and hidden originals are left alone", async () => {
   ]);
 
   await recordMessageRevisions(sessions, runs, [edit({ self: true }), edit({ ts: "100.2", text: "revealed" })]);
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 0);
+  assert.equal(revisions(await history(sessions, session.id)).length, 0);
 });
 
 test("a channel thread reply's edit reaches the thread session via the sub root", async () => {
@@ -166,7 +171,7 @@ test("a channel thread reply's edit reaches the thread session via the sub root"
   await recordMessageRevisions(sessions, runs, [
     { container: CH, ts: "51.0", sub: "50.0", editedAt: Date.now(), text: "reply fixed", kind: "channel" },
   ]);
-  const marks = revisions(await sessions.getEntries(session.id));
+  const marks = revisions(await history(sessions, session.id));
   assert.equal(marks.length, 1);
   assert.equal(marks[0]!.name, "Josh");
 });
@@ -235,7 +240,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
     { text: "original text", ts: "50.0", name: "Alex Morgan" },
     { text: "second", ts: "51.0", name: "Ada" },
   ]);
-  const anchorAt = (await sessions.getEntry(session.id, await sessions.latestEntrySeq(session.id)))!.createdAt;
+  const anchorAt = (await sessions.getItem(session.id, await sessions.latestItemSeq(session.id)))!.createdAt;
   await sleep(5);
   const writer = { sessionId: session.id };
   const finishTurn = await holdThread(runs, session.threadRef);
@@ -250,7 +255,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
   ];
   await cache.ingest(events);
   await recordMessageRevisions(sessions, runs, events, NO_WAIT);
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 0, "a busy session records nothing yet");
+  assert.equal(revisions(await history(sessions, session.id)).length, 0, "a busy session records nothing yet");
 
   const recorded = await reconcileMessageRevisions({
     sessions,
@@ -261,7 +266,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
     fallbackSince: 0,
   });
   assert.equal(recorded, 2, "only the thread's own messages are marked; the other thread's edit is not this session's");
-  const marks = revisions(await sessions.getEntries(session.id)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  const marks = revisions(await history(sessions, session.id)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
   assert.deepEqual(
     marks.map((m) => [m.action, m.ts, m.text ?? null]),
     [
@@ -326,21 +331,17 @@ test("an edit whose marker is already recorded never checks for a live turn", as
   };
   await recordMessageRevisions(sessions, spied, [edit()], NO_WAIT);
   assert.deepEqual(checks, [], "a no-op revision is decided from a plain read");
-  assert.equal(revisions(await sessions.getEntries(session.id)).length, 1);
+  assert.equal(revisions(await history(sessions, session.id)).length, 1);
 });
 
 test("the anchor is the last conversation entry, skipping system entries such as a fresh marker", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
-  const conversationAt = (await sessions.getEntries(session.id)).at(-1)!.createdAt;
+  const conversationAt = (await history(sessions, session.id)).at(-1)!.createdAt;
   await sleep(5);
   await recordMessageRevisions(sessions, runs, [edit()], NO_WAIT);
   const writer = { sessionId: session.id };
-  await sessions.append(writer, {
-    type: "system",
-    payload: { kind: "wake", cause: "cron", text: "a fresh marker" },
-    scopeLabel: SCOPE,
-  });
+  await sessions.append(writer, { kind: "Wake", wakeCause: "cron", body: { text: "a fresh marker" } });
   assert.equal(await revisionAnchorAt(sessions, session.id), conversationAt);
   assert.equal(await revisionAnchorAt(createPostgresSessionStore(testDatabaseUrl()), "nope"), undefined);
 });
@@ -353,7 +354,7 @@ test("an edit made before the message's own turn is still caught through the tri
   await cache.ingest([{ container: CH, ts: "51.0", sub: "50.0", text: "secnd", createdAt: editedAt - 1 }]);
   await cache.ingest([{ container: CH, ts: "51.0", sub: "50.0", text: "second", editedAt }]);
   const writer = { sessionId: session.id };
-  await sessions.append(writer, { type: "user", payload: { text: "secnd", ts: "51.0" }, scopeLabel: SCOPE });
+  await sessions.append(writer, { kind: "UserMessage", text: "secnd", externalId: "51.0" });
   const anchorAt = Date.now();
   const target = { id: session.id, scopeId: SCOPE, threadRef: session.threadRef };
   assert.equal(
@@ -392,7 +393,7 @@ test("imported agent posts receive attributed edits and deletions without creati
   ]);
   await recordMessageRevisions(sessions, runs, [edit({ self: true, text: "Shall I restart the worker?" })]);
   await recordMessageRevisions(sessions, runs, [del({ self: true })]);
-  const entries = await sessions.getEntries(session.id);
+  const entries = await history(sessions, session.id);
   const marks = revisions(entries);
   assert.deepEqual(
     marks.map((m) => [m.action, m.sourceRole]),

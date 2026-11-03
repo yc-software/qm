@@ -18,9 +18,13 @@ function test(name: string, ...args: [() => void | Promise<void>] | [TestOptions
   const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
   nodeTest(name, options, () => inTestTenant(fn));
 }
+import { entryFromItem } from "../src/sessions/items.ts";
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;
+
+const history = async (sessions: SessionStore, sessionId: string) =>
+  (await sessions.getItems(sessionId)).map((item) => entryFromItem(item, scope));
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
@@ -35,57 +39,50 @@ for (const backend of ["memory", "postgres"] as const) {
       await sessions.addParticipant(session.id, "alice");
       const writer = { sessionId: session.id };
       const receipt = await sessions.append(writer, {
-        type: "user",
-        scopeLabel: scope,
-        payload: { text: "Receipt text", ts: "100.123", slackReplyReceipt: true, deliveryKey: "sent-1" },
+        kind: "UserMessage",
+        text: "Receipt text",
+        externalId: "100.123",
+        body: { slackReplyReceipt: true, deliveryKey: "sent-1" },
       });
-      const middle = await sessions.append(writer, {
-        type: "assistant",
-        scopeLabel: scope,
-        payload: { text: "Intervening reply" },
-      });
+      const middle = await sessions.append(writer, { kind: "AgentMessage", text: "Intervening reply" });
       const source = createTranscriptSource(sessions);
       assert.deepEqual(
-        (await source.forViewer(session.id, "alice")).entries.map((e) => e.seq),
+        (await source.forViewer(session.id, "alice")).items.map((e) => e.seq),
         [receipt.seq, middle.seq],
       );
       assert.deepEqual(
-        forModelContext(await sessions.getEntries(session.id)).map((e) => e.seq),
+        forModelContext(await history(sessions, session.id)).map((e) => e.seq),
         [middle.seq],
       );
       assert.deepEqual(
-        forSearchView(await sessions.getEntries(session.id)).map((e) => e.seq),
+        forSearchView(await history(sessions, session.id)).map((e) => e.seq),
         [middle.seq],
       );
       await sessions.removeParticipant(session.id, "alice");
       await sessions.addParticipant(session.id, "bob");
-      const event = await sessions.append(writer, {
-        type: "user",
-        scopeLabel: scope,
-        payload: { text: "Receipt text", ts: "100.123" },
-      });
+      const event = await sessions.append(writer, { kind: "UserMessage", text: "Receipt text", externalId: "100.123" });
       const page = await source.forRender(session.id, { limit: 1 });
       assert.deepEqual(
-        page.entries.map((e) => e.seq),
+        page.items.map((e) => e.seq),
         [event.seq],
       );
       assert.equal(page.earlier, 1);
       const previous = await source.forRender(session.id, { limit: 1, beforeSeq: event.seq });
       assert.deepEqual(
-        previous.entries.map((e) => e.seq),
+        previous.items.map((e) => e.seq),
         [middle.seq],
       );
       assert.equal(previous.earlier, 0);
       assert.deepEqual(
-        (await source.forViewer(session.id, "alice")).entries.map((e) => e.seq),
+        (await source.forViewer(session.id, "alice")).items.map((e) => e.seq),
         [receipt.seq, middle.seq],
       );
       assert.deepEqual(
-        forModelContext(await sessions.getEntries(session.id)).map((e) => e.seq),
+        forModelContext(await history(sessions, session.id)).map((e) => e.seq),
         [middle.seq, event.seq],
       );
       assert.deepEqual(
-        (await source.forViewer(session.id, "bob")).entries.map((e) => e.seq),
+        (await source.forViewer(session.id, "bob")).items.map((e) => e.seq),
         [event.seq],
       );
     },
@@ -122,22 +119,18 @@ for (const backend of ["memory", "postgres"] as const) {
       await sleep(10);
       assert.deepEqual(await deliveries.claimPending("web", 1), []);
       assert.equal((await inner.get(row.id))?.expiredAt, undefined);
-      assert.equal((await sessions.getEntries(session.id)).length, 0);
+      assert.equal((await sessions.getItems(session.id)).length, 0);
       await finishTurn();
       await sleep(10);
       assert.equal((await deliveries.claimPending("web", 1)).length, 1);
       await sessions.appendMany(
         { sessionId: session.id },
-        Array.from({ length: 210 }, (_, i) => ({
-          type: "assistant" as const,
-          scopeLabel: scope,
-          payload: { text: `Reply ${i}` },
-        })),
+        Array.from({ length: 210 }, (_, i) => ({ kind: "AgentMessage" as const, text: `Reply ${i}` })),
       );
       const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
       await restarted.pending("web");
-      const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
-      assert.equal(entries.filter((e) => (e.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt).length, 1);
+      const items = (await createTranscriptSource(sessions).forRender(session.id)).items;
+      assert.equal(items.filter((e) => e.body.slackReplyReceipt).length, 1);
       await inner.ack(row.id, Date.now());
     },
   );
