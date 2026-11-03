@@ -53,6 +53,7 @@ const RESOURCES: RowTable<SandboxResource, "id"> = {
       indexes: [
         "CREATE INDEX sandbox_resources_owner ON sandbox_resources (tenant_id, owner_scope_id) WHERE job_only IS NOT TRUE",
         "CREATE INDEX sandbox_resources_job_only ON sandbox_resources (tenant_id) WHERE job_only",
+        "CREATE INDEX sandbox_resources_backing ON sandbox_resources (tenant_id, backing_scope_id)",
       ],
     }),
   ],
@@ -97,6 +98,7 @@ export interface SandboxResourceRecords {
   owners(): Promise<string[]>;
   ownedBy(scopes: readonly string[]): Promise<SandboxResource[]>;
   jobComputers(): Promise<SandboxResource[]>;
+  providerName(backend: string, backingScopeId: string): Promise<string | null>;
 }
 
 export interface SandboxDefaults {
@@ -133,6 +135,14 @@ export function createSandboxResourceStores(databaseUrl: string): {
         ).map(records.row),
       jobComputers: async () =>
         (await records.db.q(`${records.select} WHERE ${records.scoped("job_only")} ORDER BY id`)).map(records.row),
+      providerName: async (backend, backingScopeId) => {
+        const where = records.scoped("backend = $1 AND backing_scope_id = $2 AND provider_name IS NOT NULL");
+        const rows = await records.db.q(`SELECT provider_name FROM sandbox_resources WHERE ${where} LIMIT 1`, [
+          backend,
+          backingScopeId,
+        ]);
+        return rows[0] ? String(rows[0].provider_name) : null;
+      },
     },
     defaults: {
       get: async (scopeId) => {

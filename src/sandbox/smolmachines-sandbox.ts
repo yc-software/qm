@@ -122,6 +122,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
+  let storedName: ((scopeId: string) => Promise<string | null>) | undefined;
+  const nameFor = async (scopeId: string): Promise<string> =>
+    (await storedName?.(scopeId)) ?? sandboxScopeName(prefix, scopeId);
   const image = opts.image ?? DEFAULT_IMAGE;
   const resources = {
     ...(opts.cpus ? { cpus: opts.cpus } : {}),
@@ -462,6 +465,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     workspace,
     label: "smolmachines",
     prefix,
+    nameFor,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
@@ -563,7 +567,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
+            const name = await nameFor(scopeId);
             await base.provisionQueue(scopeId, () =>
               advisoryLock.withLock(lifecycleKey(scopeId), async () => {
                 await initializeMachine(name, scopeId);
@@ -574,8 +578,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         }
       : {}),
 
+    scopeName: (scopeId: string) => sandboxScopeName(prefix, scopeId),
+    useStoredNames(lookup: (scopeId: string) => Promise<string | null>) {
+      storedName = lookup;
+    },
+
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       const recovery = await recoveryFor(scopeId);
       let info: MachineInfo | null;
       try {
@@ -618,7 +627,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     async destroyScope(scopeId: string): Promise<void> {
       return base.provisionQueue(scopeId, () =>
         advisoryLock.withLock(lifecycleKey(scopeId), async () => {
-          await deleteMachine(sandboxScopeName(prefix, scopeId));
+          await deleteMachine(await nameFor(scopeId));
           await store.delete(scopeId);
         }),
       );
