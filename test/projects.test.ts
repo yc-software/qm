@@ -618,7 +618,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         audience: [{ externalId: "outsider" }],
       },
       text: "background project work",
-      triggered: true,
+      origin: { kind: "automation" },
     });
   assert.equal((await background()).status, "ok");
   const removableApprovalThread = "web:member:approval-to-cancel";
@@ -846,7 +846,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
         audience: [],
       },
       text: `!security-risk ${marker}`,
-      unprompted: true,
+      origin: { kind: "ambient" },
       ...(overheard
         ? {
             overheard: [
@@ -869,7 +869,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
       audience: [],
     },
     text: "!security-risk initial-marker",
-    unprompted: true,
+    origin: { kind: "ambient" },
     approval: { requestId: quarantined.pendingApprovals![0]!.requestId, approved: false },
   });
   assert.equal(denied.status, "refused");

@@ -51,7 +51,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -446,8 +446,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const bounded = securityScreenPayload({
         surface: "external",
         text: "",
-        triggered: true,
-        securityScreenData: payload,
+        origin: { kind: "automation", screenData: payload },
         ...(verifiedSwarm ? { verifiedSwarm } : {}),
       });
       const steerContext = {
@@ -898,8 +897,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const screenPayload = screenInbound
           ? securityScreenPayload({
               ...input,
-              ...turnOriginRequestFields(input.origin),
-              ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
+              ...(sessionTurn ? { origin: { kind: "automation" as const, screenData: input.text } } : {}),
               overheard: [],
               externalPromptData,
               verifiedSwarm: Boolean(input.swarm && swarmBinding),

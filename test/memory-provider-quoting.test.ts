@@ -92,7 +92,7 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   assert.deepEqual(outcomes(entries.find((entry) => entry.type === "user")), recalledBoth);
 
   await assert.rejects(
-    built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", liveActor: true }),
+    built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", origin: { kind: "human" } }),
     /not approved/,
   );
   const failed = (await built.sessions.getEntries(result.sessionId!)).findLast((entry) => entry.type === "user");

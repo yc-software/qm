@@ -589,7 +589,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
       conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
       text: "Make it shorter",
       model: "claude-haiku-4-5",
-      triggered: true,
+      origin: { kind: "automation" },
       async: true,
     });
     assert.equal(rejected.status, "refused");

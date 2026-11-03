@@ -127,7 +127,7 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();
@@ -151,7 +151,7 @@ test("a company Claude subscription token in ANTHROPIC_API_KEY serves company tu
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "claude-company-subscription-e2e" },
     text: "ping",
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   });
   built.runtime.start();

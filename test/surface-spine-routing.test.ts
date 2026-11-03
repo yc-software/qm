@@ -25,7 +25,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -190,10 +190,9 @@ test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) post
       actor,
       conversation: { kind: "channel", threadRef: "ch:C7:700.7", channelRef: "C7", audience: [actor] },
       text: "!post the build passed",
-      triggered: true,
+      origin: { kind: "automation", destination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") } },
       surfaceTools: true,
       addressed: true,
-      triggerDestination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -216,10 +215,12 @@ test("a monitor (addressed poll fire) that finishes silently is NOT nudged into 
       actor,
       conversation: { kind: "channel", threadRef: "ch:C8:800.8", channelRef: "C8", audience: [actor] },
       text: "!finish-silent",
-      triggered: true,
+      origin: {
+        kind: "automation",
+        destination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
+      },
       surfaceTools: true,
       addressed: true,
-      triggerDestination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
       async: false,
     });
     await sleep(300);
@@ -244,7 +245,7 @@ test("surfaceTools with NO resolvable destination falls back to the normal auto-
       actor: principal,
       conversation: { kind: "dm", threadRef: "dm:U9:x", audience: [principal] },
       text: "hello",
-      liveActor: true,
+      origin: { kind: "human" },
       surfaceTools: true,
       async: false,
     });
@@ -267,7 +268,7 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: "!post following up",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: true,
     });
     const posted = await pollFor(
@@ -468,7 +469,7 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
       conversation: { kind: "channel", threadRef: `ch:C-amb:700.3`, channelRef: "C-amb", audience: [actor] },
       deliveryTarget: `C-amb:700.3`,
       text: "!silent",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: false,
     });
     assert.equal(res.status, "silent", "an unaddressed silent turn stays silent, no nudge");
@@ -492,7 +493,7 @@ test("post broadcast:true posts at the channel top level, not in the current thr
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: `!broadcast ahoy channel`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     const posted = await pollFor(built.deliveries, (d) => d.text === "ahoy channel");
@@ -516,7 +517,7 @@ test("post with an explicit ts to the current channel targets exactly <channel>:
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `${channel}:${root}`,
       text: `!postthread ${ts} threaded reply`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     const posted = await pollFor(built.deliveries, (d) => d.text === "threaded reply");
@@ -545,7 +546,7 @@ test("reach to a named channel resolves it, posts at that channel's top level, a
       },
       deliveryTarget: `${channel}:${root}`,
       text: `!reachchan ${channel} elsewhere`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -595,7 +596,7 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: "!post following up",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -639,7 +640,7 @@ test("a shared web project turn answers with its final text, not surface tools",
       actor,
       conversation: { kind: "group", threadRef: `web:U1:${crypto.randomUUID()}`, channelRef: ref, audience: [actor] },
       text: "hello project",
-      liveActor: true,
+      origin: { kind: "human" },
     });
     assert.equal(result.status, "ok", result.reason);
     assert.ok(result.reply, "the final text is the reply");

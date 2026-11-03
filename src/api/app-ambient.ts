@@ -264,8 +264,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           conversation,
           deliveryTarget: batch.container,
           text: solicited.message.text,
-          liveActor: true,
-          triggerTs: solicited.message.ts,
+          origin: { kind: "human", ...(solicited.message.ts ? { messageTs: solicited.message.ts } : {}) },
           surfaceTools: true,
           async: true,
           spawned: true,
@@ -286,11 +285,13 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             recentMessages: shown,
             instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
-          securityScreenData: JSON.stringify({
-            messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-            judgeReason: decision.reason ?? null,
-          }),
-          triggered: true,
+          origin: {
+            kind: "automation",
+            screenData: JSON.stringify({
+              messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
+              judgeReason: decision.reason ?? null,
+            }),
+          },
           surfaceTools: true,
           async: true,
           spawned: true,
