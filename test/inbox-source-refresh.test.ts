@@ -5,10 +5,11 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
+import { testItemRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createLoopItemLedger(testMap());
+  const items = createLoopItemLedger(testItemRows());
   await items.ingest([
     {
       loopId: "inbox",
@@ -658,7 +659,7 @@ test("profile failures retain diagnostics without exposing credentials", () =>
   inTestTenant(async () => {
     for (const mode of [undefined, "avatars"] as const) {
       const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-      const errors = createPostgresErrorLog(testDatabaseUrl());
+      const errors = createPostgresErrorLog(testSharedDatabaseUrl());
       await createInboxSourceRefresh({
         featureFlags,
         items,
@@ -681,7 +682,7 @@ test("profile failures retain diagnostics without exposing credentials", () =>
 test("cosmetic refresh records ledger failures without rejecting the inbox request", () =>
   inTestTenant(async () => {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-    const errors = createPostgresErrorLog(testDatabaseUrl());
+    const errors = createPostgresErrorLog(testSharedDatabaseUrl());
     await createInboxSourceRefresh({
       featureFlags,
       items: {

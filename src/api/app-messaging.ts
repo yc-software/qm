@@ -192,8 +192,8 @@ export function createMessagingMethods(
     latestCronFireForThread(id, threadRef) {
       return deps.crons.latestFireForThread(id, threadRef);
     },
-    listCrons() {
-      return deps.crons.list();
+    listCrons(ownerScopeId) {
+      return ownerScopeId ? deps.crons.ownedBy(ownerScopeId) : deps.crons.list();
     },
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
@@ -299,8 +299,8 @@ export function createMessagingMethods(
         }),
       );
     },
-    listWebhooks() {
-      return deps.webhooks.list();
+    listWebhooks(ownerScopeId) {
+      return ownerScopeId ? deps.webhooks.ownedBy(ownerScopeId) : deps.webhooks.list();
     },
     setWebhookEnabled(id, enabled) {
       return deps.webhooks.setEnabled(id, enabled);

@@ -1,11 +1,12 @@
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { MAX_SCREEN_CHARS } from "../src/security/security-posture.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,13 +38,7 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testAdvisoryLock,
-  testDeployBackings,
-  testMap,
-} from "./support/test-database.ts";
+import { testConfigStore, testAdvisoryLock, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
@@ -111,10 +106,10 @@ function buildOrchestrator(
   } = {},
 ) {
   const config = testConfigStore(ORG);
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(testSharedDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testSharedDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
-  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const memory = createPostgresMemoryService(testSharedDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -123,8 +118,8 @@ function buildOrchestrator(
     auditLog,
     acl,
   });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
+  const files = createPostgresFileArtifactStore(testSharedDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -539,7 +534,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", () =>
   inTestTenant(async () => {
-    const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+    const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
     const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
     await crons.create({
       ...base,
@@ -953,7 +948,7 @@ test("a steer delivered by notification is screened in the context of the turn i
         screens.push(contextHeaders(headers));
       return new Response(anthropicStream('{"decision":"auto"}'), { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
-    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const signals = createPostgresRunSignalStore(testSharedDatabaseUrl());
     const { orchestrator } = buildOrchestrator({
       agent: createAgent({
         defaultModelId: "claude-haiku-4-5",
@@ -1421,7 +1416,7 @@ for (const surfaceTools of [false, true]) {
 
 test("scheduled-work changes update the next turn's system block without rewriting history", () =>
   inTestTenant(async () => {
-    const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+    const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
     const sandbox = fakeSandbox();
     const seen: AgentTurnInput[] = [];
     const agent = createMockAgent();

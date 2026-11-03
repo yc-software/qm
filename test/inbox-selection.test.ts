@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { inboxRoutes } from "../src/api/routes/inbox.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
@@ -11,16 +11,24 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import {
+  testCronRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+  testShipGrantRows,
+  testSharedDatabaseUrl,
+} from "./support/typed-stores.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
-    store: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
-    grants: createShipGrantStore(testMap()),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    store: createLoopStore(testLoopRows()),
+    items: createLoopItemLedger(testItemRows()),
+    outputs: createLoopOutputStore(testOutputRows()),
+    grants: createShipGrantStore(testShipGrantRows()),
+    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) }),
     config: testConfigStore("org"),
   };
   const uiState = testMap<PersistedUiState>();
@@ -404,7 +412,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
 });
 
 test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
-  const store = createLoopStore(testMap());
+  const store = createLoopStore(testLoopRows());
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
     ...base,

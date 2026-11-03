@@ -59,9 +59,7 @@ export function renderSourceInboxTask(loopId: string, source: string): string {
 export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): Promise<Loop[]> {
   const loops: Loop[] = [];
   for (const [source, { loopName: name }] of Object.entries(SOURCE_TEXT)) {
-    const existing = (await store.list()).find(
-      (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
-    );
+    const existing = await store.byScope(scopeId("personal", owner), `inbox:${source}`);
     if (existing) {
       loops.push(existing);
       continue;

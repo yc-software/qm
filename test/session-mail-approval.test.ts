@@ -20,23 +20,17 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testAdvisoryLock,
-  testConfigStore,
-  testDatabaseUrl,
-  testMap,
-  testDeployBackings,
-} from "./support/test-database.ts";
+import { testAdvisoryLock, testConfigStore, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSessionMailbox, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function fakeSandbox(): Sandbox {
@@ -64,16 +58,16 @@ const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audie
 let callSeq = 0;
 
 async function scenario() {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
+  const { runs } = createPostgresRunStore(testSharedDatabaseUrl());
+  const mailbox = testSessionMailbox();
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
     mailbox,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(testSharedDatabaseUrl()),
     maxAttempts: 3,
     advisoryLock: testAdvisoryLock(),
   });
@@ -98,8 +92,8 @@ async function scenario() {
       return { decision: "strict" as const, reason: "test quarantine" };
     },
   };
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(testSharedDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testSharedDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
@@ -108,11 +102,11 @@ async function scenario() {
     sessions,
     runs,
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testSharedDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
     agent,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(testSharedDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),

@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -8,11 +9,11 @@ import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from 
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

@@ -10,13 +10,18 @@ import { sealOAuthState } from "../src/connectors/oauth.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import type { SecretDropStore } from "../src/credentials/secret-drop.ts";
 import type { DeliverResult } from "../src/webhooks/webhook-receiver.ts";
+import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
+import { createPostgresWebhookRows } from "../src/webhooks/webhook-table.ts";
+import { createPostgresIngressSourceRows } from "../src/loops/ingress-table.ts";
+import { scopeId } from "../src/types.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { boundTenant, isTenantId, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const SIGNING_SECRET = "tenant-ingress-signing-secret-0123456789abcdef";
 const APPS_DOMAIN = "apps.ingress.test";
@@ -44,8 +49,8 @@ const UNBOUND_ROUTES: Record<string, { tenant: RouteTenant; gap?: string }> = {
   "POST /v1/slack/managed/events": { tenant: "row", gap: "T8" },
   "GET /v1/connectors/oauth/github/callback": { tenant: "row" },
   "GET /v1/deployments/dep-1/git/info/refs": { tenant: "row" },
-  "POST /v1/webhooks/incoming/x": { tenant: "row", gap: "K2" },
-  "POST /v1/loop-ingress/x": { tenant: "row", gap: "K2" },
+  "POST /v1/webhooks/incoming/x": { tenant: "row" },
+  "POST /v1/loop-ingress/x": { tenant: "row" },
   "GET /v1/keychain/drops/x/form": { tenant: "row", gap: "K1" },
   "POST /v1/keychain/drops/x": { tenant: "row", gap: "K1" },
 };
@@ -68,7 +73,8 @@ function portOf(server: Server): number {
 }
 
 const [TENANT] = testTenants();
-const config = testConfig();
+const databaseUrl = testMigratedDatabaseUrl();
+const config = testConfig({ databaseUrl });
 const built = buildApp(config);
 const managedSlack = createManagedSlack({
   serviceUrl: "https://slack-service.ingress.test",
@@ -246,26 +252,49 @@ describe("row- and signed-source-resolved routes bind before tenant work", () =>
     assert.deepEqual(seen, [TENANT]);
   });
 
-  it("incoming webhooks bind a tenant before delivery", { todo: "K2 resolves the webhook's tenant" }, async (t) => {
+  it("incoming webhooks bind the webhook row's tenant before delivery", async (t) => {
+    const webhook = await inTestTenant(() =>
+      createWebhookStore(createPostgresWebhookRows(databaseUrl)).create({
+        ownerScopeId: scopeId("personal", "U1"),
+        owner: "U1",
+        createdBy: "U1",
+        action: "triage",
+        verification: { scheme: "github", secret: SIGNING_SECRET },
+        destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
+      }),
+    );
     const seen: Array<string | undefined> = [];
     t.mock.method(built.webhookReceiver, "deliver", async (): Promise<DeliverResult> => {
       recordTenant(seen);
       return { status: 404 };
     });
     await send("POST", "/v1/webhooks/incoming/x", { "content-type": "application/json" }, "{}");
-    assert.equal(seen.length, 1);
-    assert.ok(isTenantId(seen[0]));
+    assert.deepEqual(seen, []);
+    await send("POST", `/v1/webhooks/incoming/${webhook.id}`, { "content-type": "application/json" }, "{}");
+    assert.deepEqual(seen, [TENANT]);
   });
 
-  it("loop ingress binds a tenant before receiving", { todo: "K2 resolves the loop source's tenant" }, async (t) => {
+  it("loop ingress binds the source row's tenant before receiving", async (t) => {
+    await inTestTenant(() =>
+      createPostgresIngressSourceRows(databaseUrl).insert({
+        id: "ingress-source-1",
+        loopId: "loop-1",
+        owner: "U1",
+        kind: "webhook",
+        enabled: true,
+        secret: SIGNING_SECRET,
+        createdAt: Date.now(),
+      }),
+    );
     const seen: Array<string | undefined> = [];
     t.mock.method(built.loopIngress, "receive", async () => {
       recordTenant(seen);
       return { status: 404, body: "" };
     });
     await send("POST", "/v1/loop-ingress/x", { "content-type": "application/json" }, "{}");
-    assert.equal(seen.length, 1);
-    assert.ok(isTenantId(seen[0]));
+    assert.deepEqual(seen, []);
+    await send("POST", "/v1/loop-ingress/ingress-source-1", { "content-type": "application/json" }, "{}");
+    assert.deepEqual(seen, [TENANT]);
   });
 
   const dropRequests: Array<[string, string]> = [

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createHmac } from "node:crypto";
 import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -8,13 +8,50 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push.ts";
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
+import {
+  testIngressDeliveryRows,
+  testIngressSourceRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+} from "./support/typed-stores.ts";
+
+function inspectableSources() {
+  const rows = testIngressSourceRows();
+  const ids = new Set<string>();
+  return {
+    ...rows,
+    insert: async (source: LoopIngress) => {
+      await rows.insert(source);
+      ids.add(source.id);
+    },
+    all: async () =>
+      (await Promise.all([...ids].sort().map((id) => rows.get(id)))).filter((s): s is LoopIngress => s !== null),
+    merge: (id: string, patch: Partial<LoopIngress>) => rows.update(id, (source) => ({ ...source, ...patch })),
+  };
+}
+
+function inspectableDeliveries() {
+  const rows = testIngressDeliveryRows();
+  const ids = new Set<string>();
+  const get = (id: string) => rows.update(id, (delivery) => delivery);
+  return {
+    ...rows,
+    insertIfAbsent: async (delivery: IngressDelivery) => {
+      await rows.insertIfAbsent(delivery);
+      ids.add(delivery.id);
+    },
+    get,
+    all: async () => (await Promise.all([...ids].sort().map(get))).filter((d): d is IngressDelivery => d !== null),
+  };
+}
 
 async function world() {
-  const sources = testMap<LoopIngress>();
-  const deliveries = testMap<IngressDelivery>();
-  const loops = createLoopStore(testMap());
-  const items = createLoopItemLedger(testMap());
+  const sources = inspectableSources();
+  const deliveries = inspectableDeliveries();
+  const loops = createLoopStore(testLoopRows());
+  const items = createLoopItemLedger(testItemRows());
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",
@@ -30,7 +67,7 @@ async function world() {
     deliveries,
     loops,
     items,
-    outputs: createLoopOutputStore(testMap()),
+    outputs: createLoopOutputStore(testOutputRows()),
     lock: testAdvisoryLock(),
     fire: {
       fire: async (

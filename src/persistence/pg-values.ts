@@ -1,0 +1,58 @@
+import type { Pool } from "pg";
+import { withPgTransaction } from "./pg-pool.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
+
+export type Row = Record<string, unknown>;
+
+export const text = (value: string | undefined | null): string | null => (value == null ? null : pgTextSafe(value));
+
+export const texts = (value: readonly string[] | undefined | null): string[] | null =>
+  value == null ? null : value.map(pgTextSafe);
+
+export const json = (value: unknown): string | null => (value == null ? null : jsonbStringify(value));
+
+export const ms = (value: number | undefined | null): number | null => (value == null ? null : Math.round(value));
+
+export const num = (value: unknown): number | undefined => (value == null ? undefined : Number(value));
+
+export function present<T>(record: Record<string, unknown>): T {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== null && value !== undefined)) as T;
+}
+
+export const kvText = (field: string): string => `json->>'${field}'`;
+
+export const kvBigint = (field: string): string => `(json->>'${field}')::numeric::bigint`;
+
+export const kvTexts = (field: string): string =>
+  `CASE WHEN jsonb_typeof(json->'${field}') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'${field}')) END`;
+
+export const kvJsonb = (field: string): string => `NULLIF(json->'${field}', 'null'::jsonb)`;
+
+export function columnList(columns: ReadonlyArray<readonly [string, string]>): { names: string; values: string } {
+  return {
+    names: columns.map(([name]) => name).join(", "),
+    values: columns.map(([, type], i) => `$${i + 1}::${type}`).join(", "),
+  };
+}
+
+export interface LockedRow<T> {
+  select: string;
+  update: string;
+  read(row: Row): T;
+  params(value: T): unknown[];
+}
+
+export function updateLocked<T extends { id: string }>(
+  pool: Pool,
+  row: LockedRow<T>,
+  id: string,
+  apply: (current: T) => T,
+): Promise<T | null> {
+  return withPgTransaction(pool, async (client) => {
+    const current = await client.query(`${row.select} AND id = $1 FOR UPDATE`, [id]);
+    if (!current.rows[0]) return null;
+    const next = { ...apply(row.read(current.rows[0])), id };
+    await client.query(row.update, row.params(next));
+    return next;
+  });
+}

@@ -1,9 +1,10 @@
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -18,9 +19,17 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import {
+  testCronRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+  testShipGrantRows,
+  testSharedDatabaseUrl,
+} from "./support/typed-stores.ts";
 
 function fakeIdentity() {
   return {
@@ -57,11 +66,12 @@ function service(
     resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
-  const loops = createLoopStore(testMap());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const items = createLoopItemLedger(testMap());
-  const outputs = createLoopOutputStore(testMap());
-  const grants = overrides?.grants ?? createShipGrantStore(testMap());
+  const url = testDatabaseUrl();
+  const loops = createLoopStore(testLoopRows(url));
+  const crons = createCronStore(testCronRows(url), { fires: createPostgresCronFireStore(url) });
+  const items = createLoopItemLedger(testItemRows(url));
+  const outputs = createLoopOutputStore(testOutputRows(url));
+  const grants = overrides?.grants ?? createShipGrantStore(testShipGrantRows(url));
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore(testMap());
@@ -362,7 +372,7 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 });
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const directory = createPostgresDirectoryStore(testSharedDatabaseUrl());
   await inTestTenant(async () => {
     await directory.replace([
       { principalId: "josh", displayName: "Josh", type: "internal" },
@@ -381,7 +391,7 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
 
 test("a stale-loop ping still reaches the owner's web conversation", async () => {
   const s = service(HAPPY, {
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(testSharedDatabaseUrl()),
     resolveRecipient: async () => ({ kind: "none" }),
   });
   const loop = await makeLoop(s.loops, {
@@ -444,7 +454,7 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
 });
 
 test("an auto grant ships the matching slice without a person", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(
@@ -463,7 +473,7 @@ test("an auto grant ships the matching slice without a person", async () => {
 });
 
 test("revoking an auto grant during work leaves the output held", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   let grantId = "";
   const s = service(
     (req) => {
@@ -490,7 +500,7 @@ test("revoking an auto grant during work leaves the output held", async () => {
 });
 
 test("a policy version bump during work leaves the output held", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   let loopId = "";
   const s = service(
     (req) => {
@@ -517,7 +527,7 @@ test("a policy version bump during work leaves the output held", async () => {
 });
 
 test("a stale grant does not auto-ship after a semantic policy change", async () => {
-  const grants = createShipGrantStore(testMap());
+  const grants = createShipGrantStore(testShipGrantRows());
   const s = service(HAPPY, { grants });
   const loop = await makeLoop(s.loops);
   await grants.put(

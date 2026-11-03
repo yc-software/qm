@@ -474,10 +474,7 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
   const acting = actingPrincipal(ctx);
   if (!acting) return;
-  const loop =
-    (await deps.store.list()).find(
-      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
-    ) ?? null;
+  const loop = await deps.store.byOwner(acting.actorId, "inbox:gmail");
   const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
   sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
 }

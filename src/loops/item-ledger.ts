@@ -10,7 +10,7 @@ import type {
   LoopThreadMessage,
 } from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type ItemRows } from "./item-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -209,14 +209,14 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 }
 
 export function createLoopItemLedger(
-  backing: DurableMap<LoopItem>,
+  rows: ItemRows,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;
     accepts: (loopId: string) => Promise<boolean>;
   },
 ): LoopItemLedger {
-  const update = backing.update.bind(backing);
+  const update = (id: string, apply: (item: LoopItem) => LoopItem) => rows.update(id, apply);
   const emit = (item: LoopItem | null | undefined, op: LedgerEventOp): void => {
     if (item && onEvent) onEvent({ loopId: item.loopId, itemId: item.id, op, at: Date.now() });
   };
@@ -238,8 +238,7 @@ export function createLoopItemLedger(
     return applied ? after : null;
   };
 
-  const forLoop = async (loopId: string): Promise<LoopItem[]> =>
-    (await backing.all()).filter((item) => item.loopId === loopId);
+  const forLoop = (loopId: string): Promise<LoopItem[]> => rows.byLoop(loopId);
 
   const ledger: LoopItemLedger = {
     async enqueue(input) {
@@ -257,20 +256,12 @@ export function createLoopItemLedger(
         updatedAt: now,
         ...(input.sourceSummary !== undefined ? { sourceSummary: input.sourceSummary } : {}),
       };
-      const created = await backing.insertIfAbsent(id, candidate);
-      return { item: created ? candidate : ((await backing.get(id)) ?? candidate), created };
+      const created = await rows.insertIfAbsent(candidate);
+      return { item: created ? candidate : ((await rows.get(id)) ?? candidate), created };
     },
     async summaries(loopIds, options) {
-      if (!options?.includeInboxMetadata)
-        return backing.select({
-          where: { field: "loopId", anyOfFold: loopIds },
-          omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
-        });
-      const items = await backing.select({
-        where: { field: "loopId", anyOfFold: loopIds },
-        omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
-      });
+      if (!options?.includeInboxMetadata) return rows.summaries(loopIds);
+      const items = await rows.summaries(loopIds, ["automated", "participants", "slackAvatarsRefreshAt"]);
       return items.map(({ sourcePayload, ...item }) => {
         return {
           ...item,
@@ -293,7 +284,7 @@ export function createLoopItemLedger(
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
       if (!entries.length) return outcome;
       const changed: LoopItem[] = [];
-      await backing.mutateMany(
+      await rows.mutateMany(
         entries.map((entry) => {
           const id = loopItemId(entry.loopId, entry.dedupeKey);
           return {
@@ -382,7 +373,7 @@ export function createLoopItemLedger(
       return applied ? after : null;
     },
     async appendThread(id, messages) {
-      if (messages.length === 0) return backing.get(id);
+      if (messages.length === 0) return rows.get(id);
       let applied = false;
       const after = await update(id, (item) => {
         applied = true;
@@ -478,7 +469,7 @@ export function createLoopItemLedger(
     },
     async prune(loopId, options) {
       const now = options.now ?? Date.now();
-      const items = await forLoop(loopId);
+      const items = await rows.lifecycle(loopId);
       const expired = items.filter(
         (item) => isResolved(item) && now - (item.actedAt ?? item.updatedAt) >= options.retentionMs,
       );
@@ -490,21 +481,12 @@ export function createLoopItemLedger(
           .sort((a, b) => (a.actedAt ?? a.updatedAt) - (b.actedAt ?? b.updatedAt));
         for (const item of resolvedOldestFirst.slice(0, surviving.length - options.maxItems)) doomed.set(item.id, item);
       }
-      for (const id of doomed.keys()) await backing.delete(id);
+      await rows.delete([...doomed.keys()]);
       return doomed.size;
     },
-    get: (id) => backing.get(id),
+    get: (id) => rows.get(id),
     byLoop: forLoop,
-    async queued(loopId, limit) {
-      const queued = (await forLoop(loopId))
-        .filter(
-          (item) =>
-            item.status === "queued" ||
-            (item.status === "in_progress" && (item.claimedAt ?? 0) + CLAIM_LEASE_MS <= Date.now()),
-        )
-        .sort((a, b) => a.createdAt - b.createdAt);
-      return limit === undefined ? queued : queued.slice(0, limit);
-    },
+    queued: (loopId, limit) => rows.queued(loopId, Date.now() - CLAIM_LEASE_MS, limit),
     async claim(id, claimedAt = Date.now(), expectedLoopId) {
       const now = claimedAt;
       let applied = false;
@@ -631,7 +613,7 @@ export function createLoopItemLedger(
         "skipped",
       ),
     async stats(loopId, now, held) {
-      const items = (await forLoop(loopId)).filter((item) => !held?.has(item.id));
+      const items = (await rows.lifecycle(loopId)).filter((item) => !held?.has(item.id));
       const queued = items.filter((item) => item.status === "queued");
       const oldest = queued.reduce<number | undefined>(
         (acc, item) => (acc === undefined || item.createdAt < acc ? item.createdAt : acc),
@@ -645,9 +627,7 @@ export function createLoopItemLedger(
         ...(oldest !== undefined ? { oldestQueuedAgeMs: Math.max(0, now - oldest) } : {}),
       };
     },
-    async deleteByLoop(loopId) {
-      for (const item of await forLoop(loopId)) await backing.delete(item.id);
-    },
+    deleteByLoop: (loopId) => rows.deleteByLoop(loopId),
   };
   if (!coordination) return ledger;
   const guarded = <T>(loopId: string, fn: () => Promise<T>): Promise<T> =>

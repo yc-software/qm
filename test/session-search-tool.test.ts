@@ -8,9 +8,9 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import { testSessionMailbox, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { scopeId, type Principal } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
@@ -36,13 +36,13 @@ test("session search reuses indexed search with participant intersection, tenure
       kind: "UserMessage",
       text: "memo shared",
     });
-    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(testSharedDatabaseUrl());
     let members: Principal[] | undefined;
     const factory = createSessionSyscalls({
       sessions,
       runs,
-      signals: createPostgresRunSignalStore(testDatabaseUrl()),
-      mailbox: createSessionMailbox(testMap<SessionMessage>()),
+      signals: createPostgresRunSignalStore(testSharedDatabaseUrl()),
+      mailbox: testSessionMailbox(),
       maxAttempts: 1,
       advisoryLock: testAdvisoryLock(),
       prepareRequest: async (request) => ({

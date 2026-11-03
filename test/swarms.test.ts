@@ -1,5 +1,7 @@
+import { withoutTenant } from "../src/tenants/context.ts";
 import { SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
@@ -774,7 +776,7 @@ test("restart between enqueue and outbox acknowledgement does not redeliver", ()
     await Promise.all([service.sweep(), restarted.sweep()]);
     assert.equal((await runs.list()).length, before.length);
     assert.deepEqual((await runs.list()).map((run) => run.id).sort(), before.map((run) => run.id).sort());
-    assert.equal((await store.pending()).length, 0);
+    assert.equal((await withoutTenant(() => store.pending())).length, 0);
   }));
 
 test("sandbox reservation survives a crash after provisioning without creating another disk", () =>
@@ -830,7 +832,7 @@ test("provisioning failure is bounded and rolls back owned resources without que
     assert.equal((await records.get(forum.id))!.state, "ready");
     assert.equal(await sessions.getByThread(worker!.threadRef), null);
     assert.equal((await runs.list()).length, 1);
-    assert.equal((await store.pending()).length, 0);
+    assert.equal((await withoutTenant(() => store.pending())).length, 0);
   }));
 
 test("explicit forum supplements private worker disks and remains scope-authorized", () =>

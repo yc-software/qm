@@ -3,7 +3,12 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
 import { jsonbStringify } from "../src/util/text.ts";
-import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
+import {
+  createPostgresSessionMailbox,
+  type SessionMailbox,
+  type SessionMessage,
+} from "../src/sessions/session-mailbox.ts";
+import { testSessionMailbox, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { test as nodeTest, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -23,7 +28,7 @@ import type { Run, RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
@@ -51,11 +56,11 @@ async function rig(opts?: {
   treeRunCap?: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const url = testDatabaseUrl();
+  const url = testSharedDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const signals = createPostgresRunSignalStore(url);
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = testSessionMailbox();
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
     mailbox,
@@ -883,8 +888,8 @@ test("follow-up retries recover the accepted run before checking full capacity",
 });
 
 test("mailbox survives recreation and rejects acknowledgements for another recipient", async () => {
-  const backing = testMap<SessionMessage>();
-  const mail = createSessionMailbox(backing);
+  const url = testSharedDatabaseUrl();
+  const mail = createPostgresSessionMailbox(url);
   const message: SessionMessage = {
     id: "one",
     senderId: "sender",
@@ -896,7 +901,7 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
   };
   await mail.send(message);
   await mail.send({ ...message, text: "replacement" });
-  const restarted = createSessionMailbox(backing);
+  const restarted = createPostgresSessionMailbox(url);
   await restarted.acknowledge("wrong", [message.id]);
   assert.equal((await restarted.pending("recipient"))[0]!.text, "data");
   await restarted.acknowledge("recipient", [message.id]);
@@ -1744,11 +1749,11 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const url = testDatabaseUrl();
+  const url = testSharedDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: testSessionMailbox(),
     sessions,
     runs,
     signals: createPostgresRunSignalStore(url),
@@ -1789,7 +1794,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const url = testDatabaseUrl();
+  const url = testSharedDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
@@ -1803,7 +1808,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const guest: Principal = { id: "G1", type: "guest", displayName: "Guest" };
   await sessions.addParticipant(room.id, guest.id);
   const factory = createSessionSyscalls({
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: testSessionMailbox(),
     sessions,
     runs,
     signals: createPostgresRunSignalStore(url),

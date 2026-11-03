@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { withoutTenant } from "../src/tenants/context.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
@@ -66,10 +67,10 @@ test("a paused worker's held notification does not keep the swarm in the outbox 
     await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
     await fixture.service.sweep();
     assert.equal((await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!.state, "pending");
-    assert.deepEqual(await fixture.store.pending(), []);
+    assert.deepEqual(await withoutTenant(() => fixture.store.pending()), []);
     await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "active" });
     assert.deepEqual(
-      (await fixture.store.pending()).map((swarm) => swarm.id),
+      (await withoutTenant(() => fixture.store.pending())).map((swarm) => swarm.id),
       [fixture.root.id],
     );
   }));
@@ -91,7 +92,7 @@ test("an expired swarm fails a paused worker's held notifications and keeps thei
     assert.deepEqual(swarm.messages[0]!.notifications[second!.id], { state: "failed", runId: queued.runId });
     assert.equal(swarm.messages.at(-1)!.notifications[second!.id]!.state, "failed");
     assert.equal(swarm.messages.at(-1)!.notifications[first!.id]!.state, "failed");
-    assert.deepEqual(await fixture.store.pending(), []);
+    assert.deepEqual(await withoutTenant(() => fixture.store.pending()), []);
   }));
 
 test("a worker cannot control a sibling", () =>

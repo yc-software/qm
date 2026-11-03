@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import pg, { type Pool } from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createCronStore } from "../src/cron/cron-store.ts";
-import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
-import type { Webhook, Cron } from "../src/triggers/types.ts";
 import {
   createKeychain,
   KeychainError,
@@ -18,14 +15,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import {
-  migrateTestDatabase,
-  ownerUrlOf,
-  testAdvisoryLock,
-  testMap,
-  testDatabaseUrl,
-} from "./support/test-database.ts";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { migrateTestDatabase, ownerUrlOf, testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -81,28 +71,6 @@ test("pg map: a value persists across map instances (no per-process cache to div
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await migrateTestDatabase(URL);
   assert.equal((await reader.get("shared"))!.nested.n, 9);
-});
-
-test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
-  const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
-    fires: createPostgresCronFireStore(testDatabaseUrl()),
-  });
-  await migrateTestDatabase(URL);
-  const c = await store.create({
-    schedule: { everyMs: 60_000 },
-    action: "digest",
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-  });
-  await store.markFired(c.id, 123);
-  const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
-    fires: createPostgresCronFireStore(testDatabaseUrl()),
-  });
-  await migrateTestDatabase(URL);
-  const got = await reader.get(c.id);
-  assert.equal(got?.action, "digest");
-  assert.equal(got?.lastFiredAt, 123);
 });
 
 test(
@@ -471,42 +439,6 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
   }
 });
 
-test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
-  const factory = createPostgresMapFactory(URL!);
-  const makeStore = () =>
-    createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
-  const a = makeStore();
-  const b = makeStore();
-  await migrateTestDatabase(URL);
-  const webhook = await a.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    action: "summarize",
-    verification: { scheme: "github", secret: "test-only" },
-  });
-  await Promise.all(
-    Array.from({ length: 60 }, (_, i) =>
-      (i % 2 ? a : b).recordEvent(webhook.id, {
-        deliveryId: `event-${i}`,
-        receivedAt: i,
-        payload: "hello 🌊",
-      }),
-    ),
-  );
-  await b.recordEvent(webhook.id, {
-    deliveryId: "event-59",
-    receivedAt: 59,
-    payload: "hello 🌊",
-  });
-  const events = await makeStore().listEvents(webhook.id);
-  assert.equal(events.length, 50);
-  assert.equal(events[0]?.receivedAt, 59);
-  assert.equal(events[0]?.payload, "hello 🌊");
-  assert.equal(events.at(-1)?.receivedAt, 10);
-  assert.equal(new Set(events.map((e) => e.deliveryId)).size, 50);
-});
-
 for (const postgres of [false, true]) {
   test(
     `${postgres ? "pg" : "memory"} map: nested projection excludes large fields and preserves default reads`,
@@ -609,26 +541,4 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
     await asOwner((owner) => owner.query("DROP TABLE IF EXISTS map_scoped_widgets"));
     await factory.pool.close();
   }
-});
-
-test("pg map: trigger stores list only the owner's rows", { skip }, async () => {
-  const f = createPostgresMapFactory(URL!);
-  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]), {
-    fires: createPostgresCronFireStore(URL!),
-  });
-  await migrateTestDatabase(URL);
-  const upper = scopeId("personal", "OwnerU");
-  const lower = scopeId("personal", "owneru");
-  for (const owner of [upper, lower, scopeId("personal", "other")])
-    await crons.create({
-      owner: owner.slice("personal:".length),
-      createdBy: owner.slice("personal:".length),
-      ownerScopeId: owner,
-      schedule: { everyMs: 60_000 },
-      action: `check ${owner}`,
-    });
-  assert.deepEqual(
-    (await crons.ownedBy(upper)).map((cron) => cron.ownerScopeId),
-    [upper],
-  );
 });

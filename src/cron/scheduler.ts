@@ -14,7 +14,7 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
@@ -83,7 +83,6 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
@@ -401,7 +400,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  const tick = async (nowArg?: number): Promise<void> => {
+  const tick = crossTenantLoop(async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
     await withWork(() =>
@@ -412,7 +411,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
       }),
     );
-  };
+  });
 
   const makeSweeper = () =>
     createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {
@@ -602,16 +601,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           onFire: (job) =>
             observed === epoch ? inTenantOf(job.tenantId, () => runQueueTask(() => fireJob(job))) : Promise.resolve(),
         })
-        .then(
-          () => {
-            if (!stopped) leaseGuard.start();
-          },
-          (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
-            reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
-            if (!stopped) sweeper.start(intervalMs);
-          },
-        );
+        .then(() => {
+          if (!stopped) leaseGuard.start();
+        });
     },
     async ready() {
       await starting;

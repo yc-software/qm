@@ -28,6 +28,7 @@ mock.module("../src/persistence/pg-pool.ts", {
 
 mock.module("pg-boss", {
   namedExports: {
+    getConstructionPlans: () => "BEGIN; COMMIT;",
     PgBoss: class {
       constructor(options: { db: Adapter }) {
         adapter = options.db;

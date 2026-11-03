@@ -3,6 +3,7 @@ import { createSandboxResources, type SandboxResource } from "../../src/sandbox/
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSwarmStore, type SwarmStore } from "../../src/swarms/swarm-store.ts";
+import { createPostgresSwarmRows } from "../../src/swarms/swarm-table.ts";
 import { createSwarmService, type SwarmCaller } from "../../src/swarms/swarm-service.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
@@ -14,6 +15,7 @@ import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 export async function swarmFixture(
   options: {
+    url?: string;
     store?: SwarmStore;
     sessions?: SessionStore;
     runs?: RunStore;
@@ -22,10 +24,11 @@ export async function swarmFixture(
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
-  const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
-  const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
+  const url = options.url ?? testDatabaseUrl();
+  const sessions = options.sessions ?? createPostgresSessionStore(url);
+  const runs = options.runs ?? createPostgresRunStore(url).runs;
   const lock = options.lock ?? testAdvisoryLock();
-  const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
+  const store = options.store ?? createSwarmStore(createPostgresSwarmRows(url));
   const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -133,6 +136,7 @@ export async function swarmFixture(
     };
   };
   return {
+    url,
     service,
     serviceOptions,
     store,

@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { withoutTenant } from "../src/tenants/context.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
@@ -28,7 +29,7 @@ test("initial persistence includes settings, pool, message and pending work in o
     });
     assert.equal(workers.length, 2);
     assert.equal(f.provisioned.length, 0);
-    assert.equal((await f.store.pending()).length, 1);
+    assert.equal((await withoutTenant(() => f.store.pending())).length, 1);
   }));
 
 test("inspect, immediate read and send reuse one authorized swarm snapshot", () =>

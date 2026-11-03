@@ -1,3 +1,5 @@
+import { boundTenant } from "../tenants/context.ts";
+import type { Loop } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { conversationEvent, type IngressEntry } from "./ingress.ts";
@@ -6,7 +8,7 @@ import { sourceAdapter } from "./sources/index.ts";
 import { isResolved } from "./ledger-view.ts";
 
 export interface InboxRealtimeDeps {
-  loops: Pick<LoopStore, "list">;
+  loops: Pick<LoopStore, "inboxLoops">;
   items: Pick<LoopItemLedger, "byLoop">;
   enqueue: (loop: { id: string; owner: string }, entries: IngressEntry[]) => Promise<unknown>;
 }
@@ -16,19 +18,16 @@ const LOOP_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxLoops: Array<{ id: string; owner: string }> = [];
-  let cacheAt = 0;
+  const cache = new Map<string | undefined, { at: number; loops: Loop[] }>();
 
-  async function inboxLoops(): Promise<Array<{ id: string; owner: string }>> {
+  async function inboxLoops(): Promise<Loop[]> {
+    const tenant = boundTenant();
     const now = Date.now();
-    if (now - cacheAt > LOOP_CACHE_TTL_MS) {
-      const all = await deps.loops.list();
-      cachedInboxLoops = all
-        .filter((loop) => loop.surface?.startsWith("inbox:") && loop.state !== "archived")
-        .map((loop) => ({ id: loop.id, owner: loop.owner }));
-      cacheAt = now;
-    }
-    return cachedInboxLoops;
+    const hit = cache.get(tenant);
+    if (hit && now - hit.at <= LOOP_CACHE_TTL_MS) return hit.loops;
+    const loops = await deps.loops.inboxLoops();
+    cache.set(tenant, { at: now, loops });
+    return loops;
   }
 
   return {

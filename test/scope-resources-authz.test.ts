@@ -9,9 +9,10 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCronRows, testWebhookRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const ORG = "default-org";
@@ -21,10 +22,10 @@ const channelScope = scopeId("channel", C1);
 const orgScope = scopeId("org", ORG);
 
 function makeDeps() {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const webhooks = createWebhookStore(testMap(), testMap());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+  const files = createPostgresFileArtifactStore(testSharedDatabaseUrl(), createMemoryDurableByteStore());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
+  const webhooks = createWebhookStore(testWebhookRows());
+  const acl = createAclStore(createPostgresGrantStore(testSharedDatabaseUrl()), {
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const identity = {

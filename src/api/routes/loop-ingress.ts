@@ -1,3 +1,4 @@
+import { inTenantOf } from "../../tenants/claim.ts";
 import { z } from "zod";
 import { parseScopeId, scopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
@@ -118,9 +119,15 @@ async function receive(ctx: BaseCtx) {
     ctx.req.resume();
     return sendJson(ctx.res, 404, { error: "not_found" });
   }
+  const ingress = ctx.deps.loopIngress;
+  const id = ctx.params.id!;
   try {
     const rawBody = await readRawBody(ctx.req);
-    const result = await ctx.deps.loopIngress.receive(ctx.params.id!, { headers: ctx.req.headers, rawBody });
+    const tenant = id === "gmail" ? undefined : await ingress.tenantOf(id);
+    const result =
+      id !== "gmail" && !tenant
+        ? { status: 404, body: "Not found" }
+        : await inTenantOf(tenant, () => ingress.receive(id, { headers: ctx.req.headers, rawBody }));
     ctx.res.writeHead(result.status, { "content-type": "text/plain", "cache-control": "no-store" });
     ctx.res.end(result.body);
   } catch (error) {

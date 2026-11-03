@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -9,7 +9,8 @@ import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -19,7 +20,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

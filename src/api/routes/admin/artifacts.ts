@@ -30,26 +30,24 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   if (resource === "crons") {
-    const crons = (await app.listCrons())
-      .filter((c) => orgWide || c.ownerScopeId === scope)
-      .map((c) => ({
-        id: c.id,
-        ownerScopeId: c.ownerScopeId,
-        title: c.title,
-        action: c.action,
-        message: c.message,
-        owner: c.owner,
-        createdBy: c.createdBy,
-        enabled: c.enabled,
-        archived: c.archived,
-        schedule: c.schedule,
-        runtime: c.runtime,
-        loopId: c.loopId,
-        unattendedGrants: c.unattendedGrants,
-        destination: c.destination,
-        createdAt: c.createdAt,
-        lastFiredAt: c.lastFiredAt,
-      }));
+    const crons = (await app.listCrons(orgWide ? undefined : scope)).map((c) => ({
+      id: c.id,
+      ownerScopeId: c.ownerScopeId,
+      title: c.title,
+      action: c.action,
+      message: c.message,
+      owner: c.owner,
+      createdBy: c.createdBy,
+      enabled: c.enabled,
+      archived: c.archived,
+      schedule: c.schedule,
+      runtime: c.runtime,
+      loopId: c.loopId,
+      unattendedGrants: c.unattendedGrants,
+      destination: c.destination,
+      createdAt: c.createdAt,
+      lastFiredAt: c.lastFiredAt,
+    }));
     return sendJson(res, 200, { scopeId: scope, crons });
   }
   if (resource === "deployments") {

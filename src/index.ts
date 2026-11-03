@@ -20,8 +20,6 @@ useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await verifyRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
-const backfilledFires = await built.crons.backfillFires();
-if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);

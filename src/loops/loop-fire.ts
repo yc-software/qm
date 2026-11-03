@@ -1,3 +1,4 @@
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
@@ -7,7 +8,6 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
-import { inTenantOf, type Claimed } from "../tenants/claim.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -948,18 +948,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function sweepStale(now: number): Promise<void> {
-    const loops: Array<Claimed<Loop>> = await deps.loops.list();
-    for (const loop of loops) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
-      }
-    }
-  }
+  const sweepStale = crossTenantLoop(async (now: number): Promise<void> => {
+    for (const loop of await deps.loops.staleGoverned(now))
+      await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
+  });
 
   async function itemTurn(
     loop: Loop,
