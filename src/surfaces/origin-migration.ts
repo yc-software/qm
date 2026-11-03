@@ -274,7 +274,7 @@ const SETTLED_CATCH_UP = originMigration("surface-origin-rewrite/settled-since-c
     SETTLED_COLLECTED,
     `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
        WHERE r.status IN ('done', 'failed')
-         AND r.finished_at >= (SELECT min(collected_at) FROM ${SETTLED_COLLECTED})
+         AND r.finished_at >= (SELECT min(collected_at) FROM ${SETTLED_COLLECTED}) - ${RECENTLY_FINISHED_MS}
          AND (${oldKeysIn("r.request")} OR ${mayNeedOrigin("r")})
        ON CONFLICT DO NOTHING`,
   ),
@@ -356,17 +356,21 @@ async function rewriteSettledBatch(client: PoolClient): Promise<boolean> {
   return taken > 0;
 }
 
+const FRESH_WRITE_REWRITES = [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES];
+
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
-  for (const migration of [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES, SETTLED_CATCH_UP])
-    await rewriteInTransaction(pool, migration.id, REWRITE_LOCK, async (client) => {
+  const rewrite = (migration: { id: string; statements: string[] }) =>
+    rewriteInTransaction(pool, migration.id, REWRITE_LOCK, async (client) => {
       for (const statement of migration.statements) await client.query(statement);
     });
+  for (const migration of [...FRESH_WRITE_REWRITES, SETTLED_CATCH_UP]) await rewrite(migration);
   await Promise.all(
     Array.from({ length: SETTLED_BATCH_WORKERS }, async () => {
       while (await rewriteInTransaction(pool, SETTLED_BATCH_REWRITE.id, BATCH_LOCK, rewriteSettledBatch));
     }),
   );
+  for (const migration of FRESH_WRITE_REWRITES) await rewrite(migration);
   await pg.migrate(SETTLED_ORIGIN_MIGRATION).catch((error: unknown) => {
     throw new Error(`surface origin rewrite ${SETTLED_ORIGIN_MIGRATION.id} failed: ${errMessage(error)}`, {
       cause: error,

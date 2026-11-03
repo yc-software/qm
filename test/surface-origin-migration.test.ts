@@ -221,6 +221,14 @@ test(
       );
       await admin.query("UPDATE surface_origin_settled_collected SET collected_at = $1", [now - 72 * 3_600_000]);
       await run("settled-after-boot", "s7", "done", 4, request({ slackSource: internalSource }), now - 48 * 3_600_000);
+      await run(
+        "finished-as-collected",
+        "s8",
+        "done",
+        5,
+        request({ slackSource: internalSource }),
+        now - 72 * 3_600_000 - 1_000,
+      );
       await rewrite(url);
 
       const { runs, close } = createPostgresRunStore(url);
@@ -228,6 +236,11 @@ test(
         const read = async (id: string) =>
           (await runs.get(id))!.request as unknown as Record<string, unknown> & { origin: Record<string, unknown> };
         assert.deepEqual((await read("settled-after-boot")).surfaceOrigin, internalOrigin);
+        assert.deepEqual(
+          (await read("finished-as-collected")).surfaceOrigin,
+          internalOrigin,
+          "a run stamped just before collection but committed after it is still folded",
+        );
         const pending = await read("pending");
         assert.deepEqual(pending.surfaceOrigin, internalOrigin);
         assert.equal("slackSource" in pending, false);
