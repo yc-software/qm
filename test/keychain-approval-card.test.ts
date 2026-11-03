@@ -16,6 +16,7 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testKeychainRows } from "./support/credential-stores.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import type { KeychainAskRows } from "../src/credentials/keychain-rows.ts";
 
 function failFirstApproval(asks: KeychainAskRows): void {
@@ -236,7 +237,7 @@ test("a crash after grant persistence recovers approval before denial or expiry"
     assert.equal(replay.ask.status, "approved");
     assert.equal(replay.mode, "standing");
     assert.equal((await f.grants.all()).length, 1);
-    assert.equal((await f.keychain.unnotifiedResolvedAsks(Date.now())).length, 1);
+    assert.equal((await withoutTenant(() => f.keychain.unnotifiedResolvedAsks(Date.now()))).length, 1);
   }
 });
 
@@ -270,9 +271,9 @@ test("an expired notification cannot hide an approval recovered after a failed w
     await approving;
     assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "approved");
     if (!notifyBeforeRecovery) await f.keychain.markAskNotified(f.ask.id, "expired");
-    assert.equal((await f.keychain.unnotifiedResolvedAsks(Date.now())).length, 1);
+    assert.equal((await withoutTenant(() => f.keychain.unnotifiedResolvedAsks(Date.now()))).length, 1);
     await f.keychain.markAskNotified(f.ask.id, "approved");
-    assert.equal((await f.keychain.unnotifiedResolvedAsks(Date.now())).length, 0);
+    assert.equal((await withoutTenant(() => f.keychain.unnotifiedResolvedAsks(Date.now()))).length, 0);
   }
 });
 

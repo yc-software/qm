@@ -1,4 +1,4 @@
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -167,8 +167,8 @@ export function createAskExpirySweep(deps: {
       swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
     }
   };
-  return async (now) => {
+  return crossTenantLoop(async (now: number) => {
     for (const ask of await deps.keychain.unnotifiedResolvedAsks(now))
       await inTenantOf(ask.tenantId, () => settle(ask, now));
-  };
+  });
 }

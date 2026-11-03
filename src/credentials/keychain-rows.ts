@@ -38,6 +38,7 @@ export interface KeychainAskRows {
   update(id: string, fn: (current: KeychainAsk) => KeychainAsk): Promise<KeychainAsk | null>;
   delete(id: string): Promise<void>;
   newestFirst(filter: KeychainAskFilter): Promise<KeychainAsk[]>;
+  tenants(): Promise<string[]>;
 }
 
 export interface KeychainRows {

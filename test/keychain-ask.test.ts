@@ -41,6 +41,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testKeychainRows } from "./support/credential-stores.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -269,6 +270,7 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   });
 
   t += ASK_TTL_MS + 1;
+  const unnotified = () => withoutTenant(() => k.unnotifiedResolvedAsks(t));
   const listed = await k.listAsks({ requesterScopeId: "channel:C1" });
   assert.equal(listed[0]?.status, "expired");
   assert.equal((await k.getAsk(ask.id))?.status, "expired");
@@ -278,16 +280,16 @@ test("expiry: lazy flip on read, sweep returns each expired ask exactly once", a
   );
 
   assert.deepEqual(
-    (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
+    (await unnotified()).map((a) => a.id),
     [ask.id],
   );
   assert.deepEqual(
-    (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
+    (await unnotified()).map((a) => a.id),
     [ask.id],
     "still returned until the resolution actually fired",
   );
   await k.markAskNotified(ask.id, "expired");
-  assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
+  assert.deepEqual(await unnotified(), []);
 });
 
 test("expiry sweep fires the resolution once and rides the scheduler tick", async () => {
