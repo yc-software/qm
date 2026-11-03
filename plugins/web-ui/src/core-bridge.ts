@@ -1935,7 +1935,14 @@ interface GoalCancelledNote {
   timestamp?: number;
 }
 
-export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
+interface TranscriptNotice {
+  role: "system-note";
+  note: "notice";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote | TranscriptNotice;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -2292,6 +2299,10 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         else original.edited = true;
       }
       out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+    } else if (e.kind === "Error" && e.text && e.errorCode !== "turn_failure") {
+      spillHeldPosts();
+      flushWork("", e.createdAt);
+      out.push({ role: "system-note", note: "notice", content: e.text, timestamp: e.createdAt } as unknown as AgentMessage);
     } else if (e.kind === "Error" && e.text) {
       spillHeldPosts();
       flushWork("", e.createdAt);
