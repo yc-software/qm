@@ -5,6 +5,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { configuredTenant, inResolvedTenant, setTenantResolver } from "../plugins/chassis/src/resolve-tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -142,4 +145,57 @@ test("provisioning needs core opt-in and never reactivates a deactivated founder
   await inTestTenant(() => s.built.identity.deactivate(id));
   assert.equal((await send(s.base, claims())).status, 403);
   assert.equal((await inTestTenant(() => s.built.admin.adminStatusOf({ id, type: "internal" }))).isAdmin, false);
+});
+
+test("a portal provisions admins only in its configured tenant, refuses without one, and core rejects a re-addressed request", async (t) => {
+  const s = start();
+  t.after(s.close);
+  t.after(() => setTenantResolver(configuredTenant(undefined)));
+  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  const edge = createHttpServer(
+    (req, res) =>
+      void inResolvedTenant(req, res, async () => {
+        await provisionTrustedAdmin(config, String(req.headers["x-subject"]));
+        res.end("ok");
+      }),
+  );
+  edge.listen(0);
+  t.after(() => edge.close());
+  const viaEdge = (subject: string) =>
+    fetch(`http://127.0.0.1:${(edge.address() as AddressInfo).port}/`, { headers: { "x-subject": subject } });
+  const isAdmin = (tenant: string, subject: string) =>
+    withTenant(tenant, async () => {
+      const principal = { id: trustedPrincipal(issuer, subject), type: "internal" as const };
+      return (await s.built.admin.adminStatusOf(principal)).isAdmin;
+    });
+  const [a, b] = testTenants();
+  for (const [tenant, other, subject] of [
+    [a, b, "founder-a"],
+    [b, a, "founder-b"],
+  ] as const) {
+    setTenantResolver(configuredTenant(tenant));
+    assert.equal((await viaEdge(subject)).status, 200);
+    assert.equal(await isAdmin(tenant, subject), true);
+    assert.equal(await isAdmin(other, subject), false);
+  }
+  for (const missing of [undefined, "", "not-a-tenant"]) {
+    setTenantResolver(configuredTenant(missing));
+    assert.equal((await viaEdge("founder-none")).status, 503);
+  }
+  assert.equal(await isAdmin(a, "founder-none"), false);
+  const path = `/v1/auth/trusted/admin?nonce=${crypto.randomUUID()}`;
+  const body = JSON.stringify({ assertion: await mintSignedPayload(claims({ subject: "founder-x" }), identitySecret) });
+  const ts = Math.floor(Date.now() / 1000);
+  const readdressed = await fetch(s.base + path, {
+    method: "POST",
+    body,
+    headers: {
+      "content-type": "application/json",
+      "x-qm-tenant": b,
+      "x-timestamp": String(ts),
+      "x-signature": signRequest(signingSecret, ts, canonicalPayload("POST", path, body, a)),
+    },
+  });
+  assert.equal(readdressed.status, 401);
+  assert.equal(await isAdmin(b, "founder-x"), false);
 });

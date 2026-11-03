@@ -2,7 +2,6 @@ import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 let whoamiProbes = 0;
 let lastWhoamiActor: string | null = null;
@@ -123,8 +122,8 @@ process.env.CORE_API_URL = upstreamUrl;
 const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 
+process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server } = await import("../src/index.ts");
-setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 const { deriveKey, seal, open } = await import("../src/session.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;

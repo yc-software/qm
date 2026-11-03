@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   res.writeHead(200, { "content-type": "application/json" });
@@ -21,8 +20,8 @@ delete process.env.PORTAL_APPS_DOMAIN;
 delete process.env.PORTAL_COOKIE_DOMAIN;
 process.env.DEPLOY_APPS_DOMAIN = "apps.qm.example.com";
 
+process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { derivedCookieDomain, bootChecks } = await import("../src/index.ts");
-setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 
 test.after(() => {
   upstream.close();

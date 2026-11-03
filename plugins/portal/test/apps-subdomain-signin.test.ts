@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   res.writeHead(200, { "content-type": "application/json", "set-cookie": ["app_pref=ok", "dpl_owner=test"] });
@@ -23,8 +22,8 @@ process.env.PORTAL_APPS_DOMAIN = "apps.qm.example.com";
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "viewer@example.com";
 
+process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server, hostIsWithinDomain } = await import("../src/index.ts");
-setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 

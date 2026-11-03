@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isChatApiRoute, parseAllowedOrigins } from "../src/cors.ts";
-import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const upstream = createServer((req: IncomingMessage, res) => {
   req.resume();
@@ -32,8 +31,8 @@ process.env.PORTAL_API_ALLOWED_ORIGINS = `${EMBEDDER}, http://localhost:5173`;
 const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 
+process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server } = await import("../src/index.ts");
-setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 const { deriveKey, seal } = await import("../src/session.ts");
 const impersonateKey = deriveKey("api-cors-test-portal-secret-0123456789", "portal.impersonate.v1");
 await new Promise<void>((r) => server.listen(0, r));
