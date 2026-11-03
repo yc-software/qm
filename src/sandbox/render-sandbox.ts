@@ -620,11 +620,12 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
           if (!stored || !due(stored)) return;
           const info = await client.get(stored.sandboxId);
           if (!info || info.status === "terminated" || info.status === "errored") {
-            reportError(
-              "computer_ended",
-              new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
-              scope,
-            );
+            if (stored.expiresAtMs > Date.now())
+              reportError(
+                "computer_ended",
+                new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+                scope,
+              );
             await store.merge(scope, { stopped: true });
             return;
           }

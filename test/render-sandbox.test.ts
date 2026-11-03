@@ -922,6 +922,21 @@ test("Render tells a turn that its sandbox ended and restores it on the next tur
   );
 });
 
+test("Render marks a computer that reached its lifetime stopped without reporting it as ended", async (t) => {
+  const { make, fake, layers, store, scope, errors } = setup(t);
+  const sandbox = make();
+  await sandbox.provision(layers);
+  const stored = (await store.get(scope))!;
+  await fake.client.terminate(stored.sandboxId);
+  await store.merge(scope, { expiresAtMs: Date.now() - 1000 });
+  await sandbox.reapDeepIdle!(3600_000);
+  assert.equal((await store.get(scope))!.stopped, true);
+  assert.deepEqual(
+    errors.filter((error) => error.code === "computer_ended"),
+    [],
+  );
+});
+
 test("Render does not report a computer that QM itself restarted as ended", async (t) => {
   const { make, fake, layers, store, scope, errors } = setup(t);
   const sandbox = make();
