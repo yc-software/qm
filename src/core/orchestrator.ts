@@ -148,13 +148,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import {
-  findTrailingPartialTurn,
-  resumeStrategy,
-  runtimeSwitchNote,
-  turnAtSeq,
-  unrecordedResultItems,
-} from "./turn-resume.ts";
+import { findTrailingPartialTurn, reconcile, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
@@ -2680,16 +2674,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (outcome) => void recallOutcomes.push(outcome),
         );
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
-        let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
-        if (partial && resumePlan?.kind === "settle") {
-          const settle = resumePlan;
+        const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
+        if (reconciled?.settleItems.length) {
           const settled = await withManagedRosterVersion(() =>
-            deps.sessions.appendMany(writer, unrecordedResultItems(settle, input.resumeCause)),
+            deps.sessions.appendMany(writer, reconciled.settleItems),
           );
           visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
-          resumePlan = resumeStrategy(visibleHistory, partial);
         }
-        const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
+        const resume = reconciled?.resumed ? partial : null;
         const documentBudget = documentTokenBudget(scopeId, input.model);
         const history = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
@@ -2852,7 +2844,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
           });
           console.error(
-            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan!.kind}`,
+            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} settled=${reconciled!.settleItems.length} rerun=${reconciled!.rerun?.callId ?? "none"}`,
           );
         }
         let turnInput = baseText;
@@ -3402,7 +3394,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
-            ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
+            ...(reconciled?.rerun && !continuation ? { resumeToolCall: reconciled.rerun } : {}),
             emit,
             goal: sessionGoal,
             saveGoal,

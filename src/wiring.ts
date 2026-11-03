@@ -1918,6 +1918,10 @@ export function buildApp(
     ],
   });
   pgArtifactMap.pool.registerMigration({
+    id: "ratelimit/limiter/0002-drop",
+    statements: ["DROP TABLE IF EXISTS rate_limit_windows"],
+  });
+  pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
     statements: [
       "DROP TABLE IF EXISTS approved_harness_configs",
