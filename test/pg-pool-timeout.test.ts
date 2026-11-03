@@ -96,10 +96,16 @@ async function until(check: () => Promise<boolean>, what: string): Promise<void>
   }
 }
 
+async function activity(observer: pg.Client, text: string, values: unknown[]) {
+  await observer.query("SELECT pg_stat_clear_snapshot()");
+  return observer.query(text, values);
+}
+
 async function lockWaiter(observer: pg.Client, prefix: string): Promise<number> {
   let pid = 0;
   await until(async () => {
-    const { rows } = await observer.query(
+    const { rows } = await activity(
+      observer,
       "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND starts_with(query, $1)",
       [prefix],
     );
@@ -144,7 +150,7 @@ test("a write aborted while it waits rolls back once the backend gets the lock",
     await assert.rejects(writing, { name: "AbortError" });
     await locker.query("COMMIT");
     await until(
-      async () => (await locker.query("SELECT 1 FROM pg_stat_activity WHERE pid = $1", [pid])).rowCount === 0,
+      async () => (await activity(locker, "SELECT 1 FROM pg_stat_activity WHERE pid = $1", [pid])).rowCount === 0,
       "the aborted backend to exit",
     );
     assert.equal((await locker.query("SELECT count(*)::int AS n FROM aborted_rows")).rows[0].n, 0);
@@ -210,7 +216,7 @@ test(
       await assert.rejects(reading, { name: "AbortError" });
       await until(
         async () =>
-          (await locker.query("SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'", [pid]))
+          (await activity(locker, "SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'", [pid]))
             .rowCount === 0,
         "the aborted backend to stop waiting",
       );
