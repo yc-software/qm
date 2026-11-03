@@ -387,8 +387,7 @@ export function createTurnMethods(
       }
       let dedupKey: string | undefined = redeliveryKey;
       if (req.idempotencyKey) {
-        dedupKey =
-          project ? `${req.idempotencyKey}:project-${project.version}` : req.idempotencyKey;
+        dedupKey = project ? `${req.idempotencyKey}:project-${project.version}` : req.idempotencyKey;
         if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
       }
 
