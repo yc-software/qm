@@ -3250,6 +3250,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       ? "A mid-turn message was withheld by the security screen."
                       : "A mid-turn message was withheld because the security screen could not check it.",
                     author,
+                    authorName: speakerName(speaker, nameOf),
                     withheld: true,
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;

@@ -1,3 +1,4 @@
+import { steerWithheldItem } from "../core/turn-error.ts";
 import type { ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import {
@@ -46,6 +47,7 @@ export interface SteerIntake {
   images?: AgentTurnInput["images"];
   author?: string;
   authorName?: string;
+  withheld?: boolean;
   acknowledge?: () => Promise<void>;
 }
 
@@ -60,18 +62,20 @@ export function imageRefs(images: AgentTurnInput["images"]): { images?: ReplayIm
 }
 
 export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake): Promise<void> {
-  await turn.emit({
-    kind: "SteeringMessage",
-    text: steer.text,
-    author: steer.author ?? null,
-    body: {
-      ...(steer.authorName ? { name: steer.authorName } : {}),
-      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
-      ...(steer.ts ? { ts: steer.ts } : {}),
-      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-      ...imageRefs(steer.images),
-    },
-  });
+  if (steer.withheld) await turn.emit(steerWithheldItem(steer.authorName ?? steer.author ?? ""));
+  else
+    await turn.emit({
+      kind: "SteeringMessage",
+      text: steer.text,
+      author: steer.author ?? null,
+      body: {
+        ...(steer.authorName ? { name: steer.authorName } : {}),
+        ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
+        ...(steer.ts ? { ts: steer.ts } : {}),
+        ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+        ...imageRefs(steer.images),
+      },
+    });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 

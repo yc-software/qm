@@ -128,10 +128,12 @@ export function startSignalPoll(
     inFlight = (async () => {
       const pending = await signals.pending(runId);
       await deliverStop(pending).catch((e: unknown) => opts?.onError?.(e));
+      let tookOne = false;
       for (const { id, signal: s } of pending) {
         if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         try {
-          await stopCheck.catch(() => undefined);
+          if (tookOne) await deliverStop();
+          tookOne = true;
           if (s.text || s.request?.attachments?.length) {
             const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
               signals.acknowledge(runId, id),

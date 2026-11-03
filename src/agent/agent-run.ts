@@ -1273,13 +1273,14 @@ export function createAgent(opts?: AgentOptions): Agent {
                     const prompt = prepared?.text ?? text;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const steer = {
-                      text: prepared?.withheld ? prompt : text,
+                      text,
                       prompt,
                       ts,
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
                       authorName: prepared?.authorName,
+                      withheld: prepared?.withheld,
                       acknowledge,
                     };
                     pendingSteers.push(steer);
