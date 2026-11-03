@@ -160,13 +160,11 @@ test("pg participant activity uses the latest user entry, including overheard en
   const scope = scopeId("personal", owner);
   const session = await store.getOrCreateByThread(owner, "dm", scope);
   await store.addParticipant(session.id, owner);
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   at = 300_000;
-  await store.append(lease, { type: "user", payload: { text: "overheard", overheard: true }, scopeLabel: scope });
+  await store.append(writer, { type: "user", payload: { text: "overheard", overheard: true }, scopeLabel: scope });
   at = 500_000;
-  await store.append(lease, { type: "assistant", payload: { text: "later reply" }, scopeLabel: scope });
-  await store.releaseLease(lease);
+  await store.append(writer, { type: "assistant", payload: { text: "later reply" }, scopeLabel: scope });
   at = 400_000;
   const empty = await store.getOrCreateByThread(`${owner}-empty`, "dm", scope);
   await store.addParticipant(empty.id, owner);
@@ -591,28 +589,9 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   }
 });
 
-test("pg session store: a bare failed acquire means the session is gone, not a lease race", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "U1");
-  const missing = await s.acquireLease("00000000-0000-0000-0000-00000000dead", "turn");
-  assert.equal(missing.lease, null);
-  assert.equal(missing.heldUntil, undefined, "no phantom holder is invented for a deleted session");
-
-  const session = await s.getOrCreateByThread("release-race", "dm", scope);
-  const { lease } = await s.acquireLease(session.id, "turn");
-  assert.ok(lease);
-  const peeked = await s.peekLease(session.id);
-  assert.equal(peeked?.holder, "turn");
-  await s.releaseLease(lease!);
-  assert.equal(await s.peekLease(session.id), null);
-  const reacquired = await s.acquireLease(session.id, "turn");
-  assert.ok(reacquired.lease, "a released lease is immediately reacquirable");
-  await s.releaseLease(reacquired.lease!);
-});
-
-test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibility window", { skip }, async () => {
+test("pg session store: one-per-thread, monotonic log, visibility window", { skip }, async () => {
   let now = Date.now();
-  const s = createPostgresSessionStore(URL!, { leaseTtlMs: 50, now: () => now });
+  const s = createPostgresSessionStore(URL!, { now: () => now });
   const scope = scopeId("personal", "U1");
 
   const a = await s.getOrCreateByThread("t1", "dm", scope);
@@ -665,15 +644,9 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.equal(union.filter((r) => r.turnSeq === 0).length, 2, "turnSeqs + orphans keeps the turn rows");
   assert.equal(union.filter((r) => r.turnSeq === null).length, 1, "…and unions in the orphan");
 
-  const { lease: dead } = await s.acquireLease(a.id, "compaction");
-  assert.ok(dead);
-  const blocked = await s.acquireLease(a.id, "turn");
-  assert.equal(blocked.lease, null, "live lease blocks a second writer");
-  assert.equal(blocked.heldBy, "compaction", "the blocked writer learns what kind of work holds the lock");
-  assert.equal(blocked.heldUntil! - blocked.heldSince!, 50, "…when it was taken, and when it lapses (one TTL)");
-
-  const e0 = await s.append(dead!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  const e1 = await s.append(dead!, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
+  const writer = { sessionId: a.id };
+  const e0 = await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  const e1 = await s.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
   assert.deepEqual([e0.seq, e1.seq], [0, 1], "monotonic seq");
   assert.deepEqual(
     (await s.getEntries(a.id)).map((e) => e.type),
@@ -686,16 +659,9 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.equal(await s.getEntry("nope", 0), undefined, "an unknown session is undefined");
 
   now += 70;
-  assert.equal(await s.renewLease(dead!), false, "an expired lease cannot be revived by its old holder");
-  const { lease: fresh } = await s.acquireLease(a.id);
-  assert.ok(fresh, "expired lease is reclaimable");
-  assert.equal(await s.renewLease(fresh!), true, "the live holder renews without writing an entry");
-  assert.equal(await s.renewLease(dead!), false, "the superseded holder cannot renew the new lock");
-  await assert.rejects(s.append(dead!, { type: "user", payload: {}, scopeLabel: scope }), /valid session lease/);
-
   await s.addParticipant(a.id, "U1");
   assert.equal((await s.visibleEntries(a.id, "U1")).length, 0, "a late joiner sees none of the pre-tenure backlog");
-  await s.append(fresh!, { type: "user", payload: { text: "after-join" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "after-join" }, scopeLabel: scope });
   const seen = await s.visibleEntries(a.id, "U1");
   assert.deepEqual(
     seen.map((e) => (e.payload as { text?: string }).text),
@@ -711,12 +677,6 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   assert.equal((await s.getByThread("t1"))?.id, a.id);
   assert.equal(await s.getByThread("never-written"), null, "missing thread → null, no session created");
 
-  assert.equal((await s.acquireLease(a.id)).lease, null, "lease still held by `fresh`");
-  await s.forceReleaseLease(a.id);
-  const { lease: reacquired } = await s.acquireLease(a.id);
-  assert.ok(reacquired, "force-released lease can be re-acquired");
-  await assert.rejects(s.append(fresh!, { type: "user", payload: {}, scopeLabel: scope }), /valid session lease/);
-
   now += 5;
   await s.removeParticipant(a.id, "U1");
   await s.addParticipant(a.id, "U1");
@@ -726,7 +686,7 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     "old entries fall outside the new tenure",
   );
   now += 5;
-  await s.append(reacquired!, { type: "user", payload: { text: "re-joined" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "re-joined" }, scopeLabel: scope });
   assert.equal(
     (await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries,
     true,
@@ -734,37 +694,15 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
   );
 });
 
-test("pg lease: a lock taken by an older instance still blocks, and reports what it can", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!, { leaseTtlMs: 60_000 });
-  const scope = scopeId("personal", "legacy-lease");
-  const session = await s.getOrCreateByThread("legacy-lease", "dm", scope);
-  assert.ok((await s.acquireLease(session.id, "turn")).lease);
-
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query("UPDATE session_leases SET holder = NULL, acquired_at = NULL WHERE session_id = $1", [session.id]);
-  } finally {
-    await raw.end();
-  }
-
-  const blocked = await s.acquireLease(session.id, "turn");
-  assert.equal(blocked.lease, null, "a pre-column lock still blocks");
-  assert.equal(blocked.heldBy, undefined, "…and says so rather than inventing a holder");
-  assert.equal(blocked.heldSince, undefined);
-  assert.ok(blocked.heldUntil! > Date.now(), "the expiry is still readable, so the lock is still datable");
-});
-
 test("pg latestEntrySeq and participant windows round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");
   const session = await s.getOrCreateByThread("pg-projection-reads", "dm", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
 
   assert.equal(await s.latestEntrySeq(session.id), -1);
-  await s.append(lease!, { type: "user", payload: { text: "one" }, scopeLabel: scope });
-  await s.append(lease!, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "one" }, scopeLabel: scope });
+  await s.append(writer, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
   assert.equal(await s.latestEntrySeq(session.id), 1);
 
   await s.addParticipant(session.id, "proj-reads", undefined, { includeHistory: true });
@@ -786,21 +724,20 @@ test("pg participant tenure remains exact when every event shares a timestamp", 
   const s = createPostgresSessionStore(URL!, { now: () => at });
   const scope = scopeId("personal", "SAME-TICK");
   const session = await s.getOrCreateByThread("same-tick-window", "dm", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
-  await s.append(lease!, { type: "user", payload: { text: "before" }, scopeLabel: scope });
+  const writer = { sessionId: session.id };
+  await s.append(writer, { type: "user", payload: { text: "before" }, scopeLabel: scope });
   await s.addParticipant(session.id, "SAME-TICK");
   assert.deepEqual(await s.visibleEntries(session.id, "SAME-TICK"), []);
-  await s.append(lease!, { type: "user", payload: { text: "during" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "during" }, scopeLabel: scope });
   assert.deepEqual(
     (await s.visibleEntries(session.id, "SAME-TICK")).map((entry) => entry.seq),
     [1],
   );
   await s.removeParticipant(session.id, "SAME-TICK");
-  await s.append(lease!, { type: "user", payload: { text: "gap" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "gap" }, scopeLabel: scope });
   await s.addParticipant(session.id, "SAME-TICK");
   assert.deepEqual(await s.visibleEntries(session.id, "SAME-TICK"), []);
-  await s.append(lease!, { type: "user", payload: { text: "after" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "after" }, scopeLabel: scope });
   assert.deepEqual(
     (await s.visibleEntries(session.id, "SAME-TICK")).map((entry) => entry.seq),
     [3],
@@ -814,8 +751,8 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   const keep = await s.getOrCreateByThread("del-t2", "dm", scope);
   await s.addParticipant(a.id, "DEL1");
   await s.addParticipant(keep.id, "DEL1");
-  const { lease } = await s.acquireLease(a.id);
-  await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  const writer = { sessionId: a.id };
+  await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
   await s.recordLlmRequest(a.id, {
     turnSeq: 0,
     step: 0,
@@ -838,10 +775,13 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   const keptRow = (await s.listByParticipant("DEL1")).find((x) => x.id === keep.id);
   assert.ok(keptRow, "other sessions untouched");
   assert.equal(keptRow!.hasEntries, false, "an entry-less session reads back hasEntries=false");
-  assert.equal((await s.acquireLease(a.id)).lease, null, "no lease is granted on a deleted session");
+  await assert.rejects(
+    s.append({ sessionId: a.id }, { type: "user", payload: { text: "late" }, scopeLabel: scope }),
+    /foreign key/,
+    "no append lands on a deleted session",
+  );
   const reborn = await s.getOrCreateByThread("del-t1", "dm", scope);
   assert.notEqual(reborn.id, a.id, "the thread gets a fresh session");
-  assert.notEqual((await s.acquireLease(reborn.id)).lease, null, "the fresh session is leasable");
 });
 
 test("pg scopeSessionSummaries: counts via aggregate, not per-transcript reads", { skip }, async () => {
@@ -852,10 +792,10 @@ test("pg scopeSessionSummaries: counts via aggregate, not per-transcript reads",
   const a = await s.getOrCreateByThread("sumA", "channel", team);
   const b = await s.getOrCreateByThread("sumB", "channel", team);
   const c = await s.getOrCreateByThread("sumC", "channel", other);
-  const { lease } = await s.acquireLease(a.id);
-  await s.append(lease!, { type: "user", payload: { text: "1" }, scopeLabel: team });
-  await s.append(lease!, { type: "assistant", payload: { text: "ack" }, scopeLabel: team });
-  await s.append(lease!, { type: "user", payload: { text: "2" }, scopeLabel: team });
+  const writer = { sessionId: a.id };
+  await s.append(writer, { type: "user", payload: { text: "1" }, scopeLabel: team });
+  await s.append(writer, { type: "assistant", payload: { text: "ack" }, scopeLabel: team });
+  await s.append(writer, { type: "user", payload: { text: "2" }, scopeLabel: team });
 
   const cron = await s.getOrCreateByThread("agent:main:cron:c1", "channel", team);
   const webhook = await s.getOrCreateByThread("agent:main:webhook:wh1", "channel", team);
@@ -1039,9 +979,8 @@ test("pg scopeSessionSummaries: keyset cursor pages stitch into the full listing
   const scope = scopeId("channel", "keyset");
   for (let i = 0; i < 5; i++) {
     const sess = await s.getOrCreateByThread(`keyset:${i}`, "channel", scope);
-    const { lease } = await s.acquireLease(sess.id);
-    await s.append(lease!, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
-    await s.releaseLease(lease!);
+    const writer = { sessionId: sess.id };
+    await s.append(writer, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
   }
   const all = await s.scopeSessionSummaries(scope, false, { limit: 10 });
   const page1 = await s.scopeSessionSummaries(scope, false, { limit: 2 });
@@ -1096,23 +1035,20 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("channel", "pvw");
   const obj = await s.getOrCreateByThread("pvwA", "channel", scope);
-  const { lease } = await s.acquireLease(obj.id);
-  await s.append(lease!, {
+  const writer = { sessionId: obj.id };
+  await s.append(writer, {
     type: "user",
     payload: { text: `[${"c".repeat(3000)}]\n\nthe real opener` },
     scopeLabel: scope,
   });
-  await s.append(lease!, { type: "user", payload: { text: "x".repeat(300) }, scopeLabel: scope });
-  await s.releaseLease(lease!);
+  await s.append(writer, { type: "user", payload: { text: "x".repeat(300) }, scopeLabel: scope });
   const strp = await s.getOrCreateByThread("pvwB", "channel", scope);
-  const { lease: lease2 } = await s.acquireLease(strp.id);
-  await s.append(lease2!, { type: "user", payload: "a bare string payload", scopeLabel: scope });
-  await s.append(lease2!, { type: "user", payload: { text: "nul\u0000byte" }, scopeLabel: scope });
-  await s.releaseLease(lease2!);
+  const lease2 = { sessionId: strp.id };
+  await s.append(lease2, { type: "user", payload: "a bare string payload", scopeLabel: scope });
+  await s.append(lease2, { type: "user", payload: { text: "nul\u0000byte" }, scopeLabel: scope });
   const nontext = await s.getOrCreateByThread("pvwC", "channel", scope);
-  const { lease: lease3 } = await s.acquireLease(nontext.id);
-  await s.append(lease3!, { type: "user", payload: { text: 42 }, scopeLabel: scope });
-  await s.releaseLease(lease3!);
+  const lease3 = { sessionId: nontext.id };
+  await s.append(lease3, { type: "user", payload: { text: 42 }, scopeLabel: scope });
 
   const rows = await s.scopeSessionSummaries(scope, false, { limit: 500 });
   const ra = rows.find((r) => r.id === obj.id)!;
@@ -1148,10 +1084,9 @@ test("pg append returns the same sanitized text it stores for a lone surrogate",
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("channel", "surrogate");
   const session = await s.getOrCreateByThread("surrogateA", "channel", scope);
-  const { lease } = await s.acquireLease(session.id);
+  const writer = { sessionId: session.id };
   const cut = "emoji 😀".slice(0, 7);
-  const appended = await s.append(lease!, { type: "user", payload: { text: `${cut}\u0000` }, scopeLabel: scope });
-  await s.releaseLease(lease!);
+  const appended = await s.append(writer, { type: "user", payload: { text: `${cut}\u0000` }, scopeLabel: scope });
   const [stored] = await s.getEntries(session.id);
   assert.deepEqual(appended.payload, { text: "emoji \uFFFD" });
   assert.deepEqual(stored!.payload, appended.payload);
@@ -1166,21 +1101,20 @@ test("pg appendMany maintains first/last user previews across batches", { skip }
     return [row.firstMessage, row.lastMessage, row.turns];
   };
   assert.deepEqual(await preview(), ["", "", 0], "a fresh session has no preview");
-  const { lease } = await s.acquireLease(session.id);
-  await s.appendMany(lease!, [
+  const writer = { sessionId: session.id };
+  await s.appendMany(writer, [
     { type: "assistant", payload: { text: "greeting" }, scopeLabel: scope },
     { type: "user", payload: { text: "an overheard aside", overheard: true }, scopeLabel: scope },
     { type: "user", payload: { text: "first ask" }, scopeLabel: scope },
     { type: "user", payload: { text: "second ask" }, scopeLabel: scope },
   ]);
   assert.deepEqual(await preview(), ["first ask", "second ask", 2], "one batch sets both ends, skipping overheard");
-  await s.appendMany(lease!, [{ type: "assistant", payload: { text: "reply" }, scopeLabel: scope }]);
+  await s.appendMany(writer, [{ type: "assistant", payload: { text: "reply" }, scopeLabel: scope }]);
   assert.deepEqual(await preview(), ["first ask", "second ask", 2], "a batch without user turns keeps both");
-  await s.append(lease!, { type: "user", payload: { text: "third ask" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "third ask" }, scopeLabel: scope });
   assert.deepEqual(await preview(), ["first ask", "third ask", 3], "later user turns move only the last preview");
-  await s.append(lease!, { type: "user", payload: { text: "eavesdrop", overheard: true }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "eavesdrop", overheard: true }, scopeLabel: scope });
   assert.deepEqual(await preview(), ["first ask", "third ask", 3], "an overheard turn is not the last message");
-  await s.releaseLease(lease!);
 });
 
 test(
@@ -1193,9 +1127,8 @@ test(
     const titled = await s.getOrCreateByThread("pvwLegacyTitled", "channel", scope);
     const bare = await s.getOrCreateByThread("pvwLegacyBare", "channel", scope);
     for (const session of [titled, bare]) {
-      const { lease } = await s.acquireLease(session.id);
-      await s.append(lease!, { type: "user", payload: { text: "open" }, scopeLabel: scope });
-      await s.releaseLease(lease!);
+      const writer = { sessionId: session.id };
+      await s.append(writer, { type: "user", payload: { text: "open" }, scopeLabel: scope });
     }
     const pg = (await import("pg")).default;
     const raw = new pg.Pool({ connectionString: URL });
@@ -1270,9 +1203,8 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("channel", "plan-shape");
   const session = await s.getOrCreateByThread("plan-shape", "channel", scope);
-  const { lease } = await s.acquireLease(session.id);
-  await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  await s.releaseLease(lease!);
+  const writer = { sessionId: session.id };
+  await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
   const pg = (await import("pg")).default;
   const execute = pg.Client.prototype.query;
   const captured: { text: string; values: unknown[] }[] = [];
@@ -1354,31 +1286,29 @@ test("pg append debounces last_activity by 60s but keeps counters exact", { skip
   const s = createPostgresSessionStore(URL!, { now: () => nowRef.v });
   const scope = scopeId("channel", "debounce");
   const session = await s.getOrCreateByThread("debounceA", "channel", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   const activityOf = async () =>
     (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === session.id)!;
 
   nowRef.v = t0 + 30_000;
-  await s.append(lease, { type: "user", payload: { text: "within the window" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "within the window" }, scopeLabel: scope });
   let row = await activityOf();
   assert.equal(row.lastActivity, t0, "an append within 60s leaves last_activity alone");
   assert.equal(row.messages, 1, "…while messages stays exact");
   assert.equal(row.turns, 1, "…and turns stays exact");
 
   nowRef.v = t0 + 90_000;
-  await s.append(lease, { type: "user", payload: { text: "past the window" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "past the window" }, scopeLabel: scope });
   row = await activityOf();
   assert.equal(row.lastActivity, t0 + 90_000, "an append past 60s advances last_activity");
   assert.equal(row.messages, 2);
   assert.equal(row.turns, 2);
 
   nowRef.v = t0 + 120_000;
-  await s.append(lease, { type: "assistant", payload: { text: "still within" }, scopeLabel: scope });
+  await s.append(writer, { type: "assistant", payload: { text: "still within" }, scopeLabel: scope });
   row = await activityOf();
   assert.equal(row.lastActivity, t0 + 90_000, "the window measures from the stored value, not the last append");
   assert.equal(row.messages, 3);
-  await s.releaseLease(lease);
 });
 
 test("pg store startup never rewrites or waits on session rows", { skip }, async () => {
@@ -1389,9 +1319,8 @@ test("pg store startup never rewrites or waits on session rows", { skip }, async
   for (let i = 0; i < 4; i++) ids.push((await s.getOrCreateByThread(`bootNoLock${i}`, "channel", scope)).id);
   nowRef.v += 10_000;
   for (const id of ids) {
-    const { lease } = await s.acquireLease(id);
-    await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    await s.releaseLease(lease!);
+    const writer = { sessionId: id };
+    await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
   }
   const [held, writing, ...idle] = ids as [string, string, ...string[]];
   const pg = (await import("pg")).default;
@@ -1413,12 +1342,11 @@ test("pg store startup never rewrites or waits on session rows", { skip }, async
 
     const boots = [0, 1, 2].map(() => createPostgresSessionStore(URL!));
     await within(Promise.all(boots.map((b) => b.get(held))), "concurrent fresh-store startup");
-    const { lease } = await boots[0]!.acquireLease(writing);
+    const writer = { sessionId: writing };
     await within(
-      boots[0]!.append(lease!, { type: "assistant", payload: { text: "beside a boot" }, scopeLabel: scope }),
+      boots[0]!.append(writer, { type: "assistant", payload: { text: "beside a boot" }, scopeLabel: scope }),
       "append on a freshly booted store",
     );
-    await boots[0]!.releaseLease(lease!);
     assert.deepEqual(await rowVersions(), before, "startup writes no session rows");
     const row = (await boots[1]!.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === writing)!;
     assert.equal(row.messages, 2, "normal appends keep exact counters");
@@ -1463,10 +1391,10 @@ test("pg attributedTurns: covering join credits only user entries, per principal
   const b = await s.getOrCreateByThread("uetB", "channel", scope);
   await s.addParticipant(a.id, "UET1");
   await s.addParticipant(b.id, "UET1");
-  const { lease } = await s.acquireLease(a.id);
-  const u0 = await s.append(lease!, { type: "user", payload: { text: "1" }, scopeLabel: scope });
-  await s.append(lease!, { type: "assistant", payload: { text: "ack" }, scopeLabel: scope });
-  const u1 = await s.append(lease!, { type: "user", payload: { text: "2" }, scopeLabel: scope });
+  const writer = { sessionId: a.id };
+  const u0 = await s.append(writer, { type: "user", payload: { text: "1" }, scopeLabel: scope });
+  await s.append(writer, { type: "assistant", payload: { text: "ack" }, scopeLabel: scope });
+  const u1 = await s.append(writer, { type: "user", payload: { text: "2" }, scopeLabel: scope });
 
   const rows = await s.attributedTurns();
   const forA = rows.filter((r) => r.sessionId === a.id);
@@ -1493,18 +1421,17 @@ test(
     const t0 = nowRef.v;
     const sess = await s.getOrCreateByThread("covA", "channel", scope);
     await s.addParticipant(sess.id, "COV1");
-    const { lease } = await s.acquireLease(sess.id);
+    const writer = { sessionId: sess.id };
     nowRef.v = t0 + 1000;
-    const early = await s.append(lease!, { type: "user", payload: { text: "early" }, scopeLabel: scope });
+    const early = await s.append(writer, { type: "user", payload: { text: "early" }, scopeLabel: scope });
     nowRef.v = t0 + 2000;
     await s.addParticipant(sess.id, "COV2");
     nowRef.v = t0 + 3000;
-    const mid = await s.append(lease!, { type: "user", payload: { text: "both" }, scopeLabel: scope });
+    const mid = await s.append(writer, { type: "user", payload: { text: "both" }, scopeLabel: scope });
     nowRef.v = t0 + 4000;
     await s.removeParticipant(sess.id, "COV2");
     nowRef.v = t0 + 5000;
-    const late = await s.append(lease!, { type: "user", payload: { text: "late" }, scopeLabel: scope });
-    await s.releaseLease(lease!);
+    const late = await s.append(writer, { type: "user", payload: { text: "late" }, scopeLabel: scope });
 
     const rows = await s.attributedTurns();
     const c1 = rows.filter((r) => r.principalId === "COV1" && r.sessionId === sess.id);
@@ -1534,20 +1461,19 @@ test(
     const scope = scopeId("channel", "ov");
     const a = await s.getOrCreateByThread("ovA", "channel", scope);
     await s.addParticipant(a.id, "OV1");
-    const { lease } = await s.acquireLease(a.id);
-    await s.append(lease!, {
+    const writer = { sessionId: a.id };
+    await s.append(writer, {
       type: "user",
       payload: { overheard: true, ts: "1", name: "Alice", text: "overheard chatter" },
       scopeLabel: scope,
     });
-    await s.append(lease!, { type: "user", payload: { text: "the real question" }, scopeLabel: scope });
-    await s.append(lease!, { type: "assistant", payload: { text: "answer" }, scopeLabel: scope });
-    await s.append(lease!, {
+    await s.append(writer, { type: "user", payload: { text: "the real question" }, scopeLabel: scope });
+    await s.append(writer, { type: "assistant", payload: { text: "answer" }, scopeLabel: scope });
+    await s.append(writer, {
       type: "user",
       payload: { overheard: true, ts: "2", name: "Bob", text: "more chatter" },
       scopeLabel: scope,
     });
-    await s.releaseLease(lease!);
 
     const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
     assert.equal(row.turns, 1, "summary turns excludes overheard");
@@ -1569,9 +1495,8 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const scope = scopeId("channel", "nul");
   const a = await s.getOrCreateByThread("nulA", "channel", scope);
   await s.addParticipant(a.id, "NUL1");
-  const { lease } = await s.acquireLease(a.id);
-  const e = await s.append(lease!, { type: "user", payload: { text: "a\u0000b" }, scopeLabel: scope });
-  await s.releaseLease(lease!);
+  const writer = { sessionId: a.id };
+  const e = await s.append(writer, { type: "user", payload: { text: "a\u0000b" }, scopeLabel: scope });
   assert.equal(
     (e.payload as { text?: string }).text,
     "ab",
@@ -1596,9 +1521,8 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
     2,
     "both user turns counted",
   );
-  const { lease: lease2 } = await s.acquireLease(a.id);
-  await s.append(lease2!, { type: "user", payload: { text: "z" }, scopeLabel: scope });
-  await s.releaseLease(lease2!);
+  const lease2 = { sessionId: a.id };
+  await s.append(lease2, { type: "user", payload: { text: "z" }, scopeLabel: scope });
   const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
   assert.equal(row.turns, 3, "append recounts NULL turns");
   assert.equal(row.messages, 3, "messages self-heal from the entry seq");
@@ -1612,11 +1536,10 @@ test(
     const scope = scopeId("channel", "counters");
     const a = await s.getOrCreateByThread("countersA", "channel", scope);
     const b = await s.getOrCreateByThread("countersB", "channel", scope);
-    const { lease } = await s.acquireLease(a.id);
-    await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    await s.append(lease!, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-    await s.append(lease!, { type: "user", payload: { text: "heard", overheard: true }, scopeLabel: scope });
-    await s.releaseLease(lease!);
+    const writer = { sessionId: a.id };
+    await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await s.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
+    await s.append(writer, { type: "user", payload: { text: "heard", overheard: true }, scopeLabel: scope });
 
     const pg = (await import("pg")).default;
     const raw = new pg.Pool({ connectionString: URL });
@@ -1634,13 +1557,12 @@ test(
       assert.equal(rb.messages, 0, "entry-less legacy session reads as zero");
       assert.equal(rb.lastActivity, rb.createdAt, "entry-less last-activity falls back to created_at");
 
-      const { lease: legacyLease } = await s2.acquireLease(a.id);
-      await s2.append(legacyLease!, {
+      const legacyWriter = { sessionId: a.id };
+      await s2.append(legacyWriter, {
         type: "assistant",
         payload: { text: "first write on new code" },
         scopeLabel: scope,
       });
-      await s2.releaseLease(legacyLease!);
       const entries = await s2.getEntries(a.id);
       const legacy = (await s2.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(legacy.messages, 4, "append counts every entry of a legacy row");
@@ -1651,9 +1573,8 @@ test(
         "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
-      const { lease: lease2 } = await s2.acquireLease(a.id);
-      await s2.append(lease2!, { type: "user", payload: { text: "back on new code" }, scopeLabel: scope });
-      await s2.releaseLease(lease2!);
+      const lease2 = { sessionId: a.id };
+      await s2.append(lease2, { type: "user", payload: { text: "back on new code" }, scopeLabel: scope });
       const healed = (await s2.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(healed.messages, 6, "messages self-heal from the entry seq");
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
@@ -1666,18 +1587,16 @@ test(
       const s3 = createPostgresSessionStore(URL!);
       const stale = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === b.id)!;
       assert.equal(stale.messages, 0, "a fresh store leaves stale non-NULL counters alone");
-      const { lease: leaseB } = await s3.acquireLease(b.id);
-      await s3.append(leaseB!, { type: "assistant", payload: { text: "next" }, scopeLabel: scope });
-      await s3.releaseLease(leaseB!);
+      const leaseB = { sessionId: b.id };
+      await s3.append(leaseB, { type: "assistant", payload: { text: "next" }, scopeLabel: scope });
       const rb2 = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === b.id)!;
       assert.equal(rb2.messages, 3, "the next append repairs stale non-NULL counters");
       assert.equal(rb2.turns, 1, "…and restores turns the old writer never counted");
 
       const future = Date.now() + 5_000_000;
       await raw.query("UPDATE sessions SET last_activity = $2 WHERE id = $1", [a.id, future]);
-      const { lease: lease3 } = await s3.acquireLease(a.id);
-      await s3.append(lease3!, { type: "assistant", payload: { text: "late clock" }, scopeLabel: scope });
-      await s3.releaseLease(lease3!);
+      const lease3 = { sessionId: a.id };
+      await s3.append(lease3, { type: "assistant", payload: { text: "late clock" }, scopeLabel: scope });
       const ra2 = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(ra2.lastActivity, future, "an older-clocked append never moves last_activity backwards");
       const ra3 = (await createPostgresSessionStore(URL!).scopeSessionSummaries(scope, false, { limit: 500 })).find(
@@ -1791,32 +1710,6 @@ test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up 
     const after = await runs.terminalFinished({ finishedAt: first.finishedAt!, id: first.id }, far, 10_000);
     assert.ok(!after.some((run) => run.id === first.id), "the cursor row itself is excluded");
     assert.deepEqual(await runs.terminalFinished({ finishedAt: started, id: "" }, first.finishedAt! - 1, 10_000), []);
-  } finally {
-    await close();
-  }
-});
-
-test("pg run store: a session_busy completion frees the dedup key so the same key runs again", { skip }, async () => {
-  const { runs, close } = createPostgresRunStore(URL!);
-  try {
-    const key = `busy-${randomUUID()}`;
-    const first = (await runs.enqueue({ sessionId: `sBusy-${key}`, request: turn("later"), dedupKey: key })).run;
-    const claimed = await runs.claimById(first.id, "w", 5_000);
-    await runs.complete(first.id, claimed!.leaseToken!, {
-      status: "refused",
-      refusalKind: "session_busy",
-      reason: "b",
-    });
-    assert.equal((await runs.get(first.id))?.dedupKey, null);
-    const retry = await runs.enqueue({ sessionId: `sBusy-${key}`, request: turn("later"), dedupKey: key });
-    assert.equal(retry.deduped, false);
-    assert.notEqual(retry.run.id, first.id);
-    const again = await runs.claimById(retry.run.id, "w", 5_000);
-    await runs.complete(retry.run.id, again!.leaseToken!, { status: "ok", reply: "done" });
-    assert.equal(
-      (await runs.enqueue({ sessionId: `sBusy-${key}`, request: turn("later"), dedupKey: key })).deduped,
-      true,
-    );
   } finally {
     await close();
   }
@@ -2068,30 +1961,23 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
 test("pg run store: reaper cannot clobber a run that completed or renewed its lease mid-sweep", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   try {
-    const retiredSessions: string[] = [];
-    const collect = async (ids: string[]): Promise<void> => {
-      retiredSessions.push(...ids);
-    };
-
     const completed = (await runs.enqueue({ sessionId: "sweepDone", request: turn("x") })).run;
     const claimedDone = await runs.claimById(completed.id, "w1", 1);
     assert.ok(claimedDone?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     assert.equal(await runs.complete(completed.id, claimedDone!.leaseToken!, { status: "ok", reply: "won" }), true);
-    await runs.reapExpired(collect);
+    await runs.reapExpired();
     const done = await runs.get(completed.id);
     assert.equal(done?.status, "done", "completed run is not flipped back to pending");
     assert.equal(done?.result?.reply, "won");
-    assert.ok(!retiredSessions.includes("sweepDone"), "a completed run's session is never released by the sweep");
 
     const renewed = (await runs.enqueue({ sessionId: "sweepAlive", request: turn("y") })).run;
     const claimedAlive = await runs.claimById(renewed.id, "w2", 1);
     assert.ok(claimedAlive?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     assert.equal(await runs.heartbeat(renewed.id, claimedAlive!.leaseToken!, 60_000), true);
-    await runs.reapExpired(collect);
+    await runs.reapExpired();
     assert.equal((await runs.get(renewed.id))?.status, "running", "renewed lease survives the sweep");
-    assert.ok(!retiredSessions.includes("sweepAlive"), "a renewed run's session is never released by the sweep");
   } finally {
     await close();
   }
@@ -2106,7 +1992,7 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
     assert.ok((await runs.claimById(old.id, "wOld", 1))?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     const oldEvents: ReapEvent[] = [];
-    const sweptOld = await runs.reapExpired(undefined, { maxAgeMs: 5, onReap: (e) => oldEvents.push(e) });
+    const sweptOld = await runs.reapExpired({ maxAgeMs: 5, onReap: (e) => oldEvents.push(e) });
     assert.equal(sweptOld.parked, 1, "an over-age run parks");
     assert.equal(sweptOld.requeued, 0);
     const parked = await runs.get(old.id);
@@ -2124,7 +2010,7 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
     assert.ok((await runs.claimById(young.id, "wYoung", 1))?.leaseToken);
     await new Promise((res) => setTimeout(res, 20));
     const youngEvents: ReapEvent[] = [];
-    const sweptYoung = await runs.reapExpired(undefined, { maxAgeMs: 600_000, onReap: (e) => youngEvents.push(e) });
+    const sweptYoung = await runs.reapExpired({ maxAgeMs: 600_000, onReap: (e) => youngEvents.push(e) });
     assert.equal(sweptYoung.requeued, 1, "a young expired run requeues");
     assert.equal(sweptYoung.parked, 0);
     assert.equal((await runs.get(young.id))?.status, "pending");
@@ -2355,27 +2241,25 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   const sess = await s.getOrCreateByThread("srch-1", "dm", scope);
   await s.addParticipant(sess.id, "USRCH", undefined, { includeHistory: true });
 
-  const att = await s.acquireLease(sess.id);
-  const lease = att.lease!;
-  await s.append(lease, {
+  const writer = { sessionId: sess.id };
+  await s.append(writer, {
     type: "user",
     payload: { text: "can you refresh the memo board data?", name: "josh" },
     scopeLabel: scope,
   });
-  await s.append(lease, {
+  await s.append(writer, {
     type: "assistant",
     payload: { text: "Done — pushed the memo board refresh." },
     scopeLabel: scope,
   });
-  await s.append(lease, {
+  await s.append(writer, {
     type: "tool_call",
     payload: { tool: "execute", callId: "noise", text: "memo board tool noise" },
     scopeLabel: scope,
   });
   // A latecomer joins without history, then one more message lands.
   await s.addParticipant(sess.id, "ULATE");
-  await s.append(lease, { type: "user", payload: { text: "memo board postscript" }, scopeLabel: scope });
-  await s.releaseLease(lease);
+  await s.append(writer, { type: "user", payload: { text: "memo board postscript" }, scopeLabel: scope });
 
   const hits = await s.searchEntries("USRCH", "memo boar");
   assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
@@ -2397,9 +2281,8 @@ test("pg search: own chats and side chats only, no subagents or automations", { 
   const write = async (threadRef: string, text: string, surface?: string): Promise<string> => {
     const sess = await s.getOrCreateByThread(threadRef, "dm", scope, undefined, surface);
     await s.addParticipant(sess.id, "UOWN", undefined, { includeHistory: true });
-    const { lease } = await s.acquireLease(sess.id);
-    await s.append(lease!, { type: "user", payload: { text }, scopeLabel: scope });
-    await s.releaseLease(lease!);
+    const writer = { sessionId: sess.id };
+    await s.append(writer, { type: "user", payload: { text }, scopeLabel: scope });
     await s.updateTitle(sess.id, "Ownchat harbor");
     return sess.id;
   };
@@ -2429,27 +2312,25 @@ test("pg search: participation windows filter global matches before the result l
   const s = createPostgresSessionStore(URL!, { now: () => at });
   const scope = scopeId("personal", "SEARCH-WINDOW");
   const session = await s.getOrCreateByThread("search-window-limit", "dm", scope);
-  const lease = (await s.acquireLease(session.id)).lease!;
+  const writer = { sessionId: session.id };
   const append = async (text: string) => {
     at += 1;
-    return s.append(lease, { type: "user", payload: { text }, scopeLabel: scope });
+    return s.append(writer, { type: "user", payload: { text }, scopeLabel: scope });
   };
   await append("limitwindow before joining");
   await s.addParticipant(session.id, "SEARCH-WINDOW");
   const visible = await append("limitwindow visible");
   await s.removeParticipant(session.id, "SEARCH-WINDOW");
   await append("limitwindow after leaving");
-  await s.releaseLease(lease);
 
   const hidden = await s.getOrCreateByThread("search-hidden-limit", "dm", scope);
-  const hiddenLease = (await s.acquireLease(hidden.id)).lease!;
+  const hiddenWriter = { sessionId: hidden.id };
   at += 1;
-  await s.append(hiddenLease, {
+  await s.append(hiddenWriter, {
     type: "user",
     payload: { text: "limitwindow inaccessible session" },
     scopeLabel: scope,
   });
-  await s.releaseLease(hiddenLease);
 
   for (const limit of [1, 200]) {
     const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
@@ -2466,18 +2347,18 @@ test("pg search: message writes populate the index and tool results stay unfinda
   const scope = scopeId("personal", "UIDX");
   const sess = await s.getOrCreateByThread("srch-idx-1", "dm", scope);
   await s.addParticipant(sess.id, "UIDX", undefined, { includeHistory: true });
-  const lease = (await s.acquireLease(sess.id)).lease!;
-  await s.append(lease, {
+  const writer = { sessionId: sess.id };
+  await s.append(writer, {
     type: "user",
     payload: { text: "please rotate the deploy key", name: "alex" },
     scopeLabel: scope,
   });
-  await s.append(lease, {
+  await s.append(writer, {
     type: "tool_result",
     payload: { tool: "execute", callId: "c1", isError: false, result: "secret broker value QQ17" },
     scopeLabel: scope,
   });
-  await s.append(lease, {
+  await s.append(writer, {
     type: "assistant",
     payload: { text: "Rotated the deploy key." },
     scopeLabel: scope,
@@ -2487,18 +2368,18 @@ test("pg search: message writes populate the index and tool results stay unfinda
   assert.equal(before.length, 2, "message writes are searchable immediately");
   assert.equal(before.find((hit) => hit.type === "user")?.author, "alex");
 
-  await s.append(lease, { type: "user", payload: { text: "also rotate the staging deploy key" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "also rotate the staging deploy key" }, scopeLabel: scope });
   assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
 
   assert.deepEqual(await s.searchEntries("UIDX", "secret broker"), [], "tool results are unfindable");
 
   await s.addParticipant(sess.id, "ULATE2");
-  await s.append(lease, { type: "user", payload: { text: "deploy key postscript" }, scopeLabel: scope });
+  await s.append(writer, { type: "user", payload: { text: "deploy key postscript" }, scopeLabel: scope });
   const late = await s.searchEntries("ULATE2", "deploy key");
   assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
   assert.equal(late[0]!.text, "deploy key postscript");
 
-  await s.append(lease, {
+  await s.append(writer, {
     type: "user",
     payload: { text: "nul\u0000riddled deploy key", name: "e\u0000ve" },
     scopeLabel: scope,
@@ -2506,109 +2387,65 @@ test("pg search: message writes populate the index and tool results stay unfinda
   const nulHits = await s.searchEntries("UIDX", "nulriddled");
   assert.equal(nulHits.length, 1, "a NUL byte in the text never wedges the index write");
   assert.equal(nulHits[0]!.author, "eve");
-  await s.releaseLease(lease);
 });
 
-test(
-  "pg deleteSessionIfEmpty: an expired lease forfeits, and the stale holder cannot orphan entries",
-  { skip },
-  async () => {
-    let now = Date.now();
-    const s = createPostgresSessionStore(URL!, { leaseTtlMs: 40, now: () => now });
-    const scope = scopeId("personal", "USTALE");
-    const sess = await s.getOrCreateByThread("web:USTALE:seed", "dm", scope);
-    const att = await s.acquireLease(sess.id);
-    assert.ok(att.lease);
-    now += 60;
-    assert.equal(await s.deleteSessionIfEmpty(sess.id), true, "an expired lease does not block the discard");
-    assert.equal(await s.get(sess.id), null);
-    await assert.rejects(
-      s.append(att.lease!, { type: "user", payload: {}, scopeLabel: scope }),
-      /valid session lease/,
-      "the stale holder cannot append after the discard",
-    );
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
-    const leftovers = await raw.query(
-      "SELECT (SELECT COUNT(*) FROM items WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
-      [sess.id],
-    );
-    await raw.end();
-    assert.equal(Number(leftovers.rows[0].e), 0, "no orphaned entries after the stale append is refused");
-    assert.equal(Number(leftovers.rows[0].l), 0, "no orphaned lease row survives");
-  },
-);
-
-test("pg deleteSession: racing a fresh lease acquisition never orphans entries", { skip }, async () => {
+test("pg deleteSession: racing an append never orphans entries", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UHARD");
+  const ids: string[] = [];
   for (let i = 0; i < 15; i++) {
     const sess = await s.getOrCreateByThread(`web:UHARD:${i}`, "dm", scope);
-    const [attempt] = await Promise.all([s.acquireLease(sess.id), s.deleteSession(sess.id)]);
+    ids.push(sess.id);
+    await Promise.allSettled([
+      s.append({ sessionId: sess.id }, { type: "user", payload: { text: "racing" }, scopeLabel: scope }),
+      s.deleteSession(sess.id),
+    ]);
     assert.equal(await s.get(sess.id), null, "the session is gone either way");
-    if (attempt.lease) {
-      await assert.rejects(
-        s.append(attempt.lease, { type: "user", payload: {}, scopeLabel: scope }),
-        /valid session lease/,
-        "a lease granted before the delete cannot orphan entries",
-      );
-    }
   }
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
-  const leftovers = await raw.query(
-    "SELECT COUNT(*) AS n FROM session_leases l WHERE NOT EXISTS (SELECT 1 FROM sessions ss WHERE ss.id = l.session_id)",
-  );
+  const leftovers = await raw.query("SELECT COUNT(*) AS n FROM items WHERE session_id = ANY($1)", [ids]);
   await raw.end();
-  assert.equal(Number(leftovers.rows[0].n), 0, "no lease row survives its session");
+  assert.equal(Number(leftovers.rows[0].n), 0, "no entry survives its session");
 });
 
-test("pg deleteSessionIfEmpty: racing a fresh lease acquisition never orphans the lease", { skip }, async () => {
+test("pg deleteSessionIfEmpty: racing an append either discards the session or keeps the entry", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "URACE");
   for (let i = 0; i < 15; i++) {
     const sess = await s.getOrCreateByThread(`web:URACE:${i}`, "dm", scope);
-    const [attempt, discarded] = await Promise.all([s.acquireLease(sess.id), s.deleteSessionIfEmpty(sess.id)]);
-    if (discarded) {
-      assert.equal(attempt.lease, null, "a discarded session never grants a lease");
+    const [appended, discarded] = await Promise.allSettled([
+      s.append({ sessionId: sess.id }, { type: "user", payload: { text: "racing" }, scopeLabel: scope }),
+      s.deleteSessionIfEmpty(sess.id),
+    ]);
+    assert.equal(discarded.status, "fulfilled");
+    if (discarded.value) {
+      assert.equal(appended.status, "rejected", "a discarded session takes no append");
       assert.equal(await s.get(sess.id), null);
     } else {
-      assert.ok(attempt.lease, "when the discard is refused the lease was granted");
-      assert.ok(await s.get(sess.id), "the session survives when the lease won");
-      await s.releaseLease(attempt.lease!);
-      assert.equal(await s.deleteSessionIfEmpty(sess.id), true);
+      assert.equal(appended.status, "fulfilled", "when the discard is refused the append landed");
+      assert.equal((await s.getEntries(sess.id)).length, 1, "the session survives with its entry");
     }
   }
 });
 
-test("pg deleteSessionIfEmpty: a held lease or landed entries refuse the discard atomically", { skip }, async () => {
+test("pg deleteSessionIfEmpty: landed entries refuse the discard atomically", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UDISC");
   const sess = await s.getOrCreateByThread("web:UDISC:seed", "dm", scope);
-  const att = await s.acquireLease(sess.id);
-  assert.ok(att.lease);
-  assert.equal(await s.deleteSessionIfEmpty(sess.id), false, "a held lease blocks the discard");
-  await s.append(att.lease, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
-  await s.releaseLease(att.lease);
+  await s.append({ sessionId: sess.id }, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
   assert.equal(await s.deleteSessionIfEmpty(sess.id), false, "entries block the discard");
   assert.ok(await s.get(sess.id), "the refused discard leaves the session intact");
 
   const empty = await s.getOrCreateByThread("web:UDISC:seed2", "dm", scope);
-  const att2 = await s.acquireLease(empty.id);
-  assert.ok(att2.lease);
-  await s.releaseLease(att2.lease);
-  assert.equal(await s.deleteSessionIfEmpty(empty.id), true, "a released empty session is discarded");
+  assert.equal(await s.deleteSessionIfEmpty(empty.id), true, "an empty session is discarded");
   assert.equal(await s.get(empty.id), null);
 
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
-  const orphans = await raw.query(
-    "SELECT (SELECT COUNT(*) FROM items WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
-    [empty.id],
-  );
+  const orphans = await raw.query("SELECT COUNT(*) AS e FROM items WHERE session_id = $1", [empty.id]);
   await raw.end();
   assert.equal(Number(orphans.rows[0].e), 0, "no orphaned entries survive the discard");
-  assert.equal(Number(orphans.rows[0].l), 0, "no orphaned lease survives the discard");
 });
 
 test("pg search: globally limits indexed hits across sessions", { skip }, async () => {
@@ -2618,12 +2455,15 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
   for (let i = 0; i < 3; i++) {
     const session = await store.getOrCreateByThread(`search-global-limit-${i}`, "dm", scope);
     await store.addParticipant(session.id, "ULIMITSEARCH", undefined, { includeHistory: true });
-    const lease = (await store.acquireLease(session.id)).lease!;
+    const writer = { sessionId: session.id };
     for (let j = 0; j < 4; j++) {
-      const entry = await store.append(lease, { type: "user", payload: { text: "document limit" }, scopeLabel: scope });
+      const entry = await store.append(writer, {
+        type: "user",
+        payload: { text: "document limit" },
+        scopeLabel: scope,
+      });
       expected.push({ sessionId: session.id, seq: entry.seq });
     }
-    await store.releaseLease(lease);
   }
   expected.sort((a, b) => a.sessionId.localeCompare(b.sessionId) || b.seq - a.seq);
   for (const limit of [1, 5, 12, 20]) {
@@ -2644,9 +2484,9 @@ test(
     await store.addParticipant(session.id, "UATOMIC", undefined, { includeHistory: true });
     const pg = (await import("pg")).default;
     const pool = new pg.Pool({ connectionString: URL });
-    const lease = (await store.acquireLease(session.id)).lease!;
+    const writer = { sessionId: session.id };
     try {
-      const entry = await store.append(lease, {
+      const entry = await store.append(writer, {
         type: "user",
         payload: { text: "original document" },
         scopeLabel: session.scopeId,
@@ -2665,7 +2505,6 @@ test(
         /only allowed through its session/,
       );
     } finally {
-      await store.releaseLease(lease);
       await store.deleteSession(session.id);
       await pool.end();
     }
@@ -2695,8 +2534,7 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "canonical-failure");
   const session = await s.getOrCreateByThread("pg-canonical-failure", "dm", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   const pg = (await import("pg")).default;
   const client = new pg.Client({ connectionString: URL! });
   await client.connect();
@@ -2708,7 +2546,7 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
   );
   try {
     await assert.rejects(
-      s.append(lease, { type: "user", payload: { text: "must rollback" }, scopeLabel: scope }),
+      s.append(writer, { type: "user", payload: { text: "must rollback" }, scopeLabel: scope }),
       /transcript unavailable/,
     );
     assert.deepEqual(await s.getEntries(session.id), []);
@@ -2719,7 +2557,6 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
     await client.query("DROP TRIGGER reject_transcript_test ON items");
     await client.query("DROP FUNCTION reject_transcript_test()");
     await client.end();
-    await s.releaseLease(lease);
   }
 });
 
@@ -2873,10 +2710,8 @@ test("pg late joiners start after any stored sequence gap", { skip }, async () =
   const scope = scopeId("channel", "gap-C1");
   const session = await store.getOrCreateByThread("slack:gap-C1:1", "channel", scope, "eng");
   await store.addParticipant(session.id, "gap-early");
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
-  await store.append(lease, { type: "user", payload: { text: "before" }, scopeLabel: scope });
-  await store.releaseLease(lease);
+  const writer = { sessionId: session.id };
+  await store.append(writer, { type: "user", payload: { text: "before" }, scopeLabel: scope });
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
@@ -2959,10 +2794,8 @@ test("pg session pages sort by the person's last message, which appends keep", {
     ids.push(session.id);
   }
   const say = async (sessionId: string, type: "user" | "assistant") => {
-    const { lease } = await s.acquireLease(sessionId);
-    assert.ok(lease);
-    await s.append(lease, { type, payload: { text: type }, scopeLabel: personal });
-    await s.releaseLease(lease);
+    const writer = { sessionId: sessionId };
+    await s.append(writer, { type, payload: { text: type }, scopeLabel: personal });
   };
   await say(ids[0]!, "user");
   await say(ids[2]!, "assistant");

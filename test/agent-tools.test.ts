@@ -702,8 +702,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const store = createPostgresSessionStore(url);
   const pool = createPgPool(url);
   const session = await store.getOrCreateByThread("web:park", "dm", "personal:U1" as SessionEntry["scopeLabel"]);
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   await pool.q("INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100')");
   const clock = { at: Date.now() };
   const bytes = createMemoryDurableByteStore();
@@ -719,7 +718,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     current: tc,
     emit: (e) => {
       emitted.push(e as Emitted);
-      appends.push(store.append({ ...lease, turnId: "run-park" }, e as Parameters<typeof store.append>[1]));
+      appends.push(store.append({ ...writer, turnId: "run-park" }, e as Parameters<typeof store.append>[1]));
     },
     scopeLabel: "personal:U1",
   };
@@ -752,7 +751,6 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.result.includes("line 1000"));
-  await store.releaseLease(lease);
   await pool.close();
 });
 

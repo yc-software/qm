@@ -19,12 +19,10 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
-  sessions: Pick<SessionStore, "getByThread" | "fenceTurnLease">;
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
@@ -188,8 +186,6 @@ async function handBack(
     return;
   }
   console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
-  const session = await deps.sessions.getByThread(run.sessionId);
-  if (session) await deps.sessions.fenceTurnLease(session.id, exited);
   await deps.runs.releaseLease(run.id, token, stop, exited);
 }
 
