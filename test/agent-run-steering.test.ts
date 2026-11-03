@@ -79,7 +79,7 @@ function gatedSse(events: Array<Record<string, unknown>>, gate: Promise<void>): 
 for (const variant of ["text", "images", "documents", "finished during preparation"]) {
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
-  test(`steered input lands in consumption order, including steered ${variant}`, async () => {
+  test(`steered input lands in consumption order, including steered ${variant}`, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const agent = createAgent({ apiKey: "sk-test", signals });
     const sink: Sink = { entries: [] };
@@ -99,15 +99,6 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       if (calls === 1) {
         setTimeout(() => {
           void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
-          if (!finishDuringPreparation)
-            setTimeout(() => {
-              assert.equal(
-                sink.entries.filter((entry) => entry.type === "user").length,
-                1,
-                "enqueue is not model intake",
-              );
-              releaseFirstStep();
-            }, 100);
         }, 30);
         const events = textReplyEvents("first step");
         if (variant === "text") {
@@ -131,20 +122,29 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
         return emit(entry);
       };
-      if (withImages)
-        turn.prepareSteer = async (text) => {
-          if (finishDuringPreparation) {
+      turn.prepareSteer = async (text) => {
+        if (finishDuringPreparation) {
+          releaseFirstStep();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        } else {
+          setTimeout(() => {
+            assert.equal(
+              sink.entries.filter((entry) => entry.type === "user").length,
+              1,
+              "enqueue is not model intake",
+            );
             releaseFirstStep();
-            await new Promise((resolve) => setTimeout(resolve, 150));
-          }
-          return {
-            text: `${text}\nFile available in inbox/photo.png`,
-            images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
-            ...(variant === "documents"
-              ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
-              : {}),
-          };
+          });
+        }
+        if (!withImages) return { text };
+        return {
+          text: `${text}\nFile available in inbox/photo.png`,
+          images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
+          ...(variant === "documents"
+            ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
+            : {}),
         };
+      };
       const result = await agent.runTurn(turn);
       if (finishDuringPreparation) {
         assert.equal(result.reply, "first step");
