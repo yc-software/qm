@@ -277,32 +277,28 @@ test(
   },
 );
 
-test(
-  "pg directory: listChannelsFor returns public ∪ private-member, ordered by name",
-  { skip },
-  async () => {
-    const store = createPostgresDirectoryStore(URL!);
-    await store.replaceChannels(
-      [
-        { channelId: "C-pub", name: "general" },
-        { channelId: "C-mine", name: "mine", isPrivate: true },
-        { channelId: "C-theirs", name: "theirs", isPrivate: true },
-      ],
-      [
-        { channelId: "C-mine", principalId: "U1" },
-        { channelId: "C-theirs", principalId: "U2" },
-      ],
-    );
-    assert.deepEqual(
-      (await store.listChannelsFor("U1")).map((c) => c.name),
-      ["general", "mine"],
-    );
-    assert.deepEqual(
-      (await store.listChannelsFor("U2")).map((c) => c.name),
-      ["general", "theirs"],
-    );
-  },
-);
+test("pg directory: listChannelsFor returns public ∪ private-member, ordered by name", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceChannels(
+    [
+      { channelId: "C-pub", name: "general" },
+      { channelId: "C-mine", name: "mine", isPrivate: true },
+      { channelId: "C-theirs", name: "theirs", isPrivate: true },
+    ],
+    [
+      { channelId: "C-mine", principalId: "U1" },
+      { channelId: "C-theirs", principalId: "U2" },
+    ],
+  );
+  assert.deepEqual(
+    (await store.listChannelsFor("U1")).map((c) => c.name),
+    ["general", "mine"],
+  );
+  assert.deepEqual(
+    (await store.listChannelsFor("U2")).map((c) => c.name),
+    ["general", "theirs"],
+  );
+});
 
 test(
   "pg directory: a second store instance reads what the first wrote (multi-instance consistency)",
