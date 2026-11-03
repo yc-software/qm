@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { JSDOM } from "jsdom";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/v1/surface-config")) {
@@ -41,8 +42,12 @@ test.after(() => {
   core.close();
 });
 
-test("cold start: the FIRST shell render already carries accent, mark, and self-label", async () => {
-  const r = await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice" } });
+test("cold start: a tenant's FIRST shell render already carries accent, mark, and self-label", async () => {
+  const identity = mintPortalIdentity(
+    { p: "alice", t: "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93", exp: Date.now() + 60_000 },
+    "web-ui-branding-test",
+  );
+  const r = await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice", [PORTAL_IDENTITY_HEADER]: identity } });
   assert.equal(r.status, 200);
   const html = await r.text();
   assert.match(html, /--brand-accent:#f0652f/, "accent injected on the first render");

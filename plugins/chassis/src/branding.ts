@@ -1,4 +1,4 @@
-import { withoutTenant } from "./tenant.ts";
+import { boundTenant, withTenant } from "./tenant.ts";
 export interface OrgBranding {
   orgName?: string;
   accent?: string;
@@ -17,7 +17,7 @@ export interface BrandingCache {
   refreshNow(): Promise<void>;
 }
 
-export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
+function tenantBranding(tenant: string, fetchBranding: () => Promise<OrgBranding>): BrandingCache {
   let value: OrgBranding = {};
   let warmed = false;
   let nextAt = 0;
@@ -27,7 +27,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
     if (inflight || Date.now() < nextAt) return;
     inflight = (async () => {
       try {
-        value = await withoutTenant(fetchBranding);
+        value = await withTenant(tenant, fetchBranding);
         if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(value));
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
@@ -39,10 +39,12 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
       }
     })();
   };
-  setTimeout(kick, 0);
 
   return {
-    current: () => value,
+    current: () => {
+      kick();
+      return value;
+    },
     async forRender(): Promise<OrgBranding> {
       kick();
       if (!warmed && inflight) {
@@ -56,6 +58,22 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
       kick();
       if (inflight) await inflight;
     },
+  };
+}
+
+export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
+  const tenants = new Map<string, BrandingCache>();
+  const forTenant = (): BrandingCache | undefined => {
+    const tenant = boundTenant();
+    if (!tenant) return undefined;
+    const cache = tenants.get(tenant) ?? tenantBranding(tenant, fetchBranding);
+    tenants.set(tenant, cache);
+    return cache;
+  };
+  return {
+    current: () => forTenant()?.current() ?? {},
+    forRender: async () => (await forTenant()?.forRender()) ?? {},
+    refreshNow: async () => forTenant()?.refreshNow(),
   };
 }
 

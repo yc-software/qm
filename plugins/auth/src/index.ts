@@ -51,7 +51,6 @@ export async function startServer(
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
     mailer,
     brandName: () => {
-      void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
     },
   });
