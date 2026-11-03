@@ -37,6 +37,7 @@ export function toEvent(raw: unknown): IngestEvent | null {
     ...(typeof raw.authorId === "string" ? { authorId: raw.authorId } : {}),
     ...(typeof raw.authorName === "string" ? { authorName: raw.authorName } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
+    ...(isObj(raw.raw) ? { raw: raw.raw } : {}),
     ...(isObj(raw.mentions) ? { mentions: strMap(raw.mentions) } : {}),
     ...(raw.self === true ? { self: true } : {}),
     ...(raw.bot === true ? { bot: true } : {}),
