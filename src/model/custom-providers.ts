@@ -110,7 +110,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
 
 const state = perTenant(() => ({
   registry: new Map<string, CustomRuntimeModel>(),
-  providers: [] as CustomProviderSpec[],
+  providers: new Array<CustomProviderSpec>(),
   version: 0,
 }));
 
