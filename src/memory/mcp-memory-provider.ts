@@ -1,7 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import { withTimeout } from "../util/async.ts";
-import { attestableAudience, attestedPerson } from "../directory/person.ts";
+import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
@@ -40,8 +40,8 @@ export function createMcpMemoryProvider(opts: {
     actorId: string | undefined,
     scopeId: string,
   ) => {
+    if (opts.attestActor && !attestableAudience(actorId, scopeId)) throw new OutsideAudience("memory provider");
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !attestableAudience(person, scopeId)) throw new MemoryRecallWithheld(scopeId);
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
@@ -55,7 +55,9 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId, scopeId);
+    const result = await call(op, args, context?.actorId, scopeId).catch((error: unknown) => {
+      throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
+    });
     const { code } = mcpEnvelope(result);
     if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
       throw new McpCallError(`memory provider refused the read (${code})`, { code });

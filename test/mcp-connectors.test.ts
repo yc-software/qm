@@ -294,7 +294,10 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   await service.call("records", { operation: "search" }, "bob@example.com", undefined, "personal:bob@example.com");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
   assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
-  await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
+  await assert.rejects(
+    service.call("records", { operation: "search" }),
+    /answers only to them in their own private conversation/,
+  );
   await service.refresh();
   const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
   await Promise.all([
@@ -366,7 +369,7 @@ test("an attested connector refuses a call outside its person's own conversation
 
 test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
-    canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),
+    canonical: (key) => (["alice@example.com", "U_ALICE", "system:digest"].includes(key) ? "U_ALICE" : undefined),
     aliases: () => [],
   });
   t.after(() => installPrincipalLinks(null));
@@ -389,9 +392,13 @@ test("attested connectors send one canonical person and never call for an actor 
   assert.ok(mcp.requests.length > 0);
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
   const sent = mcp.requests.length;
+  await assert.rejects(
+    service.call("records", { operation: "search" }, "system:digest", undefined, "personal:U_ALICE"),
+    /answers only to them in their own private conversation/,
+  );
   for (const person of ["jörg@example.com", "x".repeat(257)])
     await assert.rejects(
-      service.call("records", { operation: "search" }, person),
+      service.call("records", { operation: "search" }, person, undefined, `personal:${person}`),
       (error: unknown) => error instanceof UnattestableActor && /POST \/v1\/admin\/principal-links/.test(error.message),
     );
   assert.equal(mcp.requests.length, sent);

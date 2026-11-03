@@ -115,7 +115,7 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
   const memory = configured(mcp.url, { attestActor: true });
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const actorId of ["jörg@acme.test", "x".repeat(257), "U 1"]) {
-      assert.equal(recallText(await memory.recall("personal:U1", { actorId, report })), "notebook fact");
+      assert.equal(recallText(await memory.recall(`personal:${actorId}`, { actorId, report })), "notebook fact");
     }
   });
   assert.deepEqual(mcp.requests, []);
@@ -126,11 +126,15 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
 });
 
 test("an attested provider is called only for the person whose private conversation it is", async (t) => {
+  installPrincipalLinks({ canonical: (key) => (key === "system:digest" ? "U1" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
-  for (const actorId of ["U2", "system:personal:U1"]) {
+  for (const actorId of ["U2", "system:personal:U1", "system:digest"]) {
     assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", actorId })), "notebook fact");
-    await memory.capture("personal:U1", ["fact"], 1, actorId, { mode: "explicit", actorId });
+    const write = await writeFacts(memory, "personal:U1", ["fact"], actorId, { mode: "explicit", actorId }, undefined);
+    assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
   }
   assert.equal(mcp.requests.length, 0);
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });

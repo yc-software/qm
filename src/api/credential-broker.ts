@@ -1,6 +1,6 @@
 import { isComposioHost } from "../credentials/keychain.ts";
 import { errMessage } from "../util/errors.ts";
-import { attestableActor, attestableAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
+import { attestableActor, attestableAudience, OutsideAudience, UNATTESTABLE_ACTOR_FIX } from "../directory/person.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -210,12 +210,8 @@ export async function brokerCredentialCall(opts: {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
   }
   if (rec.injection?.actor && !attestableAudience(actor, claims.scopeId)) {
-    return deny(
-      403,
-      "private_only",
-      "this credential acts as the person, so it answers only to them in their own private conversation with QM",
-      rec.host,
-    );
+    const refusal = new OutsideAudience("this credential");
+    return deny(403, refusal.code, refusal.message, rec.host);
   }
   let parsed: URL;
   try {

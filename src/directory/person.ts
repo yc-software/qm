@@ -27,6 +27,13 @@ export class UnattestableActor extends Error {
   readonly code = "invalid_actor";
 }
 
+export class OutsideAudience extends Error {
+  readonly code = "private_only";
+  constructor(callee: string) {
+    super(`${callee} acts as the person, so it answers only to them in their own private conversation with QM`);
+  }
+}
+
 export const UNATTESTABLE_ACTOR_FIX =
   "Link this member to a principal id of 1 to 256 visible ASCII characters with POST /v1/admin/principal-links (docs/principal-links.md).";
 

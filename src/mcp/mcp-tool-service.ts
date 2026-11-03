@@ -14,7 +14,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { attestableAudience, attestedPerson } from "../directory/person.ts";
+import { attestableAudience, attestedPerson, OutsideAudience } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -146,10 +146,8 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
 }
 
 function refuseOutsideAudience(server: McpServer, principalId: string | undefined, scopeId: ScopeId | undefined): void {
-  if (server.attestActor && !attestableAudience(attestedPerson(principalId, `MCP server ${server.id}`), scopeId))
-    throw new Error(
-      `MCP server ${server.id} acts as the person, so it answers only to them in their own private conversation with QM`,
-    );
+  if (server.attestActor && !attestableAudience(principalId, scopeId))
+    throw new OutsideAudience(`MCP server ${server.id}`);
 }
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
