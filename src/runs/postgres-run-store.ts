@@ -18,6 +18,7 @@ import {
   withTraceCarrier,
 } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../tenants/claim.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -32,6 +33,7 @@ function rowToRun(r: Record<string, unknown>): Run {
   const request = JSON.parse(r.request as string) as OrchestratorInput;
   return {
     id: r.id as string,
+    ...rowTenant(r),
     sessionId: r.session_id as string,
     status: r.status as Run["status"],
     request: { ...request, origin: resolveTurnOrigin(request) },
@@ -126,7 +128,7 @@ END $base_schema$`,
   function watchAvailability(): void {
     if (availabilityClosed || availabilityListeners.size === 0 || availabilityTimer || availabilityProbe) return;
     availabilityTimer = setTimeout(
-      () => {
+      crossTenantLoop(() => {
         availabilityTimer = undefined;
         availabilityProbe = q(
           `SELECT EXISTS (
@@ -146,7 +148,7 @@ END $base_schema$`,
             availabilityProbe = null;
             watchAvailability();
           });
-      },
+      }),
       Math.min(...availabilityListeners.values()),
     );
     availabilityTimer.unref();
@@ -160,7 +162,7 @@ END $base_schema$`,
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) listener(run);
+    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
   }
   async function retire(
     run: Run,
@@ -389,8 +391,9 @@ END $base_schema$`,
       return rows[0] ? rowToRun(rows[0]) : null;
     },
     async pendingReturns(limit = 100, afterId = "") {
-      const { rows } = await q(
-        `SELECT * FROM (
+      const { rows } = await claimAcrossTenants(() =>
+        q(
+          `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
            UNION
@@ -401,16 +404,19 @@ END $base_schema$`,
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
          ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
-        [limit, afterId, Date.now()],
+          [limit, afterId, Date.now()],
+        ),
       );
       return rows.map(rowToRun);
     },
     async terminalFinished(after, beforeMs, limit) {
-      const { rows } = await q(
-        `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
+      const { rows } = await claimAcrossTenants(() =>
+        q(
+          `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
-        [beforeMs, after.finishedAt, after.id, limit],
+          [beforeMs, after.finishedAt, after.id, limit],
+        ),
       );
       return rows.map(rowToRun);
     },
@@ -509,14 +515,15 @@ END $base_schema$`,
       opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
-        [now],
+      const { rows } = await claimAcrossTenants(() =>
+        q("SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1", [
+          now,
+        ]),
       );
       const expired = rows.map(rowToRun);
       let requeued = 0;
       let parked = 0;
-      for (const run of expired) {
+      const reap = async (run: Run): Promise<void> => {
         const tooOld = opts?.maxAgeMs !== undefined && run.startedAt !== null && now - run.startedAt > opts.maxAgeMs;
         const reason = tooOld ? "run exceeded max age (reaped)" : "lease expired (reaped)";
         const fenceToken = randomUUID();
@@ -524,10 +531,10 @@ END $base_schema$`,
           "UPDATE runs SET lease_token=$1, lease_expires_at=$5 WHERE id=$2 AND lease_token=$3 AND status='running' AND lease_expires_at <= $4 RETURNING id",
           [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
         );
-        if (!fenced.rows[0]) continue;
+        if (!fenced.rows[0]) return;
         if (onRetired) await onRetired([run.sessionId]);
         const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
-        if (!r.applied) continue;
+        if (!r.applied) return;
         if (r.requeued) requeued++;
         else parked++;
         opts?.onReap?.({
@@ -538,7 +545,8 @@ END $base_schema$`,
           errorAttempts: run.errorAttempts,
           outcome: r.requeued ? "requeued" : "parked",
         });
-      }
+      };
+      for (const run of expired) await inTenantOf(run.tenantId, () => reap(run));
       return { requeued, parked };
     },
 
