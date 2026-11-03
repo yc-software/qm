@@ -30,14 +30,14 @@ import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts"
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, tenantHeader, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { requireOperatorControl } from "./routes/background-work.ts";
-import { operatorTenant } from "./routes/tenant-settings.ts";
+import { operatorTenantKnown } from "./routes/tenant-settings.ts";
 import { orgScope } from "../config.ts";
-import { withTenant } from "../tenants/context.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { tenantReady } from "../tenants/context.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -355,10 +355,8 @@ const TENANT_ROOT_SCOPE_ALIAS = "tenant";
 
 async function runApi(route: Route<ApiCtx>, params: Record<string, string>, ctx: ApiCtx): Promise<void> {
   if (!ctx.operator) return run(route, params, ctx);
-  const tenant = await operatorTenant(ctx);
-  if (!tenant) return;
-  const resolved = params.scope === TENANT_ROOT_SCOPE_ALIAS ? { ...params, scope: orgScope() } : params;
-  await withTenant(tenant, () => run(route, resolved, ctx));
+  if (!(await operatorTenantKnown(ctx))) return;
+  await run(route, params.scope === TENANT_ROOT_SCOPE_ALIAS ? { ...params, scope: orgScope() } : params, ctx);
 }
 
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
@@ -522,6 +520,7 @@ function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | nul
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
+    if (boundTenant()) await tenantReady();
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");

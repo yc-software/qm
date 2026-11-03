@@ -64,6 +64,7 @@ test.after(() => fake.cleanup());
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
     const built = buildApp(testConfig());
+    await built.identity.ready();
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -127,6 +128,7 @@ for (const kind of ["command", "security-screen"] as const) {
 
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   try {
     const rootTurn = await built.app.turn({
       surface: "test",
@@ -423,6 +425,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
 
 test("unbound request fields cannot claim verified swarm provenance", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   const before = screenedPayloads.length;
   try {
     const request: TurnRequest & { verifiedSwarm: boolean } = {
@@ -450,6 +453,7 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const sandbox = await built.sandboxResources.create("U1", "personal:U1", "sprites");
   await built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id);
@@ -500,6 +504,7 @@ test("a resolved command approval informs the model without changing its request
 
 test("disabled swarms park queued notifications once without running the model or writing failures", async () => {
   const built = buildApp(testConfig({ swarmsEnabled: false }));
+  await built.identity.ready();
   try {
     const rootTurn = await built.app.turn({
       surface: "test",
@@ -576,6 +581,7 @@ test("swarms stay off for a person until the swarms flag names their personal sc
 
 test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
@@ -617,6 +623,7 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
 
 test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
@@ -661,6 +668,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 
 test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
   const built = buildApp(testConfig());
+  await built.identity.ready();
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);

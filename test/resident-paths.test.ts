@@ -394,7 +394,7 @@ test("quarantined credentials are pruned from the backup archive, not just filte
     },
     readAbsBytes: async () => Buffer.alloc(0),
     defaultHomeDir: "/home/agent",
-    ephemeralCredentialPrefixes: EPHEMERAL_CRED_PATHS.map((link) => link.rel),
+    ephemeralCredentialPrefixes: () => EPHEMERAL_CRED_PATHS.map((link) => link.rel),
   });
   await backup.exportFiles(
     { id: "box", rootDir: "/home/agent/workspace", homeDir: "/home/agent" },

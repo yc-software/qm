@@ -23,6 +23,7 @@ for (const surface of ["web", "slack", "swarm"]) {
         },
       },
     });
+    await built.identity.ready();
     await built.config.setSecurityPosture(scopeId("org", config.orgId), "auto");
     await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
     await selectDefaultSandbox(built, "U1", "personal:U1");

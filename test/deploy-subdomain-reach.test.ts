@@ -12,7 +12,6 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId } from "../src/types.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { viewerIdentityKey } from "../src/deploy/access-token.ts";
@@ -20,7 +19,7 @@ import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
@@ -144,7 +143,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
   assert.equal(reach.status === "ok" && reach.endpoint.host, "frozen");
 });
 
-function appServingUpstream(upstreamPort: number) {
+async function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -163,7 +162,7 @@ function appServingUpstream(upstreamPort: number) {
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
 }
@@ -196,7 +195,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = await appServingUpstream(upstreamPort);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -262,7 +261,7 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = await appServingUpstream(upstreamPort);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -303,7 +302,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = await appServingUpstream(upstreamPort);
   await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -339,7 +338,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
 });
 
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
-  const app = appServingUpstream(1);
+  const app = await appServingUpstream(1);
   const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -363,7 +362,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const app = appServingUpstream(upstreamPort);
+  const app = await appServingUpstream(upstreamPort);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -414,7 +413,7 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     res.end(`cookie=${req.headers.cookie ?? ""}`);
   });
   upstream.listen(0);
-  const app = appServingUpstream((upstream.address() as AddressInfo).port);
+  const app = await appServingUpstream((upstream.address() as AddressInfo).port);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

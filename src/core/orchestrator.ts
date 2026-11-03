@@ -234,6 +234,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
+import { perTenant, tenantReady } from "../tenants/context.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -268,7 +269,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
-const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
@@ -288,32 +288,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ agent: deps.agent, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;
 
-  const pendingCaptures = new Map<ScopeId, Promise<void>>();
+  const pendingCaptures = perTenant(() => new Map<ScopeId, Promise<void>>());
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
-  const reachRosterCache = new LRUCache<string, DirectoryChannel[]>({
-    max: INSTANCE_CACHE_MAX_ENTRIES,
-    ttl: REACH_ROSTER_TTL_MS,
-  });
+  const reachRosterCache = perTenant(
+    () => new LRUCache<string, DirectoryChannel[]>({ max: INSTANCE_CACHE_MAX_ENTRIES, ttl: REACH_ROSTER_TTL_MS }),
+  );
   async function reachableChannelsFor(directory: DirectoryStore, principalId: string): Promise<DirectoryChannel[]> {
-    const cached = reachRosterCache.get(principalId);
+    const cached = reachRosterCache().get(principalId);
     if (cached) return cached;
     const channels = await directory.listChannelsFor(principalId);
-    reachRosterCache.set(principalId, channels);
+    reachRosterCache().set(principalId, channels);
     return channels;
   }
 
-  const DIRECTORY_INDEX_TTL_MS = REACH_ROSTER_TTL_MS;
-  const directoryIndexCache = new LRUCache<string, Map<string, DirectoryMember>>({
-    max: DIRECTORY_INDEX_CACHE_MAX_ENTRIES,
-    ttl: DIRECTORY_INDEX_TTL_MS,
-  });
+  const directoryIndexCache = perTenant(
+    () => new LRUCache<"index", Map<string, DirectoryMember>>({ max: 1, ttl: REACH_ROSTER_TTL_MS }),
+  );
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache().get("index");
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache().set("index", byId);
     return byId;
   }
 
@@ -1178,7 +1175,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
+      await tenantReady();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1268,8 +1265,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
 
-      if (!external && deps.deploymentLayer?.hints.length) {
-        systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
+      const layerHints = deps.deploymentLayer?.().hints ?? [];
+      if (!external && layerHints.length) {
+        systemPrompt += `\n\n## Deployment tool hints\n${layerHints.map((hint) => `- ${hint}`).join("\n")}`;
       }
       const gatewayBlock = renderGatewayContext(
         input.surface,
@@ -1414,7 +1412,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
+      const brokeredTools = external ? [] : (deps.deploymentLayer?.().brokeredTools ?? []);
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const openAutomationKeychain =
@@ -1891,7 +1889,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
-      const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
+      const layerCommandRules = [...(deps.deploymentLayer?.().commandRules ?? [])];
       const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
       const turnSandboxResources = external
         ? deps.sandboxResources?.forTurn({
@@ -2719,8 +2717,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.deploymentLayer
             ? {
                 layerAuth: {
-                  credentialPaths: deps.deploymentLayer.credentialPaths,
-                  splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
+                  credentialPaths: deps.deploymentLayer().credentialPaths,
+                  splitEnvTemplates: deps.deploymentLayer().splitEnvTemplates,
                 },
               }
             : {}),
@@ -3730,7 +3728,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-          const prior = pendingCaptures.get(memoryScopeId);
+          const prior = pendingCaptures().get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
             try {
@@ -3758,9 +3756,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             }
           })();
-          pendingCaptures.set(memoryScopeId, capture);
+          pendingCaptures().set(memoryScopeId, capture);
           void capture.finally(() => {
-            if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
+            if (pendingCaptures().get(memoryScopeId) === capture) pendingCaptures().delete(memoryScopeId);
           });
         }
 

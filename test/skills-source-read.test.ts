@@ -7,14 +7,14 @@ import type { TurnRequest } from "../src/types.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
-  await built.deploymentLayerReady;
+  await built.identity.ready();
+  await built.deploymentLayerStore.hydrate();
   for (const actor of ["U1", "U2"]) {
     const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
     await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
   }
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let provisions = 0;

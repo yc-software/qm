@@ -18,7 +18,6 @@ const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -43,11 +42,6 @@ const server = createServer(built.app, {
   tenants: singleTenantResolver(built.tenants),
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
-await built.deploymentLayerReady;
-built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
@@ -180,7 +174,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(

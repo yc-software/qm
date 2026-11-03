@@ -1,4 +1,4 @@
-import { currentTenant, isTenantId } from "../../tenants/context.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
 import { TenantSettingsInvalidError } from "../../tenants/settings-parse.ts";
 import { sendJson } from "../http.ts";
@@ -6,20 +6,16 @@ import { requireOperatorControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-export async function operatorTenant(ctx: ApiCtx): Promise<string | null> {
-  const { deps, body, res } = ctx;
+export async function operatorTenantKnown(ctx: ApiCtx): Promise<boolean> {
+  const { deps, res } = ctx;
   if (!deps.tenantSettings) {
     sendJson(res, 404, { error: "not_found" });
-    return null;
+    return false;
   }
-  const tenant = isObj(body) ? body.tenant : undefined;
-  if (!isTenantId(tenant)) {
-    sendJson(res, 400, { error: "invalid_tenant", message: "tenant must be a tenant id: a lowercase uuid" });
-    return null;
-  }
-  if (await deps.tenantSettings.hasTenant(tenant)) return tenant;
+  const tenant = currentTenant();
+  if (await deps.tenantSettings.hasTenant(tenant)) return true;
   sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the id ${tenant}`, tenant });
-  return null;
+  return false;
 }
 
 async function putTenantSettings(ctx: ApiCtx): Promise<void> {

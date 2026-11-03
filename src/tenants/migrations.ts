@@ -149,16 +149,15 @@ export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
      )`,
     `DO $qm_flags_copy$ BEGIN
        IF to_regclass('feature_flags_json') IS NOT NULL THEN
-         IF EXISTS (SELECT 1 FROM feature_flags_json) AND (SELECT count(*) FROM tenants) <> 1 THEN
-           RAISE EXCEPTION 'Feature flags need a tenant, but this database has % tenants', (SELECT count(*) FROM tenants);
+         IF to_regclass('qm_tenant') IS NOT NULL THEN
+           INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
+             SELECT (SELECT id FROM qm_tenant), id,
+                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
+                    to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
+                    COALESCE(json->>'updatedBy', '')
+             FROM feature_flags_json
+             ON CONFLICT DO NOTHING;
          END IF;
-         INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
-           SELECT (SELECT id FROM tenants), id,
-                  ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
-                  to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
-                  COALESCE(json->>'updatedBy', '')
-           FROM feature_flags_json
-           ON CONFLICT DO NOTHING;
          DROP TABLE feature_flags_json;
          IF to_regclass('durable_map_versions') IS NOT NULL THEN
            DELETE FROM durable_map_versions WHERE tbl = 'feature_flags';

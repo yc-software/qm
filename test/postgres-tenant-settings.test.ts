@@ -31,10 +31,7 @@ async function withSettingsDb(
     await migrateRegisteredPgSchemas(schemaUrl.toString());
     const a = randomUUID();
     const b = randomUUID();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'first', 'First'), ($2, 'second', 'Second')`, [
-      a,
-      b,
-    ]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
     const login = await createAppLogin(schemaUrl.toString());
     const appUrl = new globalThis.URL(login.url);
     const app = createPgPool(login.url);

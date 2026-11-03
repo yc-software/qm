@@ -114,6 +114,7 @@ test("broker admission preserves configured email members without external invit
     emailAuthPrincipals: ["ops@allowed.example"],
   });
   t.after(s.close);
+  await s.built.identity.ready();
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
     assert.equal(s.built.identity.externalMember(email), undefined);
     assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: true });
@@ -509,6 +510,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 test("expiry classifies an external as guest, and the signed broker check answers accordingly", async () => {
   const s = await start({ signed: true });
   try {
+    await s.built.identity.ready();
     const now = Date.now();
     const record = (email: string, expiresAt: number) => ({
       email,

@@ -14,7 +14,6 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   const built = buildApp(testConfig({ memoryCapture: "off" }));
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   const threadRef = "dm:U1:subagent-visibility";
@@ -94,7 +93,6 @@ test("human-origin delegated input is screened before model execution", async (t
   await built.config.setSecurityPosture(scopeId("org", config.orgId), "strict");
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   const threadRef = "dm:U1:screen-delegation";
@@ -133,7 +131,6 @@ for (const fork of [false, true]) {
     await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
     t.after(async () => {
       built.scheduler.stop();
-      built.deploymentLayerRefresh.stop();
       await built.runtime.stop();
     });
     const threadRef = `web:U1:seed-${fork}`;

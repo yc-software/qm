@@ -70,6 +70,7 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
     },
   };
 }
+import { tenantReady } from "../../src/tenants/context.ts";
 
 const built: BuiltApp[] = [];
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
@@ -114,4 +115,13 @@ export function buildApp(
     }),
   );
   return Object.assign(app, { modelCalls });
+}
+
+export async function buildLoadedApp(
+  config: Config,
+  overrides: Parameters<typeof buildProductionApp>[1] = {},
+): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
+  const app = buildApp(config, overrides);
+  await tenantReady();
+  return app;
 }
