@@ -1,5 +1,7 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
+import type { SessionOrigin } from "./sessions/session-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -83,8 +85,7 @@ export interface SurfaceBriefing {
 }
 
 export interface SpawnMeta {
-  slackSource?: TurnRequest["slackSource"];
-  externalSlack?: TurnRequest["externalSlack"];
+  surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
   origin?: TurnOrigin;
@@ -121,7 +122,10 @@ export interface Session {
   forkBoundarySeq?: number;
   sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
+  origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  surfaceBinding?: TurnSurfaceOrigin;
+  runtime?: TurnRuntime;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -133,41 +137,13 @@ export interface Session {
   crons?: number;
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   subagents?: { running: number; waiting: number };
-}
-
-export type EntryType =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "text_start"
-  | "text"
-  | "tool_call"
-  | "tool_result"
-  | "system"
-  | "delivery"
-  | "approval_request"
-  | "approval_resolved";
-
-export interface SessionEntry {
-  sessionId: string;
-  seq: number;
-  parentSeq: number | null;
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  createdAt: number;
-}
-
-type LayerMode = "ro" | "rw";
-
-export interface WorkspaceLayer {
-  scopeId: ScopeId;
-  mountPath: string;
-  mode: LayerMode;
+  workingSince?: number;
+  purpose?: string;
 }
 
 export interface Resolution {
-  layers: WorkspaceLayer[];
+  writableScopeId: ScopeId;
+  readOnlyScopeIds: ScopeId[];
   systemPrompt: string;
   egress: EgressPolicy;
   commandPolicy: CommandPolicy;
@@ -176,6 +152,7 @@ export interface Resolution {
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
+  guidance?: string;
 }
 
 export type Permission = "read" | "write";
@@ -197,9 +174,7 @@ export interface GrantedHandle {
 }
 
 export interface Destination {
-  slackAccountId?: string;
-  slackTeamId?: string;
-  slackPolicyNamespace?: string;
+  account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -217,6 +192,7 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
+  editNote?: string;
   webTranscript?:
     | { kind: "reply" }
     | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
@@ -358,21 +334,8 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
-  slackSource?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    externalPolicyNamespace?: string;
-    replyThreadTs?: string;
-  };
-  externalSlack?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    companyDomains: string[];
-    companyTeamIds: string[];
-    serviceCredentials: string[];
-  };
+  midTurn?: "steer" | "queue";
+  surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
   delegatingRunId?: string;
   privateSessionMessage?: true;
@@ -394,16 +357,8 @@ export interface TurnRequest {
   };
   text: string;
   origin?: TurnOrigin;
-  triggerTs?: string;
-  entryTs?: string;
   gatewayContext?: GatewayContext;
-  triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
-  triggerDestination?: Destination;
-  ownerKeychainUnion?: boolean;
-  unprompted?: boolean;
-  liveActor?: boolean;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -501,15 +456,17 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  steerTs?: string;
   stopped?: boolean;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  retracted?: string[];
 }

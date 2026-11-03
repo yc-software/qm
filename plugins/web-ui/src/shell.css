@@ -1855,6 +1855,11 @@ a.chat-row-open {
   box-shadow: var(--chat-surface-shadow);
 }
 
+.message-stack .user-row.stuck > .message-meta {
+  position: static;
+  margin-bottom: calc(-1 * var(--meta-lane));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .message-stack .user-row > .user-bubble {
     transition: none;
@@ -2832,6 +2837,11 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   font-variant-numeric: tabular-nums;
 }
+.work-head .work-elapsed-seconds {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
+}
 .work-prestep > .work-head {
   cursor: default;
 }
@@ -2995,6 +3005,14 @@ qm-markdown .tok-in {
 .thinking-row {
   display: block;
   min-width: 0;
+}
+.continuing-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
 }
 .thinking-summary {
   display: flex;
@@ -3693,6 +3711,13 @@ qm-markdown .tok-in {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--foreground);
+}
+.subagent-row-purpose {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .subagent-row-meta {
   flex: 0 0 auto;

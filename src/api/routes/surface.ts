@@ -10,6 +10,8 @@ import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
+import type { ItemKind } from "../../sessions/items-schema.ts";
+import { compactItem } from "../../sessions/items.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
   defaultModel,
@@ -35,6 +37,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
+import { selfSpend } from "./admin/spend.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -208,6 +211,17 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, found);
 }
 
+const AGENT_TRANSCRIPT_KINDS: ReadonlySet<ItemKind> = new Set<ItemKind>([
+  "UserMessage",
+  "SteeringMessage",
+  "AgentMessage",
+  "Reasoning",
+  "ToolCall",
+  "ToolResult",
+  "Elicitation",
+  "ElicitationResponse",
+]);
+
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (!capability) {
@@ -230,12 +244,12 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    entries: found.entries.filter((entry) => entry.type !== "system"),
-    ...(found.earlierEntries ? { earlierEntries: found.earlierEntries } : {}),
+    items: found.items.filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind)).map(compactItem),
+    ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
   });
 }
 
-async function getSessionEntry(ctx: ApiCtx): Promise<void> {
+async function getSessionItem(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
@@ -244,7 +258,7 @@ async function getSessionEntry(ctx: ApiCtx): Promise<void> {
   if (!Number.isInteger(seq) || seq < 0) {
     return sendJson(res, 400, { error: "bad_request", message: "seq must be a non-negative integer" });
   }
-  const found = await app.getSessionEntryForViewer(id, viewer, seq);
+  const found = await app.getSessionItemForViewer(id, viewer, seq);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
 }
@@ -993,6 +1007,11 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  if (restored === "exists")
+    return sendJson(ctx.res, 409, {
+      error: "exists",
+      message: "a live skill of that name already exists here — archive it first",
+    });
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
@@ -1500,6 +1519,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "GET", path: "/v1/spend", auth: "source", handle: selfSpend },
     { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),
@@ -1512,7 +1532,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
       auth: "source",
       handle: getSessionBackgroundOutput,
     },
-    { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
+    { method: "GET", path: "/v1/sessions/:id/items/:seq", auth: "source", handle: getSessionItem },
     { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
     { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
     { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },

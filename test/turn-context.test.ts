@@ -20,10 +20,8 @@ async function fixture() {
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   let member = true;
   const resolution = {
-    layers: [
-      { scopeId: "personal:alice", mode: "rw", mountPath: "" },
-      { scopeId: "org:test", mode: "ro", mountPath: "global" },
-    ],
+    writableScopeId: "personal:alice",
+    readOnlyScopeIds: ["org:test"],
     orgScopeId: "org:test",
     sharingPosture: "open",
     grantedHandles: [],

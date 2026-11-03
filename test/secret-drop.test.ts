@@ -249,7 +249,6 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
-      workspace: built.workspace,
       auditLog: built.auditLog,
       runs: built.runs,
       signals: built.signals,
@@ -285,8 +284,8 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     });
     await built.signals.send(run.id, {
       kind: "steer",
-      text: "U_SPEAKER: I can provide my linear key",
-      request: { actor: { externalId: "U_SPEAKER" } } as any,
+      text: "I can provide my linear key",
+      request: { actor: { externalId: "U_SPEAKER" }, origin: { kind: "human" } } as any,
     });
     const cap = await capFor("U_A", scopeId("channel", "C1"), { threadRef: THREAD });
 
@@ -666,7 +665,6 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
-      workspace: built.workspace,
       auditLog: built.auditLog,
       fireDropResolution: async (drop) => {
         fires.push(drop);

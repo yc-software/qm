@@ -13,9 +13,10 @@ import {
   renderSubagentMail,
   SUBAGENT_TREE_RUN_CAP,
   requiresDelegation,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   delegatedAuthorizationOrigin,
   stopSessionTree,
+  sessionContextOf,
 } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -60,7 +61,11 @@ async function rig(opts?: {
     ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
     ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
   });
-  const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
+  const room = await recordContext(
+    sessions,
+    await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack"),
+    { actor, conversation, surface: "slack", deliveryTarget: "D1", timezone: "America/Los_Angeles" },
+  );
   await sessions.updateTitle(room.id, "dm with alex");
   await sessions.addParticipant(room.id, actor.id);
   const binding = (session: Session) => ({
@@ -83,6 +88,24 @@ async function rig(opts?: {
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };
+}
+
+async function recordContext(
+  sessions: SessionStore,
+  session: Session,
+  request: Pick<OrchestratorInput, "actor" | "conversation"> & Partial<OrchestratorInput>,
+): Promise<Session> {
+  return sessions.getOrCreateByThread(
+    session.threadRef,
+    session.type,
+    session.scopeId,
+    undefined,
+    undefined,
+    undefined,
+    {
+      context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
+    },
+  );
 }
 
 async function freshSession(sessions: SessionStore, id: string): Promise<Session> {
@@ -169,6 +192,7 @@ test("a wake cannot turn an ordinary session into a child or start its turn", as
   const r = await rig();
   const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
   await r.sessions.addParticipant(ordinary.id, actor.id);
+  await recordContext(r.sessions, ordinary, { actor, conversation, surface: "web" });
   await r.runs.enqueue({
     sessionId: ordinary.threadRef,
     request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "hello" },
@@ -287,10 +311,8 @@ test("read lists children with status and renders a child's recent transcript", 
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "found 3 call sites" });
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -343,9 +365,8 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   const opened = await r.syscallsFor(r.room).open({ task: "quiet work" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "halfway there" });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
@@ -421,14 +442,8 @@ test("concurrent opens and wakes share one admission limit; a wake past it sends
 test("session reads hide history outside the viewer's participant tenure", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
-  const { lease } = await r.sessions.acquireLease(target.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "assistant",
-    payload: { text: "hidden-before-membership" },
-    scopeLabel: scope,
-  });
-  await r.sessions.releaseLease(lease);
+  const writer = { sessionId: target.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "hidden-before-membership" });
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
@@ -540,16 +555,12 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
     ),
     /verified runtime context/,
   );
-  await r.runs.enqueue({
-    sessionId: destination.threadRef,
-    request: {
-      actor,
-      conversation: { ...conversation, threadRef: destination.threadRef },
-      origin: { kind: "direct" },
-      surface: "web",
-      deliveryTarget: destination.threadRef,
-      text: "hello",
-    },
+  await recordContext(r.sessions, destination, {
+    actor,
+    conversation: { ...conversation, threadRef: destination.threadRef },
+    origin: { kind: "direct" },
+    surface: "web",
+    deliveryTarget: destination.threadRef,
   });
   await deliverSubagentMail(
     { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
@@ -583,19 +594,18 @@ test("ordinary-session messages queue privately without steering an externally d
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:U1:peer", "dm", scope);
   await r.sessions.addParticipant(target.id, actor.id);
-  const { run } = await r.runs.enqueue({
-    sessionId: target.threadRef,
-    request: {
-      actor,
-      conversation: { ...conversation, threadRef: target.threadRef },
-      origin: { kind: "direct" },
-      surface: "slack",
-      deliveryTarget: "D-other",
-      deliveryCandidates: [{ target: "D-other", label: "DM" }],
-      surfaceTools: true,
-      text: "original task",
-    },
-  });
+  const original = {
+    actor,
+    conversation: { ...conversation, threadRef: target.threadRef },
+    origin: { kind: "direct" as const },
+    surface: "slack",
+    deliveryTarget: "D-other",
+    deliveryCandidates: [{ target: "D-other", label: "DM" }],
+    surfaceTools: true,
+    text: "original task",
+  };
+  await recordContext(r.sessions, target, original);
+  const { run } = await r.runs.enqueue({ sessionId: target.threadRef, request: original });
   await r.runs.claimById(run.id, "worker", 60_000);
   const result = await r.syscallsFor(r.room).write({ target: target.id, text: "an intermediate update" });
   assert.ok(result.ok);
@@ -969,13 +979,8 @@ test("queued results recheck source-entry visibility after participant tenure ch
   const opened = await api.open({ task: "shared result" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  const entry = await r.sessions.append(writer, { kind: "AgentMessage", text: "OLD_PRIVATE_RESULT" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, {
@@ -990,7 +995,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
   await r.sessions.addParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
+  assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
@@ -1371,7 +1376,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `result ${i}` });
     const finished = (await r.runs.get(run!.id))!;
     assert.equal(await deliverSubagentMail(deps, finished), false);
-    assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+    assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
   }
   const pending = await r.runs.pendingReturns();
   assert.equal(pending.length, 12);
@@ -1388,7 +1393,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.markReturned(run.id);
   }
   assert.deepEqual(await r.runs.pendingReturns(), []);
-  assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
 });
 
 test("unread completions survive parent shutdown and share one pending wakeup", async () => {
@@ -1746,6 +1751,7 @@ for (const surface of ["slack", "web"] as const) {
 test("children of a Slack group turn keep its source so external-workspace policy admits them", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
   const { externalSlackNamespace } = await import("../src/slack/external-access.ts");
+  const { slackSurfaceOrigin } = await import("../src/surfaces/slack/adapter.ts");
   const access = { companyDomains: ["partner.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
@@ -1763,11 +1769,13 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const cases = [
     {
       threadRef: "slack:group:G1",
-      request: { slackSource: { accountId: "staff", teamId: "T1", userId: "U1" } },
+      request: { surfaceOrigin: slackSurfaceOrigin({ accountId: "staff", teamId: "T1", userId: "U1" }) },
     },
     {
       threadRef: `${externalSlackNamespace("T2", access)}:C2`,
-      request: { externalSlack: { accountId: "ext", teamId: "T2", userId: "U1", ...access } },
+      request: {
+        surfaceOrigin: slackSurfaceOrigin({ accountId: "ext", teamId: "T2", userId: "U1", external: access }),
+      },
     },
   ];
   for (const c of cases) {
@@ -1784,12 +1792,12 @@ test("children of a Slack group turn keep its source so external-workspace polic
     const child = await freshSession(sessions, opened.sessionId);
     const [run] = await runs.inFlightForThread(child.threadRef);
     assert.ok(admitted(run!.request));
-    assert.deepEqual(run!.request.externalSlack, "externalSlack" in c.request ? c.request.externalSlack : undefined);
+    assert.deepEqual(run!.request.surfaceOrigin, c.request.surfaceOrigin);
     const followed = await syscalls.write({ target: child.id, text: "more", wake: true });
     assert.ok(followed.ok, JSON.stringify(followed));
     const latest = (await runs.inFlightForThread(child.threadRef)).at(-1)!;
     assert.ok(admitted(latest.request));
-    assert.deepEqual(latest.request.externalSlack, run!.request.externalSlack);
+    assert.deepEqual(latest.request.surfaceOrigin, run!.request.surfaceOrigin);
   }
 });
 
@@ -1959,14 +1967,14 @@ for (const origin of [
     const opened = await childApi.open({ task: "inspect nested" });
     assert.ok(opened.ok);
     const child = (await r.sessions.get(opened.sessionId))!;
-    const nested = (await r.runs.latestForThread(child.threadRef))!;
+    const nested = (await r.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
     assert.equal(nested.request.origin.kind, origin.kind);
     assert.equal("messageTs" in nested.request.origin, false);
     assert.equal("entryTs" in nested.request.origin, false);
     assert.equal(nested.request.delegatingRunId, r.run.id);
     assert.equal(nested.request.sessionSenderId, r.child.id);
     assert.ok((await childApi.write({ target: child.id, wake: true, text: "inspect again" })).ok);
-    const followup = (await r.runs.latestForThread(child.threadRef))!;
+    const followup = (await r.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
     assert.equal(followup.request.origin.kind, origin.kind);
     assert.equal(followup.request.delegatingRunId, r.run.id);
   });
@@ -1982,7 +1990,7 @@ test("detaching an ancestor revokes a descendant's delegated live authority", as
   const opened = await api.open({ task: "inspect nested" });
   assert.ok(opened.ok);
   const nested = (await r.sessions.get(opened.sessionId))!;
-  const run = (await r.runs.latestForThread(nested.threadRef))!;
+  const run = (await r.runs.list({ threadRef: nested.threadRef, limit: 1 }).then(([run]) => run))!;
   assert.equal((await delegatedAuthorizationOrigin(run.request, r))?.kind, "human");
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(run.request, r), undefined);

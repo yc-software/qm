@@ -5,12 +5,10 @@ import type {
   EgressPolicy,
   Principal,
   ScopeId,
-  SessionEntry,
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
-import { isOverheardEntry } from "../../sessions/session-store.ts";
+import { isAgentReply, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -111,22 +109,21 @@ export function stripTurnBoilerplate(text: string): string {
   return kept || text.trim();
 }
 
-export function visibleTitleEntryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; display?: unknown } | null;
-  const value = entry.type === "user" && typeof payload?.display === "string" ? payload.display : payload?.text;
-  return typeof value === "string" ? value.trim() || undefined : undefined;
+export function visibleTitleEntryText(item: Item): string | undefined {
+  const value = isUserItem(item) && typeof item.body.display === "string" ? item.body.display : proseText(item);
+  return value?.trim() || undefined;
 }
 
-export function renderTitleTranscript(entries: SessionEntry[]): string {
+export function renderTitleTranscript(items: Item[]): string {
   const lines: string[] = [];
-  for (const e of entries) {
-    if (e.type !== "user" && e.type !== "assistant") continue;
-    if (isOverheardEntry(e)) continue;
+  for (const e of items) {
+    if (!isUserItem(e) && !isAgentReply(e)) continue;
+    if (isOverheard(e)) continue;
     const raw = visibleTitleEntryText(e);
     if (!raw) continue;
-    const text = e.type === "user" ? stripTurnBoilerplate(raw) : raw;
+    const text = isUserItem(e) ? stripTurnBoilerplate(raw) : raw;
     if (!text) continue;
-    lines.push(`${e.type === "user" ? "User" : "Assistant"}:\n${text}`);
+    lines.push(`${isUserItem(e) ? "User" : "Assistant"}:\n${text}`);
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
@@ -170,8 +167,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   const c = input.conversation;
   return {
     surface: input.surface ?? "unknown",
-    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
-    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
+    ...(input.surfaceOrigin ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -192,7 +188,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
-    ...turnOriginRequestFields(input.origin),
+    origin: input.origin,
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),
@@ -228,27 +224,20 @@ function candidateKey(target: string, audienceScopeId: ScopeId): string {
 
 const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
 
-export function completedSurfaceEnqueues(
-  entries: readonly SessionEntry[],
-  sinceSeq: number,
-  surfaceTool: string,
-): number {
-  const calls: Array<{ enqueues: boolean; callId: string | undefined; done: boolean }> = [];
-  for (const e of entries) {
+export function completedSurfaceEnqueues(items: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  const calls: Array<{ enqueues: boolean; callId: string | null; done: boolean }> = [];
+  for (const e of items) {
     if (e.seq <= sinceSeq) continue;
-    if (e.type === "tool_call") {
-      const p = e.payload as { tool?: unknown; action?: unknown; callId?: unknown } | null;
+    if (e.kind === "ToolCall") {
       calls.push({
-        enqueues: p?.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(p?.action)),
-        callId: typeof p?.callId === "string" ? p.callId : undefined,
+        enqueues: e.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)),
+        callId: e.callId,
         done: false,
       });
-    } else if (e.type === "tool_result") {
-      const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
-      if (payload?.interrupted === true) continue;
-      const cid = payload?.callId;
-      const call =
-        typeof cid === "string" ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
+    } else if (e.kind === "ToolResult") {
+      if (e.body.interrupted === true) continue;
+      const cid = e.callId;
+      const call = cid ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
       if (call) call.done = true;
     }
   }

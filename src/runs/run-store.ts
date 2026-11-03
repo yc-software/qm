@@ -2,8 +2,9 @@ import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
+import { sleep } from "../util/async.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
 
@@ -19,7 +20,7 @@ export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
   if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
-  return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
+  return isPersonAuthored(request.origin.kind) ? 0 : 2;
 }
 
 export interface ReapEvent {
@@ -43,6 +44,11 @@ export type RunStop =
   | { kind: "error"; code?: string; status?: number };
 
 export const PARKED: RunStop = { kind: "parked" };
+
+export interface TurnPark {
+  requested(): boolean;
+  now(): void;
+}
 
 export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
   return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
@@ -92,25 +98,33 @@ export interface EnqueueResult {
   deduped: boolean;
 }
 
+export const RUN_WAIT_FALLBACK_MS = 2_000;
+
+export interface SessionWatch {
+  changed(timeoutMs: number, signal?: AbortSignal): Promise<void>;
+  close(): void;
+}
+
 export interface RunStore {
   readonly maxClaims?: number;
 
   subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  watchSession(sessionId: string): SessionWatch;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
 
-  claim(workerId: string, ttlMs: number): Promise<Run | null>;
+  claim(workerId: string, ttlMs: number, limit?: number): Promise<Run[]>;
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
-  claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
-
   personWaiting(createdBefore: number): Promise<boolean>;
+
+  personWaitingIn(sessionIds: readonly string[], createdBefore: number): Promise<Set<string>>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
+  releaseLease(runId: string, leaseToken: string, stop?: RunStop, retryAfter?: number): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
@@ -125,11 +139,7 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
-  latestForThreads(
-    threadRefs: readonly string[],
-    opts?: { excludePrivateMessages?: boolean },
-  ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
@@ -152,10 +162,10 @@ export interface RunStore {
 
   list(opts?: { limit?: number; threadRef?: string }): Promise<Run[]>;
 
-  reapExpired(
-    onRetired?: (sessionIds: string[]) => Promise<void>,
-    opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-  ): Promise<{ requeued: number; parked: number }>;
+  reapExpired(opts?: {
+    maxAgeMs?: number;
+    onReap?: (event: ReapEvent) => void;
+  }): Promise<{ requeued: number; parked: number }>;
 
   waitFor(runId: string, timeoutMs?: number): Promise<Run>;
 
@@ -167,8 +177,30 @@ export function isTerminal(status: Run["status"]): boolean {
   return TERMINAL.has(status);
 }
 
-export function releasesDedupKey(result: TurnResult): boolean {
-  return result.refusalKind === "session_busy";
+const IDLE_POLL_MS = 250;
+
+export async function hasRunningRun(
+  runs: Pick<RunStore, "inFlightForThread">,
+  threadRef: string,
+  exceptLeaseToken?: string,
+): Promise<boolean> {
+  return (await runs.inFlightForThread(threadRef)).some(
+    (run) => run.status === "running" && (exceptLeaseToken === undefined || run.leaseToken !== exceptLeaseToken),
+  );
+}
+
+export async function waitForNoRunningRun(
+  runs: Pick<RunStore, "inFlightForThread">,
+  threadRef: string,
+  budgetMs: number,
+  exceptLeaseToken?: string,
+): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (await hasRunningRun(runs, threadRef, exceptLeaseToken)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(Math.min(IDLE_POLL_MS, deadline - Date.now()), { unref: true });
+  }
+  return true;
 }
 
 export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {

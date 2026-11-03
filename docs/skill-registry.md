@@ -93,4 +93,4 @@ An agent saves or edits a skill from a conversation with the `skills` tool's `sa
 actions, which call `POST /v1/skills` and `PUT /v1/skills/:id`. They are offered only when the turn
 has control tools and a self API, so read-only and strict-posture turns do not get them. A skill
 saved from a conversation or the Skills page keeps only its instructions, so put its scripts
-in the project's Files and have the instructions point to them there.
+in this scope's Files and have the instructions point to them there.

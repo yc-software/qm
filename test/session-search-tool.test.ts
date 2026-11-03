@@ -24,20 +24,16 @@ test("session search reuses indexed search with participant intersection, tenure
   const current = await sessions.getOrCreateByThread("web:room", "group", scope);
   const source = await sessions.getOrCreateByThread("web:source", "group", scopeId("group", "source"));
   await sessions.addParticipant(source.id, alice.id, undefined, { includeHistory: true });
-  const { lease } = await sessions.acquireLease(source.id);
-  assert.ok(lease);
-  await sessions.append(lease, {
-    type: "user",
-    payload: { text: "memo before Bob joined" },
-    scopeLabel: source.scopeId,
+  const writer = { sessionId: source.id };
+  await sessions.append(writer, {
+    kind: "UserMessage",
+    text: "memo before Bob joined",
   });
   await sessions.addParticipant(source.id, bob.id);
-  const shared = await sessions.append(lease, {
-    type: "user",
-    payload: { text: "memo shared" },
-    scopeLabel: source.scopeId,
+  const shared = await sessions.append(writer, {
+    kind: "UserMessage",
+    text: "memo shared",
   });
-  await sessions.releaseLease(lease);
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({

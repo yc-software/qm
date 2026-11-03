@@ -19,9 +19,12 @@ import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../agent
 import { Check } from "typebox/value";
 import {
   assertSwarmOpen,
+  controlState,
+  memberById,
   SWARM_LIMITS,
   swarmExpired,
   type Swarm,
+  type SwarmControlState,
   type SwarmMember,
   type SwarmMessage,
   type SwarmStore,
@@ -137,32 +140,6 @@ function jsonContext(value: unknown, max: number): unknown {
   return JSON.parse(encoded) as unknown;
 }
 
-type SwarmControlState = "active" | "paused" | "stopped";
-
-const memberIndex = new WeakMap<SwarmMember[], Map<string, SwarmMember>>();
-
-function memberById(swarm: Swarm, id: string): SwarmMember | undefined {
-  let index = memberIndex.get(swarm.members);
-  if (!index || index.size !== swarm.members.length) {
-    index = new Map(swarm.members.map((member) => [member.id, member]));
-    memberIndex.set(swarm.members, index);
-  }
-  return index.get(id);
-}
-
-function controlState(swarm: Swarm, memberId: string): SwarmControlState {
-  let state: SwarmControlState = "active";
-  const seen = new Set<string>();
-  for (let id: string | undefined = memberId; id && !seen.has(id);) {
-    seen.add(id);
-    const member = memberById(swarm, id);
-    if (member?.control === "stopped") return "stopped";
-    if (member?.control === "paused") state = "paused";
-    id = member?.parentId;
-  }
-  return state;
-}
-
 function signature(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
@@ -201,9 +178,9 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     runLeaseToken: true,
     attempt: true,
     finalAttempt: true,
-    background: true,
     cancel: true,
     shutdown: true,
+    park: true,
     runStartedAt: true,
     resumeCause: true,
   };
@@ -406,15 +383,17 @@ export function createSwarmService(deps: {
         const recipient = memberById(swarm, recipientId);
         if (!recipient || recipient.state === "reserved") continue;
         const control = controlState(swarm, recipient.id);
-        if (control === "paused") continue;
         if (recipient.state === "failed" || control === "stopped" || swarmExpired(swarm)) {
           await step(() =>
             store.update(swarm.id, (current) => {
-              current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
+              const notifications = current.messages.find((item) => item.id === message.id)!.notifications;
+              const held = notifications[recipientId];
+              if (held?.state === "pending") notifications[recipientId] = { ...held, state: "failed" };
             }),
           );
           continue;
         }
+        if (control === "paused") continue;
         const request = dispatchRequest(swarm, message, recipient);
         const { run } = await step(() =>
           runs.enqueue({

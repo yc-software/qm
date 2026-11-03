@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -25,7 +26,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -118,10 +119,12 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
-    await settle(async () => (await built.sessions.getEntries(sub!.id)).some((e) => e.type === "assistant"));
-    const subEntries = await built.sessions.getEntries(sub!.id);
+    await settle(async () =>
+      (await built.sessions.getItems(sub!.id)).some((item) => item.kind === "AgentMessage" && item.variant === null),
+    );
+    const subItems = await built.sessions.getItems(sub!.id);
     assert.ok(
-      subEntries.some((e) => e.type === "assistant"),
+      subItems.some((item) => item.kind === "AgentMessage" && item.variant === null),
       "the sub-conversation session did the work + reply",
     );
   } finally {
@@ -190,10 +193,9 @@ test("a trigger turn (surfaceTools + triggerDestination, no deliveryTarget) post
       actor,
       conversation: { kind: "channel", threadRef: "ch:C7:700.7", channelRef: "C7", audience: [actor] },
       text: "!post the build passed",
-      triggered: true,
+      origin: { kind: "automation", destination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") } },
       surfaceTools: true,
       addressed: true,
-      triggerDestination: { type: "slack", target, audienceScopeId: scopeId("channel", "C7") },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -216,10 +218,12 @@ test("a monitor (addressed poll fire) that finishes silently is NOT nudged into 
       actor,
       conversation: { kind: "channel", threadRef: "ch:C8:800.8", channelRef: "C8", audience: [actor] },
       text: "!finish-silent",
-      triggered: true,
+      origin: {
+        kind: "automation",
+        destination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
+      },
       surfaceTools: true,
       addressed: true,
-      triggerDestination: { type: "slack", target: "slack:C8:800.8", audienceScopeId: scopeId("channel", "C8") },
       async: false,
     });
     await sleep(300);
@@ -244,7 +248,7 @@ test("surfaceTools with NO resolvable destination falls back to the normal auto-
       actor: principal,
       conversation: { kind: "dm", threadRef: "dm:U9:x", audience: [principal] },
       text: "hello",
-      liveActor: true,
+      origin: { kind: "human" },
       surfaceTools: true,
       async: false,
     });
@@ -267,7 +271,7 @@ test("spine ON: an unprompted thread-follow ALSO routes to a sub-conversation wi
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: "!post following up",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: true,
     });
     const posted = await pollFor(
@@ -380,11 +384,8 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
     assert.equal(request.images?.[0]?.mimeType, "image/png");
     assert.equal(request.images?.[0]?.dataBase64, image.toString("base64"));
     assert.match(request.messages?.at(-1)?.content ?? "", /QA-IMAGE-ENVIRONMENT/);
-    const entries = await built.sessions.getEntries(session!.id);
-    assert.equal(
-      entries.filter((entry) => Array.isArray((entry.payload as { attachments?: unknown[] }).attachments)).length,
-      1,
-    );
+    const items = await built.sessions.getItems(session!.id);
+    assert.equal(items.filter((item) => Array.isArray(item.body.attachments)).length, 1);
   } finally {
     await built.runtime.stop();
   }
@@ -468,7 +469,7 @@ test("ambient (unaddressed) silence → no nudge (silence stays free)", async ()
       conversation: { kind: "channel", threadRef: `ch:C-amb:700.3`, channelRef: "C-amb", audience: [actor] },
       deliveryTarget: `C-amb:700.3`,
       text: "!silent",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: false,
     });
     assert.equal(res.status, "silent", "an unaddressed silent turn stays silent, no nudge");
@@ -492,7 +493,7 @@ test("post broadcast:true posts at the channel top level, not in the current thr
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: `!broadcast ahoy channel`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     const posted = await pollFor(built.deliveries, (d) => d.text === "ahoy channel");
@@ -516,7 +517,7 @@ test("post with an explicit ts to the current channel targets exactly <channel>:
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `${channel}:${root}`,
       text: `!postthread ${ts} threaded reply`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     const posted = await pollFor(built.deliveries, (d) => d.text === "threaded reply");
@@ -545,7 +546,7 @@ test("reach to a named channel resolves it, posts at that channel's top level, a
       },
       deliveryTarget: `${channel}:${root}`,
       text: `!reachchan ${channel} elsewhere`,
-      liveActor: true,
+      origin: { kind: "human" },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -570,8 +571,8 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     assert.equal(posted.text, "ahoy");
 
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
-    const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
+    const items = await built.sessions.getItems(sub!.id);
+    const userText = items.find((item) => USER_ITEM_KINDS.includes(item.kind))?.text ?? "";
     assert.match(userText, /^<wake reason="addressed"/, "the addressed turn opens with a wake envelope");
     assert.match(
       userText,
@@ -595,7 +596,7 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
       conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
       deliveryTarget: `slack:${channel}:${root}`,
       text: "!post following up",
-      unprompted: true,
+      origin: { kind: "ambient" },
       async: true,
     });
     assert.equal(res.status, "queued");
@@ -605,8 +606,8 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
     );
     assert.ok(posted, "the thread-follow still routes + posts");
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
-    const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
+    const items = await built.sessions.getItems(sub!.id);
+    const userText = items.find((item) => USER_ITEM_KINDS.includes(item.kind))?.text ?? "";
     assert.doesNotMatch(
       userText,
       /^<wake/,
@@ -639,7 +640,7 @@ test("a shared web project turn answers with its final text, not surface tools",
       actor,
       conversation: { kind: "group", threadRef: `web:U1:${crypto.randomUUID()}`, channelRef: ref, audience: [actor] },
       text: "hello project",
-      liveActor: true,
+      origin: { kind: "human" },
     });
     assert.equal(result.status, "ok", result.reason);
     assert.ok(result.reply, "the final text is the reply");

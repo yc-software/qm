@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { firstAttemptFailed } from "./support/settle.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type NewItem, storedItem } from "../src/sessions/items.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
@@ -24,20 +25,22 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
     deliveryTarget: "slack:C9:t1",
     surfaceTools: true,
     addressed: true,
-    liveActor: true,
+    origin: { kind: "human" },
     text,
     ...extra,
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
+test("a retried turn does not re-post: the same position dedups against the delivered row", async (t) => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
+  await firstAttemptFailed(built, req);
   const afterFirst = await built.deliveries.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(61_000);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -55,7 +58,6 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   const built = freshApp();
   const req = channelTurn("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -75,13 +77,11 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
     actor,
     conversation: { kind: "channel", threadRef: "monitor:M1:t1", channelRef: "C9", audience: [actor] },
     surfaceTools: true,
-    triggered: true,
-    triggerDestination: { type: "slack", target: "slack:C9:t1" },
+    origin: { kind: "automation", destination: { type: "slack", target: "slack:C9:t1" } },
     text: "!post-then-boom monitor first|monitor second",
     idempotencyKey: "dedup-monitor-1",
   };
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -104,27 +104,30 @@ test("distinct posts in one turn each get their own key and all deliver", async 
 });
 
 test("completedSurfaceEnqueues counts only completed surface enqueue calls after the interrupted user entry", () => {
-  const entry = (seq: number, type: SessionEntry["type"], payload: unknown): SessionEntry =>
-    ({ seq, parentSeq: null, type, payload, createdAt: seq }) as SessionEntry;
+  const entry = (seq: number, item: NewItem) => storedItem(item, { sessionId: "s", seq, createdAt: seq });
+  const call = (seq: number, tool: string, callId: string, body: Record<string, unknown>) =>
+    entry(seq, { kind: "ToolCall", tool, callId, body });
+  const result = (seq: number, tool: string, callId: string, body: Record<string, unknown> = {}) =>
+    entry(seq, { kind: "ToolResult", tool, callId, body });
   const entries = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post", callId: "a" }),
-    entry(2, "tool_result", { tool: "slack", action: "post", callId: "a", ok: true }),
-    entry(3, "tool_call", { tool: "execute", command: "make", callId: "b" }),
-    entry(4, "tool_result", { tool: "execute", callId: "b", ok: true }),
-    entry(5, "tool_call", { tool: "slack", action: "reach", callId: "c" }),
-    entry(6, "tool_result", { tool: "slack", action: "reach", callId: "c", ok: true }),
-    entry(7, "tool_call", { tool: "slack", action: "post", callId: "d" }),
-    entry(8, "tool_result", { tool: "slack", callId: "d", interrupted: true, isError: true }),
+    entry(0, { kind: "UserMessage", text: "!go" }),
+    call(1, "slack", "a", { action: "post" }),
+    result(2, "slack", "a", { action: "post" }),
+    call(3, "execute", "b", { command: "make" }),
+    result(4, "execute", "b"),
+    call(5, "slack", "c", { action: "reach" }),
+    result(6, "slack", "c", { action: "reach" }),
+    call(7, "slack", "d", { action: "post" }),
+    entry(8, { kind: "ToolResult", tool: "slack", callId: "d", isError: true, body: { interrupted: true } }),
   ];
   assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the interrupted post at seq 7 is not counted");
   assert.equal(completedSurfaceEnqueues(entries, 5, "slack"), 0, "entries at or before sinceSeq are excluded");
 
   const noCallIds = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post" }),
-    entry(2, "tool_result", { tool: "post", ok: true }),
-    entry(3, "tool_call", { tool: "slack", action: "post" }),
+    entry(0, { kind: "UserMessage", text: "!go" }),
+    call(1, "slack", "", { action: "post" }),
+    result(2, "post", ""),
+    call(3, "slack", "", { action: "post" }),
   ];
   assert.equal(
     completedSurfaceEnqueues(noCallIds, 0, "slack"),

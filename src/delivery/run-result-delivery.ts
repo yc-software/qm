@@ -1,12 +1,12 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { TurnFailurePayload } from "../core/turn-error.ts";
+import { isSessionTurn } from "../core/turn-origin.ts";
+import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
@@ -28,23 +28,31 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
+export function replyEditNote(retracted: readonly string[] | undefined): string | undefined {
+  return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
+}
+
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
-  const origin = resolveTurnOrigin(run.request);
+  const origin = run.request.origin;
+  const surfaceOrigin = run.request.surfaceOrigin;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
     type: surface,
     target,
-    ...(run.request.slackSource
-      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
-      : {}),
-    ...(run.request.slackSource?.externalPolicyNamespace
-      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
+    ...(surfaceOrigin
+      ? {
+          account: {
+            id: surfaceOrigin.author.account,
+            workspace: surfaceOrigin.workspace,
+            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+          },
+        }
       : {}),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
@@ -79,8 +87,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
+    const editNote = replyEditNote(run.result.retracted);
     return {
-      destination,
+      destination: editNote ? { ...destination, editNote } : destination,
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,
@@ -90,15 +99,16 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   return null;
 }
 
-export type TurnFailureSessions = Pick<
-  SessionStore,
-  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries"
->;
+export type TurnFailureSessions = Pick<SessionStore, "append" | "getByThread" | "getItems">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
 
-export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: Run): Promise<boolean> {
+export async function recordRunFailureEntry(
+  sessions: TurnFailureSessions,
+  runs: Pick<RunStore, "inFlightForThread">,
+  run: Run,
+): Promise<boolean> {
   if (run.status !== "failed" || run.request.swarm) return false;
   const session = await sessions.getByThread(run.sessionId);
   if (!session) {
@@ -107,24 +117,15 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     );
     return false;
   }
-  const { lease } = await acquireLeaseWithin(sessions, session.id, "backfill", FAILURE_RECORD_WAIT_MS);
-  if (!lease) {
+  if (!(await waitForNoRunningRun(runs, run.sessionId, FAILURE_RECORD_WAIT_MS))) {
     console.error(`[delivery] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
     return false;
   }
-  try {
-    const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
-    if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
-    const payload: TurnFailurePayload = {
-      kind: "turn_failure",
-      message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
-      runId: run.id,
-    };
-    await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
-    return true;
-  } finally {
-    await sessions.releaseLease(lease);
-  }
+  const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+  if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
+  const message = `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`;
+  await sessions.append({ sessionId: session.id }, turnFailureItem(message, run.id));
+  return true;
 }
 
 const RUN_RESULT_SWEEP_LOOKBACK_MS = 60 * 60_000;
@@ -136,14 +137,14 @@ export interface RunResultRecovery {
 }
 
 export function wireRunResultDeliveries(
-  runs: Pick<RunStore, "onTerminal" | "terminalFinished">,
+  runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "inFlightForThread">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
   const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
-      void recordRunFailureEntry(sessions, run).catch(
+      void recordRunFailureEntry(sessions, runs, run).catch(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }

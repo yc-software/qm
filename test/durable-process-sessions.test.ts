@@ -1,28 +1,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { type ProcessRegistry, createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { writableMemoryScope } from "../src/memory/policy.ts";
 import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
+import { settle } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -115,7 +112,6 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -129,11 +125,9 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -148,7 +142,7 @@ async function memoryScope(): Promise<string> {
     testConfigStore(ORG),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
-  return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));
+  return (await resolution.resolve(conv, actor)).writableScopeId;
 }
 
 const turn = (text: string): OrchestratorInput => ({
@@ -176,10 +170,12 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
   });
   const res = await orch.handleTurn(turn("!run echo hi"));
   assert.equal(res.status, "ok");
+  await settle(async () => fake.teardowns.length === 1);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, true);
 
   fake.procs.get(live.processId)!.exited = true;
   await orch.handleTurn(turn("!run echo hi"));
+  await settle(async () => fake.teardowns.length === 2);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, false);
 });
 
@@ -200,6 +196,7 @@ test("reattach reconciles a session whose process died while core was down", asy
   await orch.handleTurn(turn("!run echo hi"));
 
   assert.equal((await reg.liveByScope(await memoryScope())).length, 0);
+  await settle(async () => fake.teardowns.length === 1);
   assert.equal(fake.teardowns.at(-1)!.keepWarm, false);
 });
 
@@ -208,6 +205,7 @@ test("with no live session the per-scope box suspends as before (gate is off by 
   const fake = fakeProcessSandbox();
   const orch = buildOrchestrator(reg, fake.sandbox);
   await orch.handleTurn(turn("!run echo hello"));
+  await settle(async () => fake.teardowns.length === 1);
   assert.equal(fake.teardowns.length, 1);
   assert.equal(fake.teardowns[0]!.keepWarm, false);
 });

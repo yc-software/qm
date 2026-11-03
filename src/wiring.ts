@@ -3,7 +3,7 @@ import { nonDeploymentCredential, withDeploymentCredentials } from "./credential
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
+import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -13,7 +13,6 @@ import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/re
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createRenderWorkspaceStore } from "./workspace/render-workspace-store.ts";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
@@ -21,6 +20,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
+import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -50,9 +50,9 @@ import {
   type SessionSyscallsFactory,
   deliverSubagentMail,
   sessionTreeRoot,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   sessionTreeWorking,
-  stoppableAncestors,
+  stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
@@ -129,11 +129,10 @@ import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { SETTLED_CANDIDATES_MIGRATION, rewriteSurfaceOrigins } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -186,7 +185,6 @@ import {
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
-import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
@@ -317,7 +315,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -388,6 +386,8 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createSurfaceRegistry } from "./surfaces/registry.ts";
+import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -409,11 +409,13 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-      await flushErrorReporting();
-      process.exit();
-    });
-  }, shutdownDrainMs + 5_000);
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      async () => {
+        await flushErrorReporting();
+        process.exit();
+      },
+    );
+  }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
   void runtime.stop().then(
     async () => {
@@ -425,10 +427,12 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-        await flushErrorReporting();
-        process.exit(1);
-      });
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+        async () => {
+          await flushErrorReporting();
+          process.exit(1);
+        },
+      );
     },
   );
 }
@@ -436,6 +440,7 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
+  rewriteSurfaceOrigins: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -479,7 +484,6 @@ export interface BuiltApp {
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
   admin: AdminService;
-  rateLimiter: RateLimiter;
   budget: BudgetTracker | undefined;
   errors: ErrorLog;
   crons: CronStore;
@@ -495,7 +499,6 @@ export interface BuiltApp {
   keychainApprovals?: KeychainApprovals;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
-  workspace: WorkspaceStore;
   memory: MemoryService;
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
@@ -544,7 +547,7 @@ export function buildApp(
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
-  let inlineShutdown = new AbortController();
+  let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
@@ -554,8 +557,6 @@ export function buildApp(
     databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
-    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
-    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
@@ -591,7 +592,10 @@ export function buildApp(
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
   const gatewayCatalog = config.modelGateway
-    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
+    ? createGatewayCatalog(
+        { ...config.modelGateway, actorKey: config.capabilitySecret },
+        overrides.modelCredentialFetch,
+      )
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
@@ -712,8 +716,6 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
-  const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -732,10 +734,6 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
-  const workspace =
-    config.workspaceStore === "postgres"
-      ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
-      : createLocalWorkspaceStore(config.dataDir);
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
       ? createS3BlobTransferStore({
@@ -780,9 +778,9 @@ export function buildApp(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionEntries: (sessionId) => {
+      sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
     (scope) => memoryTidy.ensure(scope),
@@ -803,13 +801,13 @@ export function buildApp(
       error,
     );
   const buildLocal = (): Sandbox =>
-    createLocalSandbox(workspace, {
+    createLocalSandbox({
       ...config.localSandbox,
       onError: sandboxOnError,
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
-    return createSpritesSandbox(workspace, {
+    return createSpritesSandbox({
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
       advisoryLock,
@@ -830,7 +828,7 @@ export function buildApp(
   const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
-    return createSmolmachinesSandbox(workspace, {
+    return createSmolmachinesSandbox({
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
@@ -854,6 +852,21 @@ export function buildApp(
   const renderBodies = artifactMap<StoredRenderSandbox>("render_sandbox_bodies");
   const renderScratch = artifactMap<StoredRenderScratch>("render_scratch_bodies");
   const renderCleanup = artifactMap<StoredRenderCleanup>("render_sandbox_cleanup");
+  const renderClient =
+    config.renderSandbox.apiKey && config.renderSandbox.workspaceId && config.renderSandbox.image
+      ? createSdkRenderClient({ apiKey: config.renderSandbox.apiKey, workspaceId: config.renderSandbox.workspaceId })
+      : undefined;
+  const renderBase =
+    renderClient && config.renderSandbox.image
+      ? createRenderBase({
+          client: renderClient,
+          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          image: config.renderSandbox.image,
+          hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
+          onError: sandboxOnError,
+        })
+      : undefined;
+  let renderBasePreparing: AbortController | undefined;
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey)
@@ -870,7 +883,7 @@ export function buildApp(
   };
   const buildE2b = (): Sandbox => {
     const e2b = config.e2bSandbox;
-    return createE2bSandbox(workspace, {
+    return createE2bSandbox({
       advisoryLock,
       client: e2bClient("computers"),
       ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
@@ -899,7 +912,7 @@ export function buildApp(
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
-    return createManagedAgentsSandbox(workspace, {
+    return createManagedAgentsSandbox({
       client: createSdkManagedAgentsClient({
         apiToken: managedAgents.apiToken,
         ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
@@ -934,7 +947,7 @@ export function buildApp(
     const modal = config.modalSandbox;
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
-    return createModalSandbox(workspace, {
+    return createModalSandbox({
       advisoryLock,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
@@ -974,7 +987,7 @@ export function buildApp(
     });
   };
   const buildAgent37 = (): Sandbox =>
-    createAgent37Sandbox(workspace, {
+    createAgent37Sandbox({
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
@@ -1009,7 +1022,7 @@ export function buildApp(
       )
       .digest("hex")
       .slice(0, 32);
-    return createSuperserveSandbox(workspace, {
+    return createSuperserveSandbox({
       configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
       client: createSdkSuperserveClient({
         apiKey: ss.apiKey,
@@ -1039,7 +1052,7 @@ export function buildApp(
   };
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
+    return createAwsSandbox({
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
@@ -1054,7 +1067,7 @@ export function buildApp(
     });
   };
   const buildPorter = (): Sandbox =>
-    createPorterSandbox(workspace, {
+    createPorterSandbox({
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
@@ -1067,14 +1080,12 @@ export function buildApp(
     });
   const buildRender = (): Sandbox => {
     const render = config.renderSandbox;
-    if (!render.apiKey || !render.workspaceId) {
-      throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY and RENDER_WORKSPACE_ID");
+    if (!renderClient || !renderBase) {
+      throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE");
     }
-    return createRenderSandbox(workspace, {
-      client: createSdkRenderClient({
-        apiKey: render.apiKey,
-        workspaceId: render.workspaceId,
-      }),
+    return createRenderSandbox({
+      client: renderClient,
+      base: renderBase,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
@@ -1437,15 +1448,7 @@ export function buildApp(
     overrides.decisionBackend ??
       createDecisionBackend({
         providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway?.apiKey
-          ? {
-              gateway: {
-                url: config.modelGateway.url,
-                apiKey: config.modelGateway.apiKey,
-                ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-              },
-            }
-          : {}),
+        ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
             ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
@@ -1511,9 +1514,9 @@ export function buildApp(
     );
   };
   const workingAncestors = async (session: Session) => {
-    const candidates = await stoppableAncestors(sessions, session);
-    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
-    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
+    const root = await stoppableRoot(sessions, session);
+    const awaiting = await blockingApprovalSessions(root ? [root.id] : []);
+    const ancestors = root && !awaiting.has(root.id) ? [root] : [];
     return Promise.all(
       ancestors.map(async (ancestor) => ({
         session: ancestor,
@@ -1530,7 +1533,7 @@ export function buildApp(
           known &&
           (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
           !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
+          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
             SUBAGENT_TREE_RUN_CAP
         )
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
@@ -1780,7 +1783,7 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -1856,7 +1859,7 @@ export function buildApp(
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
+      return Boolean(loop && loop.state !== "archived");
     },
   });
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
@@ -1887,6 +1890,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(SETTLED_CANDIDATES_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -1912,6 +1916,10 @@ export function buildApp(
       "DROP TABLE IF EXISTS internal_member_overrides",
       "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
     ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "ratelimit/limiter/0002-drop",
+    statements: ["DROP TABLE IF EXISTS rate_limit_windows"],
   });
   pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
@@ -2045,7 +2053,9 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const surfaces = createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] });
   const orchestratorDeps: OrchestratorDeps = {
+    admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
@@ -2070,8 +2080,8 @@ export function buildApp(
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+    surfaces,
     sessions,
-    workspace,
     files,
     toolOutput,
     sandbox,
@@ -2079,7 +2089,6 @@ export function buildApp(
     swarms,
     connectorTokens,
     auditLog,
-    rateLimiter,
     budget,
     agent,
     memory,
@@ -2091,7 +2100,6 @@ export function buildApp(
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
     securityScreenTimeoutMs: config.securityScreenTimeoutMs,
     ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: config.backgroundJobTtlMs,
@@ -2138,8 +2146,8 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
+    ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -2175,7 +2183,7 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
-  const reaper: Reaper = createReaper(runs, sessions, {
+  const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
     maxAgeMs: config.runMaxAgeMs,
@@ -2198,7 +2206,7 @@ export function buildApp(
   };
   const liveFallback = async (
     container: string,
-    opts?: { limit?: number },
+    opts?: { limit?: number; surface?: string },
   ): Promise<Array<{
     container: string;
     ts: string;
@@ -2208,7 +2216,7 @@ export function buildApp(
     createdAt: number;
   }> | null> => {
     const puller = orchestratorDeps.surfaceContext;
-    if (!puller) return null;
+    if (!puller || (opts?.surface ?? "slack") !== "slack") return null;
     const result = await puller.pull("slack", {
       conversationTarget: container,
       ...(opts?.limit !== undefined ? { count: opts.limit } : {}),
@@ -2232,15 +2240,15 @@ export function buildApp(
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
-    shutdown: () => inlineShutdown.signal,
+    shutdown: () => turnWaitShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     swarms,
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
+    surfaces,
     runs,
-    leaseTtlMs,
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -2296,7 +2304,9 @@ export function buildApp(
     surfaceCache,
     channelPolicy,
     ...(agent.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
+      ? {
+          ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
+        }
       : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
@@ -2371,7 +2381,7 @@ export function buildApp(
       const settle = async (target: Session): Promise<boolean> => {
         if (await runs.activeForThread(target.threadRef)) return false;
         const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        if (!waiting && !target.parentSessionId && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({
           threadRef: target.threadRef,
@@ -2383,7 +2393,8 @@ export function buildApp(
         return true;
       };
       if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+      const root = await stoppableRoot(sessions, session);
+      if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
@@ -2489,11 +2500,12 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
-    const slackSource =
-      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
-        : undefined;
-    return app.turn(slackSource ? { ...req, slackSource } : req);
+    const session = req.surfaceOrigin ? undefined : await sessions.getByThread(req.conversation.threadRef);
+    const bound = session?.surface === "slack" ? session.surfaceBinding : undefined;
+    if (!bound) return app.turn(req);
+    if (bound.audience === "internal") return app.turn({ ...req, surfaceOrigin: bound });
+    const { access: _access, ...internal } = bound;
+    return app.turn({ ...req, surfaceOrigin: { ...internal, audience: "internal" } });
   };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
@@ -2673,19 +2685,18 @@ export function buildApp(
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      heartbeatIntervalMs: config.heartbeatIntervalMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRuns,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
+  const worker = createWorker({
+    admittedWork,
+    runs,
+    orchestrator,
+    leaseTtlMs,
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
+    errors,
+    slots: config.workers,
+    pollMs: 250,
+    canClaim: canClaimRuns,
+  });
+  const preemption = createRunPreemption({ runs, worker, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
@@ -2792,15 +2803,7 @@ export function buildApp(
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
+    worker.start();
     preemptionSweeper.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
@@ -2862,7 +2865,7 @@ export function buildApp(
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       preemptionSweeper.stop(),
-      ...workers.map((worker) => worker.stopClaims()),
+      worker.stopClaims(),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
     const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
@@ -2873,20 +2876,27 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
-  async function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
-    await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
+  let releasing: Promise<void> | null = null;
+  function releaseInFlightRuns(): Promise<void> {
+    turnWaitShutdown.abort();
+    releasing ??= Promise.all([
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
+        swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
-    ]);
+      worker.releaseInFlight(),
+    ]).then(() => {});
+    return releasing;
   }
   const runtime: Runtime = {
     start() {
-      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
+      releasing = null;
       flyTunnel?.monitor();
       drain.start();
+      renderBasePreparing = new AbortController();
+      void renderBase
+        ?.prepare(renderBasePreparing.signal)
+        .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
@@ -2896,21 +2906,22 @@ export function buildApp(
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+      await Promise.all([backgroundClaimsStopping, worker.stopClaims()]);
     },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([admittedWork.drained(), worker.drained()]);
     },
     releaseInFlightRuns,
     async stop() {
+      renderBasePreparing?.abort();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
+        worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
@@ -2942,6 +2953,7 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
+    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
     sessions,
     runs,
     signals: runSignals,
@@ -2979,7 +2991,6 @@ export function buildApp(
     webhookReceiver,
     loopIngress,
     admin,
-    rateLimiter,
     errors,
     crons,
     credentialUsage,
@@ -2988,7 +2999,6 @@ export function buildApp(
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,
-    workspace,
     memory,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
@@ -3103,7 +3113,6 @@ export function serverDeps(
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
-    rateLimiter: built.rateLimiter,
     budget: built.budget,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
@@ -3139,7 +3148,6 @@ export function serverDeps(
     runs: built.runs,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,
-    workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
     memory: built.memory,

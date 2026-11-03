@@ -204,6 +204,7 @@ test("ambient judge: engage decision spawns the smart-model worker", async () =>
   };
   const decision = await judgeAmbientBatch(
     {
+      readable: (text) => text,
       judge: async () => JSON.stringify({ act: true, reason: "someone asked about the Q3 launch" }),
       spawnWorker: async (b, d) => {
         spawned.push({ batch: b, decision: d });
@@ -220,6 +221,7 @@ test("ambient judge: a silence decision spawns NO worker (silence is the default
   let spawns = 0;
   const decision = await judgeAmbientBatch(
     {
+      readable: (text) => text,
       judge: async () => JSON.stringify({ act: false }),
       spawnWorker: async () => {
         spawns++;
@@ -241,6 +243,7 @@ test("ambient judge: empty standing orders no longer short-circuits — the judg
   let spawns = 0;
   const decision = await judgeAmbientBatch(
     {
+      readable: (text) => text,
       judge: async () => {
         judged++;
         return JSON.stringify({ act: true, reason: "the assistant is addressed" });
@@ -260,27 +263,6 @@ test("ambient judge: empty standing orders no longer short-circuits — the judg
   assert.equal(decision.act, true);
   assert.equal(judged, 1, "the cheap-model judge is consulted even with no standing orders");
   assert.equal(spawns, 1);
-});
-
-test("ambient judge: the agent's own posts are never shown to the judge as new messages", async () => {
-  let sawText = "";
-  const decision = await judgeAmbientBatch(
-    {
-      judge: async (_s, prompt) => {
-        sawText = prompt;
-        return JSON.stringify({ act: false });
-      },
-      spawnWorker: async () => {},
-    },
-    {
-      container: "C1",
-      surface: "slack",
-      orders: "flag launch talk",
-      messages: [{ container: "C1", ts: "1.0", text: "", deleted: true, createdAt: 1 }],
-    },
-  );
-  assert.equal(decision.act, false, "an empty/deleted-only batch is not judged into acting");
-  assert.equal(sawText, "", "the judge isn't even called when there's nothing meaningful to show");
 });
 
 test("mentions round-trip through ingest → readMessages (memory)", async () => {

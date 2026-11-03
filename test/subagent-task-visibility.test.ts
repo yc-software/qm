@@ -8,6 +8,7 @@ import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -25,7 +26,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     text: "hello",
     origin: { kind: "human" },
   });
-  const parentRun = (await built.runs.latestForThread(threadRef))!;
+  const parentRun = (await built.runs.list({ threadRef: threadRef, limit: 1 }).then(([run]) => run))!;
   const parentSession = (await built.sessions.getByThread(threadRef))!;
   await built.config.setPersonalModelAuth("U1", true, "openai");
   await built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1");
@@ -49,18 +50,17 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   };
   const userEntry = async (run: Run) => {
     const session = (await built.sessions.getByThread(run.sessionId))!;
-    const entries = await built.sessions.getEntries(session.id);
-    const { payload } = entries.find((entry) => entry.type === "user" && entry.seq === run.turnUserSeq)!;
-    const { hidden, display, speakerId } = payload as { hidden?: boolean; display?: string; speakerId?: string };
-    assert.equal(speakerId, undefined, "delegated input is not a new human message");
-    return { hidden: hidden === true, display };
+    const items = await built.sessions.getItems(session.id);
+    const { hidden, body } = items.find((item) => USER_ITEM_KINDS.includes(item.kind) && item.seq === run.turnUserSeq)!;
+    assert.equal(body.speakerId, undefined, "delegated input is not a new human message");
+    return { hidden: hidden === true, display: body.display as string | undefined };
   };
 
   const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary" });
   assert.ok(opened.ok);
   const child = (await built.sessions.get(opened.sessionId))!;
   built.runtime.startBackground();
-  const first = await finished(() => built.runs.latestForThread(child.threadRef));
+  const first = await finished(() => built.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run));
   assert.equal(first.request.origin.kind, "human");
   assert.deepEqual(await userEntry(first), { hidden: false, display: "Summarize the repo" });
   const wake = await finished(() => built.runs.getByDedupKey(`subagent-return:${first.id}`));
@@ -68,7 +68,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.equal(wake.request.origin.kind, "human");
 
   assert.ok((await syscalls.write({ wake: true, target: child.id, text: "Check the tests too" })).ok);
-  const second = await finished(() => built.runs.latestForThread(child.threadRef));
+  const second = await finished(() => built.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run));
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
 });
 
@@ -102,7 +102,7 @@ test("human-origin delegated input is screened before model execution", async (t
     origin: { kind: "human" },
     text: "inspect a task",
   });
-  const parent = (await built.runs.latestForThread(threadRef))!;
+  const parent = (await built.runs.list({ threadRef: threadRef, limit: 1 }).then(([run]) => run))!;
   const session = (await built.sessions.getByThread(threadRef))!;
   const syscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
@@ -115,7 +115,7 @@ test("human-origin delegated input is screened before model execution", async (t
   const opened = await syscalls.open({ task: "UNTRUSTED_TASK" });
   assert.ok(opened.ok);
   const child = (await built.sessions.get(opened.sessionId))!;
-  const run = (await built.runs.latestForThread(child.threadRef))!;
+  const run = (await built.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
   assert.equal(run.request.origin.kind, "human");
   built.runtime.startBackground();
   await settle(async () => ["done", "failed"].includes((await built.runs.get(run.id))!.status));
@@ -140,7 +140,7 @@ for (const fork of [false, true]) {
       origin: { kind: "human" },
       text: "start another task",
     });
-    const parent = (await built.runs.latestForThread(threadRef))!;
+    const parent = (await built.runs.list({ threadRef: threadRef, limit: 1 }).then(([run]) => run))!;
     const session = (await built.sessions.getByThread(threadRef))!;
     await built.config.setPersonalModelAuth("U1", true, "openai");
     const out = await startSession(built.app, built.sessions, "U1", {
@@ -152,16 +152,15 @@ for (const fork of [false, true]) {
       delegatingRunId: parent.id,
     });
     assert.ok("session" in out);
-    const queued = (await built.runs.latestForThread(out.session.threadRef))!;
+    const queued = (await built.runs.list({ threadRef: out.session.threadRef, limit: 1 }).then(([run]) => run))!;
     assert.equal(queued.request.modelAccount, "company");
     built.runtime.startBackground();
     await settle(async () => (await built.runs.get(queued.id))!.status === "done");
     const run = (await built.runs.get(queued.id))!;
     assert.equal(run.result?.status, "ok");
-    const entry = (await built.sessions.getEntries(out.session.id)).find((entry) => entry.seq === run.turnUserSeq)!;
-    const payload = entry.payload as { hidden?: boolean; speakerId?: string; text?: string };
-    assert.equal(payload.hidden === true, false);
-    assert.equal(payload.speakerId, undefined);
-    assert.equal(payload.text, "work on the seed");
+    const item = (await built.sessions.getItems(out.session.id)).find((item) => item.seq === run.turnUserSeq)!;
+    assert.equal(item.hidden === true, false);
+    assert.equal(item.body.speakerId, undefined);
+    assert.equal(item.text, "work on the seed");
   });
 }

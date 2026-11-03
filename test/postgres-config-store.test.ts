@@ -98,6 +98,24 @@ test("setSoul advances the canonical row without trusting a stale instance cache
   );
 });
 
+test("a guidance revision keeps the session that wrote it after another instance hydrates it", async () => {
+  const souls = testMap<PersistedSoul>();
+  const writer = testConfigStore("default-org", { souls });
+  const channel = scopeId("channel", "revision-session");
+  await writer.setSoul(channel, "first", "alice", "session-a");
+  await writer.setSoulIfVersion(channel, 1, "second", "alice", "session-b");
+
+  const reader = testConfigStore("default-org", { souls });
+  await reader.refreshScope(channel);
+  assert.deepEqual(
+    reader.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
+    [
+      { version: 2, sessionId: "session-b" },
+      { version: 1, sessionId: "session-a" },
+    ],
+  );
+});
+
 test("the first write after upgrade retains a canonical revision that predates embedded history", async () => {
   const souls = testMap<PersistedSoul>();
   const channel = scopeId("channel", "pre-history-upgrade");

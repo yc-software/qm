@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -21,7 +19,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -57,8 +54,8 @@ function fakeSandbox(): Sandbox {
 function buildScenario(turnResult?: Partial<AgentTurnResult>) {
   const agent: Agent = {
     async runTurn(turn) {
-      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-      await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "UserMessage", text: turn.input });
+      await turn.emit({ kind: "AgentMessage", text: "done" });
       return { reply: "done", modelCalls: 1, ...turnResult };
     },
     async screenSecurity() {
@@ -68,7 +65,6 @@ function buildScenario(turnResult?: Partial<AgentTurnResult>) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bookkeeping-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -83,11 +79,9 @@ function buildScenario(turnResult?: Partial<AgentTurnResult>) {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -123,15 +117,10 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const { orchestrator, sessions, input } = buildScenario();
   await orchestrator.handleTurn(input("prime"));
   const appendMany = sessions.appendMany.bind(sessions);
-  sessions.appendMany = async (lease, entries) => {
-    if (
-      entries.some((entry) => {
-        const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
-        return payload?.overheard === true && payload.ts === "200.2";
-      })
-    )
+  sessions.appendMany = async (lease, items) => {
+    if (items.some((item) => item.body?.overheard === true && item.externalId === "200.2"))
       throw new Error("append refused");
-    return appendMany(lease, entries);
+    return appendMany(lease, items);
   };
   const request = input("what did I miss?", {
     overheard: [
@@ -143,16 +132,16 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const result = await orchestrator.handleTurn(request);
   assert.equal(result.status, "ok");
   const session = (await sessions.getByThread(conversation.threadRef))!;
-  const overheardTexts = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const overheardTexts = (await sessions.getItems(session.id))
+    .filter((item) => item.body.overheard === true)
+    .map((item) => item.text);
   assert.deepEqual(overheardTexts, [], "the atomic batch leaves no partial history on failure");
   sessions.appendMany = appendMany;
   await orchestrator.handleTurn(request);
   await orchestrator.handleTurn(request);
-  const recovered = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const recovered = (await sessions.getItems(session.id))
+    .filter((item) => item.body.overheard === true)
+    .map((item) => item.text);
   assert.deepEqual(
     recovered,
     ["first overheard", "second overheard", "third overheard"],

@@ -28,7 +28,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor, mate] },
     deliveryTarget: `${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -53,9 +53,9 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   while (Date.now() < deadline) {
     const sub = await built.sessions.getByThread(`ch:${root}`);
     if (sub) {
-      const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const items = await built.sessions.getItems(sub.id);
+      const hit = items.find((item: any) => item.kind === "AgentMessage" && item.variant === null && item.text);
+      if (hit) return hit.text as string;
     }
     await sleep(50);
   }

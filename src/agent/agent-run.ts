@@ -52,7 +52,8 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ConversationTurn, ScopeId } from "../types.ts";
+import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "../model/provider-error.ts";
@@ -72,7 +73,11 @@ import {
   contextTokenBudgetForModel,
   modelHasPrices,
 } from "../model/pi-models.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+  type ModelRequestPurpose,
+} from "../model/provider-endpoints.ts";
 import {
   type Agent,
   type CompactInput,
@@ -81,6 +86,8 @@ import {
   type TurnLlmRequestRecord,
   type AgentTurnInput,
   type AgentTurnResult,
+  REPLY_CHECK_LIMITS,
+  replyCheckPrompt,
 } from "./agent.ts";
 import {
   coreToolOptions,
@@ -97,7 +104,6 @@ import {
   userPromptText,
   seedPriorTurns,
   legacyAssistant,
-  WAKE_KIND,
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
@@ -142,7 +148,6 @@ export interface AgentOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -284,12 +289,9 @@ const DETECT_PERSONA_CAP = 2000;
 
 export function renderDetectPrompt(detect: DetectInput): string {
   const recentAssistantTurns = detect.history
-    .filter((e) => e.type === "assistant")
+    .filter(isAgentReply)
     .slice(-4)
-    .map((e) => {
-      const text = (e.payload as { text?: string } | null)?.text ?? "";
-      return `assistant (you): ${text}`.trim();
-    })
+    .map((e) => `assistant (you): ${e.text ?? ""}`.trim())
     .filter((l) => l.length > 0);
   const reacts = Boolean(detect.reactionGuidance?.trim());
   const parts: string[] = [];
@@ -734,11 +736,12 @@ export async function oneShot(
   opts?: {
     signal?: AbortSignal;
     modelGateway?: ModelGatewayTransportConfig;
+    purpose?: ModelRequestPurpose;
     thinkingLevel?: LegacyThinkingLevel;
     recordLlmRequest?: (rec: TurnLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
-  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
+  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway, opts?.purpose);
   const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
     prefix,
     systemPrompt,
@@ -885,7 +888,6 @@ export function createAgent(opts?: AgentOptions): Agent {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -893,11 +895,11 @@ export function createAgent(opts?: AgentOptions): Agent {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
+      ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
@@ -911,7 +913,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
-    history: SessionEntry[],
+    history: Item[],
     priorTurns: ConversationTurn[] | undefined,
     turnProviderKeys: ProviderKeys | undefined,
     ref: TurnSession["ref"],
@@ -923,6 +925,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
+      "turn",
       "long",
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
@@ -1032,7 +1035,6 @@ export function createAgent(opts?: AgentOptions): Agent {
         runtimeHandoff: undefined,
         runtimeMutationPending: false,
         runtimeInFlight: new Set(),
-        runtimeRunId: dispatched.runId,
         runtimeActorId: dispatched.runtimeActorId,
         pendingApprovals: [],
         pausedOnApproval: undefined,
@@ -1096,28 +1098,30 @@ export function createAgent(opts?: AgentOptions): Agent {
         const userEntry = continueTurn
           ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
           : await turn.emit({
-              type: "user",
-              payload: {
-                text: turn.input,
+              kind: "UserMessage",
+              text: turn.input,
+              author: turn.runtimeActorId ?? null,
+              externalId: turn.triggerTs ?? turn.entryTs ?? null,
+              body: {
                 ...(turn.environment ? { environment: turn.environment } : {}),
                 ...(goalNote.trim() ? { goalNote } : {}),
-                ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
                 ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
                 ...imageRefs(turn.images),
               },
-              scopeLabel: turn.scopeLabel,
-              ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
             });
         const modelPrompt =
           (userEntry
             ? dayMarkerPrefix(
-                turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                turn.history.findLast((e) => isUserItem(e) && e.seq < userEntry.seq),
                 userEntry,
               )
             : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
-        entry.ref.onModelRequest = turn.onModelRequest;
+        entry.ref.onModelRequest = () => {
+          turn.onModelRequest?.();
+          if (turn.park?.requested()) turn.park.now();
+        };
         turn.recordModelCall({
           model: effectiveModel,
           inputTokens:
@@ -1131,7 +1135,12 @@ export function createAgent(opts?: AgentOptions): Agent {
         let thinkTail: Promise<unknown> = Promise.resolve();
         let triggerSeen = continueTurn;
         const toolAbort = new AbortController();
+        let steerWake = new AbortController();
+        entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        const unrecordedPrompts = new Set<string>();
+        const retractedMessages = new Set<unknown>();
+        const checked = { retry: [] as string[], prod: [] as string[] };
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
           thinkTail = thinkTail.then(async () => {
@@ -1156,12 +1165,15 @@ export function createAgent(opts?: AgentOptions): Agent {
           else if (role === "user") {
             steps.flush();
             const text = textFromContent((message as { content?: unknown }).content);
+            if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
+              steerWake = new AbortController();
+              entry.ref.steered = steerWake.signal;
+            }
             persist(() =>
-              steer
-                ? recordSteerIntake(turn, steer)
-                : turn.emit({ type: "system", payload: { kind: WAKE_KIND, text }, scopeLabel: turn.scopeLabel }),
+              steer ? recordSteerIntake(turn, steer) : turn.emit({ kind: "Wake", wakeCause: "system", body: { text } }),
             );
           }
           await thinkTail;
@@ -1260,6 +1272,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                 {
                   onSteer: async (text, ts, request, acknowledge) => {
                     if (ts && steeredSeen.has(ts)) return;
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
@@ -1270,6 +1283,8 @@ export function createAgent(opts?: AgentOptions): Agent {
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
+                      authorName: prepared?.authorName,
+                      withheld: prepared?.withheld,
                       acknowledge,
                     };
                     pendingSteers.push(steer);
@@ -1286,6 +1301,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                           data: image.dataBase64,
                         })),
                       );
+                      steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
                       if (at >= 0) pendingSteers.splice(at, 1);
@@ -1490,6 +1506,50 @@ export function createAgent(opts?: AgentOptions): Agent {
               }
             }
           }
+          const checkable = () =>
+            wallClock === "ok" &&
+            !userAborted &&
+            !turn.cancel?.aborted &&
+            !recoveryDead &&
+            !entry.ref.silentRequested &&
+            !entry.ref.runtimeHandoff &&
+            !entry.ref.pausedOnApproval &&
+            !entry.ref.pendingApprovals?.length &&
+            !endedOnPurpose(entry.ref) &&
+            roomToReprompt();
+          while (turn.checkReply && checkable()) {
+            const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
+            if (!draft) break;
+            const verdict = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
+            if (!verdict || checked[verdict.action].length >= REPLY_CHECK_LIMITS[verdict.action] || !checkable()) break;
+            if (
+              verdict.action === "prod" &&
+              !(await Promise.resolve(turn.onInterimReply?.(draft) ?? false).catch(
+                swallowAs("pi: interim reply", false),
+              ))
+            )
+              break;
+            checked[verdict.action].push(verdict.reason);
+            console.error(
+              `[pi] reply check ${verdict.action === "prod" ? "prodded" : "retracted"} the reply session=${turn.session.id} reason=${verdict.reason} round=${checked.retry.length + checked.prod.length}`,
+            );
+            steps.mark(verdict);
+            await thinkTail;
+            if (persistError) throw persistError;
+            await turn.onTextBlockStart?.();
+            const prompt = replyCheckPrompt(verdict);
+            const before = entry.agentSession.agent.state.messages.length;
+            if (verdict.action === "retry") unrecordedPrompts.add(prompt);
+            wallClock = await reprompt(prompt);
+            if (verdict.action === "retry")
+              for (const m of entry.agentSession.agent.state.messages.slice(before - 1, before + 1))
+                retractedMessages.add(m);
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
+          }
+          if (retractedMessages.size)
+            entry.agentSession.agent.state.messages = entry.agentSession.agent.state.messages.filter(
+              (m) => !retractedMessages.has(m),
+            );
         } catch (err) {
           if (persistError) throw persistError;
           const cancelAbortRejection =
@@ -1518,6 +1578,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
+          entry.ref.steered = undefined;
           entry.ref.screenToolResult = undefined;
         }
         if (persistError) throw persistError;
@@ -1544,7 +1605,14 @@ export function createAgent(opts?: AgentOptions): Agent {
         };
         const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
           const cacheUsage = sumCacheUsage(callUsage);
-          return { reply, ...extra, modelCalls: entry.ref.modelCalls ?? 0, ...(cacheUsage ? { cacheUsage } : {}) };
+          return {
+            reply,
+            ...extra,
+            ...(checked.retry.length ? { retracted: checked.retry } : {}),
+            ...(checked.prod.length ? { prodded: checked.prod } : {}),
+            modelCalls: entry.ref.modelCalls ?? 0,
+            ...(cacheUsage ? { cacheUsage } : {}),
+          };
         };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
@@ -1578,11 +1646,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         await settleGoal(false);
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
         const reply = entry.ref.silentRequested ? "" : closingText;
-        await turn.emit({
-          type: "assistant",
-          payload: { text: reply, ...steps.closing(reply) },
-          scopeLabel: turn.scopeLabel,
-        });
+        const closing = steps.closing(reply);
+        await turn.emit({ kind: "AgentMessage", text: reply, step: closing?.step ?? null, body: { ...closing?.body } });
         const pendingApprovals = entry.ref.pendingApprovals ?? [];
         return result(reply, {
           ...(pendingApprovals.length ? { pendingApprovals } : {}),
@@ -1609,6 +1674,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const out = (
         (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
           modelGateway,
+          purpose: "detect",
           ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
         })) ?? ""
       ).trim();
@@ -1618,7 +1684,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     async compactHistory(input: CompactInput): Promise<string> {
       const primaryId = resolveModelId();
       const providerKeys = await resolveProviderKeys();
-      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const runtime = await buildModelRuntime(providerKeys, modelGateway, "compaction");
       const summarize = (compactModelId: string) =>
         summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
           input.recordModelCall({
@@ -1656,19 +1722,25 @@ export function createAgent(opts?: AgentOptions): Agent {
       return contextTokenBudgetForModel(id);
     },
 
-    async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+    async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {
       const model = requiredModel(resolveModelId());
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway, purpose });
     },
 
-    async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+    async judge(
+      systemPrompt: string,
+      prompt: string,
+      signal?: AbortSignal,
+      purpose: ModelRequestPurpose = "judge",
+    ): Promise<string | undefined> {
       const model = requiredModel(judgeModelId());
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
       return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
         modelGateway,
+        purpose,
         signal,
         thinkingLevel: "low",
       });
@@ -1697,6 +1769,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
             signal,
             modelGateway,
+            purpose: "security_screen",
           }),
         );
       } catch (e) {
@@ -1713,7 +1786,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
       const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const runtime = await buildModelRuntime(providerKeys, modelGateway, "ack_emoji");
       const reply = await runtime.completeSimple(
         model,
         { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
@@ -1733,6 +1806,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       if (!keyForModel(providerKeys, model)) return undefined;
       const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
         modelGateway,
+        purpose: "title",
       });
       return sanitizeTitle(out);
     },
@@ -1750,7 +1824,10 @@ export function createAgent(opts?: AgentOptions): Agent {
         command.slice(0, 4000),
       ].join("\n");
       const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
+        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, {
+          modelGateway,
+          purpose: "approval_summary",
+        })
       )?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);

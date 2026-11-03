@@ -1,6 +1,8 @@
 import { createSelfApiCall, type SelfApiResponse } from "./self-api.ts";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
+import { isObj } from "../util/objects.ts";
+import { compactItem, type Item } from "../sessions/items.ts";
 
 const string = Type.String();
 const optionalString = Type.Optional(string);
@@ -151,6 +153,15 @@ export const adminOperations = {
     value: object,
   }),
   reset_user: operation("Reset a user's onboarding data (destructive).", "POST", "/users/:id/reset", { id: string }),
+  offboard_user: operation(
+    "Offboard a departed person: preview by default, value.apply true to act. See the admin skill.",
+    "POST",
+    "/users/:id/offboard",
+    { id: string, value: Type.Optional(Type.Object({ apply: Type.Boolean() }, { additionalProperties: false })) },
+  ),
+  reactivate_user: operation("Turn a deactivated person's sign-in back on.", "POST", "/users/:id/reactivate", {
+    id: string,
+  }),
   sandboxes: operation("List a scope's sandboxes.", "GET", "/sandboxes/:scope", scope),
   create_sandbox: operation("Create a sandbox in a scope.", "POST", "/sandboxes/:scope", {
     ...scope,
@@ -273,6 +284,9 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
         path = path.replace(`:${key}`, encodeURIComponent(segment));
       } else query.set(key === "auditAction" ? "action" : key, String(value));
     }
-    return request(op.method, `/v1/admin${path}?${query}`, params.value, signal);
+    const response = await request(op.method, `/v1/admin${path}?${query}`, params.value, signal);
+    if (action === "session" && isObj(response.body) && Array.isArray(response.body.items))
+      return { ...response, body: { ...response.body, items: (response.body.items as Item[]).map(compactItem) } };
+    return response;
   };
 }

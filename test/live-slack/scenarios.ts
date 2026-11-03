@@ -33,7 +33,7 @@ export const scenarios: Scenario[] = [
       assert.match(reply.text ?? "", /\b391\b/);
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for runtime handoff");
-      const choice = assertRuntimeHandoff(session.entries);
+      const choice = assertRuntimeHandoff(session.items);
       type ModelCall = { step: number; model: string; createdAt: number; usage: { output: number } | null };
       let modelCalls: ModelCall[];
       const deadline = Date.now() + 30_000;
@@ -145,8 +145,8 @@ export const scenarios: Scenario[] = [
       assert.match(reply.text ?? "", uname, `no uname output in reply: ${reply.text?.slice(0, 300)}`);
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
-      const ran = session.entries.some(
-        (e: any) => e.type === "tool_result" && /Linux/.test(JSON.stringify(e.payload ?? {})),
+      const ran = session.items.some(
+        (item) => item.kind === "ToolResult" && /Linux/.test(`${item.text ?? ""}${JSON.stringify(item.body)}`),
       );
       assert.ok(
         ran,
@@ -452,9 +452,12 @@ export const scenarios: Scenario[] = [
 
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
-      const digest = session.entries
-        .filter((e: any) => e.type === "thinking" || e.type === "tool_call")
-        .map((e: any) => `[${e.type}] ${JSON.stringify(e.payload ?? {}).slice(0, 500)}`)
+      const digest = session.items
+        .filter((item) => item.kind === "Reasoning" || item.kind === "ToolCall")
+        .map(
+          (item) =>
+            `[${item.kind}] ${JSON.stringify({ tool: item.tool, text: item.text, ...item.body }).slice(0, 500)}`,
+        )
         .join("\n")
         .slice(0, 7000);
 

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
-import { createWorker } from "../src/runs/worker.ts";
+import { createWorker, SHUTDOWN_EXIT_MS, SHUTDOWN_RELEASE_MS, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
@@ -45,7 +45,7 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -59,13 +59,13 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
 
-  let claimed = await runs.claim("w1", 10_000);
+  let claimed = (await runs.claim("w1", 10_000))[0] ?? null;
   let failed = await runs.fail(r.id, claimed!.leaseToken!, "boom", { retry: true });
   assert.equal(failed.requeued, true, "first error requeues");
   assert.equal((await runs.get(r.id))?.status, "pending");
   assert.equal((await runs.get(r.id))?.errorAttempts, 1);
 
-  claimed = await runs.claim("w2", 10_000);
+  claimed = (await runs.claim("w2", 10_000))[0] ?? null;
   failed = await runs.fail(r.id, claimed!.leaseToken!, "boom again", { retry: true });
   assert.equal(failed.requeued, false, "second error parks");
   const parked = await runs.get(r.id);
@@ -78,7 +78,7 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -99,7 +99,7 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -127,11 +127,11 @@ test("a concrete error parks with its own message even when over the claim cap",
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 2 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
 
-  let claimed = await runs.claim("w1", 10_000);
+  let claimed = (await runs.claim("w1", 10_000))[0] ?? null;
   let failed = await runs.fail(r.id, claimed!.leaseToken!, "first boom", { retry: true });
   assert.equal(failed.requeued, true);
 
-  claimed = await runs.claim("w2", 10_000);
+  claimed = (await runs.claim("w2", 10_000))[0] ?? null;
   assert.equal(claimed?.attempts, 2, "second claim reaches the cap");
   failed = await runs.fail(r.id, claimed!.leaseToken!, "real boom", { retry: true });
   assert.equal(failed.requeued, false, "over the claim cap, the error parks instead of requeuing");
@@ -153,7 +153,7 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
       return leader ? fn(new Promise<void>(() => {})) : null;
     },
   };
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, {
     intervalMs: 5,
     leaderLease: lease,
   });
@@ -180,7 +180,7 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
       return null;
     },
   };
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, {
     intervalMs: 60_000,
     leaderLease: denyAll,
   });
@@ -189,76 +189,56 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
   assert.equal((await runs.get(r.id))?.status, "pending");
 });
 
-test("reaping a lease-expired run releases its stranded session lease", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+test("reapExpired fences the dead attempt before it requeues, so a zombie can neither revive the run nor write", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(session.id);
-  assert.ok(held, "the (now-dead) worker holds the session lease");
-  assert.equal((await sessions.acquireLease(session.id)).lease, null, "session lease is held");
-
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  await runs.claim("dead-worker", 10);
+  const claimed = (await runs.claim("dead-worker", 10))[0] ?? null;
   await sleep(30);
 
-  const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
-  const swept = await reaper.sweep();
+  const swept = await runs.reapExpired();
+  const replacement = await runs.claimById(r.id, "live-worker", 60_000);
+  assert.ok(replacement?.leaseToken);
+
   assert.equal(swept.requeued, 1);
-  assert.equal((await runs.get(r.id))?.status, "pending", "expired run is requeued");
-  const { lease: reacquired } = await sessions.acquireLease(session.id);
-  assert.ok(reacquired, "session lease was released on reap, so the retry can re-acquire");
+  assert.equal(
+    await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000),
+    false,
+    "the dead attempt is fenced, so a zombie cannot revive the run",
+  );
+  const entry = (text: string) => ({ kind: "AgentMessage" as const, text });
+  await sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: replacement.leaseToken }, entry("live"));
+  await assert.rejects(
+    sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: claimed!.leaseToken! }, entry("zombie")),
+    /no longer holds its claim/,
+  );
+  assert.deepEqual(
+    (await sessions.getItems(session.id)).map((item) => item.text),
+    ["live"],
+  );
 });
 
-test("reapExpired fences the dead attempt, releases its session lease, and only then requeues", async () => {
+test("a heartbeat landing between SELECT and retire leaves the run untouched", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const claimed = await runs.claim("dead-worker", 10);
-  await sleep(30);
-
-  let statusAtRelease: string | undefined;
-  let zombieBeatAtRelease: boolean | undefined;
-  let sessionIdsSeen: string[] = [];
-  const swept = await runs.reapExpired(async (sessionIds) => {
-    sessionIdsSeen = sessionIds;
-    statusAtRelease = (await runs.get(r.id))?.status;
-    zombieBeatAtRelease = await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000);
-  });
-
-  assert.deepEqual(sessionIdsSeen, ["t1"], "the hook receives the retired run's thread ref");
-  assert.equal(statusAtRelease, "running", "the lease is released BEFORE the retry becomes claimable");
-  assert.equal(zombieBeatAtRelease, false, "the dead attempt is fenced first, so a zombie cannot revive the run");
-  assert.equal(swept.requeued, 1);
-  assert.equal((await runs.get(r.id))?.status, "pending", "the retry is claimable only after the release hook ran");
-});
-
-test("a heartbeat landing between SELECT and retire leaves the run AND its session lease untouched", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(session.id);
-  assert.ok(held, "the live worker holds the session lease");
 
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const claimed = await runs.claim("live-worker", 10);
+  const claimed = (await runs.claim("live-worker", 10))[0] ?? null;
   assert.ok(claimed?.leaseToken);
   await sleep(30);
 
   assert.equal(await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000), true, "live worker renews its lease");
 
-  const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
+  const reaper = createReaper(runs, { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
 
   assert.equal(swept.requeued, 0, "the renewed run is not requeued");
   assert.equal(swept.parked, 0, "the renewed run is not parked");
   assert.equal((await runs.get(r.id))?.status, "running", "the run is untouched");
-  assert.equal(
-    (await sessions.acquireLease(session.id)).lease,
-    null,
-    "the session lease is untouched — the live worker still holds it",
-  );
 });
 
-test("shutdown cancels before handback and holds both leases until the turn unwinds", async () => {
+test("shutdown cancels before handback and holds the run until the turn unwinds", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -279,17 +259,12 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
       signal = input.cancel!;
       shutdownSignal = input.shutdown;
       leaseToken = input.runLeaseToken!;
-      const { lease } = await sessions.acquireLease(session.id);
-      assert.ok(lease);
+      const writer = { sessionId: session.id };
       started();
-      try {
-        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-        await cleanup;
-        await sessions.append(lease, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" });
-        return { status: "silent" as const, stopped: true };
-      } finally {
-        await sessions.releaseLease(lease);
-      }
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      await cleanup;
+      await sessions.append(writer, { kind: "Stop" });
+      return { status: "silent" as const, stopped: true };
     },
   } as unknown as Orchestrator;
   const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, heartbeatIntervalMs: 5, pollMs: 5 });
@@ -305,57 +280,92 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   assert.equal(shutdownSignal?.aborted, true, "the turn can tell this cancellation apart from a user Stop");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
   assert.equal((await runs.get(enq.id))?.status, "running");
-  assert.equal(await runs.claim("replacement", 5_000), null);
-  assert.equal((await sessions.acquireLease(session.id)).lease, null);
+  assert.equal((await runs.claim("replacement", 5_000))[0] ?? null, null);
   const second = worker.releaseInFlight();
   unwind();
   await Promise.all([handback, second]);
   assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
-  const replacement = await runs.claim("replacement", 5_000);
+  const replacement = (await runs.claim("replacement", 5_000))[0] ?? null;
   assert.ok(replacement);
-  const freshLease = (await sessions.acquireLease(session.id)).lease;
-  assert.ok(freshLease);
   await worker.releaseInFlight();
-  assert.equal((await sessions.acquireLease(session.id)).lease, null, "late shutdown cannot steal a new lease");
+  assert.equal((await runs.get(enq.id))?.status, "running", "late shutdown cannot hand back the replacement's claim");
   assert.equal(await runs.complete(enq.id, leaseToken, { status: "silent" }), false);
   assert.deepEqual(await runs.fail(enq.id, leaseToken, "late error"), { requeued: false });
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
 });
 
-test("an uncooperative turn keeps both leases until it actually exits", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+test("an uncooperative turn is handed back after the settle grace, and resumes once after the old process exits", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  let held: Awaited<ReturnType<typeof sessions.acquireLease>>["lease"];
-  const { orchestrator, started, unblock } = gatedOrchestrator(
-    async () => {
-      held = (await sessions.acquireLease(session.id)).lease;
-      assert.ok(held);
+  const started = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const attempts: OrchestratorInput[] = [];
+  const lateWrite = Promise.withResolvers<unknown>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      attempts.push(input);
+      if (input.attempt === 1) {
+        started.resolve();
+        await gate.promise;
+        const writer = { sessionId: session.id, turnId: input.runId!, runLeaseToken: input.runLeaseToken! };
+        await sessions.append(writer, { kind: "Stop" }).then(lateWrite.resolve, lateWrite.reject);
+        return { status: "ok" as const, reply: "stale" };
+      }
+      return { status: "ok" as const, reply: "resumed" };
     },
-    async () => {
-      await sessions.releaseLease(held!);
-    },
+  } as unknown as Orchestrator;
+  const old = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "old" });
+  old.start();
+  await started.promise;
+  await old.stop(1);
+  const shutdownAt = Date.now();
+  await Promise.race([
+    old.releaseInFlight(),
+    sleep(SHUTDOWN_RELEASE_MS).then(() => assert.fail("hand-back waited on the stuck turn")),
+  ]);
+  assert.ok(Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS - 50, "the turn gets the settle window first");
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.equal(handedBack.leaseToken, null);
+  assert.equal(handedBack.errorAttempts, 0);
+  assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
+  assert.equal(
+    (await runs.claim("too-early", 5_000))[0] ?? null,
+    null,
+    "nothing resumes the turn while the old process may live",
   );
-  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
-  worker.start();
-  await started;
-  await worker.stop(1);
-  let released = false;
-  const handback = worker.releaseInFlight().then(() => {
-    released = true;
-  });
-  await sleep(20);
-  assert.equal(released, false);
-  assert.equal((await runs.get(enq.id))?.status, "running");
-  assert.equal((await sessions.acquireLease(session.id)).lease, null);
-  assert.equal(await runs.claim("replacement", 5_000), null);
-  unblock();
-  await handback;
-  assert.equal((await runs.get(enq.id))?.status, "pending");
-  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
-  assert.ok((await sessions.acquireLease(session.id)).lease);
+  const staleToken = attempts[0]!.runLeaseToken!;
+
+  gate.resolve();
+  await assert.rejects(lateWrite.promise, /no longer holds its claim/);
+  assert.equal(await runs.complete(enq.id, staleToken, { status: "ok", sessionId: "t1" }), false);
+
+  const fresh = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
+  fresh.start();
+  const done = await runs.waitFor(enq.id, 20_000);
+  await fresh.stop();
+  assert.equal(done.status, "done");
+  assert.deepEqual(done.result, { status: "ok", reply: "resumed" });
+  assert.deepEqual(
+    attempts.map((input) => [input.attempt, input.resumeCause]),
+    [
+      [1, undefined],
+      [2, { kind: "shutdown" }],
+    ],
+  );
+  assert.ok(
+    Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + SHUTDOWN_EXIT_MS,
+    "the resume waited for the old process exit",
+  );
+  assert.equal(
+    (await sessions.getItems(session.id)).some((item) => item.kind === "Stop"),
+    false,
+    "the handed-back attempt cannot write to the conversation",
+  );
 });
 
 test("shutdown aborts the blocked step before the handback, and the next worker resumes it exactly once", async () => {
@@ -419,12 +429,12 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
   });
   const entriesNow = async () => {
     const session = await built.sessions.getByThread(threadRef);
-    return session ? built.sessions.getEntries(session.id) : [];
+    return session ? built.sessions.getItems(session.id) : [];
   };
   built.runtime.start();
   try {
     const deadline = Date.now() + 5_000;
-    while (!(await entriesNow()).some((entry) => entry.type === "tool_result")) {
+    while (!(await entriesNow()).some((entry) => entry.kind === "ToolResult")) {
       if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
       await sleep(10);
     }
@@ -436,7 +446,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     assert.equal(handedBack.leaseToken, null);
     const interrupted = await entriesNow();
     assert.deepEqual(
-      interrupted.filter((entry) => entry.type === "assistant"),
+      interrupted.filter((entry) => entry.kind === "AgentMessage"),
       [],
       "the shutdown-cancelled attempt must not close the turn",
     );
@@ -445,9 +455,9 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     assert.equal(done.status, "done");
     assert.equal(done.attempts, 2);
     assert.equal(done.result?.reply, "finished after resume");
-    const replies = (await entriesNow()).filter((entry) => entry.type === "assistant");
+    const replies = (await entriesNow()).filter((entry) => entry.kind === "AgentMessage");
     assert.deepEqual(
-      replies.map((entry) => (entry.payload as { text: string }).text),
+      replies.map((entry) => entry.text),
       ["finished after resume"],
     );
   } finally {
@@ -618,7 +628,7 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
   }
 });
 
-test("timed-out stop cannot resurrect a worker while its previous turn drains", async () => {
+test("a start during a timed-out drain resumes claiming without exceeding the worker's slots", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
@@ -629,15 +639,45 @@ test("timed-out stop cannot resurrect a worker while its previous turn drains", 
   const second = (await runs.enqueue({ sessionId: "t2", request: turn, maxAttempts: 3 })).run;
   worker.start();
   await sleep(30);
-  assert.equal((await runs.get(second.id))?.status, "pending");
+  assert.equal((await runs.get(second.id))?.status, "pending", "the only slot is still busy");
   unblock();
-  await worker.drained();
+  await runs.waitFor(second.id, 5_000);
   assert.equal((await runs.get(first.id))?.status, "done");
-  assert.equal((await runs.get(second.id))?.status, "pending");
-  worker.start();
-  await sleep(30);
   await worker.stop();
-  assert.equal((await runs.get(second.id))?.status, "done");
+});
+
+test("restarting claims after a stop fills free slots while a held turn keeps running", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const gates = new Map<string, () => void>();
+  const orchestrator = {
+    handleTurn: (input: { conversation: { threadRef: string } }) =>
+      new Promise((resolve) => gates.set(input.conversation.threadRef, () => resolve({ status: "ok", reply: "" }))),
+  } as unknown as Orchestrator;
+  const enqueue = async (threadRef: string) =>
+    (
+      await runs.enqueue({
+        sessionId: threadRef,
+        request: { ...turn, conversation: { ...turn.conversation, threadRef } },
+        maxAttempts: 3,
+      })
+    ).run;
+  const long = await enqueue("long");
+  const short = await enqueue("short");
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, slots: 2 });
+  worker.start();
+  for (let i = 0; i < 200 && gates.size < 2; i++) await sleep(5);
+  await worker.stopClaims();
+  worker.start();
+  const next = await enqueue("next");
+  gates.get("short")!();
+  for (let i = 0; i < 200 && !gates.has("next"); i++) await sleep(5);
+  assert.ok(gates.has("next"), "the freed slot claims new work");
+  assert.equal((await runs.get(long.id))?.status, "running");
+  assert.equal((await runs.get(short.id))?.status, "done");
+  gates.get("long")!();
+  gates.get("next")!();
+  await runs.waitFor(next.id, 5_000);
+  await worker.stop();
 });
 
 test("stopClaims relinquishes new work while keeping an active turn and its heartbeats alive", async () => {
@@ -755,7 +795,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
   }
 });
 
-test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
+test("synchronous turns remain admitted through pause and queued intake survives rollback", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
@@ -768,6 +808,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     () => admitted,
     () => admitted,
   );
+  built.runtime.startBackground();
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -788,7 +829,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
       text: "hello",
       async,
     });
-  const running = turn("inline-before-pause");
+  const running = turn("sync-before-pause");
   try {
     await completing.promise;
     admitted = false;
@@ -799,7 +840,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     });
     await sleep(10);
     assert.equal(drained, false);
-    assert.equal((await turn("inline-after-pause")).status, "refused");
+    assert.equal((await turn("sync-after-pause")).status, "refused");
     const queued = await turn("queued-after-pause", true);
     assert.equal(queued.status, "queued");
     assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
@@ -809,7 +850,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     admitted = true;
     built.runtime.startBackground();
     assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
-    assert.equal((await turn("inline-after-resume")).status, "ok");
+    assert.equal((await turn("sync-after-resume")).status, "ok");
   } finally {
     release.resolve();
     await running;
@@ -874,7 +915,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
     for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
       await built.runs.enqueue({ sessionId: "t1", request });
-      const run = (await built.runs.claim("worker", 10_000))!;
+      const run = ((await built.runs.claim("worker", 10_000))[0] ?? null)!;
       await built.runs.complete(run.id, run.leaseToken!, result);
     }
     assert.deepEqual(events, ["response_completed", "response_failed"]);
@@ -898,7 +939,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
           actor: { externalId: "U1" },
           conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
           text: "test message",
-          liveActor: true,
+          origin: { kind: "human" },
           async: true,
           [flag]: true,
         });
@@ -915,7 +956,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   }
 });
 
-test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
+test("final shutdown holds a synchronous turn's lease until the step unwinds, then hands the run back", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")),
     workers: 1,
@@ -926,13 +967,13 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
   const gate = Promise.withResolvers<void>();
   const append = built.sessions.append.bind(built.sessions);
   let first = true;
-  built.sessions.append = async (lease, entry) => {
-    if (first && entry.type === "user") {
+  built.sessions.append = async (writer, entry) => {
+    if (first && entry.kind === "UserMessage") {
       first = false;
       blocked.resolve();
       await gate.promise;
     }
-    return append(lease, entry);
+    return append(writer, entry);
   };
   const inline = built.app.turn({
     surface: "test",
@@ -949,9 +990,9 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
       stopped = true;
     });
     await sleep(300);
-    assert.equal(stopped, false, "stop waits for the inline step to unwind");
+    assert.equal(stopped, false, "stop waits for the running step to unwind");
     assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
-    assert.equal(await built.runs.claim("replacement", 5_000), null);
+    assert.equal((await built.runs.claim("replacement", 5_000))[0] ?? null, null);
     gate.resolve();
     const result = await inline;
     await stopping;
@@ -963,7 +1004,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
       assert.equal(handedBack.leaseToken, null);
       assert.equal(handedBack.errorAttempts, 0);
       assert.equal(handedBack.attempts, 1);
-      assert.equal((await runs.claim("replacement", 5_000))?.id, running.id);
+      assert.equal(((await runs.claim("replacement", 5_000))[0] ?? null)?.id, running.id);
     });
   } finally {
     gate.resolve();
@@ -1028,4 +1069,31 @@ test("runtime shutdown contains store close failures and waits for remaining sto
     release.resolve();
     await stopping;
   }
+});
+
+test("a deploy during a park wait stops the turn as a deploy", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const enq = (await runs.enqueue({ sessionId: "t-park", request: turn, maxAttempts: 3 })).run;
+  const started = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      started.resolve();
+      await new Promise((resolve) => input.shutdown!.addEventListener("abort", resolve, { once: true }));
+      return { status: "silent" as const, sessionId: "t-park", stopped: true };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started.promise;
+  worker.held()[0]!.parkRequested = true;
+  await sleep(50);
+  assert.equal((await runs.get(enq.id))!.status, "running", "a park waits for the step to end");
+  await worker.stop(1);
+  const releasedAt = Date.now();
+  await worker.releaseInFlight();
+  assert.ok(Date.now() - releasedAt < SHUTDOWN_SETTLE_MS, "the deploy does not wait for the step");
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
+  assert.equal(handedBack.preemptions, 0);
 });

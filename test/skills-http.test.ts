@@ -19,6 +19,7 @@ import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
 import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
+import { sleep } from "../src/util/async.ts";
 
 function start() {
   const built = buildApp(
@@ -220,6 +221,33 @@ test("an archived skill can be restored by its manager", async () => {
   }
 });
 
+test("restoring an archived skill is a 409 when a live skill already has its name", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const old = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "recover-me", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.archive(old.id);
+    await publish(srv.skills, home, "recover-me", "live");
+    const restored = await fetch(`${srv.base}/v1/skills/${old.id}/restore`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1" }),
+    });
+    assert.equal(restored.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "recover-me" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
+    assert.equal((await srv.skills.get(old.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("an archived skill name can be reused for a replacement", async () => {
   const srv = start();
   try {
@@ -246,6 +274,33 @@ test("an archived skill name can be reused for a replacement", async () => {
     const created = (await replacement.json()) as { skill: SkillView };
     assert.notEqual(created.skill.id, oldId);
     assert.equal(await srv.skills.get(oldId), null, "the reused name retires its archived tombstone");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("POST /v1/skills is a 409 when the name has a live skill beside an archived one", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const draft = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "watch-ci", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.delete(draft.id);
+    await srv.skills.restore({ ...draft, id: "00000000-0000-4000-8000-000000000000", status: "archived" });
+    await publish(srv.skills, home, "watch-ci", "live");
+    const res = await fetch(`${srv.base}/v1/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", name: "watch-ci", description: "dup", body: "# dup" }),
+    });
+    assert.equal(res.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "watch-ci" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
   } finally {
     await srv.close();
   }
@@ -384,6 +439,42 @@ test("POST /v1/skills rejects a duplicate name in the caller's personal scope wi
     assert.equal(res.status, 409);
     const err = (await res.json()) as { error: string };
     assert.equal(err.error, "exists");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("concurrent POST /v1/skills of one name in one scope save it once and 409 the rest", async () => {
+  const srv = start();
+  const list = srv.skills.list;
+  srv.skills.list = async () => {
+    const rows = await list();
+    await sleep(50);
+    return rows;
+  };
+  try {
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        fetch(`${srv.base}/v1/skills`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            principalId: "U1",
+            name: "watch-ci",
+            description: `attempt ${i}`,
+            body: "# watch-ci",
+          }),
+        }).then((res) => res.status),
+      ),
+    );
+    assert.deepEqual(
+      statuses.toSorted((a, b) => a - b),
+      [201, 409, 409, 409, 409],
+    );
+    const rows = (await srv.skills.list()).filter(
+      (s) => s.scopeId === scopeId("personal", "U1") && s.manifest.name === "watch-ci",
+    );
+    assert.equal(rows.length, 1);
   } finally {
     await srv.close();
   }
@@ -1293,7 +1384,7 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
           publishMembers: [avery],
         },
         text: "hello",
-        liveActor: true,
+        origin: { kind: "human" },
         ...(readOnly ? { readOnly: true } : {}),
       });
     assert.equal((await turn(false)).status, "ok");
