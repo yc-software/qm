@@ -141,8 +141,6 @@ test("an attested provider is called only for the person whose private conversat
   const memory = configured(mcp.url, { attestActor: true });
   const refused: Array<[string, string | undefined]> = [
     ["U2", "personal:U1"],
-    ["system:personal:U1", "personal:U1"],
-    ["system:digest", "personal:U1"],
     ["U1", "personal:U2"],
     ["U1", "channel:C1"],
     ["U1", undefined],
@@ -158,8 +156,23 @@ test("an attested provider is called only for the person whose private conversat
       { mode: "explicit", ...reader },
       undefined,
     );
+    assert.equal(write.added, 1);
     assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
     assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
+  }
+  for (const actorId of ["system:personal:U1", "system:digest"]) {
+    const reader = { actorId, audienceScopeId: "personal:U1" };
+    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
+    const skipped = await writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      actorId,
+      { mode: "explicit", ...reader },
+      undefined,
+    );
+    assert.equal(skipped.added, 1);
+    assert.deepEqual(external(skipped.outcomes), []);
   }
   const intoAnother = await writeFacts(
     memory,
@@ -382,7 +395,8 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.equal(second, first);
   assert.notEqual(third, first);
   assert.notEqual(otherTurn, first);
-  assert.equal(none, undefined);
+  assert.match(String(none), uuid);
+  assert.notEqual(none, first);
   assert.notEqual(otherNotebook, first);
   assert.match(String(slow), uuid);
 });

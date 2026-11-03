@@ -2,7 +2,13 @@ import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
-import { problemLine, withProviders, writeFacts, type MemoryProviderProblem } from "../../memory/provider-outcome.ts";
+import {
+  MAX_FACTS_PER_WRITE,
+  problemLine,
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+} from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
@@ -764,7 +770,7 @@ export function parseFacts(body: unknown): string[] | string {
     ? b.facts.filter((f): f is string => typeof f === "string" && f.trim() !== "")
     : [];
   if (facts.length === 0) return "facts (non-empty string array) required";
-  if (facts.length > 20) return "at most 20 facts per call";
+  if (facts.length > MAX_FACTS_PER_WRITE) return `at most ${MAX_FACTS_PER_WRITE} facts per call`;
   return facts;
 }
 
@@ -1008,6 +1014,11 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId);
+  if (restored === "exists")
+    return sendJson(ctx.res, 409, {
+      error: "exists",
+      message: "a live skill of that name already exists here — archive it first",
+    });
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
