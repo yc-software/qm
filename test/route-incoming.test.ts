@@ -49,7 +49,7 @@ test("the turn already handling this very message takes it past the origin gates
 test("when only a conversation's subagents are running, a bare stop stops them and anything else is a new turn", () => {
   const descendants: LiveTurn = { kind: "descendants", actorIds: ["U1"] };
   assert.deepEqual(routeIncoming({ ...person, text: "stop" }, descendants, steer), { kind: "abort" });
-  assert.deepEqual(routeIncoming(person, descendants, steer), { kind: "turn", reason: "nothing-live" });
+  assert.deepEqual(routeIncoming(person, descendants, steer), { kind: "turn", reason: "only-subagents-live" });
 });
 
 test("isHalt matches a bare stop, optionally after the agent's own handle, and nothing wordier", () => {
@@ -67,7 +67,7 @@ test("an un-mentioned bare stop stops a run or its subagents only when their sta
   assert.deepEqual(routeIncoming({ ...overheardStop, actorId: "U2" }, live, steer), { kind: "steer" });
   assert.deepEqual(routeIncoming({ ...overheardStop, actorId: "U2" }, descendants, steer), {
     kind: "turn",
-    reason: "nothing-live",
+    reason: "only-subagents-live",
   });
 });
 

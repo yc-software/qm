@@ -1,4 +1,3 @@
-import { stopsLiveWork } from "../wake/route-incoming.ts";
 import {
   externalSlackNamespace,
   extractPrivateContinuation,
@@ -428,15 +427,7 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
-    const halt = stopsLiveWork(
-      {
-        origin: inc.unprompted ? "ambient" : "human",
-        text,
-        ...(ids.botHandle ? { selfHandle: ids.botHandle } : {}),
-      },
-      true,
-    );
-    if (!halt && (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs))) {
+    if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
           audience,

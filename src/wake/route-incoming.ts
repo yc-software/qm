@@ -41,6 +41,7 @@ export interface IncomingPrefs {
 type TurnReason =
   | "not-mid-turn"
   | "nothing-live"
+  | "only-subagents-live"
   | "duplicate"
   | "account"
   | "automation-live"
@@ -85,12 +86,12 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     )
   )
     return { kind: "abort" };
-  if (live.kind === "descendants") return { kind: "turn", reason: "nothing-live" };
+  if (live.kind === "descendants") return { kind: "turn", reason: "only-subagents-live" };
   if (!message.text.trim() && !message.hasFiles) return { kind: "drop", reason: "empty" };
   const sameAccount =
-    message.modelAccount === undefined ||
-    (message.modelAccount === live.modelAccount &&
-      (message.modelAccount === "company" || message.actorId === live.actorId));
+    message.modelAccount !== undefined &&
+    message.modelAccount === live.modelAccount &&
+    (message.modelAccount === "company" || message.actorId === live.actorId);
   if (!sameAccount) return { kind: "turn", reason: "account" };
   if (!live.handlesThisMessage) {
     if (live.origin === "automation" && message.person) return { kind: "turn", reason: "automation-live" };
