@@ -49,6 +49,7 @@ function sweep(): void {
 function release(names: readonly string[]): void {
   for (const name of names) released.add(name);
   sweep();
+  void dropping.then(() => parentPort!.postMessage({ released: names.length }));
 }
 
 function quoted(name: string): string {

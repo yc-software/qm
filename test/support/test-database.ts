@@ -44,7 +44,11 @@ async function finishEndedTests(): Promise<void> {
   endedTests = [];
   await Promise.all(frames.flatMap((frame) => frame.ends).map((end) => end()));
   const databases = frames.flatMap((frame) => frame.databases);
-  if (databases.length) startDatabaseWorker().worker.postMessage({ release: databases });
+  if (!databases.length) return;
+  const { worker } = startDatabaseWorker();
+  const released = new Promise((resolve) => worker.once("message", resolve));
+  worker.postMessage({ release: databases });
+  await released;
 }
 
 beforeEach(async () => {
