@@ -103,9 +103,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "unknown state filter" });
   }
   if (loop.surface?.startsWith("inbox:") && loop.owner === loaded.acting.actorId) {
-    const openMail = (await deps.items.byLoop(loop.id)).filter(
-      (item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail",
-    );
+    const openMail = (await deps.items.byLoop(loop.id)).filter((item) => !isResolved(item) && item.source === "gmail");
     await ctx.deps.inboxSourceRefresh?.(loop.owner, openMail);
   }
   const all = sortLedgerItems(await deps.items.byLoop(loop.id), loop);
@@ -141,7 +139,6 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     loop.ownerScopeId === scopeId("personal", loop.owner) &&
     (await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loop.owner))) === true;
   const entries: IngestEntryInput[] = [];
-  const existingItems = await deps.items.byLoop(loop.id);
   for (const [at, raw] of body.items.entries()) {
     const parsed = parseIngestEntry(loop, raw);
     if ("error" in parsed) {
@@ -150,15 +147,6 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     if (classifyInboxEmail && parsed.source === "gmail" && isObj(raw)) {
       for (const key of ["automated", "probablyResolved"])
         if (typeof raw[key] === "boolean") parsed.sourcePayload[key] = raw[key];
-    }
-    if (parsed.source === "slack") {
-      const adapter = sourceAdapter("slack")!;
-      const existing = existingItems.find(
-        (item) =>
-          (item.source ?? item.sourcePayload?.source) === "slack" && adapter.matchesEvent(item, parsed.dedupeKey),
-      );
-      // Retain the ID, human edits and resolution watermark of legacy channel-keyed cards.
-      if (existing) parsed.dedupeKey = existing.sourceKey;
     }
     entries.push(sessionId && parsed.proposal ? { ...parsed, proposal: { ...parsed.proposal, sessionId } } : parsed);
   }

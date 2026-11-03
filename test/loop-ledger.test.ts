@@ -409,7 +409,7 @@ test("email classification projection is opt-in, scoped, and never changes store
     assert.ok(query.omit?.includes("thread"));
     if (!query.omit?.includes("sourcePayload"))
       assert.deepEqual(query.pickNested, {
-        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
+        sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"],
       });
     const rows = await originalSelect(query);
     for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
@@ -427,34 +427,15 @@ test("email classification projection is opt-in, scoped, and never changes store
   assert.deepEqual(await ledger.get(loopItemId(LOOP, "gmail:thread-1")), stored);
 });
 
-test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
-  const ledger = createLoopItemLedger(testMap());
-  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
-  const before = await ledger.summaries([LOOP]);
-  const [classified] = await ledger.summaries([LOOP], { includeInboxMetadata: true });
-  assert.equal(classified!.source, "gmail");
-  assert.equal(classified!.inboxPreview!.automated, true);
-  assert.deepEqual(await ledger.summaries([LOOP]), before);
-  assert.equal((await ledger.byLoop(LOOP))[0]!.source, undefined);
-});
-
-test("ingest batches per-loop locks and writes while resolving legacy IDs and duplicate events", async () => {
+test("ingest batches per-loop locks and writes and skips duplicate events", async () => {
   const backing = testMap<LoopItem>();
   const seed = createLoopItemLedger(backing);
   await seed.ingest([entry()]);
-  const original = (await seed.byLoop(LOOP))[0]!;
-  await backing.delete(original.id);
-  await backing.put("legacy", { ...original, id: "legacy" });
-  let selects = 0;
   let writes = 0;
   let locks = 0;
   const ledger = createLoopItemLedger(
     {
       ...backing,
-      select: async (query) => {
-        selects++;
-        return backing.select(query);
-      },
       get: async () => {
         throw new Error("per-item read");
       },
@@ -478,10 +459,8 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
   const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
   const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
   assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
-  assert.deepEqual({ selects, writes, locks }, { selects: 1, writes: 1, locks: 1 });
+  assert.deepEqual({ writes, locks }, { writes: 1, locks: 1 });
   assert.equal((await backing.all()).length, 101);
-  assert.ok(await backing.get("legacy"));
-  assert.equal(await backing.get(original.id), null);
 });
 
 test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
