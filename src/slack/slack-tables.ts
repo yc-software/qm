@@ -269,9 +269,11 @@ function pgSlackInstallationRows(pg: PgPool): SlackInstallationRows {
   };
 }
 
-export async function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_id: string; version: string }>> {
+export async function installedSlackTenants(
+  databaseUrl: string,
+): Promise<Array<{ tenant_id: string; version: string }>> {
   const { rows } = await claimAcrossTenants(
-    pg,
+    databaseUrl,
     "SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id), version: String(row.version) }));
@@ -279,11 +281,11 @@ export async function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_
 
 export type SlackTeamTenant = (team: string) => Promise<string | null>;
 
-export function slackTeamTenant(pg: PgPool): SlackTeamTenant {
+export function slackTeamTenant(databaseUrl: string): SlackTeamTenant {
   return async (team) => {
     const { rows } = await withoutTenant(() =>
       claimAcrossTenants(
-        pg,
+        databaseUrl,
         "SELECT tenant_id::text AS tenant_id FROM slack_installation WHERE team_id = $1 AND NOT disabled",
         [team],
       ),
@@ -317,7 +319,7 @@ function pgStagedEnvelopeRows(pg: PgPool): StagedEnvelopeRows {
 }
 
 export async function claimStagedEnvelopes(
-  pg: PgPool,
+  databaseUrl: string,
   opts: {
     now: number;
     staleAfterMs: number;
@@ -327,12 +329,12 @@ export async function claimStagedEnvelopes(
     accounts: ReadonlyArray<{ tenantId: string; account: string }>;
   },
 ): Promise<DueEnvelope[]> {
-  await claimAcrossTenants(pg, "DELETE FROM slack_staged_envelopes WHERE received_at < $1", [
+  await claimAcrossTenants(databaseUrl, "DELETE FROM slack_staged_envelopes WHERE received_at < $1", [
     opts.now - opts.abandonAfterMs,
   ]);
   if (!opts.accounts.length) return [];
   const { rows } = await claimAcrossTenants(
-    pg,
+    databaseUrl,
     `WITH due AS (
        SELECT s.tenant_id, s.key FROM slack_staged_envelopes s
        JOIN unnest($4::uuid[], $5::text[]) AS a(tenant_id, account) ON a.tenant_id = s.tenant_id AND a.account = s.account
@@ -466,9 +468,11 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
   };
 }
 
-export async function tenantsWithSessionStatus(pg: PgPool): Promise<Array<{ tenant_id: string; account: string }>> {
+export async function tenantsWithSessionStatus(
+  databaseUrl: string,
+): Promise<Array<{ tenant_id: string; account: string }>> {
   const { rows } = await claimAcrossTenants(
-    pg,
+    databaseUrl,
     "SELECT DISTINCT tenant_id::text AS tenant_id, account FROM slack_session_status",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id), account: String(row.account) }));
@@ -527,9 +531,9 @@ function pgTaskAckRows(pg: PgPool): TaskAckRows {
   };
 }
 
-export async function tenantsWithUnsettledAcks(pg: PgPool): Promise<Array<{ tenant_id: string }>> {
+export async function tenantsWithUnsettledAcks(databaseUrl: string): Promise<Array<{ tenant_id: string }>> {
   const { rows } = await claimAcrossTenants(
-    pg,
+    databaseUrl,
     "SELECT DISTINCT tenant_id::text AS tenant_id FROM slack_task_acknowledgements WHERE NOT synced OR NOT finished",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id) }));
@@ -573,6 +577,7 @@ function pgSlackAccountRows(pg: PgPool): SlackAccountRows {
 export function createSlackTables(databaseUrl: string) {
   const pg = createPgPool(databaseUrl, SLACK_TABLE_MIGRATIONS);
   return {
+    databaseUrl,
     pool: pg,
     installation: pgSlackInstallationRows(pg),
     accounts: pgSlackAccountRows(pg),

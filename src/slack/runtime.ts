@@ -30,9 +30,8 @@ export function createSlackRuntime(opts: {
   managed: boolean;
 }) {
   const { env, installation, teamTenant, tables } = opts;
-  const environment = slackPluginConfigFromEnv(env);
   const extraAccounts = slackAccountConfigsFromEnv(env);
-  const witness = environment ?? extraAccounts[0];
+  const witness = slackPluginConfigFromEnv(env) ?? extraAccounts[0];
   const teams = new Map<string, Promise<string | undefined>>();
   const teamOf = (token: string): Promise<string | undefined> => {
     let team = teams.get(token);
@@ -59,12 +58,13 @@ export function createSlackRuntime(opts: {
     claims: {
       async installedTenants() {
         const environmentOwner = await tenantOfEnvironment().catch(() => null);
-        const installed = (await installedSlackTenants(tables.pool)).map((row) => row.tenant_id);
+        const installed = (await installedSlackTenants(tables.databaseUrl)).map((row) => row.tenant_id);
         return environmentOwner ? [...installed, environmentOwner] : installed;
       },
-      dueEnvelopes: (accounts) => claimStagedEnvelopes(tables.pool, { now: Date.now(), ...ENVELOPE_REPLAY, accounts }),
-      statusAccounts: () => tenantsWithSessionStatus(tables.pool),
-      ackTenants: () => tenantsWithUnsettledAcks(tables.pool),
+      dueEnvelopes: (accounts) =>
+        claimStagedEnvelopes(tables.databaseUrl, { now: Date.now(), ...ENVELOPE_REPLAY, accounts }),
+      statusAccounts: () => tenantsWithSessionStatus(tables.databaseUrl),
+      ackTenants: () => tenantsWithUnsettledAcks(tables.databaseUrl),
     },
     async load() {
       const owned = (await tenantOfEnvironment().catch(() => null)) === currentTenant();
@@ -76,9 +76,7 @@ export function createSlackRuntime(opts: {
               copilotBotToken: await workspaceToken(env.SLACK_COPILOT_BOT_TOKEN, stored.teamId),
             })
           : null;
-      const fromEnvironment = !stored && owned && !(await installation.status()).managed ? environment : null;
-      const main = own ?? fromEnvironment;
-      const accounts = [...(main ? [main] : []), ...(owned ? extraAccounts : [])];
+      const accounts = [...(own ? [own] : []), ...(owned ? extraAccounts : [])];
       if (!accounts.length) return null;
       return { version: stored?.version ?? "environment", accounts };
     },

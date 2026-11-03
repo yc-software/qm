@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
-import { rowTenant } from "../tenants/claim.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -96,9 +97,11 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   ]);
 
   const enqueueListeners = new Set<() => void>();
+  const claim = async (text: string, params: unknown[]): Promise<Record<string, unknown>[]> =>
+    boundTenant() === undefined ? (await claimAcrossTenants(connectionString, text, params)).rows : q(text, params);
 
   async function expireOveraged(): Promise<void> {
-    const rows = await q(
+    const rows = await claim(
       `UPDATE deliveries
           SET expired_at = ${NOW_MS_SQL}
         WHERE id IN (
@@ -166,7 +169,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async claimPending(type, ttlMs) {
       await expireOveraged();
-      const rows = await q(
+      const rows = await claim(
         `UPDATE deliveries
             SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (

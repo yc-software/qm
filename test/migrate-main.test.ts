@@ -19,6 +19,7 @@ test(
         cwd: fileURLToPath(new URL("..", import.meta.url)),
         env: {
           PATH: process.env.PATH,
+          DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL,
           NODE_ENV: "test",
           DATABASE_URL: databaseUrl,
           SANDBOX_BACKEND: "local",

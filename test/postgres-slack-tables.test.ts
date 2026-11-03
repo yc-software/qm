@@ -8,6 +8,7 @@ import {
   tenantsWithSessionStatus,
   tenantsWithUnsettledAcks,
 } from "../src/slack/slack-tables.ts";
+import { adoptEnvironmentSlack } from "../src/slack/environment-install.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { skipWithoutPg, withSlackDb } from "./support/slack-db.ts";
@@ -132,7 +133,7 @@ test(
           finished: false,
         }),
       );
-      const teamTenant = slackTeamTenant(owner.pool);
+      const teamTenant = slackTeamTenant(store.databaseUrl);
       assert.equal(await withTenant(otherTenant, () => teamTenant("TA")), tenant);
       assert.equal(await teamTenant("TB"), otherTenant);
       assert.equal(await teamTenant("TZ"), null);
@@ -144,12 +145,12 @@ test(
         installs.set({ botToken: "xoxb", appToken: "xapp", teamId: "TB", updatedBy: "admin" }),
       );
       assert.deepEqual(
-        (await withoutTenant(() => installedSlackTenants(owner.pool))).map((row) => row.tenant_id).sort(),
+        (await withoutTenant(() => installedSlackTenants(store.databaseUrl))).map((row) => row.tenant_id).sort(),
         [tenant, otherTenant].sort(),
       );
-      assert.deepEqual(await withoutTenant(() => tenantsWithUnsettledAcks(owner.pool)), [{ tenant_id: tenant }]);
+      assert.deepEqual(await withoutTenant(() => tenantsWithUnsettledAcks(store.databaseUrl)), [{ tenant_id: tenant }]);
       assert.deepEqual(
-        (await withoutTenant(() => tenantsWithSessionStatus(owner.pool))).sort((a, b) =>
+        (await withoutTenant(() => tenantsWithSessionStatus(store.databaseUrl))).sort((a, b) =>
           a.account.localeCompare(b.account),
         ),
         [
@@ -159,7 +160,11 @@ test(
       );
       const claim = () =>
         withoutTenant(() =>
-          claimStagedEnvelopes(owner.pool, { now, ...replay, accounts: [{ tenantId: tenant, account: "default" }] }),
+          claimStagedEnvelopes(store.databaseUrl, {
+            now,
+            ...replay,
+            accounts: [{ tenantId: tenant, account: "default" }],
+          }),
         );
       const first = await claim();
       assert.deepEqual(
@@ -174,7 +179,7 @@ test(
       assert.equal(abandoned[0]!.n, 0, "rows older than a day are dropped for every tenant");
       const later = () =>
         withoutTenant(() =>
-          claimStagedEnvelopes(owner.pool, {
+          claimStagedEnvelopes(store.databaseUrl, {
             now: now + 120_000,
             ...replay,
             accounts: [
@@ -198,7 +203,7 @@ test(
 );
 
 test("concurrent claimers never receive the same staged envelope", { skip }, async () => {
-  await withSlackDb(async ({ store, owner, tenant }) => {
+  await withSlackDb(async ({ store, tenant }) => {
     await withTenant(tenant, async () => {
       for (let i = 0; i < 40; i++)
         await store.stagedEnvelopes.putIfAbsent(`k${i}`, {
@@ -210,7 +215,7 @@ test("concurrent claimers never receive the same staged envelope", { skip }, asy
     });
     const claim = () =>
       withoutTenant(() =>
-        claimStagedEnvelopes(owner.pool, {
+        claimStagedEnvelopes(store.databaseUrl, {
           now: 100_000,
           ...replay,
           accounts: [{ tenantId: tenant, account: "default" }],
@@ -323,6 +328,39 @@ test(
         (admin) => seedTenants(admin, true),
       ),
       /Rows in slack_installation need a tenant, but this database has 2 tenants/,
+    );
+  },
+);
+
+test(
+  "an upgraded install whose Slack lived only in the environment keeps it under its original tenant",
+  { skip },
+  async () => {
+    await withSlackDb(
+      async ({ store, otherTenant }) => {
+        const installs = createSlackInstallationStore(store.installation, "key");
+        const env = { SLACK_BOT_TOKEN: "xoxb-env", SLACK_APP_TOKEN: "xapp-env" };
+        const asked: string[] = [];
+        const workspaceOf = async (token: string) => {
+          asked.push(token);
+          return { teamId: "TENV", teamName: "Env" };
+        };
+        const adopt = () =>
+          withoutTenant(() =>
+            adoptEnvironmentSlack({ env, databaseUrl: store.databaseUrl, installation: installs, workspaceOf }),
+          );
+        assert.equal(await adopt(), INSTANCE);
+        assert.equal(await slackTeamTenant(store.databaseUrl)("TENV"), INSTANCE);
+        const stored = await withTenant(INSTANCE, () => installs.get());
+        assert.deepEqual([stored?.botToken, stored?.appToken, stored?.teamName], ["xoxb-env", "xapp-env", "Env"]);
+        assert.equal(await withTenant(otherTenant, () => installs.get()), null);
+        assert.equal(await adopt(), null, "an existing installation row is left alone");
+        assert.deepEqual(asked, ["xoxb-env"]);
+      },
+      async (admin) => {
+        await admin.query(`CREATE TABLE qm_tenant(id UUID PRIMARY KEY)`);
+        await admin.query(`INSERT INTO qm_tenant(id) VALUES ($1)`, [INSTANCE]);
+      },
     );
   },
 );

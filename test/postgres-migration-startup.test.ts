@@ -51,6 +51,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
         timeout: 60_000,
         env: {
           PATH: process.env.PATH,
+          DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL,
           NODE_ENV: "test",
           DATABASE_URL: url,
           SANDBOX_BACKEND: "local",
