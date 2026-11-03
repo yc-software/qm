@@ -1,6 +1,5 @@
 import type { Principal, TurnRequest } from "../types.ts";
 import { scopeId } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
@@ -23,8 +22,7 @@ async function projectAccess(deps: AppDeps, ref: string, actor: Principal): Prom
   const id = projectIdFromGroupRef(ref);
   if (!id) return NOT_A_MEMBER;
   const project = await deps.projects?.get(id);
-  if (!project || project.orgId !== orgIdOf() || !deps.identity.isInternal(deps.identity.classify(project.ownerId)))
-    return NOT_A_MEMBER;
+  if (!project || !deps.identity.isInternal(deps.identity.classify(project.ownerId))) return NOT_A_MEMBER;
   const roster = (await deps.projects?.members(ref)) ?? [];
   const memberIds = roster.filter((memberId) => deps.identity.isInternal(deps.identity.classify(memberId)));
   if (!rosterAdmits(memberIds, actor.id, scopeId("group", ref))) return NOT_A_MEMBER;

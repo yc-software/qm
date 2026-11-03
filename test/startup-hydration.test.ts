@@ -5,7 +5,7 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -16,8 +16,8 @@ mock.module("../src/identity/identity-service.ts", {
     createIdentityService: (...args: Parameters<typeof identityModule.createIdentityService>) =>
       identityModule.createIdentityService(
         {
-          ...testMap<identityModule.DeactivationRecord>(),
-          all: async () => {
+          ...args[0],
+          list: async () => {
             throw identityFailure;
           },
         },
@@ -52,11 +52,13 @@ test("startup hydration failures are contained while explicit hydration remains 
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(logged("startup: hydrate"), false);
     await built.startup();
-    await settle(async () => logged("startup: hydrate identity") && logged("startup: hydrate configuration"));
-    assert.ok(logged("startup: hydrate identity"));
+    await settle(async () => logged("startup: hydrate configuration"));
     assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
+      await assert.rejects(
+        inTestTenant(() => built.identity.refresh()),
+        (error: unknown) => error === identityFailure,
+      );
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);
     }
   } finally {

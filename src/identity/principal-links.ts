@@ -1,6 +1,9 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
 export interface PrincipalLink {
@@ -9,6 +12,80 @@ export interface PrincipalLink {
   evidence: string;
   linkedBy: string;
   createdAt: number;
+}
+
+export interface PrincipalLinkStore {
+  list(): Promise<PrincipalLink[]>;
+  insertIfAbsent(link: PrincipalLink): Promise<PrincipalLink>;
+  take(principalId: string): Promise<PrincipalLink | null>;
+  close?(): Promise<void>;
+}
+
+const PRINCIPAL_LINKS_MIGRATION = typedTableMigration({
+  table: "principal_links",
+  columns: [
+    "principal_id TEXT NOT NULL",
+    "canonical_id TEXT NOT NULL",
+    "evidence TEXT NOT NULL",
+    "linked_by TEXT NOT NULL",
+    "created_at BIGINT NOT NULL",
+  ],
+  primaryKey: ["principal_id"],
+  backfill: {
+    principal_id: "id",
+    canonical_id: "json->>'canonicalId'",
+    evidence: "json->>'evidence'",
+    linked_by: "json->>'linkedBy'",
+    created_at: "round((json->>'createdAt')::numeric)::bigint",
+  },
+  where: `json->>'canonicalId' IS NOT NULL AND json->>'evidence' IS NOT NULL
+    AND json->>'linkedBy' IS NOT NULL AND json->>'createdAt' IS NOT NULL`,
+});
+
+const LINK_COLUMNS = "principal_id, canonical_id, evidence, linked_by, created_at";
+
+function principalLink(row: Record<string, unknown>): PrincipalLink {
+  return {
+    principalId: String(row.principal_id),
+    canonicalId: String(row.canonical_id),
+    evidence: String(row.evidence),
+    linkedBy: String(row.linked_by),
+    createdAt: Number(row.created_at),
+  };
+}
+
+export function createPostgresPrincipalLinkStore(connectionString: string): PrincipalLinkStore {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, PRINCIPAL_LINKS_MIGRATION]);
+  return {
+    async list() {
+      const rows = await q(
+        `SELECT ${LINK_COLUMNS} FROM principal_links WHERE tenant_id = ${TENANT} ORDER BY created_at, principal_id`,
+      );
+      return rows.map(principalLink);
+    },
+    async insertIfAbsent(link) {
+      const principalId = foldPrincipalId(link.principalId);
+      const inserted = await q(
+        `INSERT INTO principal_links(${LINK_COLUMNS}) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant_id, principal_id) DO NOTHING RETURNING ${LINK_COLUMNS}`,
+        [principalId, link.canonicalId, link.evidence, link.linkedBy, link.createdAt],
+      );
+      const [row] = inserted.length
+        ? inserted
+        : await q(`SELECT ${LINK_COLUMNS} FROM principal_links WHERE tenant_id = ${TENANT} AND principal_id = $1`, [
+            principalId,
+          ]);
+      return row ? principalLink(row) : link;
+    },
+    async take(principalId) {
+      const [row] = await q(
+        `DELETE FROM principal_links WHERE tenant_id = ${TENANT} AND principal_id = $1 RETURNING ${LINK_COLUMNS}`,
+        [foldPrincipalId(principalId)],
+      );
+      return row ? principalLink(row) : null;
+    },
+    close,
+  };
 }
 
 interface PrincipalLinkInput {
@@ -37,39 +114,54 @@ const MAX_ID_LENGTH = 255;
 const MAX_EVIDENCE_LENGTH = 500;
 const REFRESH_TTL_MS = 10_000;
 
+interface TenantLinks {
+  byAlias: Map<string, PrincipalLink>;
+  byCanonical: Map<string, PrincipalLink[]>;
+  refresh(force?: boolean): Promise<void>;
+}
+
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
-  const byAlias = new Map<string, PrincipalLink>();
-  const byCanonical = new Map<string, PrincipalLink[]>();
+export function createPrincipalLinkService(store: PrincipalLinkStore, lock: AdvisoryLock): PrincipalLinkService {
+  const tenants = new Map<string, TenantLinks>();
 
-  function index(rows: PrincipalLink[]): void {
-    byAlias.clear();
-    byCanonical.clear();
-    for (const row of rows) {
-      byAlias.set(foldPrincipalId(row.principalId), row);
-      const key = foldPrincipalId(row.canonicalId);
-      const list = byCanonical.get(key) ?? [];
-      list.push(row);
-      byCanonical.set(key, list);
-    }
+  function tenantLinks(): TenantLinks {
+    const tenant = currentTenant();
+    const existing = tenants.get(tenant);
+    if (existing) return existing;
+    const created: TenantLinks = {
+      byAlias: new Map(),
+      byCanonical: new Map(),
+      refresh: createTtlRefresh(REFRESH_TTL_MS, async () => {
+        const rows = await store.list();
+        created.byAlias.clear();
+        created.byCanonical.clear();
+        for (const row of rows) {
+          created.byAlias.set(foldPrincipalId(row.principalId), row);
+          const key = foldPrincipalId(row.canonicalId);
+          created.byCanonical.set(key, [...(created.byCanonical.get(key) ?? []), row]);
+        }
+      }),
+    };
+    tenants.set(tenant, created);
+    return created;
   }
 
-  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all()));
+  const refresh = (force?: boolean): Promise<void> => tenantLinks().refresh(force);
 
   return {
     canonical(key) {
-      return byAlias.get(key)?.canonicalId;
+      return tenantLinks().byAlias.get(key)?.canonicalId;
     },
     aliases(key) {
-      return (byCanonical.get(key) ?? []).map((row) => row.principalId);
+      return (tenantLinks().byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
     async list() {
       await refresh(true);
-      return [...byAlias.values()].sort(
+      return [...tenantLinks().byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
     },
@@ -89,6 +181,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
+        const { byAlias, byCanonical } = tenantLinks();
         const existing = byAlias.get(aliasKey);
         if (existing) {
           if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
@@ -105,7 +198,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.putIfAbsent(aliasKey, {
+        const stored = await store.insertIfAbsent({
           principalId,
           canonicalId,
           evidence,
@@ -120,7 +213,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.take(foldPrincipalId(principalId));
+        const row = await store.take(principalId);
         await refresh(true);
         return row;
       });

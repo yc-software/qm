@@ -75,7 +75,15 @@ function start(
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    base,
+    built,
+    member: (email: string) => inTestTenant(() => built.identity.externalMember(email)),
+    kind: (id: string) => inTestTenant(() => built.identity.classify(id).type),
+    isAdmin: (email: string) =>
+      inTestTenant(async () => adminStatusFromGrants(await built.admin.listGrants(), email).isAdmin),
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
 }
 
 const invite = (base: string, body: unknown, headers: Record<string, string> = { "x-admin-actor": ALICE }) =>
@@ -110,7 +118,7 @@ test("broker admission preserves configured email members without external invit
   const s = start({ signed: true, emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
   t.after(s.close);
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
-    assert.equal(s.built.identity.externalMember(email), undefined);
+    assert.equal(s.member(email), undefined);
     assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, email)), { allowed: true });
   }
   for (const email of ["stranger@allowed.example", "person@othercorp.example", "person@corp.example.attacker.test"]) {
@@ -184,28 +192,22 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
   const s = start();
   try {
     const expiresAt = Date.now() + 7 * DAY_MS;
-    const isAdmin = async (email: string) =>
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), email).isAdmin;
 
     assert.equal((await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt })).status, 200);
-    assert.equal(await isAdmin("boss@partner.example"), true);
+    assert.equal(await s.isAdmin("boss@partner.example"), true);
 
     assert.equal((await invite(s.base, { email: "boss@partner.example", role: "member", expiresAt })).status, 200);
-    assert.equal(await isAdmin("boss@partner.example"), false);
+    assert.equal(await s.isAdmin("boss@partner.example"), false);
 
     assert.equal((await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt })).status, 200);
-    assert.equal(await isAdmin("boss@partner.example"), true);
-    assert.equal(s.built.identity.classify("boss@partner.example").type, "internal");
+    assert.equal(await s.isAdmin("boss@partner.example"), true);
+    assert.equal(s.kind("boss@partner.example"), "internal");
 
     const gone = await revoke(s.base, "Boss@Partner.example");
     assert.equal(gone.status, 200);
-    assert.equal(await isAdmin("boss@partner.example"), false);
-    assert.equal(
-      s.built.identity.classify("boss@partner.example").type,
-      "guest",
-      "a revoked external loses access now",
-    );
-    const tomb = s.built.identity.externalMember("boss@partner.example");
+    assert.equal(await s.isAdmin("boss@partner.example"), false);
+    assert.equal(s.kind("boss@partner.example"), "guest", "a revoked external loses access now");
+    const tomb = s.member("boss@partner.example");
     assert.equal(tomb?.role, "member");
     assert.ok(typeof tomb?.expiresAt === "number" && tomb.expiresAt <= Date.now());
     assert.deepEqual(
@@ -225,7 +227,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
 
     const back = await invite(s.base, { email: "boss@partner.example", expiresAt });
     assert.equal(((await back.json()) as any).created, false);
-    assert.equal(s.built.identity.classify("boss@partner.example").type, "internal", "a new expiry readmits them");
+    assert.equal(s.kind("boss@partner.example"), "internal", "a new expiry readmits them");
 
     const now = Date.now();
     await inTestTenant(() =>
@@ -240,7 +242,7 @@ test("role org_admin grants admin; member revokes it; DELETE drops the grant and
     );
     const forgotten: any = await (await revoke(s.base, "old@partner.example")).json();
     assert.deepEqual(forgotten, { ok: true, removed: true });
-    assert.equal(s.built.identity.externalMember("old@partner.example"), undefined);
+    assert.equal(s.member("old@partner.example"), undefined);
     assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "external_user.forget"));
   } finally {
     await s.close();
@@ -276,12 +278,9 @@ test("an address that already belongs to an org member cannot be invited", async
       const r = await invite(s.base, { email, expiresAt });
       assert.equal(r.status, 409, email);
       assert.match(((await r.json()) as any).message, /already belongs to a member.*Make admin.*Users page/s);
-      assert.equal(s.built.identity.externalMember(email), undefined, email);
+      assert.equal(s.member(email), undefined, email);
     }
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "ceo@other.example").isAdmin,
-      true,
-    );
+    assert.equal(await s.isAdmin("ceo@other.example"), true);
     assert.deepEqual((await roster(s.base)).externalUsers, []);
 
     assert.equal((await invite(s.base, { email: "pat@partner.example", expiresAt })).status, 200);
@@ -293,11 +292,8 @@ test("an address that already belongs to an org member cannot be invited", async
     assert.match(((await extend.json()) as any).message, /holds an org admin grant/);
     const del = await revoke(s.base, "pat@partner.example");
     assert.equal(del.status, 409);
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "pat@partner.example").isAdmin,
-      true,
-    );
-    assert.equal(s.built.identity.classify("pat@partner.example").type, "internal");
+    assert.equal(await s.isAdmin("pat@partner.example"), true);
+    assert.equal(s.kind("pat@partner.example"), "internal");
 
     const adopt: any = await (
       await invite(s.base, { email: "pat@partner.example", role: "org_admin", expiresAt: expiresAt + DAY_MS })
@@ -308,10 +304,7 @@ test("an address that already belongs to an org member cannot be invited", async
     );
     assert.deepEqual(grantAudits, [], "adopting an existing grant creates nothing");
     assert.equal((await revoke(s.base, "pat@partner.example")).status, 200);
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "pat@partner.example").isAdmin,
-      false,
-    );
+    assert.equal(await s.isAdmin("pat@partner.example"), false);
   } finally {
     await s.close();
   }
@@ -330,7 +323,7 @@ test("an expired external org admin no longer passes the admin authorizer", asyn
       (await fetch(`${s.base}/v1/admin/users`, { headers: { ...testTenantHeaders(), ...boss } })).status,
       200,
     );
-    const record = s.built.identity.externalMember("boss@partner.example")!;
+    const record = s.member("boss@partner.example")!;
     await inTestTenant(() => s.built.identity.putExternalMember({ ...record, expiresAt: Date.now() - 1 }));
     const denied = await fetch(`${s.base}/v1/admin/users`, { headers: { ...testTenantHeaders(), ...boss } });
     assert.equal(denied.status, 403);
@@ -357,14 +350,14 @@ test("revoking the last org admin is refused and leaves the external record unto
     const r = await revoke(s.base, "boss@partner.example", boss);
     assert.equal(r.status, 400);
     assert.match(((await r.json()) as any).message, /last org admin/);
-    const kept = s.built.identity.externalMember("boss@partner.example");
+    const kept = s.member("boss@partner.example");
     assert.equal(kept?.role, "org_admin");
     assert.equal(kept?.expiresAt, expiresAt);
     assert.ok(!(await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "external_user.revoke"));
 
     const demote = await invite(s.base, { email: "boss@partner.example", role: "member", expiresAt }, boss);
     assert.equal(demote.status, 400);
-    assert.equal(s.built.identity.externalMember("boss@partner.example")?.role, "org_admin");
+    assert.equal(s.member("boss@partner.example")?.role, "org_admin");
   } finally {
     await s.close();
   }
@@ -440,7 +433,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
     assert.equal(r.emailSent, false);
     assert.match(r.emailProblem, /HTTP 403 domain not verified/);
     assert.equal(r.signInUrl, `${PORTAL}/auth/login`);
-    assert.equal(f.built.identity.externalMember("sam@partner.example")?.role, "member");
+    assert.equal(f.member("sam@partner.example")?.role, "member");
   } finally {
     await f.close();
   }
@@ -474,7 +467,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
     const promote = await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt }, cap);
     assert.equal(promote.status, 403);
     assert.match(((await promote.json()) as any).message, /portal-only/);
-    assert.equal(s.built.identity.externalMember("boss@partner.example"), undefined);
+    assert.equal(s.member("boss@partner.example"), undefined);
 
     const now = Date.now();
     await inTestTenant(() =>
@@ -492,10 +485,10 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
     const del = await revoke(s.base, "boss@partner.example", cap);
     assert.equal(del.status, 403);
     assert.match(((await del.json()) as any).message, /portal-only/);
-    assert.equal(s.built.identity.externalMember("boss@partner.example")?.role, "org_admin");
+    assert.equal(s.member("boss@partner.example")?.role, "org_admin");
 
     assert.equal((await revoke(s.base, "pat@partner.example", cap)).status, 200);
-    assert.equal(s.built.identity.classify("pat@partner.example").type, "guest");
+    assert.equal(s.kind("pat@partner.example"), "guest");
 
     const alice = s.built.admin.resolveActor(ALICE)!;
     await inTestTenant(() =>
@@ -503,11 +496,8 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
     );
     const demoteViaInvite = await invite(s.base, { email: "ceo@corp.example", role: "member", expiresAt }, cap);
     assert.equal(demoteViaInvite.status, 409);
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "ceo@corp.example").isAdmin,
-      true,
-    );
-    assert.equal(s.built.identity.externalMember("ceo@corp.example"), undefined);
+    assert.equal(await s.isAdmin("ceo@corp.example"), true);
+    assert.equal(s.member("ceo@corp.example"), undefined);
 
     await inTestTenant(() =>
       s.built.identity.putExternalMember({
@@ -534,11 +524,8 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
       assert.equal(r.status, 403);
       assert.match(((await r.json()) as any).message, /portal-only/);
     }
-    assert.equal(s.built.identity.classify("promoted@partner.example").type, "internal");
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "promoted@partner.example").isAdmin,
-      true,
-    );
+    assert.equal(s.kind("promoted@partner.example"), "internal");
+    assert.equal(await s.isAdmin("promoted@partner.example"), true);
 
     assert.equal((await invite(s.base, { email: "x@y.example", expiresAt }, { "x-admin-actor": ALICE })).status, 401);
   } finally {
@@ -560,8 +547,8 @@ test("expiry classifies an external as guest, and the signed broker check answer
     });
     await inTestTenant(() => s.built.identity.putExternalMember(record("live@partner.example", now + DAY_MS)));
     await inTestTenant(() => s.built.identity.putExternalMember(record("gone@partner.example", now - 1)));
-    assert.equal(s.built.identity.classify("live@partner.example").type, "internal");
-    assert.equal(s.built.identity.classify("Gone@Partner.example").type, "guest");
+    assert.equal(s.kind("live@partner.example"), "internal");
+    assert.equal(s.kind("Gone@Partner.example"), "guest");
 
     assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "Live@Partner.example", "test")), true);
     assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "gone@partner.example", "test")), false);
@@ -672,9 +659,9 @@ test("directory sync never deactivates an external member; manual deactivation s
     );
     const outcome = await inTestTenant(() => s.built.identity.recordDirectorySync(["live@partner.example"], []));
     assert.deepEqual(outcome.deactivated, []);
-    assert.equal(s.built.identity.classify("live@partner.example").type, "internal");
+    assert.equal(s.kind("live@partner.example"), "internal");
     await inTestTenant(() => s.built.identity.deactivate("live@partner.example"));
-    assert.equal(s.built.identity.classify("live@partner.example").type, "guest");
+    assert.equal(s.kind("live@partner.example"), "guest");
   } finally {
     await s.close();
   }
@@ -709,7 +696,7 @@ test("teammates receive permanent access and appear before their first session",
     assert.equal((await roster(s.base)).externalUsers.length, 1);
     assert.equal((await revoke(s.base, "engineer@corp.example")).status, 200);
     assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test")), false);
-    assert.equal(s.built.identity.classify("engineer@corp.example").type, "guest");
+    assert.equal(s.kind("engineer@corp.example"), "guest");
   } finally {
     await s.close();
   }
@@ -729,10 +716,7 @@ test("teammate invitations validate expiry, require admin, and do not demote exi
     const again = await inviteTeammate(s.base, { email: "a@corp.example", role: "member" });
     assert.equal(again.status, 200);
     assert.equal(((await again.json()) as any).member.role, "org_admin");
-    assert.equal(
-      adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), "a@corp.example").isAdmin,
-      true,
-    );
+    assert.equal(await s.isAdmin("a@corp.example"), true);
     assert.equal((await invite(s.base, { email: "a@corp.example", expiresAt: Date.now() + DAY_MS })).status, 400);
   } finally {
     await s.close();
@@ -748,7 +732,7 @@ test("agent capabilities cannot create permanent teammate access", async () => {
       { "x-agent-capability": await capFor("admin-alice") },
     );
     assert.equal(r.status, 403);
-    assert.equal(s.built.identity.externalMember("a@corp.example"), undefined);
+    assert.equal(s.member("a@corp.example"), undefined);
   } finally {
     await s.close();
   }
@@ -863,16 +847,16 @@ test("teammate invites reject manual deactivation before changing access or send
     const denied = await inviteTeammate(s.base, { email, role: "org_admin" });
     assert.equal(denied.status, 409);
     assert.match(((await denied.json()) as any).message, /Reactivate/);
-    assert.equal(s.built.identity.externalMember(email), undefined);
-    assert.equal(adminStatusFromGrants(await inTestTenant(() => s.built.admin.listGrants()), email).isAdmin, false);
+    assert.equal(s.member(email), undefined);
+    assert.equal(await s.isAdmin(email), false);
     assert.equal(sent.length, 0);
-    assert.equal(s.built.identity.classify(email).type, "guest");
+    assert.equal(s.kind(email), "guest");
 
     await inTestTenant(() => s.built.identity.reactivate(email));
     assert.equal((await inviteTeammate(s.base, { email })).status, 200);
     assert.equal((await revoke(s.base, email)).status, 200);
     assert.equal((await inviteTeammate(s.base, { email })).status, 200);
-    assert.equal(s.built.identity.classify(email).type, "internal");
+    assert.equal(s.kind(email), "internal");
     assert.equal(sent.length, 2);
   } finally {
     await s.close();

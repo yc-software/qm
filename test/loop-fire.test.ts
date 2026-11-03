@@ -3,7 +3,7 @@ import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -11,7 +11,6 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
@@ -21,6 +20,8 @@ import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testIdempotencyStore } from "./support/typed-stores.ts";
+const test = (name: string, fn: () => Promise<void>) => nodeTest(name, () => inTestTenant(fn));
 
 function fakeIdentity() {
   return {
@@ -64,7 +65,7 @@ function service(
   const grants = overrides?.grants ?? createShipGrantStore(testMap());
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
-  const idempotency = createIdempotencyStore(testMap());
+  const idempotency = testIdempotencyStore();
   const fire = createLoopFireService({
     admittedWork: overrides?.admittedWork,
     crons,
@@ -337,7 +338,7 @@ test("a concurrent duplicate intake is silent and does not record a failed fire"
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, undefined);
 });
 
-test("the scheduler sweep pings a stale loop without waiting for another fire", async () => {
+nodeTest("the scheduler sweep pings a stale loop without waiting for another fire", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
@@ -350,7 +351,7 @@ test("the scheduler sweep pings a stale loop without waiting for another fire", 
   assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
 });
 
-test("the scheduler sweep detects a stale loop that has never fired", async () => {
+nodeTest("the scheduler sweep detects a stale loop that has never fired", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
@@ -361,7 +362,7 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
   assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
 });
 
-test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
+nodeTest("a stale-loop ping is withheld from a group DM its owner has left", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await inTestTenant(async () => {
     await directory.replace([
@@ -379,7 +380,7 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
   assert.equal(s.deliveries.sent.length, 0);
 });
 
-test("a stale-loop ping still reaches the owner's web conversation", async () => {
+nodeTest("a stale-loop ping still reaches the owner's web conversation", async () => {
   const s = service(HAPPY, {
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     resolveRecipient: async () => ({ kind: "none" }),
@@ -633,7 +634,7 @@ async function bindCron(
 }
 
 for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
-  test(`bound scheduled and manual loop turns use current cron grants: ${unattendedGrants}`, async () => {
+  nodeTest(`bound scheduled and manual loop turns use current cron grants: ${unattendedGrants}`, async () => {
     const s = service(HAPPY);
     const loop = await makeLoop(s.loops);
     const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });

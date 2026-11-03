@@ -7,7 +7,6 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 const BLOB_TRANSFER_EXPIRY_DAYS = 1;
 
 interface StartupWorkDeps {
-  identity: { refresh(): Promise<unknown> };
   configStore: { hydrate?(): Promise<void> };
   deploymentLayer: { hydrate(): Promise<unknown> };
   mcp: { start(): void };
@@ -28,7 +27,6 @@ export function createStartup(deps: StartupWorkDeps): Startup {
   let work: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
   const hydrate = async (): Promise<void> => {
-    await deps.identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
     await deps.configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   };
   const seed = async (): Promise<void> => {

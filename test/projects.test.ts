@@ -12,7 +12,7 @@ import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createProjectStore, projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
+import { projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
 import {
   createCanManageScope,
   createCanReadScope,
@@ -24,14 +24,14 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl, testProjectStore } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", () =>
   inTestTenant(async () => {
     let at = 10;
-    const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "p1", now: () => at++ });
+    const projects = testProjectStore({ id: () => "p1", now: () => at++ });
     const project = await projects.create({ name: "  Launch Cohort  ", ownerId: "owner" });
     const initialVersion = await projects.version(projectGroupRef(project.id));
     assert.equal(project.name, "Launch Cohort");
@@ -95,7 +95,7 @@ test("session lists check each project once per request and observe membership c
 test("ProjectStore rename is owner-only and cleans the name", () =>
   inTestTenant(async () => {
     let at = 100;
-    const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "pr", now: () => at++ });
+    const projects = testProjectStore({ id: () => "pr", now: () => at++ });
     const project = await projects.create({ name: "Before", ownerId: "owner" });
     const versionBefore = await projects.version(projectGroupRef(project.id));
     assert.equal((await projects.rename(project.id, "mallory", "Hijacked")).status, "forbidden");
@@ -118,7 +118,7 @@ test("ProjectStore rename is owner-only and cleans the name", () =>
 test("ProjectStore slack-channel link is member-managed and not a roster change", () =>
   inTestTenant(async () => {
     let at = 500;
-    const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "sl", now: () => at++ });
+    const projects = testProjectStore({ id: () => "sl", now: () => at++ });
     const project = await projects.create({ name: "Linked", ownerId: "owner" });
     await projects.addMember(project.id, "owner", "member");
     const groupRef = projectGroupRef(project.id);
@@ -162,7 +162,7 @@ test("ProjectStore slack-channel link is member-managed and not a roster change"
 test("ProjectStore derives membership from the linked channel roster", () =>
   inTestTenant(async () => {
     let at = 900;
-    const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "dr", now: () => at++ });
+    const projects = testProjectStore({ id: () => "dr", now: () => at++ });
     const project = await projects.create({ name: "Derived", ownerId: "owner" });
     const groupRef = projectGroupRef(project.id);
 
@@ -200,7 +200,7 @@ test("ProjectStore derives membership from the linked channel roster", () =>
 
 test("managed groups override Slack membership and historical sessions grant no access", () =>
   inTestTenant(async () => {
-    const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "managed" });
+    const projects = testProjectStore({ id: () => "managed" });
     const project = await projects.create({ name: "Managed", ownerId: "owner" });
     const managedScope = projectScopeId(project.id);
     const deps = {
@@ -334,7 +334,7 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployDeps = { ...singleProcessDeps(), acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())) };
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
@@ -469,7 +469,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     });
     assert.equal(forgedApproval.status, "refused");
     const deploy = createDeployService({
-      ...singleProcessDeps(),
+      ...deployDeps,
       deployStore: createDeployStore(testDeployBackings()),
       provider: {
         profile: { managedScaleToZero: false },
@@ -477,7 +477,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
         destroy: async () => {},
       },
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: deployAcl,
       deployDir: mkdtempSync(join(tmpdir(), "project-deploy-")),
       canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),
     });
@@ -487,7 +486,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('ready')" }],
     });
-    await deployAcl.grant({
+    await deployDeps.acl.grant({
       ownerScopeId: "personal:owner",
       ref: `deployment:${deployment.id}`,
       granteeScopeId: scope,

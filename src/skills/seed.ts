@@ -1,7 +1,9 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { errMessage } from "../util/errors.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
 import { safeSkillFilePath, type Skill, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
 
@@ -95,7 +97,7 @@ export function upsertSeedSkill(
   },
 ): Promise<UpsertOutcome> {
   const run = () => upsertSeedSkillUnsafe(skills, input);
-  return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
+  return upsertQueue(`${currentTenant()}\0${input.scopeId}\0${input.manifest.name}`, () =>
     skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
   );
 }
@@ -112,9 +114,9 @@ async function upsertSeedSkillUnsafe(
   },
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
-  const all = await skills.list();
+  const all = await skills.inScopes([scopeId], manifest.name);
   const isOwn = (s: Skill) => (pack ? s.pack?.packId === pack.packId : s.createdBy === createdBy);
-  const existing = all.find((s) => s.scopeId === scopeId && s.manifest.name === manifest.name && isOwn(s));
+  const existing = all.find(isOwn);
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";
   if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
@@ -157,4 +159,45 @@ export async function installSeedSkills(
   }
 
   return result;
+}
+
+interface SkillBoot {
+  layer: Promise<unknown>;
+  skills: Promise<void>;
+}
+
+export function lazySkillBoot(
+  hydrateLayer: () => Promise<unknown>,
+  installCatalogs?: () => Promise<void>,
+): { layerReady: () => Promise<unknown>; skillsReady: () => Promise<void> } {
+  const boots = new Map<string, SkillBoot>();
+  const start = () => {
+    const tenant = currentTenant();
+    const existing = boots.get(tenant);
+    if (existing) return existing;
+    const layer = hydrateLayer();
+    const layerSettled = layer.then(
+      () => true,
+      (e: unknown) => {
+        console.error("[seed] deployment layer not ready:", errMessage(e));
+        return false;
+      },
+    );
+    const catalogs = (installCatalogs?.() ?? Promise.resolve()).then(
+      () => true,
+      (e: unknown) => {
+        console.error("[seed] failed to install seed skills:", errMessage(e));
+        return false;
+      },
+    );
+    const boot: SkillBoot = {
+      layer,
+      skills: Promise.all([catalogs, layerSettled]).then((settled) => {
+        if (!settled.every(Boolean) && boots.get(tenant) === boot) boots.delete(tenant);
+      }),
+    };
+    boots.set(tenant, boot);
+    return boot;
+  };
+  return { layerReady: () => start().layer, skillsReady: () => start().skills };
 }

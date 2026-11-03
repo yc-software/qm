@@ -11,7 +11,6 @@ const built = buildApp(config);
 await verifyRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
-await built.identity.refresh();
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);

@@ -15,8 +15,6 @@ import { createServer } from "../src/api/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -31,6 +29,7 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -98,107 +97,115 @@ describe("SecretDropStore", () => {
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: testIdempotencyStore(),
+    identity: testIdentityService(),
     run,
   });
 
-  it("resumes the channel as the owner with the credential handle, exactly once", async () => {
-    const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
-      seen.push(req);
-      return { status: "ok" } as TurnResult;
-    });
-    const drop: DropResolution = {
-      id: "drop1",
-      ownerId: "U_A",
-      service: "stripe",
-      purpose: "charge cards",
-      audienceScopeId: scopeId("channel", "C1"),
-      threadRef: "ch:C1-t",
-      destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-      grantId: "g1",
-      credentialHandle: "kc_stripe",
-      granted: true,
-    };
-    await fireDropResolution(deps, drop);
-    assert.equal(seen.length, 1);
-    assert.equal(seen[0]!.conversation.kind, "channel");
-    assert.equal(seen[0]!.actor.externalId, "U_A", "the resume runs as the owner who supplied the key");
-    assert.match(seen[0]!.text, /kc_stripe/, "the channel resume hands over the credential handle");
+  it("resumes the channel as the owner with the credential handle, exactly once", () =>
+    inTestTenant(async () => {
+      const seen: TurnRequest[] = [];
+      const deps = depsWith(async (req) => {
+        seen.push(req);
+        return { status: "ok" } as TurnResult;
+      });
+      const drop: DropResolution = {
+        id: "drop1",
+        ownerId: "U_A",
+        service: "stripe",
+        purpose: "charge cards",
+        audienceScopeId: scopeId("channel", "C1"),
+        threadRef: "ch:C1-t",
+        destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+        grantId: "g1",
+        credentialHandle: "kc_stripe",
+        granted: true,
+      };
+      await fireDropResolution(deps, drop);
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0]!.conversation.kind, "channel");
+      assert.equal(seen[0]!.actor.externalId, "U_A", "the resume runs as the owner who supplied the key");
+      assert.match(seen[0]!.text, /kc_stripe/, "the channel resume hands over the credential handle");
 
-    await fireDropResolution(deps, drop);
-    assert.equal(seen.length, 1, "the drop:<id> fireKey dedupes a double fire");
-  });
+      await fireDropResolution(deps, drop);
+      assert.equal(seen.length, 1, "the drop:<id> fireKey dedupes a double fire");
+    }));
 
-  it("resumes a DM (own scope, no grant) and tells the agent the key is available here", async () => {
-    const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
-      seen.push(req);
-      return { status: "ok" } as TurnResult;
-    });
-    await fireDropResolution(deps, {
-      id: "drop2",
-      ownerId: "U_A",
-      service: "openai",
-      purpose: "summarize",
-      audienceScopeId: scopeId("personal", "U_A"),
-      granted: false,
-    });
-    assert.equal(seen[0]!.conversation.kind, "dm");
-    assert.match(seen[0]!.text, /available here/);
-  });
+  it("resumes a DM (own scope, no grant) and tells the agent the key is available here", () =>
+    inTestTenant(async () => {
+      const seen: TurnRequest[] = [];
+      const deps = depsWith(async (req) => {
+        seen.push(req);
+        return { status: "ok" } as TurnResult;
+      });
+      await fireDropResolution(deps, {
+        id: "drop2",
+        ownerId: "U_A",
+        service: "openai",
+        purpose: "summarize",
+        audienceScopeId: scopeId("personal", "U_A"),
+        granted: false,
+      });
+      assert.equal(seen[0]!.conversation.kind, "dm");
+      assert.match(seen[0]!.text, /available here/);
+    }));
 
-  it("enqueues a fallback delivery when the resume turn doesn't land (drop is single-use, no sweep)", async () => {
-    const deliveries = createDeliveryStore();
-    const deps = {
-      deliveries,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-      run: async () => ({ status: "pending_approval" }) as TurnResult,
-    };
-    const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
-    await fireDropResolution(deps, {
-      id: "dropF",
-      ownerId: "U_A",
-      service: "stripe",
-      purpose: "p",
-      audienceScopeId: scopeId("channel", "C1"),
-      destination,
-      grantId: "g1",
-      credentialHandle: "kc_stripe",
-      granted: true,
-    });
-    const fb = (await deliveries.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
-    assert.equal(fb.length, 1, "the conversation hears the key arrived even when the resume turn didn't run");
-    assert.match(fb[0]!.text, /saved to the keychain/);
-  });
+  it("enqueues a fallback delivery when the resume turn doesn't land (drop is single-use, no sweep)", () =>
+    inTestTenant(async () => {
+      const deliveries = createDeliveryStore();
+      const deps = {
+        deliveries,
+        idempotency: testIdempotencyStore(),
+        identity: testIdentityService(),
+        run: async () => ({ status: "pending_approval" }) as TurnResult,
+      };
+      const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
+      await fireDropResolution(deps, {
+        id: "dropF",
+        ownerId: "U_A",
+        service: "stripe",
+        purpose: "p",
+        audienceScopeId: scopeId("channel", "C1"),
+        destination,
+        grantId: "g1",
+        credentialHandle: "kc_stripe",
+        granted: true,
+      });
+      const fb = (await deliveries.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
+      assert.equal(fb.length, 1, "the conversation hears the key arrived even when the resume turn didn't run");
+      assert.match(fb[0]!.text, /saved to the keychain/);
+    }));
 
-  it("with sibling drops still pending: the wake fires (with its grant) but says what's outstanding instead of ordering a resume", async () => {
-    const seen: TurnRequest[] = [];
-    const deps = depsWith(async (req) => {
-      seen.push(req);
-      return { status: "ok" } as TurnResult;
-    });
-    await fireDropResolution(deps, {
-      id: "dropP",
-      ownerId: "U_A",
-      service: "alphasvc",
-      purpose: "p",
-      audienceScopeId: scopeId("channel", "C1"),
-      destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-      grantId: "gA",
-      credentialHandle: "kc_alpha",
-      granted: true,
-      pendingSiblings: ["betasvc"],
-    });
-    assert.equal(seen.length, 1, "every redeem wakes the conversation — it must hear each grant's load command");
-    assert.match(seen[0]!.text, /kc_alpha/, "the intermediate wake still hands over its own handle");
-    assert.match(seen[0]!.text, /`betasvc`.*haven't been filled/, "the wake names the outstanding sibling links");
-    assert.match(seen[0]!.text, /keep waiting/);
-    assert.doesNotMatch(seen[0]!.text, /Pick the task back up/, "no resume order while credentials are outstanding");
-    assert.doesNotMatch(seen[0]!.text, /and run the task/, "the grant load command must not carry a run order either");
-  });
+  it("with sibling drops still pending: the wake fires (with its grant) but says what's outstanding instead of ordering a resume", () =>
+    inTestTenant(async () => {
+      const seen: TurnRequest[] = [];
+      const deps = depsWith(async (req) => {
+        seen.push(req);
+        return { status: "ok" } as TurnResult;
+      });
+      await fireDropResolution(deps, {
+        id: "dropP",
+        ownerId: "U_A",
+        service: "alphasvc",
+        purpose: "p",
+        audienceScopeId: scopeId("channel", "C1"),
+        destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+        grantId: "gA",
+        credentialHandle: "kc_alpha",
+        granted: true,
+        pendingSiblings: ["betasvc"],
+      });
+      assert.equal(seen.length, 1, "every redeem wakes the conversation — it must hear each grant's load command");
+      assert.match(seen[0]!.text, /kc_alpha/, "the intermediate wake still hands over its own handle");
+      assert.match(seen[0]!.text, /`betasvc`.*haven't been filled/, "the wake names the outstanding sibling links");
+      assert.match(seen[0]!.text, /keep waiting/);
+      assert.doesNotMatch(seen[0]!.text, /Pick the task back up/, "no resume order while credentials are outstanding");
+      assert.doesNotMatch(
+        seen[0]!.text,
+        /and run the task/,
+        "the grant load command must not carry a run order either",
+      );
+    }));
 });
 
 describe("/v1/keychain/drops — mint, form, redeem", async () => {

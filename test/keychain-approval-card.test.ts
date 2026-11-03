@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   keychainApprovalMessage,
   deliverKeychainCard,
@@ -16,6 +15,7 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 async function fixture() {
   let now = Date.now();
@@ -48,7 +48,7 @@ async function fixture() {
     belongsToScope: async () => member,
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = testIdentityService();
   const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
     deliveries: {

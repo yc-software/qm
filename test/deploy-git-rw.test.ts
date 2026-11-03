@@ -13,17 +13,17 @@ import { createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -63,7 +63,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = testIdentityService();
   const app = createApp({
     deploy,
     acl,
@@ -83,7 +83,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     app: tenantBound(app),
     deploy: tenantBound(deploy),
     acl: tenantBound(acl),
-    identity,
+    identity: tenantBound(identity),
     base,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };

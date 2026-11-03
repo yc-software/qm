@@ -17,7 +17,7 @@ import { inTestTenant } from "./support/test-tenants.ts";
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
   await built.config.hydrate?.();
-  await built.identity.refresh();
+  await inTestTenant(() => built.identity.refresh());
   await built.startup();
   t.after(async () => {
     built.scheduler.stop();

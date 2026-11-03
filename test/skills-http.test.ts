@@ -14,12 +14,28 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import type { SkillStore } from "../src/skills/skill-store.ts";
 
 function fetch(url: string, init: RequestInit = {}): Promise<Response> {
   return globalThis.fetch(url, {
     ...init,
     headers: { ...testTenantHeaders(), ...Object.fromEntries(new Headers(init.headers)) },
   });
+}
+
+function tenantSkills(skills: SkillStore) {
+  const bound =
+    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    (...args: A) =>
+      inTestTenant(() => fn(...args));
+  return {
+    get: bound(skills.get),
+    listAll: bound(skills.listAll),
+    create: bound(skills.create),
+    review: bound(skills.review),
+    publish: bound(skills.publish),
+    archive: bound(skills.archive),
+  };
 }
 
 function start() {
@@ -35,25 +51,26 @@ function start() {
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return {
     base,
-    skills: built.skills,
+    skills: tenantSkills(built.skills),
     directory: built.directory,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
 
 async function publish(
-  skills: ReturnType<typeof buildApp>["skills"],
+  skills: ReturnType<typeof tenantSkills>,
   scope: ScopeId,
   name: string,
   description: string,
+  createdBy = "author",
 ) {
   const sk = await skills.create({
     scopeId: scope,
     manifest: { name, description, requiredCapabilities: [], body: `# ${name}` },
-    createdBy: "author",
+    createdBy,
   });
   await skills.review(sk.id, "reviewer-1", []);
-  await skills.publish(sk.id);
+  return skills.publish(sk.id);
 }
 
 interface SkillView {
@@ -156,13 +173,7 @@ test("PUT /v1/skills/:id edits an owned personal skill in place and keeps it liv
 test("PUT /v1/skills/:id refuses to edit a skill the caller doesn't own", async () => {
   const srv = start();
   try {
-    const sk = await srv.skills.create({
-      scopeId: scopeId("personal", "U2"),
-      manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
-      createdBy: "U2",
-    });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    const sk = await publish(srv.skills, scopeId("personal", "U2"), "secret", "theirs", "U2");
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
@@ -258,13 +269,7 @@ test("an archived skill name can be reused for a replacement", async () => {
 test("DELETE /v1/skills/:id refuses a skill the caller doesn't own with 403", async () => {
   const srv = start();
   try {
-    const sk = await srv.skills.create({
-      scopeId: scopeId("personal", "U2"),
-      manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
-      createdBy: "U2",
-    });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    const sk = await publish(srv.skills, scopeId("personal", "U2"), "secret", "theirs", "U2");
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "DELETE",
@@ -461,7 +466,7 @@ async function startSecure() {
   return {
     base,
     cap,
-    skills: built.skills,
+    skills: tenantSkills(built.skills),
     directory: built.directory,
     sessions: built.sessions,
     close: () => new Promise<void>((r) => server.close(() => r())),
@@ -483,7 +488,7 @@ test("POST /v1/skills via a capability token authors as the token's own principa
     });
     assert.equal(res.status, 201);
 
-    const all = await srv.skills.list();
+    const all = await srv.skills.listAll();
     const watch = all.find((sk) => sk.manifest.name === "watch-ci");
     assert.ok(watch, "the skill was created");
     assert.equal(
@@ -517,7 +522,7 @@ test("POST /v1/skills via a capability token from a private-channel scope homes 
       body: JSON.stringify({ name: "team-thing", description: "d", body: "# b" }),
     });
     assert.equal(res.status, 201);
-    const all = await srv.skills.list();
+    const all = await srv.skills.listAll();
     const sk = all.find((s) => s.manifest.name === "team-thing");
     assert.ok(sk, "the skill was created");
     assert.equal(sk!.scopeId, scopeId("channel", "C9"), "homed in the channel, not avery's personal scope");
@@ -569,13 +574,7 @@ test("PUT /v1/skills/:id via a capability token edits the token-actor's own skil
 test("PUT /v1/skills/:id via a capability token cannot edit another scope's skill (404)", async () => {
   const srv = await startSecure();
   try {
-    const sk = await srv.skills.create({
-      scopeId: scopeId("personal", "U2"),
-      manifest: { name: "secret", description: "theirs", requiredCapabilities: [], body: "# secret" },
-      createdBy: "U2",
-    });
-    await srv.skills.review(sk.id, "reviewer-1", []);
-    await srv.skills.publish(sk.id);
+    const sk = await publish(srv.skills, scopeId("personal", "U2"), "secret", "theirs", "U2");
 
     const res = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
@@ -755,7 +754,7 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
     });
     assert.equal(create.status, 403, "an automated trigger cannot create a shared skill");
     assert.equal(
-      (await srv.skills.list()).find((s) => s.manifest.name === "auto-thing"),
+      (await srv.skills.listAll()).find((s) => s.manifest.name === "auto-thing"),
       undefined,
     );
 
@@ -905,7 +904,7 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
       });
       assert.equal(res.status, 403, `${home}: must refuse inline create into a promotion-gated scope`);
       assert.equal(
-        (await srv.skills.list()).find((s) => s.manifest.name === `wide-${home}`),
+        (await srv.skills.listAll()).find((s) => s.manifest.name === `wide-${home}`),
         undefined,
         `${home}: nothing created`,
       );
@@ -1105,13 +1104,7 @@ test("a capability token reads and restores its archived skill without losing id
 test("skill detail and restore capability calls hide other principals' skills and require identity", async () => {
   const srv = await startSecure();
   try {
-    const skill = await srv.skills.create({
-      scopeId: scopeId("personal", "U2"),
-      manifest: { name: "private", description: "theirs", requiredCapabilities: [], body: "# private" },
-      createdBy: "U2",
-    });
-    await srv.skills.review(skill.id, "reviewer-1", []);
-    await srv.skills.publish(skill.id);
+    const skill = await publish(srv.skills, scopeId("personal", "U2"), "private", "theirs", "U2");
     await srv.skills.archive(skill.id);
 
     const headers = { "x-agent-capability": await srv.cap("U1") };

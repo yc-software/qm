@@ -6,13 +6,13 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { uiStateId } from "../src/surfaces/ui-state.ts";
-import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
+import { createPostgresUiStateStore } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
@@ -23,39 +23,41 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore("org"),
   };
-  const uiState = testMap<PersistedUiState>();
+  const uiState = createPostgresUiStateStore(testDatabaseUrl());
   const call = async (method = "GET", body: unknown = null, query = "", actor = "alice") => {
     let status = 0;
     let data: any;
-    await inboxRoutes
-      .find((route) => "method" in route && route.method === method)!
-      .handle({
-        method,
-        body,
-        url: new URL(`http://local/v1/inbox?${query}`),
-        actor: { p: actor },
-        capability: null,
-        deps: {
-          loops: deps,
-          uiState,
-          inboxSourceRefresh: sourceRefresh,
-          featureFlags: { enabled: async () => enabled },
-        },
-        app: {
-          samePerson: async (a: string, b: string) => a === b,
-          membershipControlsScope: async () => false,
-          managesScope: async () => false,
-        },
-        res: {
-          getHeader: () => undefined,
-          writeHead: (value: number) => {
-            status = value;
+    await inTestTenant(() =>
+      inboxRoutes
+        .find((route) => "method" in route && route.method === method)!
+        .handle({
+          method,
+          body,
+          url: new URL(`http://local/v1/inbox?${query}`),
+          actor: { p: actor },
+          capability: null,
+          deps: {
+            loops: deps,
+            uiState,
+            inboxSourceRefresh: sourceRefresh,
+            featureFlags: { enabled: async () => enabled },
           },
-          end: (value: string) => {
-            data = JSON.parse(value);
+          app: {
+            samePerson: async (a: string, b: string) => a === b,
+            membershipControlsScope: async () => false,
+            managesScope: async () => false,
           },
-        },
-      } as unknown as ApiCtx);
+          res: {
+            getHeader: () => undefined,
+            writeHead: (value: number) => {
+              status = value;
+            },
+            end: (value: string) => {
+              data = JSON.parse(value);
+            },
+          },
+        } as unknown as ApiCtx),
+    );
     return { status, data };
   };
   return { deps, uiState, call };
@@ -288,7 +290,7 @@ test("email filters leave Slack unchanged while source counts include all open c
     ["human", ["pending", "question", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
     ["all", ["pending", "question", "receipt", "slack-bot", "slack-question", "slack-resolved", "thanks"]],
   ] as const) {
-    await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: filter, updatedAt: Date.now() });
+    await inTestTenant(() => w.uiState.put("alice", "inbox-filter", { value: filter, updatedAt: Date.now() }));
     const feed = (await w.call()).data;
     assert.equal(feed.filter, filter);
     assert.deepEqual(keys(feed), expected);
@@ -314,7 +316,7 @@ test("email filters leave Slack unchanged while source counts include all open c
   assert.equal(receipt.sourcePayload.automated, true);
   assert.equal(receipt.state, "held");
   assert.equal(receipt.proposal, undefined);
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "invalid", updatedAt: Date.now() });
+  await inTestTenant(() => w.uiState.put("alice", "inbox-filter", { value: "invalid", updatedAt: Date.now() }));
   assert.equal((await w.call()).data.filter, "human");
   const question = (await w.deps.items.byLoop(email!.id)).find((item) => item.sourceKey === "question")!;
   await w.deps.items.recordAction(question.id, { kind: "dismiss", outcome: "dismissed" });
@@ -344,7 +346,7 @@ test("inbox filters apply before pagination even when automated messages fill mu
   assert.equal(triaged.total, 85);
   assert.equal(triaged.items.length, 5);
   assert.equal(triaged.nextCursor, null);
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  await inTestTenant(() => w.uiState.put("alice", "inbox-filter", { value: "all", updatedAt: Date.now() }));
   const first = (await w.call()).data;
   const second = (await w.call("GET", null, `cursor=${first.nextCursor}`)).data;
   const third = (await w.call("GET", null, `cursor=${second.nextCursor}`)).data;
@@ -360,9 +362,9 @@ test("explicit refresh filters stay consistent across saved preference changes w
     { loopId: loop!.id, dedupeKey: "receipt", source: "gmail", sourcePayload: { automated: true } },
     { loopId: loop!.id, dedupeKey: "question", source: "gmail", sourcePayload: { automated: false } },
   ]);
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "all", updatedAt: Date.now() });
+  await inTestTenant(() => w.uiState.put("alice", "inbox-filter", { value: "all", updatedAt: Date.now() }));
   const first = (await w.call()).data;
-  await w.uiState.put(uiStateId("alice", "inbox-filter"), { value: "human", updatedAt: Date.now() + 1 });
+  await inTestTenant(() => w.uiState.put("alice", "inbox-filter", { value: "human", updatedAt: Date.now() + 1 }));
   const pinned = (await w.call("GET", null, `filter=${first.filter}`)).data;
   assert.equal(pinned.filter, "all");
   assert.equal(pinned.total, 2);

@@ -27,8 +27,6 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -42,6 +40,8 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+const tenantTest = (name: string, fn: () => Promise<void>) => test(name, () => inTestTenant(fn));
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -308,13 +308,13 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   assert.equal(fired[0]!.status, "expired");
 
   const swept: number[] = [];
-  const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
+  const idStore = testIdempotencyStore();
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: testIdentityService(),
     run: async () => ({ status: "ok" }) as TurnResult,
     sweepAsks: async (now) => void swept.push(now),
   });
@@ -377,13 +377,13 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
   assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
 });
 
-test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
+tenantTest("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
   let seen: TurnRequest | undefined;
   const outcome = await runTrigger(
     {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
     {
@@ -402,13 +402,13 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
 });
 
-test("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
+tenantTest("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
   const deliveries = createDeliveryStore();
   const outcome = await runTrigger(
     {
       deliveries,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
@@ -424,7 +424,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   assert.equal((await deliveries.pending("slack")).length, 1, "the sentinel is poll-only; an ask notice must deliver");
 });
 
-test("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
+tenantTest("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
   const ask: KeychainAsk = {
     id: "fa11bacc0000",
     credentialId: "c1",
@@ -443,8 +443,8 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     const deliveries = createDeliveryStore();
     return {
       deliveries,
-      idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run,
       getAsk: async () => current,
     };

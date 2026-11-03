@@ -8,7 +8,10 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./slack/approval-store.ts";
+import { createPostgresApprovalStore } from "./slack/approval-store.ts";
+import { createPostgresApprovalGrantStore } from "./core/approval-grant-store.ts";
+import { createPostgresContextRequestStore } from "./api/context-request-store.ts";
+import { createPostgresAmbientCursorStore } from "./api/ambient-cursor-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -69,7 +72,7 @@ import {
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
-import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
+import { createPostgresSessionShareStore, type SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
@@ -87,46 +90,38 @@ import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
   createIdentityService,
-  type DeactivationRecord,
+  createPostgresDeactivationStore,
   type IdentityService,
 } from "./identity/identity-service.ts";
 import {
+  createPostgresPrincipalLinkStore,
   createPrincipalLinkService,
-  type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
-import type { ExternalMember } from "./identity/external-members.ts";
+import { createPostgresExternalMemberStore } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
-import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
-import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
-import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
+import type { SkillStore } from "./skills/skill-store.ts";
+import { createSkillStores } from "./skills/postgres-skill-store.ts";
+import type { SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
-import { installSeedSkills } from "./skills/seed.ts";
+import { installSeedSkills, lazySkillBoot } from "./skills/seed.ts";
 import { brokerCredentialCheck, createStartup, seedCatalogs } from "./startup-work.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
+import { createPostgresUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
-import type {
-  CommandApprovalGrant,
-  PendingApprovalRecord,
-  ScopeId,
-  Session,
-  TurnRequest,
-  TurnResult,
-} from "./types.ts";
+import type { ScopeId, Session, TurnRequest, TurnResult } from "./types.ts";
 import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
-import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
@@ -154,7 +149,7 @@ import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
+import { createPostgresIdempotencyStore } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { crossTenantLoop, inTenantOf } from "./tenants/claim.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
@@ -261,12 +256,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import {
-  createFeatureFlagStore,
-  externalAppSharingAllowed,
-  type FeatureFlagRecord,
-  type FeatureFlagStore,
-} from "./feature-flags.ts";
+import { createPostgresFeatureFlagStore, externalAppSharingAllowed, type FeatureFlagStore } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
@@ -370,7 +360,7 @@ import {
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
-import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createPostgresProjectStore, type ProjectStore } from "./projects/project-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
 import {
@@ -447,6 +437,7 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
+  deploymentLayerReady: () => Promise<unknown>;
   startup: () => Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
@@ -624,11 +615,11 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const principalLinks = createPrincipalLinkService(createPostgresPrincipalLinkStore(databaseUrl), advisoryLock);
   installPrincipalLinks(principalLinks);
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
+  const identity = createIdentityService(createPostgresDeactivationStore(databaseUrl), {
     directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: artifactMap<ExternalMember>("external_members"),
+    externalMembers: createPostgresExternalMemberStore(databaseUrl),
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
@@ -638,14 +629,11 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  const skills: SkillStore = createSkillStore({
-    backing: artifactMap<Skill>("skills", ["scopeId"]),
+  const { skills, skillPacks, skillBundles } = createSkillStores(databaseUrl, {
     advisoryLock,
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
-  const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
-  const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const featureFlags = createPostgresFeatureFlagStore(databaseUrl);
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
@@ -690,6 +678,17 @@ export function buildApp(
   const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
     label: "deployment layer refresh",
   });
+  const { layerReady: deploymentLayerReady, skillsReady } = lazySkillBoot(
+    () => deploymentLayerStore.hydrate(),
+    config.seedSkills
+      ? seedCatalogs(skills, {
+          seedDir: config.skillsSeedDir,
+          pluginDirs: config.pluginSkillDirs,
+          ...(layerSkillsDir ? { layerSkillsDir } : {}),
+          scopeId: orgScope,
+        })
+      : undefined,
+  );
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -1473,14 +1472,10 @@ export function buildApp(
   const maxAttempts = config.maxAttempts;
   const runStore = createPostgresRunStore(databaseUrl, { maxClaims: config.maxClaims });
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
-    if (!sessionIds.length) return new Set();
-    const wanted = new Set(sessionIds);
     return new Set(
-      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
-        .filter(
-          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        )
-        .map((r) => r.sessionId),
+      (await approvals.forSessions(sessionIds))
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
     );
   };
   const workingAncestors = async (session: Session) => {
@@ -1590,22 +1585,11 @@ export function buildApp(
     }
   };
   const startup = createStartup({
-    identity,
     configStore,
     deploymentLayer: deploymentLayerStore,
     mcp: mcpToolService,
     blobTransfer,
     listen: () => runStreamEvents.subscribe(syncRunStream),
-    ...(config.seedSkills
-      ? {
-          seedCatalogs: seedCatalogs(skills, {
-            seedDir: config.skillsSeedDir,
-            pluginDirs: config.pluginSkillDirs,
-            ...(layerSkillsDir ? { layerSkillsDir } : {}),
-            scopeId: orgScope,
-          }),
-        }
-      : {}),
     ...(config.brokerCredentials?.length
       ? {
           checkBrokerCredentials: brokerCredentialCheck(
@@ -1760,7 +1744,7 @@ export function buildApp(
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const directory = createPostgresDirectoryStore(databaseUrl);
-  const projects = createProjectStore(artifactMap<Project>("projects"), {
+  const projects = createPostgresProjectStore(databaseUrl, {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
   });
@@ -1946,7 +1930,7 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  const approvals = createPostgresApprovalStore(databaseUrl, deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2045,7 +2029,7 @@ export function buildApp(
       if (error) throw new Error(error);
     },
   });
-  const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const uiState = createPostgresUiStateStore(databaseUrl);
   const orchestratorDeps: OrchestratorDeps = {
     admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
@@ -2112,7 +2096,7 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: startup.skills,
+    skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -2127,7 +2111,7 @@ export function buildApp(
     serviceCreds,
     deliveries,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    approvalGrants: createPostgresApprovalGrantStore(databaseUrl),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2152,7 +2136,7 @@ export function buildApp(
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
   const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const idempotency = createPostgresIdempotencyStore(databaseUrl);
   const skillFetcher = createGitFetcher(
     keychain
       ? {
@@ -2289,7 +2273,7 @@ export function buildApp(
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequests: createPostgresContextRequestStore(databaseUrl),
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2299,7 +2283,7 @@ export function buildApp(
           ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
         }
       : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: createPostgresAmbientCursorStore(databaseUrl),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
@@ -2952,6 +2936,7 @@ export function buildApp(
     deploymentLayerStore,
     brokeredTools,
     startup: startup.begin,
+    deploymentLayerReady,
     deploymentLayerRefresh,
     sessions,
     runs,
@@ -3033,7 +3018,7 @@ export function buildApp(
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: createPostgresSessionShareStore(databaseUrl),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({

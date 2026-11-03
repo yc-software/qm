@@ -5,14 +5,14 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 const U1 = "U1";
@@ -44,7 +44,7 @@ function makeDeps() {
     listByParticipant: async (_p: string) => [],
     participantScopes: async (_p: string) => [],
   };
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = testSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };
@@ -214,37 +214,40 @@ test("owning a resource in a scope does NOT grant access to that scope's context
     assert.equal(await app.listScopeResources("U2", channelScope), null);
   }));
 
-test("historical participation grants neither context listing nor current scope resources", async () => {
-  const deps = makeDeps();
-  deps.sessions.listByParticipant = async (principalId: string) =>
-    principalId === "U2"
-      ? [
-          {
-            id: "old",
-            threadRef: "old",
-            type: "channel",
-            scopeId: channelScope,
-            channelName: "general",
-            createdAt: 1,
-            lastActivityAt: 2,
-            hasEntries: true,
-          },
-        ]
-      : [];
-  deps.sessions.participantScopes = async (principalId: string) =>
-    principalId === "U2" ? [{ scopeId: channelScope, channelName: "general", sessionCount: 1, lastActivityAt: 2 }] : [];
-  await deps.skills.create({
-    scopeId: channelScope,
-    manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
-    createdBy: U1,
-  });
-  const app = createApp(deps as unknown as AppDeps);
+test("historical participation grants neither context listing nor current scope resources", () =>
+  inTestTenant(async () => {
+    const deps = makeDeps();
+    deps.sessions.listByParticipant = async (principalId: string) =>
+      principalId === "U2"
+        ? [
+            {
+              id: "old",
+              threadRef: "old",
+              type: "channel",
+              scopeId: channelScope,
+              channelName: "general",
+              createdAt: 1,
+              lastActivityAt: 2,
+              hasEntries: true,
+            },
+          ]
+        : [];
+    deps.sessions.participantScopes = async (principalId: string) =>
+      principalId === "U2"
+        ? [{ scopeId: channelScope, channelName: "general", sessionCount: 1, lastActivityAt: 2 }]
+        : [];
+    await deps.skills.create({
+      scopeId: channelScope,
+      manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
+      createdBy: U1,
+    });
+    const app = createApp(deps as unknown as AppDeps);
 
-  assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
-  assert.equal(await app.listScopeResources("U2", channelScope), null);
-  assert.equal(await app.belongsToScope("U2", channelScope), false);
-  assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
-});
+    assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
+    assert.equal(await app.listScopeResources("U2", channelScope), null);
+    assert.equal(await app.belongsToScope("U2", channelScope), false);
+    assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
+  }));
 
 test("a context view never leaks another scope's files or crons", () =>
   inTestTenant(async () => {

@@ -3,7 +3,7 @@ import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { MAX_SCREEN_CHARS } from "../src/security/security-posture.ts";
-import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
+import { type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,6 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -28,7 +27,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
-import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
+import { type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
@@ -37,17 +36,13 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testAdvisoryLock,
-  testDeployBackings,
-  testMap,
-} from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
+import { testSkillBundleStore, testSkillStore } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -127,7 +122,7 @@ function buildOrchestrator(
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: testIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     workspace,
@@ -318,7 +313,7 @@ test("Open carries only the live actor's personal reads into a shared turn and a
 test("Open advertises the source and audits a carried skill read without granting it to the room", () =>
   inTestTenant(async () => {
     const personal = scopeId("personal", actor.id);
-    const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+    const skills = testSkillStore();
     const skill = await skills.create({
       scopeId: personal,
       createdBy: actor.id,
@@ -744,8 +739,8 @@ for (const location of [
 ] as const) {
   test(`Open screens carried skill ${location} before exposing its index or materialized content`, () =>
     inTestTenant(async () => {
-      const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-      const bundles = createSkillBundleStore({ backing: testMap() });
+      const skills = testSkillStore();
+      const bundles = testSkillBundleStore();
       const owner = scopeId("personal", actor.id);
       const room = scopeId("channel", "C1");
       let marker = "!security-risk";
@@ -859,7 +854,7 @@ for (const location of [
 test("carried skill and steer screens tell the model gateway which session they serve", (t) =>
   inTestTenant(async () => {
     const requests = recordRequests(t, '{"decision":"auto"}');
-    const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+    const skills = testSkillStore();
     const skill = await skills.create({
       scopeId: scopeId("personal", actor.id),
       createdBy: actor.id,
@@ -1004,7 +999,7 @@ test("a steer delivered by notification is screened in the context of the turn i
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", () =>
   inTestTenant(async () => {
-    const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+    const skills = testSkillStore();
     const owner = scopeId("personal", actor.id);
     const skill = await skills.create({
       scopeId: owner,

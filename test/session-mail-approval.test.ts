@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emitEntry } from "../src/agent/turn-support.ts";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -19,7 +18,6 @@ import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 import { createAgentTools } from "../src/agent/agent-tools.ts";
-import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -38,6 +36,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -67,7 +66,7 @@ async function scenario() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
-  const featureFlags = createFeatureFlagStore(testMap());
+  const featureFlags = testFeatureFlagStore();
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,
@@ -103,7 +102,7 @@ async function scenario() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: testIdentityService(),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,

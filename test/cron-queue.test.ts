@@ -5,13 +5,12 @@ import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore, createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { migrateTestDatabase, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { migrateTestDatabase, testDatabaseUrl } from "./support/test-database.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -19,7 +18,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue 
 
 const SCHEMA = "pgboss_cron_queue_test";
 const CRONS_TABLE = "cron_queue_test_crons";
-const IDEM_TABLE = "cron_queue_test_idempotency";
+const idempotencyUrl = testDatabaseUrl();
 
 before(async () => {
   if (!URL) return;
@@ -27,7 +26,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
+  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}`);
   await p.end();
 });
 
@@ -52,8 +51,8 @@ function instance(
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    idempotency: testIdempotencyStore({}, idempotencyUrl),
+    identity: testIdentityService(),
     run,
     jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
   });

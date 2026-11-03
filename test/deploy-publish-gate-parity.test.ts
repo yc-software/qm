@@ -7,14 +7,14 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { type DirectoryStore } from "../src/directory/directory-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -36,7 +36,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   );
   const acl: AclStore = tenantBound(createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const directory: DirectoryStore = tenantBound(createPostgresDirectoryStore(testDatabaseUrl()));
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = testIdentityService();
   await directory.replaceChannels(
     [
       { channelId: CH, name: "built", isPrivate: true },

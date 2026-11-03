@@ -127,14 +127,18 @@ test("offboarding previews, then disables, revokes, archives and retires what th
         verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
       }),
     );
-    const credential = await keychain!.save({ ownerId: "U1", service: "github", secret: "fixture-secret" });
-    const grant = await keychain!.createGrant({
-      credentialId: credential.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "ci",
-    });
+    const credential = await inTestTenant(() =>
+      keychain!.save({ ownerId: "U1", service: "github", secret: "fixture-secret" }),
+    );
+    const grant = await inTestTenant(() =>
+      keychain!.createGrant({
+        credentialId: credential.id,
+        ownerId: "U1",
+        audienceScopeId: "channel:C1",
+        mode: "standing",
+        purpose: "ci",
+      }),
+    );
     const manifest = (name: string) => ({ name, description: name, requiredCapabilities: [], body: "..." });
     const personalSkill = await inTestTenant(() =>
       skills.create({ scopeId: "personal:U1", manifest: manifest("mine"), createdBy: "U1" }),
@@ -164,7 +168,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
         `webhook:${webhook.id}:disable`,
       ].sort(),
     );
-    assert.equal(identity.classify("U1").type, "internal", "preview changes nothing");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "internal", "preview changes nothing");
     assert.equal((await inTestTenant(() => app.getCron(personalCron.id)))!.enabled, true);
     assert.deepEqual(s.archivedApps, []);
 
@@ -175,7 +179,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       [["app-broken", "runtime destroy failed"]],
       "one failure is reported and does not stop the rest",
     );
-    assert.equal(identity.classify("U1").type, "guest", "sign-in is off");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "guest", "sign-in is off");
     for (const id of [personalCron.id, channelCron.id]) {
       const cron = (await inTestTenant(() => app.getCron(id)))!;
       assert.equal(cron.enabled, false);
@@ -232,7 +236,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       headers: { ...testTenantHeaders(), ...ADMIN },
     });
     assert.equal(reactivated.status, 200);
-    assert.equal(identity.classify("U1").type, "internal");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "internal");
     assert.equal(
       (await inTestTenant(() => app.getCron(personalCron.id)))!.archived,
       true,
@@ -252,10 +256,10 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
   try {
     const denied = await s.offboard("U1", { apply: true }, { "x-admin-actor": "user-uma@default-org" });
     assert.equal(denied.status, 403);
-    assert.equal(s.built.identity.classify("U1").type, "internal");
+    assert.equal(inTestTenant(() => s.built.identity.classify("U1")).type, "internal");
     const self = await s.offboard("admin-alice", { apply: true });
     assert.equal(self.status, 400);
-    assert.equal(s.built.identity.classify("admin-alice").type, "internal");
+    assert.equal(inTestTenant(() => s.built.identity.classify("admin-alice")).type, "internal");
     assert.equal((await s.offboard("U1", { apply: "yes" })).status, 400);
     assert.equal((await s.offboard("U1", { dryRun: true })).status, 400);
     await inTestTenant(() => s.built.identity.deactivate("already-gone@example.com"));

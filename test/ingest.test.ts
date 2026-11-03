@@ -1,10 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { planIngest, importPack, type FetchedRepo } from "../src/skills/ingest.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
-import { createSkillPackStore } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+import { testSkillPackStore, testSkillStore } from "./support/typed-stores.ts";
 
 const md = (front: string, body = "# Body\ntext") => `---\n${front}\n---\n${body}`;
 
@@ -55,89 +54,92 @@ test("planIngest classifies eligibility with reasons and excludes by config", ()
   assert.equal(counts.malformed, 1);
 });
 
-test("importPack publishes eligible skills with provenance + assets; native publish untouched", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const org = scopeId("org", "acme");
-  const native = await store.create({
-    scopeId: org,
-    manifest: { name: "publish", description: "native", requiredCapabilities: [], body: "# native" },
-    createdBy: "system:skills-seed",
-  });
-  await store.review(native.id, "system:skills-reviewer", []);
-  await store.publish(native.id);
+test("importPack publishes eligible skills with provenance + assets; native publish untouched", () =>
+  inTestTenant(async () => {
+    const store = testSkillStore();
+    const org = scopeId("org", "acme");
+    const native = await store.create({
+      scopeId: org,
+      manifest: { name: "publish", description: "native", requiredCapabilities: [], body: "# native" },
+      createdBy: "system:skills-seed",
+    });
+    await store.review(native.id, "system:skills-reviewer", []);
+    await store.publish(native.id);
 
-  const packs = createSkillPackStore({ backing: testMap() });
-  const pack = await packs.create({
-    kind: "git",
-    url: "u",
-    ref: "abc1234",
-    syncMode: "pinned",
-    trustTier: "third-party",
-    config: { exclude: ["trusted/*"] },
-    targetScopeId: org,
-    subset: "all",
-    createdBy: "u1",
-  });
+    const packs = testSkillPackStore();
+    const pack = await packs.create({
+      kind: "git",
+      url: "u",
+      ref: "abc1234",
+      syncMode: "pinned",
+      trustTier: "third-party",
+      config: { exclude: ["trusted/*"] },
+      targetScopeId: org,
+      subset: "all",
+      createdBy: "u1",
+    });
 
-  const res = await importPack(repo(), store, { pack, selected: "all", nativeNames: new Set(["publish"]) });
-  assert.deepEqual(res.imported.sort(), ["both-skill", "company-directory", "no-scope", "with-asset"]);
+    const res = await importPack(repo(), store, { pack, selected: "all", nativeNames: new Set(["publish"]) });
+    assert.deepEqual(res.imported.sort(), ["both-skill", "company-directory", "no-scope", "with-asset"]);
 
-  const published = (await store.list()).filter((s) => s.status === "published");
-  const imported = published.find((s) => s.manifest.name === "with-asset")!;
-  assert.equal(imported.createdBy, `pack:${pack.id}`);
-  assert.deepEqual(imported.pack, { packId: pack.id, commit: "abc1234", upstreamName: "with-asset" });
-  assert.deepEqual(imported.manifest.files, [{ path: "scripts/foo.py", content: "print('hi')" }]);
+    const published = (await store.listAll()).filter((s) => s.status === "published");
+    const imported = published.find((s) => s.manifest.name === "with-asset")!;
+    assert.equal(imported.createdBy, `pack:${pack.id}`);
+    assert.deepEqual(imported.pack, { packId: pack.id, commit: "abc1234", upstreamName: "with-asset" });
+    assert.deepEqual(imported.manifest.files, [{ path: "scripts/foo.py", content: "print('hi')" }]);
 
-  const pub = published.find((s) => s.manifest.name === "publish" && s.createdBy === "system:skills-seed")!;
-  assert.equal(pub.manifest.description, "native");
-});
+    const pub = published.find((s) => s.manifest.name === "publish" && s.createdBy === "system:skills-seed")!;
+    assert.equal(pub.manifest.description, "native");
+  }));
 
-test("re-import is idempotent (all skipped on the second run)", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const packs = createSkillPackStore({ backing: testMap() });
-  const pack = await packs.create({
-    kind: "git",
-    url: "u",
-    ref: "abc1234",
-    syncMode: "pinned",
-    trustTier: "third-party",
-    config: { exclude: ["trusted/*"] },
-    targetScopeId: scopeId("org", "acme"),
-    subset: "all",
-    createdBy: "u1",
-  });
-  const nativeNames = new Set<string>();
-  const first = await importPack(repo(), store, { pack, selected: "all", nativeNames });
-  assert.ok(first.imported.includes("publish"));
-  const second = await importPack(repo(), store, { pack, selected: "all", nativeNames });
-  assert.deepEqual(second.imported, []);
-  assert.equal(second.skipped.length, first.imported.length);
-});
+test("re-import is idempotent (all skipped on the second run)", () =>
+  inTestTenant(async () => {
+    const store = testSkillStore();
+    const packs = testSkillPackStore();
+    const pack = await packs.create({
+      kind: "git",
+      url: "u",
+      ref: "abc1234",
+      syncMode: "pinned",
+      trustTier: "third-party",
+      config: { exclude: ["trusted/*"] },
+      targetScopeId: scopeId("org", "acme"),
+      subset: "all",
+      createdBy: "u1",
+    });
+    const nativeNames = new Set<string>();
+    const first = await importPack(repo(), store, { pack, selected: "all", nativeNames });
+    assert.ok(first.imported.includes("publish"));
+    const second = await importPack(repo(), store, { pack, selected: "all", nativeNames });
+    assert.deepEqual(second.imported, []);
+    assert.equal(second.skipped.length, first.imported.length);
+  }));
 
-test("a shared bundle cannot clobber a skill record in another scope", async () => {
-  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
-  const packs = createSkillPackStore({ backing: testMap() });
-  const pack = await packs.create({
-    kind: "git",
-    url: "u",
-    ref: "abc1234",
-    syncMode: "pinned",
-    trustTier: "third-party",
-    targetScopeId: scopeId("personal", "alice"),
-    subset: "all",
-    createdBy: "u1",
-  });
-  const claimedBundlePaths = new Map([["skills/existing/helpers/run.ts", "skill existing in org:acme"]]);
+test("a shared bundle cannot clobber a skill record in another scope", () =>
+  inTestTenant(async () => {
+    const store = testSkillStore();
+    const packs = testSkillPackStore();
+    const pack = await packs.create({
+      kind: "git",
+      url: "u",
+      ref: "abc1234",
+      syncMode: "pinned",
+      trustTier: "third-party",
+      targetScopeId: scopeId("personal", "alice"),
+      subset: "all",
+      createdBy: "u1",
+    });
+    const claimedBundlePaths = new Map([["skills/existing/helpers/run.ts", "skill existing in org:acme"]]);
 
-  await assert.rejects(
-    importPack(repo(), store, {
-      pack,
-      selected: "all",
-      nativeNames: new Set(),
-      claimedBundlePaths,
-      bundleFiles: [{ path: "skills/existing/helpers/run.ts", content: "clobber" }],
-    }),
-    /skills\/existing\/helpers\/run\.ts \(owned by skill existing in org:acme\)/,
-  );
-  assert.equal((await store.list()).length, 0);
-});
+    await assert.rejects(
+      importPack(repo(), store, {
+        pack,
+        selected: "all",
+        nativeNames: new Set(),
+        claimedBundlePaths,
+        bundleFiles: [{ path: "skills/existing/helpers/run.ts", content: "clobber" }],
+      }),
+      /skills\/existing\/helpers\/run\.ts \(owned by skill existing in org:acme\)/,
+    );
+    assert.equal((await store.listAll()).length, 0);
+  }));

@@ -13,8 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import type { Principal, TurnRequest } from "../src/types.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type Principal, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -315,14 +314,15 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.equal(replayed!.request.text, "still matters");
 });
 
-test("attributedSteerText prefixes foreign and ambient steers only", () => {
-  const eve = { id: "web-eve", displayName: "Eve Example" };
-  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
-  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
-  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
-  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
-  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
-});
+test("attributedSteerText prefixes foreign and ambient steers only", () =>
+  inTestTenant(() => {
+    const eve = { id: "web-eve", displayName: "Eve Example" };
+    assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
+    assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
+    assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
+    assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
+    assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
+  }));
 
 test("core route: steer without text is rejected 400", async () => {
   const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-notext", request: request("hi") }));
