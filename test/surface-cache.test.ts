@@ -9,183 +9,200 @@ import {
 } from "../src/surface-cache/ambient-judge.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
-test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
-  await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
-  const msgs = await cache.readMessages("C1");
-  assert.equal(msgs.length, 1, "the same ts re-delivered stays a single row");
-  assert.equal(msgs[0]!.text, "hello");
-});
+test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
+    await cache.ingest([{ container: "C1", ts: "100.1", authorId: "U1", text: "hello", createdAt: 1 }]);
+    const msgs = await cache.readMessages("C1");
+    assert.equal(msgs.length, 1, "the same ts re-delivered stays a single row");
+    assert.equal(msgs[0]!.text, "hello");
+  }));
 
-test("ingest is last-writer-wins on change-time — an edit overwrites, a stale re-send of the original does not", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "100.1", text: "original", createdAt: 1 }]);
-  await cache.ingest([{ container: "C1", ts: "100.1", text: "edited", editedAt: 5, createdAt: 1 }]);
-  let msgs = await cache.readMessages("C1");
-  assert.equal(msgs[0]!.text, "edited", "the edit (higher change-time) wins");
-  await cache.ingest([{ container: "C1", ts: "100.1", text: "original", createdAt: 1 }]);
-  msgs = await cache.readMessages("C1");
-  assert.equal(msgs[0]!.text, "edited", "a stale re-send of the original does not overwrite the newer edit");
-});
+test("ingest is last-writer-wins on change-time — an edit overwrites, a stale re-send of the original does not", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([{ container: "C1", ts: "100.1", text: "original", createdAt: 1 }]);
+    await cache.ingest([{ container: "C1", ts: "100.1", text: "edited", editedAt: 5, createdAt: 1 }]);
+    let msgs = await cache.readMessages("C1");
+    assert.equal(msgs[0]!.text, "edited", "the edit (higher change-time) wins");
+    await cache.ingest([{ container: "C1", ts: "100.1", text: "original", createdAt: 1 }]);
+    msgs = await cache.readMessages("C1");
+    assert.equal(msgs[0]!.text, "edited", "a stale re-send of the original does not overwrite the newer edit");
+  }));
 
-test("a delete always wins (even after an edit) and is monotonic — a re-delivered original can't un-delete", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "1.0", text: "original", createdAt: 1 }]);
-  await cache.ingest([{ container: "C1", ts: "1.0", text: "edited", editedAt: 9, createdAt: 1 }]);
-  await cache.ingest([{ container: "C1", ts: "1.0", deleted: true, createdAt: 1 }]);
-  let msgs = await cache.readMessages("C1", { includeDeleted: true });
-  assert.equal(
-    msgs[0]!.deleted,
-    true,
-    "the delete tombstoned the message despite the earlier edit's higher change-time",
-  );
-  await cache.ingest([{ container: "C1", ts: "1.0", text: "original", createdAt: 1 }]);
-  msgs = await cache.readMessages("C1", { includeDeleted: true });
-  assert.equal(msgs[0]!.deleted, true, "deletion is monotonic — a re-delivered original can't resurrect it");
-  assert.equal((await cache.readMessages("C1")).length, 0, "the tombstoned message is hidden from the default read");
-});
+test("a delete always wins (even after an edit) and is monotonic — a re-delivered original can't un-delete", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([{ container: "C1", ts: "1.0", text: "original", createdAt: 1 }]);
+    await cache.ingest([{ container: "C1", ts: "1.0", text: "edited", editedAt: 9, createdAt: 1 }]);
+    await cache.ingest([{ container: "C1", ts: "1.0", deleted: true, createdAt: 1 }]);
+    let msgs = await cache.readMessages("C1", { includeDeleted: true });
+    assert.equal(
+      msgs[0]!.deleted,
+      true,
+      "the delete tombstoned the message despite the earlier edit's higher change-time",
+    );
+    await cache.ingest([{ container: "C1", ts: "1.0", text: "original", createdAt: 1 }]);
+    msgs = await cache.readMessages("C1", { includeDeleted: true });
+    assert.equal(msgs[0]!.deleted, true, "deletion is monotonic — a re-delivered original can't resurrect it");
+    assert.equal((await cache.readMessages("C1")).length, 0, "the tombstoned message is hidden from the default read");
+  }));
 
-test("readMessages heals from the live fallback on a mirror miss", async () => {
-  let called = 0;
-  const liveFallback: LiveFallback = async (container) => {
-    called++;
-    return [{ container, ts: "9.9", authorId: "U2", text: "from the live surface", createdAt: 1 }];
-  };
-  const cache = createPostgresSurfaceCache(testDatabaseUrl(), { liveFallback });
-  const missed = await cache.readMessages("C-empty");
-  assert.equal(called, 1, "the live fallback was consulted on the miss");
-  assert.equal(missed.length, 1);
-  assert.equal(missed[0]!.text, "from the live surface");
-  await cache.ingest([{ container: "C-hit", ts: "1.0", text: "mirrored", createdAt: 1 }]);
-  const hit = await cache.readMessages("C-hit");
-  assert.equal(called, 1, "a mirror hit never calls the live surface");
-  assert.equal(hit[0]!.text, "mirrored");
-});
+test("readMessages heals from the live fallback on a mirror miss", () =>
+  inTestTenant(async () => {
+    let called = 0;
+    const liveFallback: LiveFallback = async (container) => {
+      called++;
+      return [{ container, ts: "9.9", authorId: "U2", text: "from the live surface", createdAt: 1 }];
+    };
+    const cache = createPostgresSurfaceCache(testDatabaseUrl(), { liveFallback });
+    const missed = await cache.readMessages("C-empty");
+    assert.equal(called, 1, "the live fallback was consulted on the miss");
+    assert.equal(missed.length, 1);
+    assert.equal(missed[0]!.text, "from the live surface");
+    await cache.ingest([{ container: "C-hit", ts: "1.0", text: "mirrored", createdAt: 1 }]);
+    const hit = await cache.readMessages("C-hit");
+    assert.equal(called, 1, "a mirror hit never calls the live surface");
+    assert.equal(hit[0]!.text, "mirrored");
+  }));
 
-test("search finds mirrored bodies and excludes deleted rows", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1.0", text: "the Q3 launch is next week", createdAt: 1 },
-    { container: "C1", ts: "2.0", text: "unrelated banter", createdAt: 2 },
-    { container: "C2", ts: "3.0", text: "another Q3 launch note", deleted: true, createdAt: 3 },
-  ]);
-  const hits = await cache.search("launch");
-  assert.equal(hits.length, 1, "the deleted row is excluded; only the live match returns");
-  assert.equal(hits[0]!.ts, "1.0");
-});
+test("search finds mirrored bodies and excludes deleted rows", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([
+      { container: "C1", ts: "1.0", text: "the Q3 launch is next week", createdAt: 1 },
+      { container: "C1", ts: "2.0", text: "unrelated banter", createdAt: 2 },
+      { container: "C2", ts: "3.0", text: "another Q3 launch note", deleted: true, createdAt: 3 },
+    ]);
+    const hits = await cache.search("launch");
+    assert.equal(hits.length, 1, "the deleted row is excluded; only the live match returns");
+    assert.equal(hits[0]!.ts, "1.0");
+  }));
 
-test("activeThreads projects sub-conversations with recent activity, newest first", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 1 },
-    { container: "C1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 2 },
-    { container: "C1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 3 },
-    { container: "C1", ts: "4.0", text: "top-level, no sub", createdAt: 4 },
-    { container: "C1", ts: "5.0", sub: "T-c", text: "gone", deleted: true, createdAt: 5 },
-  ]);
-  const threads = await cache.activeThreads({ container: "C1" });
-  assert.equal(threads.length, 2, "only the two live sub-conversations are threads (top-level and deleted aren't)");
-  assert.equal(threads[0]!.sub, "T-b", "newest activity first");
-  const a = threads.find((t) => t.sub === "T-a")!;
-  assert.equal(a.messageCount, 2);
-  const limited = await cache.activeThreads({ container: "C1", limit: 1 });
-  assert.equal(limited.length, 1);
-  assert.equal(limited[0]!.sub, "T-b");
-});
+test("activeThreads projects sub-conversations with recent activity, newest first", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([
+      { container: "C1", ts: "1.0", sub: "T-a", text: "a1", createdAt: 1 },
+      { container: "C1", ts: "2.0", sub: "T-a", text: "a2", createdAt: 2 },
+      { container: "C1", ts: "3.0", sub: "T-b", text: "b1", createdAt: 3 },
+      { container: "C1", ts: "4.0", text: "top-level, no sub", createdAt: 4 },
+      { container: "C1", ts: "5.0", sub: "T-c", text: "gone", deleted: true, createdAt: 5 },
+    ]);
+    const threads = await cache.activeThreads({ container: "C1" });
+    assert.equal(threads.length, 2, "only the two live sub-conversations are threads (top-level and deleted aren't)");
+    assert.equal(threads[0]!.sub, "T-b", "newest activity first");
+    const a = threads.find((t) => t.sub === "T-a")!;
+    assert.equal(a.messageCount, 2);
+    const limited = await cache.activeThreads({ container: "C1", limit: 1 });
+    assert.equal(limited.length, 1);
+    assert.equal(limited[0]!.sub, "T-b");
+  }));
 
-test("eager membership maintenance: ingest keeps a container's members fresh, ungated by bodies", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    {
-      container: "C1",
-      ts: "1.0",
-      text: "hi",
-      members: ["U1", "U2"],
-      containerName: "general",
-      kind: "channel",
-      createdAt: 1,
-    },
-  ]);
-  assert.deepEqual((await cache.members("C1")).sort(), ["U1", "U2"]);
-  assert.equal(await cache.isMember("C1", "U1"), true);
-  assert.equal(await cache.isMember("C1", "U9"), false);
-  await cache.ingest([{ container: "C1", ts: "2.0", text: "more", createdAt: 2 }]);
-  assert.deepEqual((await cache.members("C1")).sort(), ["U1", "U2"], "a body-only event leaves membership intact");
-  const st = await cache.containerState("C1");
-  assert.equal(st?.name, "general");
-  assert.equal(st?.kind, "channel", "the container kind round-trips and a body-only event leaves it intact");
-  assert.equal(st?.lastTs, "2.0", "the coverage watermark advances to the latest ts");
-  assert.equal((await cache.listContainers()).find((c) => c.container === "C1")?.kind, "channel");
-});
+test("eager membership maintenance: ingest keeps a container's members fresh, ungated by bodies", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([
+      {
+        container: "C1",
+        ts: "1.0",
+        text: "hi",
+        members: ["U1", "U2"],
+        containerName: "general",
+        kind: "channel",
+        createdAt: 1,
+      },
+    ]);
+    assert.deepEqual((await cache.members("C1")).sort(), ["U1", "U2"]);
+    assert.equal(await cache.isMember("C1", "U1"), true);
+    assert.equal(await cache.isMember("C1", "U9"), false);
+    await cache.ingest([{ container: "C1", ts: "2.0", text: "more", createdAt: 2 }]);
+    assert.deepEqual((await cache.members("C1")).sort(), ["U1", "U2"], "a body-only event leaves membership intact");
+    const st = await cache.containerState("C1");
+    assert.equal(st?.name, "general");
+    assert.equal(st?.kind, "channel", "the container kind round-trips and a body-only event leaves it intact");
+    assert.equal(st?.lastTs, "2.0", "the coverage watermark advances to the latest ts");
+    assert.equal((await cache.listContainers()).find((c) => c.container === "C1")?.kind, "channel");
+  }));
 
-test("oldest_ts is the numeric floor of ingested ts — compared numerically, not lexically", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "1000.1", text: "newest", createdAt: 3 }]);
-  await cache.ingest([{ container: "C1", ts: "999.1", text: "older", createdAt: 2 }]);
-  await cache.ingest([{ container: "C1", ts: "1500.1", text: "even newer", createdAt: 4 }]);
-  const st = await cache.containerState("C1");
-  assert.equal(st?.oldestTs, "999.1", "the coverage floor is the numerically-smallest ts (not the lexically-smallest)");
-});
+test("oldest_ts is the numeric floor of ingested ts — compared numerically, not lexically", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([{ container: "C1", ts: "1000.1", text: "newest", createdAt: 3 }]);
+    await cache.ingest([{ container: "C1", ts: "999.1", text: "older", createdAt: 2 }]);
+    await cache.ingest([{ container: "C1", ts: "1500.1", text: "even newer", createdAt: 4 }]);
+    const st = await cache.containerState("C1");
+    assert.equal(
+      st?.oldestTs,
+      "999.1",
+      "the coverage floor is the numerically-smallest ts (not the lexically-smallest)",
+    );
+  }));
 
-test("channel policy store: set + get + list standing orders", async () => {
-  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  assert.equal(await store.get("C1"), null);
-  await store.set("C1", "flag anything about the Q3 launch", { setBy: "U-admin" });
-  const p = await store.get("C1");
-  assert.equal(p?.orders, "flag anything about the Q3 launch");
-  assert.equal(p?.setBy, "U-admin");
-  assert.equal((await store.list()).length, 1);
-});
+test("channel policy store: set + get + list standing orders", () =>
+  inTestTenant(async () => {
+    const store = createPostgresChannelPolicyStore(testDatabaseUrl());
+    assert.equal(await store.get("C1"), null);
+    await store.set("C1", "flag anything about the Q3 launch", { setBy: "U-admin" });
+    const p = await store.get("C1");
+    assert.equal(p?.orders, "flag anything about the Q3 launch");
+    assert.equal(p?.setBy, "U-admin");
+    assert.equal((await store.list()).length, 1);
+  }));
 
-test("channel policy store: every set appends a provenance revision to history", async () => {
-  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  await store.set("C1", "flag the launch", { setBy: "U-alice", sessionId: "sess-1" });
-  await store.set("C1", "flag the launch and incidents", { setBy: "U-bob", sessionId: "sess-2" });
-  await store.set("C-other", "unrelated", { setBy: "U-carol" });
-  const h = await store.history("C1");
-  assert.equal(h.length, 2, "one revision per set, other containers excluded");
-  assert.equal(h[0]?.orders, "flag the launch and incidents");
-  assert.equal(h[0]?.setBy, "U-bob");
-  assert.equal(h[0]?.sessionId, "sess-2");
-  assert.equal(h[1]?.setBy, "U-alice");
-  assert.equal(h[1]?.sessionId, "sess-1");
-});
+test("channel policy store: every set appends a provenance revision to history", () =>
+  inTestTenant(async () => {
+    const store = createPostgresChannelPolicyStore(testDatabaseUrl());
+    await store.set("C1", "flag the launch", { setBy: "U-alice", sessionId: "sess-1" });
+    await store.set("C1", "flag the launch and incidents", { setBy: "U-bob", sessionId: "sess-2" });
+    await store.set("C-other", "unrelated", { setBy: "U-carol" });
+    const h = await store.history("C1");
+    assert.equal(h.length, 2, "one revision per set, other containers excluded");
+    assert.equal(h[0]?.orders, "flag the launch and incidents");
+    assert.equal(h[0]?.setBy, "U-bob");
+    assert.equal(h[0]?.sessionId, "sess-2");
+    assert.equal(h[1]?.setBy, "U-alice");
+    assert.equal(h[1]?.sessionId, "sess-1");
+  }));
 
-test("channel policy store: bot ledger round-trips and an omitted `bots` leaves it unchanged", async () => {
-  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  const ledger = { newsbot: { mode: "rollup" as const, rollupHours: 6 }, deploybot: { mode: "action" as const } };
-  await store.set("C1", "watch the launch", { setBy: "U-admin", bots: ledger });
-  const p = await store.get("C1");
-  assert.deepEqual(p?.bots, ledger, "the bot ledger persists verbatim");
-  await store.set("C1", "watch the launch AND the incident channel", { setBy: "U-admin" });
-  const p2 = await store.get("C1");
-  assert.equal(p2?.orders, "watch the launch AND the incident channel");
-  assert.deepEqual(p2?.bots, ledger, "an omitted bots arg leaves the ledger unchanged");
-  await store.set("C2", "hi");
-  assert.deepEqual((await store.get("C2"))?.bots, {});
-});
+test("channel policy store: bot ledger round-trips and an omitted `bots` leaves it unchanged", () =>
+  inTestTenant(async () => {
+    const store = createPostgresChannelPolicyStore(testDatabaseUrl());
+    const ledger = { newsbot: { mode: "rollup" as const, rollupHours: 6 }, deploybot: { mode: "action" as const } };
+    await store.set("C1", "watch the launch", { setBy: "U-admin", bots: ledger });
+    const p = await store.get("C1");
+    assert.deepEqual(p?.bots, ledger, "the bot ledger persists verbatim");
+    await store.set("C1", "watch the launch AND the incident channel", { setBy: "U-admin" });
+    const p2 = await store.get("C1");
+    assert.equal(p2?.orders, "watch the launch AND the incident channel");
+    assert.deepEqual(p2?.bots, ledger, "an omitted bots arg leaves the ledger unchanged");
+    await store.set("C2", "hi");
+    assert.deepEqual((await store.get("C2"))?.bots, {});
+  }));
 
-test("channel policy store: ambientEnabled is tri-state — unset by default, round-trips, omitted leaves it, null clears it", async () => {
-  const store = createPostgresChannelPolicyStore(testDatabaseUrl());
-  await store.set("C1", "watch the launch", { setBy: "U-admin" });
-  assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "unset by default — the size rule decides");
-  await store.set("C1", "watch the launch", { setBy: "U-admin", ambientEnabled: false });
-  assert.equal((await store.get("C1"))?.ambientEnabled, false, "off persists");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin" });
-  assert.equal((await store.get("C1"))?.ambientEnabled, false, "an omitted arg leaves the override unchanged");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: true });
-  assert.equal((await store.get("C1"))?.ambientEnabled, true, "explicit on persists");
-  await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: null });
-  assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "null clears back to the default rule");
-  const h = await store.history("C1");
-  assert.deepEqual(
-    h.map((r) => r.ambientEnabled),
-    [undefined, false, false, true, undefined].reverse(),
-    "every revision records the override, so a flip is auditable",
-  );
-});
+test("channel policy store: ambientEnabled is tri-state — unset by default, round-trips, omitted leaves it, null clears it", () =>
+  inTestTenant(async () => {
+    const store = createPostgresChannelPolicyStore(testDatabaseUrl());
+    await store.set("C1", "watch the launch", { setBy: "U-admin" });
+    assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "unset by default — the size rule decides");
+    await store.set("C1", "watch the launch", { setBy: "U-admin", ambientEnabled: false });
+    assert.equal((await store.get("C1"))?.ambientEnabled, false, "off persists");
+    await store.set("C1", "watch the launch harder", { setBy: "U-admin" });
+    assert.equal((await store.get("C1"))?.ambientEnabled, false, "an omitted arg leaves the override unchanged");
+    await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: true });
+    assert.equal((await store.get("C1"))?.ambientEnabled, true, "explicit on persists");
+    await store.set("C1", "watch the launch harder", { setBy: "U-admin", ambientEnabled: null });
+    assert.equal((await store.get("C1"))?.ambientEnabled, undefined, "null clears back to the default rule");
+    const h = await store.history("C1");
+    assert.deepEqual(
+      h.map((r) => r.ambientEnabled),
+      [undefined, false, false, true, undefined].reverse(),
+      "every revision records the override, so a flip is auditable",
+    );
+  }));
 
 test("parseAmbientDecision tolerates a JSON object, prose-wrapped JSON, and garbage", () => {
   assert.deepEqual(parseAmbientDecision('{"act": true, "reason": "matches"}'), { act: true, reason: "matches" });
@@ -283,207 +300,218 @@ test("ambient judge: the agent's own posts are never shown to the judge as new m
   assert.equal(sawText, "", "the judge isn't even called when there's nothing meaningful to show");
 });
 
-test("mentions round-trip through ingest → readMessages (memory)", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", mentions: { U1: "jordan" }, createdAt: 1 }]);
-  const msgs = await cache.readMessages("C1");
-  assert.deepEqual(msgs[0]!.mentions, { U1: "jordan" }, "the mentions map survives the round-trip");
-  await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", editedAt: 5, createdAt: 1 }]);
-  const after = await cache.readMessages("C1");
-  assert.deepEqual(after[0]!.mentions, { U1: "jordan" }, "a mention-less edit keeps the prior mentions");
-});
-
-test("mentionsSelf round-trips through ingest → readMessages (memory)", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1.0", text: "@bot help", mentionsSelf: true, createdAt: 1 },
-    { container: "C1", ts: "2.0", text: "just chatting", createdAt: 2 },
-  ]);
-  const msgs = await cache.readMessages("C1");
-  assert.equal(msgs.find((m) => m.ts === "1.0")!.mentionsSelf, true, "a self-mention survives the round-trip");
-  assert.equal(msgs.find((m) => m.ts === "2.0")!.mentionsSelf, undefined, "a non-mention carries no flag");
-  await cache.ingest([{ container: "C1", ts: "1.0", text: "@bot help", editedAt: 5, createdAt: 1 }]);
-  const after = await cache.readMessages("C1");
-  assert.equal(after.find((m) => m.ts === "1.0")!.mentionsSelf, true, "an edit keeps the prior self-mention flag");
-});
-
-test("revisedSince returns messages edited or deleted after the watermark, stamping deletions once", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "Cr", ts: "1.0", text: "a", createdAt: 1 },
-    { container: "Cr", ts: "2.0", text: "b", createdAt: 2 },
-    { container: "Cr", ts: "3.0", text: "c", createdAt: 3 },
-  ]);
-  const before = Date.now();
-  await cache.ingest([{ container: "Cr", ts: "1.0", text: "a2", editedAt: before + 60_000 }]);
-  await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
-  const revised = (await cache.revisedSince("Cr", before - 1)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
-  assert.deepEqual(
-    revised.map((m) => [m.ts, m.text, m.deleted ?? false]),
-    [
-      ["1.0", "a2", false],
-      ["2.0", "b", true],
-    ],
-  );
-  const firstDeletedAt = revised[1]!.deletedAt;
-  assert.ok(firstDeletedAt && firstDeletedAt >= before);
-  await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
-  assert.equal(
-    (await cache.revisedSince("Cr", 0)).find((m) => m.ts === "2.0")!.deletedAt,
-    firstDeletedAt,
-    "a repeat delete keeps the first stamp",
-  );
-  assert.equal((await cache.revisedSince("Cr", before + 60_000)).length, 1, "the watermark itself is included");
-  assert.deepEqual(await cache.revisedSince("Cr", before + 60_001), []);
-  assert.deepEqual(await cache.revisedSince("Cother", 0), []);
-  const byTs = (rows: { ts: string }[]) => rows.map((m) => m.ts).sort();
-  assert.deepEqual(
-    byTs(await cache.revisedSince("Cr", 0)),
-    byTs(await cache.revisedSince("Cr", 1)),
-    "never-revised rows never match",
-  );
-});
-
-test("revisedSince includes the bot's own edits and can be scoped to one thread", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "Ct", ts: "1.0", text: "root", createdAt: 1 },
-    { container: "Ct", ts: "1.5", sub: "1.0", text: "reply", createdAt: 2 },
-    { container: "Ct", ts: "2.0", text: "other root", createdAt: 3 },
-    { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply", self: true, createdAt: 4 },
-  ]);
-  await cache.ingest([
-    { container: "Ct", ts: "1.0", text: "root edited", editedAt: 10 },
-    { container: "Ct", ts: "1.5", sub: "1.0", text: "reply edited", editedAt: 11 },
-    { container: "Ct", ts: "2.0", text: "other root edited", editedAt: 12 },
-    { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply edited", self: true, editedAt: 13 },
-  ]);
-  assert.deepEqual(
-    (await cache.revisedSince("Ct", 0)).map((m) => m.ts),
-    ["2.5", "2.0", "1.5", "1.0"],
-  );
-  assert.deepEqual(
-    (await cache.revisedSince("Ct", 0, { thread: "1.0" })).map((m) => m.ts),
-    ["1.5", "1.0"],
-  );
-  assert.deepEqual(
-    (await cache.revisedSince("Ct", 0, { thread: "2.0" })).map((m) => m.ts),
-    ["2.5", "2.0"],
-  );
-});
-
-test("cache revisions preserve attachments and parent against stale handled events", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  try {
-    const base = { container: "CSNAPSHOT", ts: "2.0" };
-    await cache.ingest([{ ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] }]);
+test("mentions round-trip through ingest → readMessages (memory)", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
     await cache.ingest([
-      { ...base, sub: "wrong", text: "stale", editedAt: 10, handled: true, files: [{ fileId: "F2" }] },
+      { container: "C1", ts: "100.9", text: "hi @jordan", mentions: { U1: "jordan" }, createdAt: 1 },
     ]);
-    let [message] = await cache.readMessages(base.container, { at: base.ts });
-    assert.equal(message?.text, "latest");
-    assert.equal(message?.sub, "1.0");
-    assert.equal(message?.handled, true);
-    assert.deepEqual(
-      message?.files?.map((f) => f.fileId),
-      ["F1"],
-    );
-    await cache.ingest([{ ...base, sub: null, text: "root corrected", editedAt: 30 }]);
-    [message] = await cache.readMessages(base.container, { at: base.ts });
-    assert.equal(message?.sub, undefined);
-    assert.deepEqual(
-      message?.files?.map((f) => f.fileId),
-      ["F1"],
-    );
-    await cache.ingest([{ ...base, text: "replacement", editedAt: 40, files: [{ fileId: "F2", name: "renamed" }] }]);
-    [message] = await cache.readMessages(base.container, { at: base.ts });
-    assert.equal(message?.sub, undefined);
-    assert.deepEqual(
-      message?.files?.map((f) => [f.fileId, f.name]),
-      [["F2", "renamed"]],
-    );
-    await cache.ingest([{ ...base, text: "empty", editedAt: 50, files: [] }]);
-    await cache.ingest([{ ...base, text: "stale", editedAt: 40, files: [{ fileId: "F2" }] }]);
-    [message] = await cache.readMessages(base.container, { at: base.ts });
-    assert.equal(message?.text, "empty");
-    assert.equal(message?.files?.length ?? 0, 0);
-    await cache.ingest([{ ...base, deleted: true }]);
-    await cache.ingest([{ ...base, sub: "wrong", text: "revive", editedAt: 60, files: [{ fileId: "F3" }] }]);
-    [message] = await cache.readMessages(base.container, { at: base.ts, includeDeleted: true });
-    assert.equal(message?.deleted, true);
-    assert.equal(message?.text, "empty");
-    assert.equal(message?.sub, undefined);
-    assert.equal(message?.files?.length ?? 0, 0);
-  } finally {
-    await cache.close();
-  }
-});
+    const msgs = await cache.readMessages("C1");
+    assert.deepEqual(msgs[0]!.mentions, { U1: "jordan" }, "the mentions map survives the round-trip");
+    await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", editedAt: 5, createdAt: 1 }]);
+    const after = await cache.readMessages("C1");
+    assert.deepEqual(after[0]!.mentions, { U1: "jordan" }, "a mention-less edit keeps the prior mentions");
+  }));
 
-test("cache selects exact timestamps and oldest pages with live reply counts", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  try {
-    const container = "CSELECT";
+test("mentionsSelf round-trips through ingest → readMessages (memory)", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
     await cache.ingest([
-      { container, ts: "1.0", sub: null, text: "first" },
-      { container, ts: "2.0", sub: "1.0", text: "reply" },
-      { container, ts: "3.0", sub: "1.0", text: "deleted reply", deleted: true },
-      { container, ts: "4.0", sub: null, text: "second root" },
-      { container: "OTHER", ts: "5.0", sub: "1.0", text: "other container" },
+      { container: "C1", ts: "1.0", text: "@bot help", mentionsSelf: true, createdAt: 1 },
+      { container: "C1", ts: "2.0", text: "just chatting", createdAt: 2 },
     ]);
-    assert.deepEqual(
-      (await cache.readMessages(container, { timestamps: ["4.0", "1.0", "missing"] })).map((m) => m.ts),
-      ["1.0", "4.0"],
-    );
-    assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
-    await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
-    const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
-    assert.equal(oldest?.ts, "1.0");
-    assert.equal(oldest?.replyCount, 1);
-    assert.deepEqual(
-      (await cache.readMessages(container, { sub: null, limit: 1 })).map((m) => m.ts),
-      ["4.0"],
-    );
-    assert.deepEqual(
-      (await cache.readMessages(container, { sub: "1.0", oldestFirst: true })).map((m) => m.ts),
-      ["2.0"],
-    );
-    await cache.ingest([{ container, ts: "2.0", sub: null, text: "corrected" }]);
-    assert.equal((await cache.readMessages(container, { at: "1.0" }))[0]?.replyCount, 0);
-  } finally {
-    await cache.close();
-  }
-});
+    const msgs = await cache.readMessages("C1");
+    assert.equal(msgs.find((m) => m.ts === "1.0")!.mentionsSelf, true, "a self-mention survives the round-trip");
+    assert.equal(msgs.find((m) => m.ts === "2.0")!.mentionsSelf, undefined, "a non-mention carries no flag");
+    await cache.ingest([{ container: "C1", ts: "1.0", text: "@bot help", editedAt: 5, createdAt: 1 }]);
+    const after = await cache.readMessages("C1");
+    assert.equal(after.find((m) => m.ts === "1.0")!.mentionsSelf, true, "an edit keeps the prior self-mention flag");
+  }));
 
-test("channel history includes broadcasts while exact roots exclude them", async () => {
-  const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  try {
-    const container = "CBROADCAST";
+test("revisedSince returns messages edited or deleted after the watermark, stamping deletions once", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
     await cache.ingest([
-      { container, ts: "1.0", sub: null, text: "root" },
-      { container, ts: "2.0", sub: "1.0", text: "ordinary reply" },
-      { container, ts: "3.0", sub: "1.0", text: "broadcast", broadcast: true, editedAt: 20 },
+      { container: "Cr", ts: "1.0", text: "a", createdAt: 1 },
+      { container: "Cr", ts: "2.0", text: "b", createdAt: 2 },
+      { container: "Cr", ts: "3.0", text: "c", createdAt: 3 },
+    ]);
+    const before = Date.now();
+    await cache.ingest([{ container: "Cr", ts: "1.0", text: "a2", editedAt: before + 60_000 }]);
+    await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
+    const revised = (await cache.revisedSince("Cr", before - 1)).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    assert.deepEqual(
+      revised.map((m) => [m.ts, m.text, m.deleted ?? false]),
+      [
+        ["1.0", "a2", false],
+        ["2.0", "b", true],
+      ],
+    );
+    const firstDeletedAt = revised[1]!.deletedAt;
+    assert.ok(firstDeletedAt && firstDeletedAt >= before);
+    await cache.ingest([{ container: "Cr", ts: "2.0", deleted: true }]);
+    assert.equal(
+      (await cache.revisedSince("Cr", 0)).find((m) => m.ts === "2.0")!.deletedAt,
+      firstDeletedAt,
+      "a repeat delete keeps the first stamp",
+    );
+    assert.equal((await cache.revisedSince("Cr", before + 60_000)).length, 1, "the watermark itself is included");
+    assert.deepEqual(await cache.revisedSince("Cr", before + 60_001), []);
+    assert.deepEqual(await cache.revisedSince("Cother", 0), []);
+    const byTs = (rows: { ts: string }[]) => rows.map((m) => m.ts).sort();
+    assert.deepEqual(
+      byTs(await cache.revisedSince("Cr", 0)),
+      byTs(await cache.revisedSince("Cr", 1)),
+      "never-revised rows never match",
+    );
+  }));
+
+test("revisedSince includes the bot's own edits and can be scoped to one thread", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    await cache.ingest([
+      { container: "Ct", ts: "1.0", text: "root", createdAt: 1 },
+      { container: "Ct", ts: "1.5", sub: "1.0", text: "reply", createdAt: 2 },
+      { container: "Ct", ts: "2.0", text: "other root", createdAt: 3 },
+      { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply", self: true, createdAt: 4 },
     ]);
     await cache.ingest([
-      { container, ts: "3.0", sub: "1.0", text: "stale", broadcast: false, editedAt: 10, handled: true },
-    ]);
-    await cache.ingest([{ container, ts: "3.0", sub: "1.0", text: "edit without subtype", editedAt: 30 }]);
-    assert.deepEqual(
-      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
-      ["1.0", "3.0"],
-    );
-    assert.deepEqual(
-      (await cache.readMessages(container, { sub: null })).map((m) => m.ts),
-      ["1.0"],
-    );
-    assert.equal((await cache.readMessages(container, { at: "3.0" }))[0]?.broadcast, true);
-    await cache.ingest([
-      { container, ts: "3.0", sub: "1.0", text: "corrected subtype", broadcast: false, editedAt: 40 },
+      { container: "Ct", ts: "1.0", text: "root edited", editedAt: 10 },
+      { container: "Ct", ts: "1.5", sub: "1.0", text: "reply edited", editedAt: 11 },
+      { container: "Ct", ts: "2.0", text: "other root edited", editedAt: 12 },
+      { container: "Ct", ts: "2.5", sub: "2.0", text: "bot reply edited", self: true, editedAt: 13 },
     ]);
     assert.deepEqual(
-      (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
-      ["1.0"],
+      (await cache.revisedSince("Ct", 0)).map((m) => m.ts),
+      ["2.5", "2.0", "1.5", "1.0"],
     );
-  } finally {
-    await cache.close();
-  }
-});
+    assert.deepEqual(
+      (await cache.revisedSince("Ct", 0, { thread: "1.0" })).map((m) => m.ts),
+      ["1.5", "1.0"],
+    );
+    assert.deepEqual(
+      (await cache.revisedSince("Ct", 0, { thread: "2.0" })).map((m) => m.ts),
+      ["2.5", "2.0"],
+    );
+  }));
+
+test("cache revisions preserve attachments and parent against stale handled events", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    try {
+      const base = { container: "CSNAPSHOT", ts: "2.0" };
+      await cache.ingest([
+        { ...base, sub: "1.0", text: "latest", editedAt: 20, files: [{ fileId: "F1", name: "one" }] },
+      ]);
+      await cache.ingest([
+        { ...base, sub: "wrong", text: "stale", editedAt: 10, handled: true, files: [{ fileId: "F2" }] },
+      ]);
+      let [message] = await cache.readMessages(base.container, { at: base.ts });
+      assert.equal(message?.text, "latest");
+      assert.equal(message?.sub, "1.0");
+      assert.equal(message?.handled, true);
+      assert.deepEqual(
+        message?.files?.map((f) => f.fileId),
+        ["F1"],
+      );
+      await cache.ingest([{ ...base, sub: null, text: "root corrected", editedAt: 30 }]);
+      [message] = await cache.readMessages(base.container, { at: base.ts });
+      assert.equal(message?.sub, undefined);
+      assert.deepEqual(
+        message?.files?.map((f) => f.fileId),
+        ["F1"],
+      );
+      await cache.ingest([{ ...base, text: "replacement", editedAt: 40, files: [{ fileId: "F2", name: "renamed" }] }]);
+      [message] = await cache.readMessages(base.container, { at: base.ts });
+      assert.equal(message?.sub, undefined);
+      assert.deepEqual(
+        message?.files?.map((f) => [f.fileId, f.name]),
+        [["F2", "renamed"]],
+      );
+      await cache.ingest([{ ...base, text: "empty", editedAt: 50, files: [] }]);
+      await cache.ingest([{ ...base, text: "stale", editedAt: 40, files: [{ fileId: "F2" }] }]);
+      [message] = await cache.readMessages(base.container, { at: base.ts });
+      assert.equal(message?.text, "empty");
+      assert.equal(message?.files?.length ?? 0, 0);
+      await cache.ingest([{ ...base, deleted: true }]);
+      await cache.ingest([{ ...base, sub: "wrong", text: "revive", editedAt: 60, files: [{ fileId: "F3" }] }]);
+      [message] = await cache.readMessages(base.container, { at: base.ts, includeDeleted: true });
+      assert.equal(message?.deleted, true);
+      assert.equal(message?.text, "empty");
+      assert.equal(message?.sub, undefined);
+      assert.equal(message?.files?.length ?? 0, 0);
+    } finally {
+      await cache.close();
+    }
+  }));
+
+test("cache selects exact timestamps and oldest pages with live reply counts", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    try {
+      const container = "CSELECT";
+      await cache.ingest([
+        { container, ts: "1.0", sub: null, text: "first" },
+        { container, ts: "2.0", sub: "1.0", text: "reply" },
+        { container, ts: "3.0", sub: "1.0", text: "deleted reply", deleted: true },
+        { container, ts: "4.0", sub: null, text: "second root" },
+        { container: "OTHER", ts: "5.0", sub: "1.0", text: "other container" },
+      ]);
+      assert.deepEqual(
+        (await cache.readMessages(container, { timestamps: ["4.0", "1.0", "missing"] })).map((m) => m.ts),
+        ["1.0", "4.0"],
+      );
+      assert.deepEqual(await cache.readMessages(container, { timestamps: [] }), []);
+      await assert.rejects(cache.readMessages(container, { timestamps: Array(501).fill("1.0") }), /500/);
+      const [oldest] = await cache.readMessages(container, { sub: null, oldestFirst: true, limit: 1 });
+      assert.equal(oldest?.ts, "1.0");
+      assert.equal(oldest?.replyCount, 1);
+      assert.deepEqual(
+        (await cache.readMessages(container, { sub: null, limit: 1 })).map((m) => m.ts),
+        ["4.0"],
+      );
+      assert.deepEqual(
+        (await cache.readMessages(container, { sub: "1.0", oldestFirst: true })).map((m) => m.ts),
+        ["2.0"],
+      );
+      await cache.ingest([{ container, ts: "2.0", sub: null, text: "corrected" }]);
+      assert.equal((await cache.readMessages(container, { at: "1.0" }))[0]?.replyCount, 0);
+    } finally {
+      await cache.close();
+    }
+  }));
+
+test("channel history includes broadcasts while exact roots exclude them", () =>
+  inTestTenant(async () => {
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
+    try {
+      const container = "CBROADCAST";
+      await cache.ingest([
+        { container, ts: "1.0", sub: null, text: "root" },
+        { container, ts: "2.0", sub: "1.0", text: "ordinary reply" },
+        { container, ts: "3.0", sub: "1.0", text: "broadcast", broadcast: true, editedAt: 20 },
+      ]);
+      await cache.ingest([
+        { container, ts: "3.0", sub: "1.0", text: "stale", broadcast: false, editedAt: 10, handled: true },
+      ]);
+      await cache.ingest([{ container, ts: "3.0", sub: "1.0", text: "edit without subtype", editedAt: 30 }]);
+      assert.deepEqual(
+        (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+        ["1.0", "3.0"],
+      );
+      assert.deepEqual(
+        (await cache.readMessages(container, { sub: null })).map((m) => m.ts),
+        ["1.0"],
+      );
+      assert.equal((await cache.readMessages(container, { at: "3.0" }))[0]?.broadcast, true);
+      await cache.ingest([
+        { container, ts: "3.0", sub: "1.0", text: "corrected subtype", broadcast: false, editedAt: 40 },
+      ]);
+      assert.deepEqual(
+        (await cache.readMessages(container, { channelHistory: true })).map((m) => m.ts),
+        ["1.0"],
+      );
+    } finally {
+      await cache.close();
+    }
+  }));
