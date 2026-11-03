@@ -10,7 +10,11 @@ import {
 } from "../src/slack/slack-tables.ts";
 import { adoptEnvironmentSlack } from "../src/slack/environment-install.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
-import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import type { SlackPluginConfig } from "../src/slack/config.ts";
+import type { SlackAccountRuntime } from "../src/slack/index.ts";
+import { createSlackTenants } from "../src/slack/tenant-runtimes.ts";
 import { skipWithoutPg, withSlackDb } from "./support/slack-db.ts";
 
 const skip = skipWithoutPg;
@@ -357,5 +361,67 @@ test(
         await admin.query(`INSERT INTO qm_tenant(id) VALUES ($1)`, [INSTANCE]);
       },
     );
+  },
+);
+
+test(
+  "an unbound startup reconcile claims every tenant's managed installation and starts each under its own tenant",
+  { skip },
+  async () => {
+    await withSlackDb(async ({ store, tenant, otherTenant }) => {
+      const installs = createSlackInstallationStore(store.installation, "key");
+      const install = (owner: string, team: string) =>
+        withTenant(owner, () =>
+          installs.setManaged({
+            botToken: `xoxb-${team}`,
+            appId: "AMANAGED",
+            installId: `install-${team}`,
+            installedAt: 1,
+            teamId: team,
+          }),
+        );
+      assert.equal(await install(tenant, "TONE"), true);
+      assert.equal(await install(otherTenant, "TTWO"), true);
+      const started: Array<[string, string, string | undefined]> = [];
+      const core = {
+        onDeliveryEnqueued: () => () => {},
+        onContextRequest: () => () => {},
+        onScopeModelChanged: () => {},
+        onChannelHeaderPinChanged: () => {},
+      } as unknown as SlackCoreClient;
+      const tenants = createSlackTenants({
+        core,
+        claims: {
+          installedTenants: async () => (await installedSlackTenants()).map((row) => row.tenant_id),
+          dueEnvelopes: async () => [],
+          statusAccounts: async () => [],
+          ackTenants: async () => [],
+        },
+        async load() {
+          const stored = await installs.get();
+          return stored
+            ? { version: stored.version, accounts: [{ botToken: stored.botToken } as SlackPluginConfig] }
+            : null;
+        },
+        start: async (config) => {
+          started.push([currentTenant(), config.botToken, (await installs.get())?.installId]);
+          return { coreSingleton: true, stop: async () => {} } as unknown as SlackAccountRuntime;
+        },
+        intervalMs: 60_000,
+        sweepMs: 60_000,
+      });
+      await withoutTenant(async () => {
+        tenants.start();
+        await tenants.reconcile();
+      });
+      assert.deepEqual(
+        started.sort((a, b) => a[1].localeCompare(b[1])),
+        [
+          [tenant, "xoxb-TONE", "install-TONE"],
+          [otherTenant, "xoxb-TTWO", "install-TTWO"],
+        ],
+      );
+      await tenants.stop();
+    });
   },
 );
