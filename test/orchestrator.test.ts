@@ -496,7 +496,7 @@ test("an attested connector is offered only in the speaker's own DM, never where
       name: id,
       url: `https://${id}.example/mcp`,
       auth: "bearer",
-      bearerToken: "discovery-token",
+      bearerToken: "t",
       credentialScope: "shared",
       catalog: true,
       ...(attestActor ? { attestActor } : {}),
