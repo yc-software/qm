@@ -621,7 +621,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       keychainApprovals: approvals,
       deliveries: built.deliveries,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-      workspace: built.workspace,
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
     });

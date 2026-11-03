@@ -205,9 +205,9 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const turn = (text: string, thread: string) =>
     built.app.turn({
@@ -236,9 +236,9 @@ test("deployments without a gateway leave the sandbox gateway variables unset", 
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   await built.app.turn({
     surface: "test",

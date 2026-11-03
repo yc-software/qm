@@ -32,8 +32,7 @@ export async function swarmFixture(
   const state = { allowed: true, failProvision: false };
   const backend: Sandbox = options.backend ?? {
     profile: { backend: "modal", writablePersistence: "resident_disk", processSessions: false },
-    async provision(layers) {
-      const id = layers.find((layer) => layer.mode === "rw")!.scopeId;
+    async provision(id) {
       provisioned.push(id);
       if (state.failProvision) throw new Error("provider unavailable");
       if (!disks.has(id)) disks.set(id, new Map());

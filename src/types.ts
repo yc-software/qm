@@ -139,16 +139,9 @@ export interface Session {
   purpose?: string;
 }
 
-type LayerMode = "ro" | "rw";
-
-export interface WorkspaceLayer {
-  scopeId: ScopeId;
-  mountPath: string;
-  mode: LayerMode;
-}
-
 export interface Resolution {
-  layers: WorkspaceLayer[];
+  writableScopeId: ScopeId;
+  readOnlyScopeIds: ScopeId[];
   systemPrompt: string;
   egress: EgressPolicy;
   commandPolicy: CommandPolicy;

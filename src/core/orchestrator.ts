@@ -914,9 +914,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
-      const rwLayer = resolution.layers.find((l) => l.mode === "rw");
-      if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
-      for (const layer of resolution.layers) await deps.workspace.ensureScope(layer.scopeId);
+      resolution.writableScopeId = environmentId;
 
       const context = await resolveTurnContext({
         external,
@@ -2505,13 +2503,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           accessSandboxResource: accessResource,
           useSkill,
           listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
-          layers: resolution.layers,
+          writableScopeId: resolution.writableScopeId,
+          readOnlyScopeIds: resolution.readOnlyScopeIds,
           commandPolicy: () => commandPolicy,
           layerCommandRules: () => layerCommandRules,
           authorizeCommand,
           grantedHandles: resolution.grantedHandles,
           context,
-          workspace: deps.workspace,
           deploy: deps.deploy,
           acl: deps.acl,
           files: deps.files,

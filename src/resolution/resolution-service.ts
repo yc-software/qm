@@ -1,4 +1,4 @@
-import type { Conversation, Principal, Resolution, ScopeId, WorkspaceLayer } from "../types.ts";
+import type { Conversation, Principal, Resolution, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { composePolicy, defaultOrgPolicy } from "../policy/command-policy.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
@@ -57,15 +57,9 @@ export function createResolutionService(
       }
       await config.refreshSecurity([...liveConfigScopes]);
 
-      const layers: WorkspaceLayer[] = [
-        ...(!external ? [{ scopeId: orgScope, mountPath: "global", mode: "ro" as const }] : []),
-        { scopeId: scope, mountPath: "", mode: "rw" },
-      ];
-      if (!external) {
-        for (const tid of (isDm ? actor.teamIds : conversation.teamIds) ?? []) {
-          layers.push({ scopeId: scopeId("team", tid), mountPath: `team-${tid}`, mode: "ro" });
-        }
-      }
+      const readOnlyScopeIds = external
+        ? []
+        : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
       const scopeSoul = external ? null : config.getSoul(scope);
@@ -90,7 +84,8 @@ export function createResolutionService(
         : await acl.handlesForAudience(conversation.audience, scope, orgScope, principalEntitledToScope);
 
       return {
-        layers,
+        writableScopeId: scope,
+        readOnlyScopeIds,
         systemPrompt,
         egress,
         commandPolicy,

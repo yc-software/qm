@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import type { CommandPolicy } from "../src/types.ts";
 import type { SandboxHandle, Sandbox } from "../src/sandbox/sandbox.ts";
 import type { BackgroundExecBroker, BackgroundPollResult } from "../src/connectors/background-exec-broker.ts";
@@ -43,16 +43,15 @@ function recordingBroker() {
 
 function ctxFor(extra: Partial<ToolContextDeps>) {
   const scope = scopeId("personal", "U1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
   const policy: CommandPolicy = extra.commandPolicy?.() ?? { mode: "denylist", rules: [] };
   return createToolContext({
     sandbox: {} as unknown as Sandbox,
     provision: async () => handle,
-    layers,
+    writableScopeId: scope,
+    readOnlyScopeIds: [],
     commandPolicy: () => policy,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",

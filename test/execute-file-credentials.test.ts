@@ -79,7 +79,8 @@ async function fixture(t: TestContext) {
       sandbox,
       provision: async () => handle,
       provisionScratch: async () => ({ ...handle, id: "scratch" }),
-      layers: [{ scopeId: scope, mountPath: "", mode: "rw" }],
+      writableScopeId: scope,
+      readOnlyScopeIds: [],
       commandPolicy: () => ({ mode: "denylist", rules: [] }),
       authorizeCommand: () => false,
       commandCredentials: [
@@ -110,7 +111,6 @@ async function fixture(t: TestContext) {
         },
       ],
       grantedHandles: [],
-      workspace: {} as never,
       deploy: {} as never,
       acl: {} as never,
       createdBy: owner,

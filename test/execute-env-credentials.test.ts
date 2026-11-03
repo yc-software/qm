@@ -127,8 +127,8 @@ test("role broker sessions in a shared conversation reach only the turn's scratc
   await selectDefaultSandbox(built, actor.externalId, scopeId("channel", "C_BROKER"));
   const scratchBoxes = new Set<string>();
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = async (layers, opts) => {
-    const handle = await provision(layers, opts);
+  built.sandbox.provision = async (owner, opts) => {
+    const handle = await provision(owner, opts);
     if (opts?.scratch) scratchBoxes.add(handle.id);
     return handle;
   };
