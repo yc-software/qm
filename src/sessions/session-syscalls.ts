@@ -404,18 +404,12 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(
-  sessions: Pick<SessionStore, "sameScopeAncestors">,
-  session: Session,
-): Promise<Session[]> {
-  return session.parentSessionId ? sessions.sameScopeAncestors([session.threadRef]) : [];
-}
-
 export async function stoppableRoot(
   sessions: Pick<SessionStore, "sameScopeAncestors">,
   session: Session,
 ): Promise<Session | undefined> {
-  return (await stoppableAncestors(sessions, session)).find((ancestor) => !ancestor.parentSessionId);
+  if (!session.parentSessionId) return undefined;
+  return (await sessions.sameScopeAncestors([session.threadRef])).find((ancestor) => !ancestor.parentSessionId);
 }
 
 export async function sessionTreeWorking(
