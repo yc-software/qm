@@ -430,12 +430,12 @@ interface AddParticipantOptions {
   includeHistory?: boolean;
 }
 
-export interface SessionFacts {
+interface SessionFacts {
   slackBinding?: Session["slackBinding"];
   context?: SpawnMeta;
 }
 
-export interface SessionFactsFill extends Pick<SessionFacts, "slackBinding"> {
+interface SessionFactsFill extends Pick<SessionFacts, "slackBinding"> {
   runtime?: Session["runtime"];
   spawnMeta?: SpawnMeta;
 }
