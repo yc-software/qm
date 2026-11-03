@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
-import { createWorker, SHUTDOWN_HANDBACK_MS, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
+import { createWorker, SHUTDOWN_EXIT_MS, SHUTDOWN_HANDBACK_MS, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
@@ -392,7 +392,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
     ],
   );
   assert.ok(
-    Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + 2 * SHUTDOWN_HANDBACK_MS,
+    Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + SHUTDOWN_EXIT_MS,
     "the resume waited for the old process exit",
   );
   assert.equal(

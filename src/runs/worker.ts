@@ -37,7 +37,7 @@ export const SHUTDOWN_SETTLE_MS = 5_000;
 
 export const SHUTDOWN_HANDBACK_MS = 3_000;
 
-const SHUTDOWN_EXIT_MS = 2 * SHUTDOWN_HANDBACK_MS + FLUSH_MS;
+export const SHUTDOWN_EXIT_MS = 2 * SHUTDOWN_HANDBACK_MS + FLUSH_MS;
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
@@ -139,6 +139,7 @@ async function attemptRun(
     });
     const result = await Promise.race([turn, strand.promise]);
     clearTimeout(strandTimer);
+    shutdown?.removeEventListener("abort", onShutdown);
     if (stranded) turn.catch((e: unknown) => swallow(`worker: stranded run=${run.id} failed after hand-back`, e));
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
@@ -190,6 +191,7 @@ async function handBack(
   }
   console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
   const exited = Date.now() + SHUTDOWN_EXIT_MS;
+  if (!(await deps.runs.heartbeat(run.id, token, deps.leaseTtlMs))) return;
   const session = await deps.sessions.getByThread(run.sessionId);
   if (session) await deps.sessions.fenceTurnLease(session.id, exited);
   await deps.runs.releaseLease(run.id, token, stop, exited);

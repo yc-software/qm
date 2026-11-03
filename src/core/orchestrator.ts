@@ -1959,6 +1959,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
+      if (input.shutdown?.aborted) {
+        await deps.sessions.releaseLease(lease);
+        return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
+      }
       if (!ambientTurn) assignSessionTitle();
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
