@@ -889,6 +889,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
       const run = (await withoutTenant(() => built.runs.claim("worker", 10_000)))!;
       await built.runs.complete(run.id, run.leaseToken!, result);
     }
+    await settle(async () => events.length === 2);
     assert.deepEqual(events, ["response_completed", "response_failed"]);
   } finally {
     await built.runtime.stop();

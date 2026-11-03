@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
@@ -77,8 +77,9 @@ test("GET /v1/blobs/:id is 404 for an unknown id", async () => {
   }
 });
 
-function startWithDeadline(deadlineMs: number): { base: string; close: () => Promise<void> } {
+async function startWithDeadline(deadlineMs: number): Promise<{ base: string; close: () => Promise<void> }> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
+  await inTestTenant(() => undefined);
   const server = createInsecureTestServer(built.app, {
     blobTransfer: built.blobTransfer,
     requestBodyDeadlineMs: deadlineMs,
@@ -100,7 +101,7 @@ function slowBody(chunks: Buffer[], gapMs: number): ReadableStream<Uint8Array> {
 }
 
 test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the default body deadline", async () => {
-  const s = startWithDeadline(100);
+  const s = await startWithDeadline(100);
   try {
     const chunks = Array.from({ length: 6 }, (_, n) => Buffer.alloc(64 * 1024, n));
     const whole = Buffer.concat(chunks);
@@ -123,7 +124,7 @@ test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the d
 });
 
 test("other routes still enforce the default body deadline", async () => {
-  const s = startWithDeadline(100);
+  const s = await startWithDeadline(100);
   try {
     const chunks = Array.from({ length: 6 }, () => Buffer.from('{"x":1}'.padEnd(64, " ")));
     const res = await fetch(`${s.base}/v1/sessions/search`, {

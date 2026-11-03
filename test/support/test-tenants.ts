@@ -1,5 +1,11 @@
 import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { it as nodeIt, test as nodeTest, type TestContext, type TestOptions } from "node:test";
+import {
+  afterEach as nodeAfterEach,
+  it as nodeIt,
+  test as nodeTest,
+  type TestContext,
+  type TestOptions,
+} from "node:test";
 import { isTenantId, withTenant } from "../../src/tenants/context.ts";
 
 export function testTenants(): [string, string] {
@@ -34,4 +40,8 @@ export { tenantTest as test };
 
 export function it(name: string, fn: TestBody): void {
   nodeIt(name, (t) => inTestTenant(() => fn(t)));
+}
+
+export function afterEach(fn: () => unknown): void {
+  nodeAfterEach(() => inTestTenant(fn));
 }

@@ -6,7 +6,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
-import { afterEach } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -26,7 +25,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",

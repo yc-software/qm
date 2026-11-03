@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { storedItem } from "../src/sessions/items.ts";
-import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -49,7 +49,6 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
   }
 });
 
-import { afterEach } from "node:test";
 import {
   createModelOverlayStore as createStore,
   setModelOverlays,

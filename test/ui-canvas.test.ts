@@ -98,9 +98,11 @@ describe("ui canvas and ui observe", () => {
       text: "hello",
     };
     sessionId = (await inTestTenant(() => built.app.turn(turn))).sessionId!;
-    built.sessionStateBus.subscribe((event) => {
-      if (event.state === "ui") events.push(event);
-    });
+    await inTestTenant(() =>
+      built.sessionStateBus.subscribe((event) => {
+        if (event.state === "ui") events.push(event);
+      }),
+    );
   });
 
   after(async () => {

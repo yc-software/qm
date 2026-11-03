@@ -7,9 +7,9 @@ import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { buildModelRuntime, zeroUsage } from "../src/model/model-runtime.ts";
-import { test } from "./support/test-tenants.ts";
+import { inTestTenant, test } from "./support/test-tenants.ts";
 
-const model = getRequiredModel("claude-opus-5");
+const model = await inTestTenant(() => getRequiredModel("claude-opus-5"));
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
 const entry = (seq: number, type: SessionEntry["type"], payload: unknown): SessionEntry => ({
   sessionId: "test-session",

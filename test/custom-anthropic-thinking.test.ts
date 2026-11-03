@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach } from "node:test";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
-import { test } from "./support/test-tenants.ts";
+import { afterEach, test } from "./support/test-tenants.ts";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const DROP_BLOCK = { prefix_mismatch_behavior: "drop_block" };

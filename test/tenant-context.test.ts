@@ -29,10 +29,13 @@ test("withTenant binds across awaits and nests", async () => {
   );
 });
 
-test("tenant ids must be lowercase uuids", () => {
+test("tenant ids must be lowercase uuids", async () => {
   assert.equal(isTenantId(a), true);
   for (const id of [a.toUpperCase(), "", "tenant", `${a} `, a.replaceAll("-", "")]) {
     assert.equal(isTenantId(id), false);
-    assert.throws(() => withTenant(id, () => undefined), /lowercase uuid/);
+    await assert.rejects(
+      withTenant(id, () => undefined),
+      /lowercase uuid/,
+    );
   }
 });

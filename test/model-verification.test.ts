@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const spec = {
   id: "verify-future",
@@ -18,7 +18,6 @@ test("no model can be enabled without provider verification", async () => {
   assert.deepEqual(await store.statuses(), []);
 });
 
-import { afterEach } from "node:test";
 import {
   ModelVerificationError,
   verificationFailure,

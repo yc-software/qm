@@ -1,9 +1,9 @@
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
-import { test } from "./support/test-tenants.ts";
 
 const A = "00000000-0000-4000-8000-0000000000a1";
 const B = "00000000-0000-4000-8000-0000000000b2";
@@ -60,8 +60,8 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
 
 test("engaged sessions remember their tenant and each is swept under it", async () => {
   const reg = createEngagedRegistry();
-  withTenant(A, () => reg.engage("ch:C1:1"));
-  withTenant(B, () => reg.engage("ch:C1:1"));
+  await withTenant(A, () => reg.engage("ch:C1:1"));
+  await withTenant(B, () => reg.engage("ch:C1:1"));
   assert.deepEqual(
     reg.list().map((s) => s.tenantId),
     [A, B],

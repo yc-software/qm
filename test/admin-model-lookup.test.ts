@@ -36,7 +36,6 @@ import { createModelCredentialStore } from "../src/model/model-credential-store.
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
-import { afterEach } from "node:test";
 
 afterEach(() => {
   setProviderBaseUrls({});
@@ -224,7 +223,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
-import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

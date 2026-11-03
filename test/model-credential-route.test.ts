@@ -301,10 +301,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
       body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
     });
     assert.equal(selected.status, 200);
-    assert.equal(
-      inTestTenant(() => srv.built.config.getBaseModel("org:default-org")),
-      "stealth/ox-alpha",
-    );
+    assert.equal(await inTestTenant(() => srv.built.config.getBaseModel("org:default-org")), "stealth/ox-alpha");
 
     const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
     assert.equal(governance.status, 200);

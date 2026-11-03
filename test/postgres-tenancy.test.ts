@@ -108,34 +108,38 @@ test("the pool binds the current tenant to each query and transaction in one bat
 test("an open transaction refuses work for a different tenant until it has ended", { skip }, async () => {
   await withTenant(a, () =>
     withPgTransaction(app, async (client) => {
-      assert.throws(() => withTenant(b, () => 0), /already open for another tenant/);
-      assert.throws(() => withoutTenant(() => 0), /already open for another tenant/);
-      assert.equal(
-        withTenant(a, () => 1),
-        1,
+      await assert.rejects(
+        withTenant(b, () => 0),
+        /already open for another tenant/,
       );
+      assert.throws(() => withoutTenant(() => 0), /already open for another tenant/);
+      assert.equal(await withTenant(a, () => 1), 1);
       return client.query("SELECT 1");
     }),
   );
   await withoutTenant(() =>
-    withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
+    withPgTransaction(app, () =>
+      assert.rejects(
+        withTenant(a, () => 0),
+        /already open/,
+      ),
+    ),
   );
   for (const fails of [false, true]) {
     const outcomes: string[] = [];
     let settled = false;
     let spawned: Promise<string[]> | undefined;
-    const watch = (resolve: (seen: string[]) => void) => {
-      try {
-        withTenant(b, () => outcomes.push("bound"));
-      } catch {
-        outcomes.push("refused");
+    const watch = async (): Promise<string[]> => {
+      for (;;) {
+        const last = settled;
+        await withTenant(b, () => outcomes.push("bound")).catch(() => outcomes.push("refused"));
+        if (last) return outcomes;
+        await new Promise((resolve) => setImmediate(resolve));
       }
-      if (settled) resolve(outcomes);
-      else setImmediate(watch, resolve);
     };
     const transaction = withTenant(a, () =>
       withPgTransaction(app, async () => {
-        spawned = new Promise(watch);
+        spawned = watch();
         if (fails) throw new Error("body failed");
       }),
     );
