@@ -1127,6 +1127,8 @@ export function buildApp(
   }
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
+  const sandboxRollout = artifactMap<{ activatedAt: string }>("sandbox_resource_rollout");
+  const legacySandboxRoutes = artifactMap<LegacyRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
@@ -1135,8 +1137,8 @@ export function buildApp(
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
         records: sandboxRecords,
         defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        marker: sandboxRollout,
+        routes: () => legacySandboxRoutes.entries(),
         lock: advisoryLock,
         legacyBackend: (scope) =>
           legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
