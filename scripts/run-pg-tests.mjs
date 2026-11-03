@@ -65,8 +65,8 @@ function killGroup(child) {
   }
 }
 
-function databaseUrl(name) {
-  const url = new URL(baseUrl);
+function databaseUrl(name, base = baseUrl) {
+  const url = new URL(base);
   url.pathname = `/${name}`;
   return url.toString();
 }
@@ -121,7 +121,7 @@ async function runIsolated(file, index) {
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, {
       DATABASE_URL: databaseUrl(name),
-      DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL ?? baseUrl,
+      DATABASE_OWNER_URL: databaseUrl(name, process.env.DATABASE_OWNER_URL ?? baseUrl),
       QM_TEST_TEMPLATE_DATABASE: templateName,
       QM_TEST_TENANTS_DATABASE: tenantsName,
     });
