@@ -16,30 +16,44 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 interface ProviderProbe {
   appliedImages: Array<string | undefined>;
 }
 
 function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; probe: ProviderProbe } {
-  const deployStore = createDeployStore(testDeployBackings());
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
   const probe: ProviderProbe = { appliedImages: [] };
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
-    provider: {
-      profile: { managedScaleToZero: true },
-      apply: async (_d: Deployment, version: DeploymentVersion) => {
-        probe.appliedImages.push(version.image);
-        const image = version.image ?? `registry.fly.io/app:v${version.version}`;
-        return { host: "app.flycast", port: 80, image };
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-img-")),
+      provider: {
+        profile: { managedScaleToZero: true },
+        apply: async (_d: Deployment, version: DeploymentVersion) => {
+          probe.appliedImages.push(version.image);
+          const image = version.image ?? `registry.fly.io/app:v${version.version}`;
+          return { host: "app.flycast", port: 80, image };
+        },
+        destroy: async () => {},
       },
-      destroy: async () => {},
-    },
-  });
+    }),
+  );
   return { deploy, deployStore, probe };
 }
 
@@ -95,19 +109,21 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
 });
 
 test("a runtime-mount provider (no image) leaves versions image-less — Docker behavior unchanged", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-noimg-")),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 9200 }),
-      destroy: async () => {},
-    },
-  });
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-noimg-")),
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => ({ host: "127.0.0.1", port: 9200 }),
+        destroy: async () => {},
+      },
+    }),
+  );
   const d = await deploy.deploy({
     ownerScopeId: owner,
     createdBy: "U1",
@@ -122,26 +138,28 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
 });
 
 test("a reconcile-capable provider receives the git diff and marks the applied version", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
   const reconciles: DeployReconcileInput[] = [];
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
-    provider: {
-      profile: { managedScaleToZero: true, inPlaceReconcile: true },
-      apply: async () => {
-        throw new Error("image path should not be used for git-backed versions");
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
+      provider: {
+        profile: { managedScaleToZero: true, inPlaceReconcile: true },
+        apply: async () => {
+          throw new Error("image path should not be used for git-backed versions");
+        },
+        reconcile: async (_d, _version, input) => {
+          reconciles.push(input);
+          return { host: "app.flycast", port: 80 };
+        },
+        destroy: async () => {},
       },
-      reconcile: async (_d, _version, input) => {
-        reconciles.push(input);
-        return { host: "app.flycast", port: 80 };
-      },
-      destroy: async () => {},
-    },
-  });
+    }),
+  );
 
   const d = await deploy.deploy({
     ownerScopeId: owner,
@@ -168,25 +186,27 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
 });
 
 test("applied version is marked only after endpoint metadata is persisted", async () => {
-  const baseStore = createDeployStore(testDeployBackings());
+  const baseStore = tenantBound(createDeployStore(testDeployBackings()));
   const deployStore: DeployStore = {
     ...baseStore,
     setEndpoint: async () => {
       throw new Error("endpoint write failed");
     },
   };
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-applied-order-")),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 9200 }),
-      destroy: async () => {},
-    },
-  });
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-applied-order-")),
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => ({ host: "127.0.0.1", port: 9200 }),
+        destroy: async () => {},
+      },
+    }),
+  );
 
   await assert.rejects(
     () =>
@@ -203,24 +223,26 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
 });
 
 test("a failed redeploy does not move the hosted git current ref", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
   let applies = 0;
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-current-ref-")),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => {
-        applies++;
-        if (applies > 1) throw new Error("apply failed");
-        return { host: "127.0.0.1", port: 9200 };
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-current-ref-")),
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => {
+          applies++;
+          if (applies > 1) throw new Error("apply failed");
+          return { host: "127.0.0.1", port: 9200 };
+        },
+        destroy: async () => {},
       },
-      destroy: async () => {},
-    },
-  });
+    }),
+  );
 
   const d = await deploy.deploy({
     ownerScopeId: owner,

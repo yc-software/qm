@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,15 +6,26 @@ import { join } from "node:path";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDeployBackings } from "./support/test-database.ts";
+import { ownerUrlOf, testDeployBackings } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
 
 async function raw(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: ownerUrlOf(URL!) });
   try {
     const res = await p.query(sql, params);
     return res.rows as Record<string, unknown>[];
@@ -22,16 +33,6 @@ async function raw(sql: string, params: unknown[] = []): Promise<Record<string, 
     await p.end();
   }
 }
-
-before(async () => {
-  if (!URL) return;
-  await raw("DROP TABLE IF EXISTS deployment_access CASCADE");
-  await raw("DROP TABLE IF EXISTS deployments CASCADE");
-  await raw(
-    "DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/access/%' OR id LIKE 'durable-map/deployments/%'",
-  ).catch(() => {});
-  await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
-});
 
 const factories: PostgresArtifactMaps[] = [];
 
@@ -47,13 +48,15 @@ function makeFactory(): PostgresArtifactMaps {
 
 function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStore; factory: PostgresArtifactMaps } {
   const factory = makeFactory();
-  const store = createDeployStore(
-    testDeployBackings({
-      deployments: factory.map<Deployment>("deployments"),
-      pg: factory.pool,
-      git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
-      ...opts,
-    }),
+  const store = tenantBound(
+    createDeployStore(
+      testDeployBackings({
+        deployments: factory.map<Deployment>("deployments"),
+        pg: factory.pool,
+        git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
+        ...opts,
+      }),
+    ),
   );
   return { store, factory };
 }
