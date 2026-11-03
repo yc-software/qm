@@ -512,6 +512,7 @@ export interface SessionStore {
   renewLease(lease: Lease): Promise<boolean>;
   releaseLease(lease: Lease): Promise<void>;
   forceReleaseLease(sessionId: string): Promise<void>;
+  fenceTurnLease(sessionId: string, until: number): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;

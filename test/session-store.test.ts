@@ -386,6 +386,26 @@ test(`forceReleaseLease drops a held lease so a fresh acquire succeeds (reaper p
   await assert.rejects(store.append(lease, { type: "user", payload: {}, scopeLabel: s.scopeId }));
 });
 
+test(`fenceTurnLease holds the session for a stranded turn until the deadline without taking other holders' leases`, async () => {
+  const clock = { now: 10_000_000_000 };
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.now });
+  const stranded = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
+  const { lease: stale } = await store.acquireLease(stranded.id, "turn");
+  assert.ok(stale);
+  await store.fenceTurnLease(stranded.id, clock.now + 8_000);
+  await assert.rejects(store.append(stale, { type: "user", payload: {}, scopeLabel: stranded.scopeId }));
+  assert.equal(await store.renewLease(stale), false);
+  assert.equal((await store.acquireLease(stranded.id, "turn")).lease, null);
+  clock.now += 8_000;
+  assert.ok((await store.acquireLease(stranded.id, "turn")).lease);
+
+  const compacting = await store.getOrCreateByThread("t2", "dm", scopeId("personal", "U1"));
+  const { lease: compaction } = await store.acquireLease(compacting.id, "compaction");
+  assert.ok(compaction);
+  await store.fenceTurnLease(compacting.id, clock.now + 8_000);
+  assert.equal(await store.renewLease(compaction), true);
+});
+
 test(`updateTitle sets the session's display title (absent until set)`, async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
