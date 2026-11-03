@@ -13,6 +13,7 @@ import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
 const ids = (cs: { id: string }[]) => cs.map((c) => c.id);
@@ -507,7 +508,7 @@ test("sweepStrandedFires closes only over-age running rows, as failed with a not
     await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
     await store.beginFire(cron.id, { fireKey: "live", threadRef: "t", firedAt: 8_000, status: "running" });
     await store.recordFire(cron.id, { fireKey: "done", threadRef: "t", firedAt: 2_000, endedAt: 2_500, status: "ok" });
-    assert.equal(await store.sweepStrandedFires(12_000), 1);
+    assert.equal(await withoutTenant(() => store.sweepStrandedFires(12_000)), 1);
     const { runs: log } = await store.listFires(cron.id);
     const old = log.find((e) => e.fireKey === "old")!;
     assert.equal(old.status, "failed");
@@ -515,7 +516,7 @@ test("sweepStrandedFires closes only over-age running rows, as failed with a not
     assert.equal(old.note, STRANDED_FIRE_NOTE);
     assert.equal(log.find((e) => e.fireKey === "live")!.status, "running");
     assert.equal(log.find((e) => e.fireKey === "done")!.status, "ok");
-    assert.equal(await store.sweepStrandedFires(12_000), 0, "a second sweep finds nothing");
+    assert.equal(await withoutTenant(() => store.sweepStrandedFires(12_000)), 0, "a second sweep finds nothing");
   }));
 
 test("the default staleness bound tracks the run reaper's default max age", () => {
@@ -530,7 +531,7 @@ test("a completion after a stranded sweep replaces the row outright — no stran
     });
     const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
     await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
-    assert.equal(await store.sweepStrandedFires(20_000), 1);
+    assert.equal(await withoutTenant(() => store.sweepStrandedFires(20_000)), 1);
     await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 21_000, status: "ok" });
     const { runs: log } = await store.listFires(cron.id);
     assert.equal(log.length, 1);
@@ -686,7 +687,7 @@ test("a stranded-fire sweep is mirrored into the fire table", () =>
     });
     const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
     await store.beginFire(cron.id, { fireKey: "old", threadRef: "t", firedAt: 1_000, status: "running" });
-    assert.equal(await store.sweepStrandedFires(20_000), 1);
+    assert.equal(await withoutTenant(() => store.sweepStrandedFires(20_000)), 1);
     const { runs } = await store.listFires(cron.id);
     assert.equal(runs[0]!.status, "failed");
     assert.equal(runs[0]!.endedAt, 20_000);
@@ -773,11 +774,15 @@ test("the stranded sweep works the fire table: an unbackfilled legacy json row i
       createdAt: 1,
       fireLog: [{ fireKey: "gone-k", threadRef: "t2", firedAt: 1_000, status: "running" }],
     });
-    assert.equal(await store.sweepStrandedFires(20_000), 1, "only the table row is swept");
+    assert.equal(await withoutTenant(() => store.sweepStrandedFires(20_000)), 1, "only the table row is swept");
     assert.equal((await store.listFires("gone")).total, 0);
     assert.equal((await store.listFires(kept.id)).runs[0]!.status, "failed");
     assert.equal(await store.backfillFires(), 1, "the legacy row reaches the table via backfill");
-    assert.equal(await store.sweepStrandedFires(20_000), 1, "and only then can the sweep close it");
+    assert.equal(
+      await withoutTenant(() => store.sweepStrandedFires(20_000)),
+      1,
+      "and only then can the sweep close it",
+    );
   }));
 
 test("backfill cannot clobber a newer retry of the same fireKey with a stale snapshot", () =>
@@ -860,7 +865,7 @@ test("pruneEnded deletes old ended rows beyond the keep window; running and rece
     await fires.record("c1", { fireKey: "k4", threadRef: "t4", firedAt: 4, status: "running" });
     await fires.record("c1", { fireKey: "k5", threadRef: "t5", firedAt: 5, endedAt: 24, status: "ok" });
     await fires.record("c2", { fireKey: "other", threadRef: "t6", firedAt: 1, endedAt: 2, status: "ok" });
-    const pruned = await fires.pruneEnded({ endedBefore: 25, keepPerCron: 2 });
+    const pruned = await withoutTenant(() => fires.pruneEnded({ endedBefore: 25, keepPerCron: 2 }));
     assert.equal(pruned, 2, "k1 and k2: beyond the keep window AND ended before the cutoff");
     assert.deepEqual(
       (await fires.listByCron("c1")).runs.map((r) => r.fireKey),
@@ -884,7 +889,7 @@ test("pruneFires applies the retention constants: nothing prunes inside the keep
       });
     }
     const now = FIRE_RETENTION_MS + 1_000_000;
-    assert.equal(await store.pruneFires(now), 1, "only the row beyond the keep window goes");
+    assert.equal(await withoutTenant(() => store.pruneFires(now)), 1, "only the row beyond the keep window goes");
     const { runs, total } = await store.listFires(cron.id);
     assert.equal(total, FIRE_RETENTION_KEEP_PER_CRON);
     assert.equal(runs[0]!.fireKey, "k1", "the oldest row is the one pruned");

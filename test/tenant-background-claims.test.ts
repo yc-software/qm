@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -17,6 +20,8 @@ import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenants } from "./support/test-tenants.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the claim tests";
 const [A, B] = skip ? ["00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2"] : testTenants();
@@ -218,3 +223,36 @@ test("the ask sweep settles each resolved ask under its own tenant", async () =>
   assert.deepEqual(fired, expected);
   assert.deepEqual(notified, expected);
 });
+
+test(
+  "a human turn under a bound tenant pokes the reaper unbound, and the poke reaps an expired run",
+  { skip },
+  async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reaper-poke-")), workers: 0 }));
+    try {
+      const stale = (
+        await withTenant(A, () => built.runs.enqueue({ sessionId: "s-stale", request: turn("stale"), maxAttempts: 3 }))
+      ).run;
+      assert.equal((await built.runs.claim("dead-worker", 10))?.id, stale.id);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await withTenant(A, () =>
+        built.app.turn({
+          surface: "test",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: "poke" },
+          origin: { kind: "human" },
+          text: "hello",
+          async: true,
+        }),
+      );
+      let status = (await withTenant(A, () => built.runs.get(stale.id)))?.status;
+      for (let i = 0; i < 200 && status !== "pending"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        status = (await withTenant(A, () => built.runs.get(stale.id)))?.status;
+      }
+      assert.equal(status, "pending");
+    } finally {
+      await built.runtime.stop();
+    }
+  },
+);

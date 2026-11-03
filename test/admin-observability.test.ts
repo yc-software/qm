@@ -1403,6 +1403,41 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
+test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, body: unknown, headers: Record<string, string> = ALICE) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/spend-limit`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, null, "no limit by default");
+    assert.equal(
+      (await put("org:default-org", { dailyUsd: 5 }, { "x-admin-actor": "nobody@default-org" })).status,
+      403,
+    );
+    assert.equal((await put("org:default-org", { dailyUsd: 25, monthlyUsd: 300 })).status, 200);
+    assert.deepEqual((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, {
+      dailyUsd: 25,
+      monthlyUsd: 300,
+    });
+    assert.equal((await put("channel:C1", { monthlyUsd: 40 })).status, 200, "any scope can carry its own cap");
+    assert.deepEqual(await built.config.getSpendLimitDurable("channel:C1"), { monthlyUsd: 40 });
+    assert.equal((await put("channel:C1", { inherit: true })).status, 200);
+    assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
   const built = buildApp(
     testConfig({

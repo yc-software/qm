@@ -155,7 +155,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { inTenantOf } from "./tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "./tenants/claim.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -2190,7 +2190,7 @@ export function buildApp(
   let reapInFlight = false;
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
+  const pokeReaper = crossTenantLoop((): void => {
     if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
     void leaderLease
@@ -2200,7 +2200,7 @@ export function buildApp(
         reapInFlight = false;
         lastReapAt = Date.now();
       });
-  };
+  });
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },

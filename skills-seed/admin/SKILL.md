@@ -177,6 +177,12 @@ PUT /v1/admin/scopes/<scopeId>/<resource>     → resource ∈ soul | command-po
 GET first, then PUT the corrected value (`soul` takes `{content}`, `egress` takes
 `{allowedHosts,deniedHosts}`, the toggles take `{on}`). Changes apply next turn.
 
+Spend caps: `PUT …/<scopeId>/spend-limit` with `{dailyUsd?, monthlyUsd?}` (USD, per UTC
+day/month, counted the way the Spend page counts a scope). On the org scope it is the
+default for every person's personal scope; on a person, channel or project scope it caps
+that scope and overrides the default. `{}` means no cap there, `{inherit:true}` clears it.
+At the cap new turns there are refused until reset, and cron fires report the refusal.
+
 ## Read & fix any scope's memory
 
 ```bash
