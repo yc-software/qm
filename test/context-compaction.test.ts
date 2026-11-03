@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -853,7 +854,7 @@ test("runtime handoff continues once with saved results under the original run a
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
+          body: { actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
         });
         await new Promise((resolve) => setTimeout(resolve, 5));
         return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
@@ -914,7 +915,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
+          body: { actorId: actor.id, runtimeHandoff: { choice, lifetime: "task" } },
         });
         return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
       }
@@ -923,7 +924,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
     },
   };
   const { orch } = buildOrchestrator(agent);
-  const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
+  const input = { ...turn("switch and finish"), runId: randomUUID(), surfaceTools: false };
   await assert.rejects(() => orch.handleTurn(input), /worker died/);
   await orch.handleTurn({ ...input, attempt: 2 });
   assert.equal(calls, 2);
@@ -948,7 +949,7 @@ test("only a cron automation receives task-runtime authority and each fire start
           kind: "ToolResult",
           tool: "runtime",
           callId: `runtime-${input.runId}`,
-          body: { runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+          body: { actorId: actor.id, runtimeHandoff: result.handoff },
         });
         return { reply: "", runtimeHandoff: result.handoff };
       }
