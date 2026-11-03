@@ -241,7 +241,6 @@ for (const primary of ["render", "local"] as const) {
     const env = {
       ...productionEnv,
       SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
       RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
@@ -257,7 +256,6 @@ for (const primary of ["render", "local"] as const) {
   test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
     const env = {
       SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
       RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
@@ -901,21 +899,9 @@ test("Render app publishing needs a complete source, project, and environment", 
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
 });
 
-test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = {
-    SANDBOX_BACKEND: "render",
-    RENDER_API_KEY: "rnd_key",
-    RENDER_WORKSPACE_ID: "tea-test",
-    RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
-  };
-  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
-  assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
-});
-
 test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
   const env = {
     SANDBOX_BACKEND: "render",
-    WORKSPACE_STORE: "postgres",
     RENDER_API_KEY: "rnd_key",
     RENDER_WORKSPACE_ID: "tea-test",
   };

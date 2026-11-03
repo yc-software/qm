@@ -93,15 +93,23 @@ export interface EnqueueResult {
   deduped: boolean;
 }
 
+export const RUN_WAIT_FALLBACK_MS = 2_000;
+
+export interface SessionWatch {
+  changed(timeoutMs: number, signal?: AbortSignal): Promise<void>;
+  close(): void;
+}
+
 export interface RunStore {
   readonly maxClaims?: number;
 
   subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  watchSession(sessionId: string): SessionWatch;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
 
-  claim(workerId: string, ttlMs: number): Promise<Run | null>;
+  claim(workerId: string, ttlMs: number, limit?: number): Promise<Run[]>;
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 

@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -7,7 +8,7 @@ test("Slack message bubbles render the message text without template whitespace"
   const h = await harness({
     path: "/s/sess-deep",
     session: { ...SESSION, type: "dm", createdAt: 1, surface: "slack", canContinue: false },
-    entries: [{ seq: 1, type: "user", createdAt: 1, payload: { text } }],
+    items: [item("UserMessage", { seq: 1, createdAt: 1, text })],
   });
   try {
     await h.boot();

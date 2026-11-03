@@ -1,6 +1,6 @@
+import { isAgentReply, type Item, proseText } from "./items.ts";
 import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { TURN_STOPPED_KIND } from "../agent/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -242,9 +242,8 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "getEntries"
-    | "latestEntrySeq"
-    | "visibleEntries"
+    | "latestItemSeq"
+    | "visibleItems"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
@@ -278,26 +277,23 @@ function autoTitle(task: string): string {
   return line.length <= 60 ? line : `${line.slice(0, 57).trimEnd()}…`;
 }
 
-function entryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; tool?: unknown; aside?: unknown } | null;
-  if (typeof payload?.text === "string" && payload.text.trim()) return payload.text;
-  if (typeof payload?.tool === "string") return `[${payload.tool}]`;
-  return undefined;
+function itemText(item: Item): string | undefined {
+  const text = proseText(item);
+  if (text?.trim()) return text;
+  return item.tool === null ? undefined : `[${item.tool}]`;
 }
 
-function lastAssistantText(entries: readonly SessionEntry[]): string | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    const stop = e.type === "system" ? (e.payload as { kind?: unknown; reason?: unknown } | null) : null;
-    if (stop?.kind === TURN_STOPPED_KIND) {
-      const before = entries[i - 1];
-      const partial = before?.type === "assistant" ? entryText(before) : "";
-      return (
-        partial || `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""}. No reply.`
-      );
+function lastAssistantText(items: readonly Item[]): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const e = items[i]!;
+    if (e.kind === "Stop") {
+      const before = items[i - 1];
+      const partial = before && isAgentReply(before) ? itemText(before) : "";
+      const reason = e.body.reason;
+      return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
     }
-    if (e.type !== "assistant" && e.type !== "text") continue;
-    const text = entryText(e);
+    if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
+    const text = itemText(e);
     if (text) return text;
   }
   return undefined;
@@ -548,17 +544,17 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
-      async function visibleHistory(target: Session): Promise<SessionEntry[]> {
+      async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
         const views = await Promise.all(
           [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleEntries(target.id, id),
+            deps.sessions.visibleItems(target.id, id),
           ),
         );
         const allowed = commonEntrySeqs(views);
-        return (views[0] ?? []).filter((entry) => allowed.has(entry.seq));
+        return (views[0] ?? []).filter((item) => allowed.has(item.seq));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -607,8 +603,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ]);
                   const readable = await Promise.all(
                     [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
+                      (await deps.sessions.visibleItems(sender.id, id)).some(
+                        (item) => item.seq === message.sourceEntrySeq,
                       ),
                     ),
                   );
@@ -803,7 +799,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+                const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -890,8 +886,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
               )
                 continue;
-              const entries = (await visibleHistory(child)).slice(-LAST_SAID_SCAN);
-              const said = lastAssistantText(entries);
+              const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
                 sessionId: child.id,
                 title: visibleTitle(child),
@@ -915,12 +910,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const maxChars = Math.min(Math.max(200, input.maxChars ?? READ_DEFAULT_MAX_CHARS), READ_MAX_CHARS_CEILING);
           if (!(await deps.sessions.getForParticipant(target.id, binding.request.actor.id)))
             return { ok: false, message: "you are not a participant in that session." };
-          const entries = await visibleHistory(target);
+          const items = await visibleHistory(target);
           const lines: string[] = [];
-          for (const entry of entries.slice(-limit)) {
-            const text = entryText(entry);
+          for (const item of items.slice(-limit)) {
+            const text = itemText(item);
             if (!text) continue;
-            lines.push(`${entry.type}#${entry.seq} ${snippet(text, 300)}`);
+            lines.push(`${item.kind}#${item.seq} ${snippet(text, 300)}`);
           }
           let rendered = lines.join("\n");
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
@@ -1036,7 +1031,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
@@ -1154,8 +1149,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
+      const visible = await deps.sessions.visibleItems(child.id, id);
+      if (!visible.some((item) => item.seq === outputSeq))
         throw new Error("the current parent audience cannot read this child result");
     }
   }

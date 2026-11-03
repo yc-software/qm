@@ -1,7 +1,8 @@
 import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import type { AttachmentMeta, SessionEntry } from "../types.ts";
+import type { AttachmentMeta } from "../types.ts";
+import { isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { forModelContext } from "../agent/context-compaction.ts";
@@ -133,12 +134,12 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
-  return forModelContext([...history]).flatMap((entry) => {
-    if (entry.type !== "user") return [];
-    const attachments = (entry.payload as { attachments?: AttachmentMeta[] } | null)?.attachments;
+export function historicalDocumentMetas(history: readonly Item[]): AttachmentMeta[] {
+  return forModelContext([...history]).flatMap((item) => {
+    if (!isUserItem(item)) return [];
+    const attachments = item.body.attachments;
     return Array.isArray(attachments)
-      ? attachments.filter(
+      ? (attachments as AttachmentMeta[]).filter(
           (file) => file.direction === "in" && typeof file.name === "string" && isDocumentAttachment(file),
         )
       : [];

@@ -133,7 +133,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   layerEnv?: Readonly<Record<string, string | undefined>>;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
-  workspaceStore: "local" | "postgres";
   s3Bucket?: string;
   s3Region?: string;
   s3Endpoint?: string;
@@ -615,7 +614,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
     ...optNum(env, "MEMORY_CAPTURE_MAX_TURNS", "memoryCaptureMaxTurns"),
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
-    workspaceStore: env.WORKSPACE_STORE === "postgres" ? "postgres" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),

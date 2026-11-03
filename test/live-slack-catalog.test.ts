@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { Ctx, type Env } from "./live-slack/harness.ts";
 import { SlackClient, type SlackMessage } from "./live-slack/slack.ts";
 import { scenarios } from "./live-slack/scenarios.ts";
+import { storedItem } from "../src/sessions/items.ts";
 
 function context(name: string) {
   const scenario = scenarios.find((item) => item.name === name)!;
@@ -116,18 +117,18 @@ test("execute-turn waits past an acknowledgment for successful execute output", 
   ctx.env.core = {
     findSessionByThread: async () => ({
       id: "session",
-      entries: [
-        {
-          type: "tool_result",
-          payload: {
+      items: [
+        storedItem(
+          {
+            kind: "ToolResult",
             tool: "execute",
-            action: "exec",
-            code: 0,
+            callId: "call",
             isError: false,
-            timedOut: false,
-            result: `${output}\n\n[exit 0]`,
+            text: `${output}\n\n[exit 0]`,
+            body: { action: "exec", code: 0, timedOut: false },
           },
-        },
+          { sessionId: "session", seq: 0, createdAt: 0 },
+        ),
       ],
     }),
   } as never;

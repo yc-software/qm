@@ -19,7 +19,7 @@ function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }):
 const PRESSURE_WARN_FULL60 = 50;
 
 export function computerTools(kit: ToolKit) {
-  const { ref, opts, log, recordCall, recordResult, blockOnApproval } = kit;
+  const { ref, opts, logResult, recordCall, recordResult, blockOnApproval } = kit;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -138,7 +138,7 @@ export function computerTools(kit: ToolKit) {
           true,
         );
       }
-      await log("tool_result", {
+      await logResult({
         tool: "execute",
         ...scopeNote,
         callId,
@@ -155,7 +155,7 @@ export function computerTools(kit: ToolKit) {
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
   const scratchLine =
-    '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
+    '- "scratch": blank per-turn computer with the same tooling and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const scopeDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +

@@ -10,38 +10,23 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
-import { scopeId } from "../src/types.ts";
+import { isUserItem, storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
-  return {
-    sessionId: "s1",
-    seq,
-    parentSeq: seq === 0 ? null : seq - 1,
-    type,
-    payload: { text: `e${seq}` },
-    scopeLabel: scopeId("personal", "U1"),
-    createdAt: seq,
-  };
+function at(seq: number, item: NewItem): Item {
+  return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
 }
+const user = (seq: number) => at(seq, { kind: "UserMessage", text: `e${seq}` });
+const reply = (seq: number) => at(seq, { kind: "AgentMessage", text: `e${seq}` });
+const call = (seq: number) => at(seq, { kind: "ToolCall", tool: "execute", callId: `c${seq}` });
+const result = (seq: number) => at(seq, { kind: "ToolResult", tool: "execute", callId: `c${seq}`, text: `e${seq}` });
 
-const LOG: SessionEntry[] = [
-  entry(0, "user"),
-  entry(1, "tool_call"),
-  entry(2, "tool_result"),
-  entry(3, "assistant"),
-  entry(4, "user"),
-  entry(5, "assistant"),
-  entry(6, "user"),
-  entry(7, "tool_call"),
-  entry(8, "assistant"),
-];
+const LOG: Item[] = [user(0), call(1), result(2), reply(3), user(4), reply(5), user(6), call(7), reply(8)];
 
 test("windowedTranscript: tailTurns cuts on a turn boundary (a user entry), never mid-turn", () => {
   const one = windowedTranscript(LOG, { tailTurns: 1 });
   assert.deepEqual(
-    one.entries.map((e) => e.seq),
+    one.items.map((e) => e.seq),
     [6, 7, 8],
     "the last turn starts at its user entry",
   );
@@ -49,7 +34,7 @@ test("windowedTranscript: tailTurns cuts on a turn boundary (a user entry), neve
 
   const two = windowedTranscript(LOG, { tailTurns: 2 });
   assert.deepEqual(
-    two.entries.map((e) => e.seq),
+    two.items.map((e) => e.seq),
     [4, 5, 6, 7, 8],
   );
   assert.equal(two.earlier, 4);
@@ -57,37 +42,37 @@ test("windowedTranscript: tailTurns cuts on a turn boundary (a user entry), neve
 
 test("windowedTranscript: asking for more turns than exist returns everything", () => {
   const all = windowedTranscript(LOG, { tailTurns: 99 });
-  assert.equal(all.entries.length, LOG.length);
+  assert.equal(all.items.length, LOG.length);
   assert.equal(all.earlier, 0);
 });
 
 test("windowedTranscript: no window returns everything", () => {
   const all = windowedTranscript(LOG);
-  assert.equal(all.entries.length, LOG.length);
+  assert.equal(all.items.length, LOG.length);
   assert.equal(all.earlier, 0);
 });
 
 test("windowedTranscript: sinceSeq re-reads from an anchor, counting what it skipped", () => {
   const w = windowedTranscript(LOG, { sinceSeq: 4 });
   assert.deepEqual(
-    w.entries.map((e) => e.seq),
+    w.items.map((e) => e.seq),
     [4, 5, 6, 7, 8],
   );
   assert.equal(w.earlier, 4);
 
   const none = windowedTranscript(LOG, { sinceSeq: 0 });
-  assert.equal(none.entries.length, LOG.length);
+  assert.equal(none.items.length, LOG.length);
   assert.equal(none.earlier, 0);
 
   const past = windowedTranscript(LOG, { sinceSeq: 999 });
-  assert.equal(past.entries.length, 0, "an anchor past the end yields an empty window");
+  assert.equal(past.items.length, 0, "an anchor past the end yields an empty window");
   assert.equal(past.earlier, LOG.length);
 });
 
 test("windowedTranscript: beforeSeq pages history backward on turn boundaries", () => {
   const page = windowedTranscript(LOG, { beforeSeq: 6, tailTurns: 1 });
   assert.deepEqual(
-    page.entries.map((e) => e.seq),
+    page.items.map((e) => e.seq),
     [4, 5],
     "the turn immediately before the anchor",
   );
@@ -95,7 +80,7 @@ test("windowedTranscript: beforeSeq pages history backward on turn boundaries", 
 
   const next = windowedTranscript(LOG, { beforeSeq: 4, tailTurns: 1 });
   assert.deepEqual(
-    next.entries.map((e) => e.seq),
+    next.items.map((e) => e.seq),
     [0, 1, 2, 3],
   );
   assert.equal(next.earlier, 0, "the log is exhausted — the button disappears");
@@ -104,50 +89,57 @@ test("windowedTranscript: beforeSeq pages history backward on turn boundaries", 
 test("windowedTranscript: beforeSeq alone truncates; wider-than-history pages return everything left", () => {
   const prefix = windowedTranscript(LOG, { beforeSeq: 4 });
   assert.deepEqual(
-    prefix.entries.map((e) => e.seq),
+    prefix.items.map((e) => e.seq),
     [0, 1, 2, 3],
   );
   assert.equal(prefix.earlier, 0);
 
   const wide = windowedTranscript(LOG, { beforeSeq: 6, tailTurns: 99 });
   assert.deepEqual(
-    wide.entries.map((e) => e.seq),
+    wide.items.map((e) => e.seq),
     [0, 1, 2, 3, 4, 5],
   );
   assert.equal(wide.earlier, 0);
 
   const past = windowedTranscript(LOG, { beforeSeq: 999, tailTurns: 1 });
   assert.deepEqual(
-    past.entries.map((e) => e.seq),
+    past.items.map((e) => e.seq),
     [6, 7, 8],
     "an anchor past the end behaves like a plain tail read",
   );
 });
 
-function fat(seq: number, type: SessionEntry["type"], chars: number): SessionEntry {
-  return { ...entry(seq, type), payload: { tool: "execute", output: "x".repeat(chars) } };
+function fat(seq: number, kind: "ToolCall" | "ToolResult", chars: number): Item {
+  return at(seq, { kind, tool: "execute", callId: `c${seq}`, body: { output: "x".repeat(chars) } });
 }
 
 test("windowedTranscript: a fat tool payload is previewed, and the entry says so", () => {
-  const log = [entry(0, "user"), fat(1, "tool_call", 50_000), fat(2, "tool_result", 50_000), entry(3, "assistant")];
+  const log = [user(0), fat(1, "ToolCall", 50_000), fat(2, "ToolResult", 50_000), reply(3)];
   const w = windowedTranscript(log, { tailTurns: 1 });
-  assert.equal(w.entries.length, 4);
-  for (const e of w.entries.filter((x) => x.type === "tool_call" || x.type === "tool_result")) {
-    assert.equal((e.payload as { output: string }).output.length, ENTRY_STRING_BUDGET);
+  assert.equal(w.items.length, 4);
+  for (const e of w.items.filter((x) => x.kind === "ToolCall" || x.kind === "ToolResult")) {
+    assert.equal((e.body.output as string).length, ENTRY_STRING_BUDGET);
     assert.equal(e.truncated, true);
   }
-  assert.equal(w.entries[0]!.truncated, undefined, "a small entry is shipped whole and unmarked");
+  assert.equal(w.items[0]!.truncated, undefined, "a small entry is shipped whole and unmarked");
+});
+
+test("windowedTranscript: a long tool result text is previewed, and the item says so", () => {
+  const log = [user(0), at(1, { kind: "ToolResult", callId: "c1", tool: "execute", text: "o".repeat(50_000) })];
+  const result = windowedTranscript(log).items[1]!;
+  assert.equal(result.text!.length, ENTRY_STRING_BUDGET);
+  assert.equal(result.truncated, true);
 });
 
 test("windowedTranscript: conversation text is never truncated — only tool payloads are", () => {
   const said = "y".repeat(50_000);
   const log = [
-    { ...entry(0, "user"), payload: { text: said } },
-    { ...entry(1, "assistant"), payload: { text: said } },
-    { ...entry(2, "thinking"), payload: { text: said } },
+    at(0, { kind: "UserMessage", text: said }),
+    at(1, { kind: "AgentMessage", text: said }),
+    at(2, { kind: "Reasoning", text: said }),
   ];
-  for (const e of windowedTranscript(log).entries) {
-    assert.equal((e.payload as { text: string }).text.length, said.length);
+  for (const e of windowedTranscript(log).items) {
+    assert.equal(e.text!.length, said.length);
     assert.equal(e.truncated, undefined);
   }
 });
@@ -164,7 +156,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries", async () => {
+test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierItems", async () => {
   const srv = start();
   try {
     const actor = { externalId: "U1" };
@@ -183,64 +175,61 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
 
     const full = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1`);
     assert.equal(full.status, 200);
-    const fullBody = (await full.json()) as { entries: SessionEntry[]; earlierEntries?: number };
-    assert.equal(fullBody.earlierEntries, undefined, "an unwindowed read never reports earlierEntries");
-    const userSeqs = fullBody.entries.filter((e) => e.type === "user").map((e) => e.seq);
+    const fullBody = (await full.json()) as { items: Item[]; earlierItems?: number };
+    assert.equal(fullBody.earlierItems, undefined, "an unwindowed read never reports earlierItems");
+    const userSeqs = fullBody.items.filter(isUserItem).map((e) => e.seq);
     assert.equal(userSeqs.length, 3);
 
     const tail = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=1`);
     assert.equal(tail.status, 200);
-    const tailBody = (await tail.json()) as { entries: SessionEntry[]; earlierEntries?: number };
-    assert.equal(tailBody.entries[0]!.seq, userSeqs[2], "the window opens on the last turn's user entry");
-    assert.equal(tailBody.earlierEntries, userSeqs[2], "everything before the anchor is counted, not shipped");
-    assert.equal(tailBody.entries.length + tailBody.earlierEntries!, fullBody.entries.length);
+    const tailBody = (await tail.json()) as { items: Item[]; earlierItems?: number };
+    assert.equal(tailBody.items[0]!.seq, userSeqs[2], "the window opens on the last turn's user entry");
+    assert.equal(tailBody.earlierItems, userSeqs[2], "everything before the anchor is counted, not shipped");
+    assert.equal(tailBody.items.length + tailBody.earlierItems!, fullBody.items.length);
 
     const since = await fetch(
       `${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&sinceSeq=${userSeqs[1]}`,
     );
-    const sinceBody = (await since.json()) as { entries: SessionEntry[]; earlierEntries?: number };
-    assert.equal(sinceBody.entries[0]!.seq, userSeqs[1], "sinceSeq re-reads from the same boundary");
+    const sinceBody = (await since.json()) as { items: Item[]; earlierItems?: number };
+    assert.equal(sinceBody.items[0]!.seq, userSeqs[1], "sinceSeq re-reads from the same boundary");
 
     const wide = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=999`);
-    const wideBody = (await wide.json()) as { entries: SessionEntry[]; earlierEntries?: number };
-    assert.equal(wideBody.entries.length, fullBody.entries.length);
-    assert.equal(wideBody.earlierEntries, undefined);
+    const wideBody = (await wide.json()) as { items: Item[]; earlierItems?: number };
+    assert.equal(wideBody.items.length, fullBody.items.length);
+    assert.equal(wideBody.earlierItems, undefined);
 
     const before = await fetch(
       `${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&beforeSeq=${userSeqs[2]}&tailTurns=1`,
     );
     assert.equal(before.status, 200);
-    const beforeBody = (await before.json()) as { entries: SessionEntry[]; earlierEntries?: number };
-    assert.equal(beforeBody.entries[0]!.seq, userSeqs[1], "the page opens on the previous turn's user entry");
+    const beforeBody = (await before.json()) as { items: Item[]; earlierItems?: number };
+    assert.equal(beforeBody.items[0]!.seq, userSeqs[1], "the page opens on the previous turn's user entry");
     assert.ok(
-      beforeBody.entries.every((e) => e.seq < userSeqs[2]!),
+      beforeBody.items.every((e) => e.seq < userSeqs[2]!),
       "nothing at or past the anchor is re-shipped",
     );
-    assert.equal(beforeBody.earlierEntries, userSeqs[1], "what remains before this page");
+    assert.equal(beforeBody.earlierItems, userSeqs[1], "what remains before this page");
 
-    const seq = fullBody.entries[0]!.seq;
-    const one = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U1`);
+    const seq = fullBody.items[0]!.seq;
+    const one = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/items/${seq}?viewer=U1`);
     assert.equal(one.status, 200);
-    const oneBody = (await one.json()) as { entry: SessionEntry };
-    const { truncated, ...shown } = fullBody.entries[0] as SessionEntry & { truncated?: true };
-    assert.equal(truncated, true, "the view marks a user entry whose model-only context it left out");
-    assert.equal((shown.payload as { environment?: unknown }).environment, undefined);
-    assert.equal((shown.payload as { memoryRecall?: unknown }).memoryRecall, undefined);
-    assert.equal(typeof (oneBody.entry.payload as { environment?: unknown }).environment, "string");
+    const oneBody = (await one.json()) as { item: Item };
+    const { truncated, ...shown } = fullBody.items[0] as Item & { truncated?: true };
+    assert.equal(truncated, true, "the view marks a user item whose model-only context it left out");
+    assert.equal(shown.body.environment, undefined);
+    assert.equal(shown.body.memoryRecall, undefined);
+    assert.equal(typeof oneBody.item.body.environment, "string");
     assert.deepEqual(
-      {
-        ...oneBody.entry,
-        payload: { ...(oneBody.entry.payload as object), environment: undefined, environmentSnapshot: undefined },
-      },
-      { ...shown, payload: { ...(shown.payload as object), environment: undefined, environmentSnapshot: undefined } },
-      "the whole entry, exactly as stored, is one fetch away",
+      { ...oneBody.item, body: { ...oneBody.item.body, environment: undefined, environmentSnapshot: undefined } },
+      { ...shown, body: { ...shown.body, environment: undefined, environmentSnapshot: undefined } },
+      "the whole item, exactly as stored, is one fetch away",
     );
 
-    const missing = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/99999?viewer=U1`);
+    const missing = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/items/99999?viewer=U1`);
     assert.equal(missing.status, 404, "a seq that isn't in this session");
-    const stranger = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}?viewer=U2`);
-    assert.equal(stranger.status, 404, "a viewer who cannot see the session cannot see its entries");
-    const noViewer = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/entries/${seq}`);
+    const stranger = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/items/${seq}?viewer=U2`);
+    assert.equal(stranger.status, 404, "a viewer who cannot see the session cannot see its items");
+    const noViewer = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}/items/${seq}`);
     assert.equal(noViewer.status, 400, "viewer is required");
 
     const bad = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(sessionId)}?viewer=U1&tailTurns=0`);
@@ -255,34 +244,36 @@ test("GET /v1/sessions/:id honors tailTurns/sinceSeq and reports earlierEntries"
 });
 
 test("windowedTranscript: an unwindowed read is still whole — fork cutoffs count on it", () => {
-  const log = [entry(0, "user")];
-  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "tool_result", ENTRY_STRING_BUDGET * 3));
+  const log = [user(0)];
+  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", ENTRY_STRING_BUDGET * 3));
   const all = windowedTranscript(log);
-  assert.equal(all.entries.length, log.length, "no window asked for, nothing dropped");
+  assert.equal(all.items.length, log.length, "no window asked for, nothing dropped");
   assert.equal(all.earlier, 0);
-  assert.equal(all.entries[1]!.truncated, true, "though fat payloads are still previewed");
+  assert.equal(all.items[1]!.truncated, true, "though fat payloads are still previewed");
 });
 
 test("windowedTranscript: the text a post tool call puts in the conversation is never previewed", () => {
   const said = "z".repeat(50_000);
   const log = [
-    entry(0, "user"),
-    { ...entry(1, "tool_call"), payload: { tool: "reach", action: "post", text: said, callId: "c1" } },
-    { ...entry(2, "tool_result"), payload: { tool: "reach", callId: "c1", ok: true } },
+    user(0),
+    at(1, { kind: "ToolCall", tool: "reach", callId: "c1", body: { action: "post", text: said } }),
+    at(2, { kind: "ToolResult", tool: "reach", callId: "c1", body: { ok: true } }),
   ];
-  const posted = windowedTranscript(log, { tailTurns: 1 }).entries[1]!;
-  assert.equal((posted.payload as { text: string }).text.length, said.length, "the agent's reply is conversation text");
+  const posted = windowedTranscript(log, { tailTurns: 1 }).items[1]!;
+  assert.equal((posted.body.text as string).length, said.length, "the agent's reply is conversation text");
   assert.equal(posted.truncated, undefined);
 });
 
 test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the preview", () => {
   const deep = (depth: number, leaf: unknown): unknown => (depth === 0 ? leaf : { nest: deep(depth - 1, leaf) });
-  const log = [entry(0, "user")];
+  const log = [user(0)];
   for (let seq = 1; seq <= 6; seq++) {
-    log.push({ ...entry(seq, "tool_result"), payload: { tool: "execute", out: deep(12, "q".repeat(300_000)) } });
+    log.push(
+      at(seq, { kind: "ToolResult", tool: "execute", callId: `c${seq}`, body: { out: deep(12, "q".repeat(300_000)) } }),
+    );
   }
   const w = windowedTranscript(log, { tailTurns: 1 });
-  const shipped = JSON.stringify(w.entries).length;
+  const shipped = JSON.stringify(w.items).length;
   assert.ok(
     shipped < 7 * 2 * ENTRY_STRING_BUDGET,
     `a nested subtree must be charged its real size, shipped ${shipped}`,
@@ -290,60 +281,64 @@ test("windowedTranscript: a deeply nested payload cannot smuggle bytes past the 
 });
 
 test("windowedTranscript: a sinceSeq re-read is never trimmed — it refreshes what the client already holds", () => {
-  const log = [entry(0, "user")];
-  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "tool_result", ENTRY_STRING_BUDGET * 3));
+  const log = [user(0)];
+  for (let seq = 1; seq <= 400; seq++) log.push(fat(seq, "ToolResult", ENTRY_STRING_BUDGET * 3));
   const w = windowedTranscript(log, { sinceSeq: 1 });
-  assert.equal(w.entries.length, log.length - 1, "a refresh that shrinks the window makes read messages vanish");
+  assert.equal(w.items.length, log.length - 1, "a refresh that shrinks the window makes read messages vanish");
   assert.equal(w.earlier, 1);
 });
 
 test("a user entry carrying huge model-only context no longer hides the turns before it", () => {
   const context = "c".repeat(300_000);
-  const log: SessionEntry[] = [];
+  const log: Item[] = [];
   for (let turn = 0; turn < 4; turn++) {
-    log.push({
-      ...entry(turn * 2, "user"),
-      payload: {
+    log.push(
+      at(turn * 2, {
+        kind: "UserMessage",
         text: `ask ${turn}`,
-        environment: context,
-        environmentSnapshot: { hashes: { Skills: "abc" }, sessionId: "s" },
-        rosterSnapshot: { roster: [{ id: "U1", name: "a" }], sessionId: "s" },
-        memoryRecall: { body: context },
-      },
-    });
-    log.push(entry(turn * 2 + 1, "assistant"));
+        body: {
+          environment: context,
+          environmentSnapshot: { hashes: { Skills: "abc" }, sessionId: "s" },
+          rosterSnapshot: { roster: [{ id: "U1", name: "a" }], sessionId: "s" },
+          memoryRecall: { body: context },
+        },
+      }),
+    );
+    log.push(reply(turn * 2 + 1));
   }
   const w = windowedTranscript(log, { tailTurns: 25 });
   assert.equal(w.earlier, 0, "every turn is shipped; nothing is pushed behind the earlier button");
   assert.deepEqual(
-    w.entries.map((e) => e.seq),
+    w.items.map((e) => e.seq),
     log.map((e) => e.seq),
   );
-  for (const user of w.entries.filter((e) => e.type === "user")) {
-    assert.deepEqual(Object.keys(user.payload as object), ["text"], "model-only context stays out of the view");
-    assert.equal(user.truncated, true, "the full entry is one lazy fetch away");
+  for (const shown of w.items.filter((e) => isUserItem(e))) {
+    assert.deepEqual(shown.body, {}, "model-only context stays out of the view");
+    assert.match(shown.text ?? "", /^ask \d$/);
+    assert.equal(shown.truncated, true, "the full item is one lazy fetch away");
   }
-  assert.ok(JSON.stringify(w.entries).length < 10_000);
+  assert.ok(JSON.stringify(w.items).length < 10_000);
 });
 
-test("thinking entries keep their text but not the provider's signature", () => {
+test("reasoning items keep their text but not the provider's signature", () => {
   const log = [
-    entry(0, "user"),
-    { ...entry(1, "thinking"), payload: { thinking: "weighing it", thinkingSignature: "s".repeat(50_000) } },
+    user(0),
+    at(1, { kind: "Reasoning", text: "weighing it", body: { thinkingSignature: "s".repeat(50_000) } }),
   ];
-  const thought = windowedTranscript(log, { tailTurns: 1 }).entries[1]!;
-  assert.deepEqual(thought.payload, { thinking: "weighing it" });
+  const thought = windowedTranscript(log, { tailTurns: 1 }).items[1]!;
+  assert.equal(thought.text, "weighing it");
+  assert.deepEqual(thought.body, {});
   assert.equal(thought.truncated, true);
 });
 
 test("paging is by turns alone, however large the turns are", () => {
-  const log: SessionEntry[] = [];
-  const said = (n: number): SessionEntry => ({ ...entry(n, "assistant"), payload: { text: "s".repeat(50_000) } });
+  const log: Item[] = [];
+  const said = (n: number) => at(n, { kind: "AgentMessage", text: "s".repeat(50_000) });
   for (let turn = 0; turn < 40; turn++) {
-    log.push(entry(turn * 2, "user"));
+    log.push(user(turn * 2));
     log.push(said(turn * 2 + 1));
   }
   const w = windowedTranscript(log, { tailTurns: 25 });
-  assert.equal(w.entries.filter((e) => e.type === "user").length, 25);
+  assert.equal(w.items.filter(isUserItem).length, 25);
   assert.equal(w.earlier, 30);
 });

@@ -1,7 +1,7 @@
 import { parkIfOverCap } from "../../sessions/tool-output.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { createKeyedQueue } from "../../util/async.ts";
-import type { EntryType, ScopeId } from "../../types.ts";
+import type { ScopeId } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { headSlice, tailSlice } from "../../util/text.ts";
@@ -60,23 +60,45 @@ function capPayloadStrings(v: unknown): unknown {
 }
 
 export function createRecorder(ref: ToolContextRef) {
-  const log = async (type: EntryType, payload: unknown): Promise<void> => {
+  const logResult = async (
+    summary: { callId: string; isError: boolean; result: string } & Record<string, unknown>,
+  ): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
-    if (type === "tool_result" && isObj(payload)) {
-      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: handbackStop(ref.shutdown) };
-      else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
+    const { tool, callId, isError, result, output, ...body } = summary;
+    for (const key of ["stdout", "stderr"]) {
+      const stream = body[key];
+      if (typeof stream === "string" && result.includes(stream)) delete body[key];
     }
-    await ref.emit({ type, payload, scopeLabel: ref.scopeLabel });
+    if (ref.shutdown?.aborted) Object.assign(body, { interrupted: true, stop: handbackStop(ref.shutdown) });
+    else if (ref.abortSignal?.aborted) body.stopped = true;
+    let blobSha: string | null = null;
+    if (isObj(output) && typeof output.blob === "string") {
+      const { blob, ...kept } = output;
+      blobSha = blob;
+      body.output = kept;
+    } else if (output !== undefined) body.output = output;
+    await ref.emit({
+      kind: "ToolResult",
+      tool: typeof tool === "string" ? tool : null,
+      callId,
+      isError,
+      text: result,
+      blobSha,
+      body,
+    });
   };
 
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = async (callId: string, payload: Record<string, unknown>): Promise<void> => {
     if (ref.stoppedCalls?.has(callId)) return;
     const mark = retryMarks.get(callId);
-    return log("tool_call", {
-      ...payload,
+    if (!ref.emit || !ref.scopeLabel) return;
+    const { tool, ...body } = payload;
+    await ref.emit({
+      kind: "ToolCall",
+      tool: typeof tool === "string" ? tool : null,
       callId,
-      ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
+      body: { ...body, ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}) },
     });
   };
 
@@ -237,7 +259,7 @@ export function createRecorder(ref: ToolContextRef) {
         result += `\n\n${arrived}`;
       }
       if (stopped()) return ret;
-      await log("tool_result", {
+      await logResult({
         ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
         callId,
         isError,
@@ -267,5 +289,5 @@ export function createRecorder(ref: ToolContextRef) {
   ): Promise<T> =>
     recordResult(callId, summary, ret, isError, sourceScopeId, false, { provenance: "external", source });
 
-  return { log, retryMarks, recordCall, recordResult, recordCoreAuthoredResult, recordExternalResult };
+  return { logResult, retryMarks, recordCall, recordResult, recordCoreAuthoredResult, recordExternalResult };
 }

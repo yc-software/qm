@@ -20,7 +20,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   };
   await sessions.setGoal(writer, goal);
   for (let i = 0; i < 10; i++) {
-    await sessions.append(writer, { type: "user", payload: { text: `message ${i} `.repeat(100) }, scopeLabel: scope });
+    await sessions.append(writer, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
   }
   const compaction = createCompaction({
     sessions,
@@ -31,15 +31,15 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     const rebuilt = await compaction.compactContextIfNeeded({
       session,
       writer,
-      visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
+      visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).items),
       scopeId: scope,
       actorId: "test",
     });
-    assert.ok(rebuilt.some((entry) => (entry.payload as { kind?: string }).kind === "context_summary"));
-    await sessions.append(writer, { type: "user", payload: { text: "more work ".repeat(1000) }, scopeLabel: scope });
+    assert.ok(rebuilt.some((item) => item.kind === "ContextCompaction"));
+    await sessions.append(writer, { kind: "UserMessage", text: "more work ".repeat(1000) });
   }
-  const goalEntries = (await sessions.getEntries(session.id)).filter(
-    (entry) => (entry.payload as { kind?: string }).kind === "goal",
+  const goalEntries = (await sessions.getItems(session.id)).filter(
+    (entry) => entry.kind !== "UserMessage" && entry.kind !== "ContextCompaction",
   );
   assert.equal(goalEntries.length, 0, "compaction does not copy goals into the log");
   assert.deepEqual((await sessions.goals([session.id])).get(session.id), goal);
@@ -52,7 +52,7 @@ test("background compaction cannot revive an older goal over one closed while it
   const goal = createGoalRecord({ objective: "verify the result" });
   await sessions.setGoal(writer, goal);
   for (let i = 0; i < 10; i++) {
-    await sessions.append(writer, { type: "user", payload: { text: `message ${i} `.repeat(100) }, scopeLabel: scope });
+    await sessions.append(writer, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
   }
   const started = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<string>();
@@ -76,11 +76,7 @@ test("background compaction cannot revive an older goal over one closed while it
   await sessions.setGoal({ sessionId: session.id }, closed);
   finish.resolve("Earlier work.");
   const deadline = Date.now() + 3000;
-  while (
-    !(await sessions.getEntries(session.id)).some(
-      (entry) => (entry.payload as { kind?: string }).kind === "context_summary",
-    )
-  ) {
+  while (!(await sessions.getItems(session.id)).some((entry) => entry.kind === "ContextCompaction")) {
     assert.ok(Date.now() < deadline, "background compaction did not finish");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

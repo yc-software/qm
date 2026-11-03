@@ -27,7 +27,7 @@ const backends: Array<{ name: string; skip: string | false; make: () => Promise<
 
 async function claimAll(runs: RunStore): Promise<string[]> {
   const order: string[] = [];
-  for (let run = await runs.claim("w", 60_000); run; run = await runs.claim("w", 60_000)) {
+  for (let run = (await runs.claim("w", 60_000))[0] ?? null; run; run = (await runs.claim("w", 60_000))[0] ?? null) {
     order.push(run.request.text);
     await runs.complete(run.id, run.leaseToken!, { status: "ok", sessionId: run.sessionId, reply: "" });
   }
@@ -76,11 +76,11 @@ for (const backend of backends) {
       const runs = await backend.make();
       try {
         const queued = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
-        const lease = (await runs.claim("w", 60_000))!;
+        const lease = ((await runs.claim("w", 60_000))[0] ?? null)!;
         assert.equal(await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" }), true);
         const parked = (await runs.get(queued.id))!;
         assert.deepEqual([parked.status, parked.preemptions, parked.lastStop], ["pending", 1, { kind: "parked" }]);
-        const again = (await runs.claim("w", 60_000))!;
+        const again = ((await runs.claim("w", 60_000))[0] ?? null)!;
         await runs.releaseLease(again.id, again.leaseToken!, { kind: "shutdown" });
         assert.equal((await runs.get(queued.id))!.preemptions, 1, "a deploy handback is not a park");
       } finally {
@@ -114,7 +114,7 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 }
 
 async function withWorkers(
-  count: number,
+  slots: number,
   body: (ctx: { runs: RunStore; log: string[]; sweep: () => Promise<boolean> }) => Promise<void>,
   maxClaims?: number,
   setup?: (runs: RunStore) => Promise<void>,
@@ -122,15 +122,13 @@ async function withWorkers(
   const { runs } = createPostgresRunStore(testDatabaseUrl(), maxClaims ? { maxClaims } : undefined);
   await setup?.(runs);
   const log: string[] = [];
-  const workers = Array.from({ length: count }, () =>
-    createWorker({ runs, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
-  );
-  const preemption = createRunPreemption({ runs, workers, graceMs: 0 });
-  for (const worker of workers) worker.start();
+  const worker = createWorker({ runs, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5, slots });
+  const preemption = createRunPreemption({ runs, worker, graceMs: 0 });
+  worker.start();
   try {
     await body({ runs, log, sweep: () => preemption.sweep() });
   } finally {
-    await Promise.all(workers.map((worker) => worker.releaseInFlight()));
+    await worker.releaseInFlight();
   }
 }
 
@@ -190,7 +188,7 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
         await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } })
       ).run;
       for (let i = 0; i < 3; i++) {
-        const lease = (await runs.claim("w", 60_000))!;
+        const lease = ((await runs.claim("w", 60_000))[0] ?? null)!;
         await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" });
       }
     },
@@ -206,4 +204,16 @@ test("a tool result written after a park records the park, not a deploy", () => 
     [handbackStop(parked.signal), handbackStop(deploy.signal)],
     [{ kind: "parked" }, { kind: "shutdown" }],
   );
+});
+
+test("each run in a batch claim gets its own lease token", async () => {
+  const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+  try {
+    for (const sessionId of ["b1", "b2", "b3"]) await runs.enqueue({ sessionId, request: cron(sessionId) });
+    const batch = await runs.claim("w", 60_000, 3);
+    assert.equal(batch.length, 3);
+    assert.equal(new Set(batch.map((run) => run.leaseToken)).size, 3);
+  } finally {
+    await close();
+  }
 });

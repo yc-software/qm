@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
-import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
+import { createPgBossCronQueue, type CronFireJob, type CronJobQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { type CronFireStore, createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -35,10 +35,21 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
 }
 
+function recording(queue: CronJobQueue, enqueued: CronFireJob[]): CronJobQueue {
+  return {
+    ...queue,
+    enqueueFire: (job) => {
+      enqueued.push(job);
+      return queue.enqueueFire(job);
+    },
+  };
+}
+
 function instance(
   calls: TurnRequest[],
   turnMs: number,
   fires: CronFireStore,
+  enqueued: CronFireJob[] = [],
 ): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), { fires });
@@ -54,7 +65,7 @@ function instance(
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
-    jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
+    jobQueue: recording(createPgBossCronQueue(URL ?? "", SCHEMA), enqueued),
   });
   return { scheduler, crons };
 }
@@ -156,6 +167,35 @@ test(
     } finally {
       a.scheduler.stop();
       b.scheduler.stop();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  },
+);
+
+test(
+  "pg-boss queue: reconciliation enqueues only slots due within its repair window",
+  { skip, timeout: 120_000 },
+  async () => {
+    const calls: TurnRequest[] = [];
+    const enqueued: CronFireJob[] = [];
+    const a = instance(calls, 0, createPostgresCronFireStore(testDatabaseUrl()), enqueued);
+    const owner = { owner: "U4", createdBy: "U4", ownerScopeId: scopeId("personal", "U4") };
+    const overdue = await a.crons.create({ ...owner, schedule: { firstFireAt: Date.now() - 1000 }, action: "now" });
+    const distant = await a.crons.create({
+      ...owner,
+      schedule: { firstFireAt: Date.now() + 24 * 60 * 60_000 },
+      action: "tomorrow",
+    });
+    a.scheduler.start(1000);
+    try {
+      await until(() => calls.some((c) => c.idempotencyKey?.startsWith(`cron:${overdue.id}:`)), 30_000);
+      assert.ok(
+        enqueued.some((job) => job.cronId === overdue.id),
+        "the overdue slot is enqueued",
+      );
+      assert.ok(!enqueued.some((job) => job.cronId === distant.id), "the distant slot waits for a later pass");
+    } finally {
+      a.scheduler.stop();
       await new Promise((r) => setTimeout(r, 500));
     }
   },

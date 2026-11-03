@@ -54,7 +54,7 @@ export function createJobComputerSweep(deps: {
           emptySince.delete(computer.id);
           if (throttled) continue;
           attemptedAt.set(computer.id, now);
-          const handle = await deps.sandbox.provision([{ scopeId: computer.ownerScopeId, mode: "rw", mountPath: "" }], {
+          const handle = await deps.sandbox.provision(computer.ownerScopeId, {
             sandboxId: computer.id,
           });
           try {

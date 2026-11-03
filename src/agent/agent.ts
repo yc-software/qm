@@ -9,11 +9,11 @@ import type {
   ConversationTurn,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./goal.ts";
@@ -91,7 +91,7 @@ export interface AgentTurnInput {
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
-  history: SessionEntry[];
+  history: Item[];
   goal?: GoalRecord | null;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
@@ -99,7 +99,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
-  emit(entry: NewEntry): Promise<SessionEntry>;
+  emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
@@ -145,7 +145,7 @@ export interface DetectInput {
   threadOpener?: string;
   systemPrompt: string;
   reactionGuidance?: string;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
@@ -158,7 +158,7 @@ export interface DetectResult {
 
 export interface CompactInput {
   session: Session;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 

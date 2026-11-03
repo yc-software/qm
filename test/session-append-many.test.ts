@@ -21,21 +21,21 @@ for (const backend of ["memory", "postgres"] as const) {
       const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
       await store.addParticipant(session.id, "batch-test");
       const writer = { sessionId: session.id };
-      await store.append(writer, { type: "user", payload: { text: "Before batch" }, scopeLabel: scope });
+      await store.append(writer, { kind: "UserMessage", text: "Before batch" });
       const batch = await store.appendMany(writer, [
-        { type: "assistant", payload: { text: "First answer" }, scopeLabel: scope },
-        { type: "user", payload: { text: "Next question" }, scopeLabel: scope },
-        { type: "assistant", payload: { text: "Next answer" }, scopeLabel: scope },
+        { kind: "AgentMessage", text: "First answer" },
+        { kind: "UserMessage", text: "Next question" },
+        { kind: "AgentMessage", text: "Next answer" },
       ]);
       assert.deepEqual(
-        batch.map((entry) => [entry.seq, entry.parentSeq]),
+        batch.map((item) => [item.seq, item.kind, item.text]),
         [
-          [1, 0],
-          [2, 1],
-          [3, 2],
+          [1, "AgentMessage", "First answer"],
+          [2, "UserMessage", "Next question"],
+          [3, "AgentMessage", "Next answer"],
         ],
       );
-      assert.deepEqual((await store.getEntries(session.id)).slice(1), batch);
+      assert.deepEqual((await store.getItems(session.id)).slice(1), batch);
       assert.deepEqual(await store.appendMany(writer, []), []);
       const pool = backend === "postgres" ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : null;
       try {
@@ -50,11 +50,11 @@ for (const backend of ["memory", "postgres"] as const) {
           try {
             await assert.rejects(
               store.appendMany(writer, [
-                { type: "user", payload: { text: "Rolled back" }, scopeLabel: scope },
-                { type: "assistant", payload: { text: "Fails item insert" }, scopeLabel: scope },
+                { kind: "UserMessage", text: "Rolled back" },
+                { kind: "AgentMessage", text: "Fails item insert" },
               ]),
             );
-            assert.equal((await store.getEntries(session.id)).length, 4);
+            assert.equal((await store.getItems(session.id)).length, 4);
             const after = await pool.query("SELECT messages, turns FROM sessions WHERE id = $1", [session.id]);
             assert.deepEqual(after.rows, rows);
           } finally {
@@ -62,11 +62,8 @@ for (const backend of ["memory", "postgres"] as const) {
           }
         }
         await store.deleteSession(session.id);
-        await assert.rejects(
-          store.appendMany(writer, [{ type: "user", payload: { text: "Rejected" }, scopeLabel: scope }]),
-          /foreign key/,
-        );
-        assert.equal((await store.getEntries(session.id)).length, 0);
+        await assert.rejects(store.appendMany(writer, [{ kind: "UserMessage", text: "Rejected" }]), /foreign key/);
+        assert.equal((await store.getItems(session.id)).length, 0);
       } finally {
         await pool?.end();
       }
@@ -82,7 +79,7 @@ test(
     const scope = scopeId("personal", "batch-test");
     const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
     const writer = { sessionId: session.id };
-    await store.append(writer, { type: "user", payload: { text: "warm" }, scopeLabel: scope });
+    await store.append(writer, { kind: "UserMessage", text: "warm" });
     const query = pg.Client.prototype.query;
     let statements = 0;
     pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
@@ -90,15 +87,13 @@ test(
       return query.apply(this, args);
     } as typeof query;
     try {
-      await store.append(writer, { type: "assistant", payload: { text: "counted" }, scopeLabel: scope });
+      await store.append(writer, { kind: "AgentMessage", text: "counted" });
     } finally {
       pg.Client.prototype.query = query;
     }
     assert.equal(statements, 5);
     const appended = await Promise.all(
-      Array.from({ length: 8 }, (_, i) =>
-        store.append(writer, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
-      ),
+      Array.from({ length: 8 }, (_, i) => store.append(writer, { kind: "AgentMessage", text: `parallel ${i}` })),
     );
     assert.deepEqual(
       appended.map((entry) => entry.seq).sort((a, b) => a - b),
@@ -129,7 +124,7 @@ test(
       return query.apply(this, args);
     } as typeof query;
     try {
-      const appending = store.append(writer, { type: "user", payload: { text: "first" }, scopeLabel: scope });
+      const appending = store.append(writer, { kind: "UserMessage", text: "first" });
       await reachedCommit.promise;
       pg.Client.prototype.query = query;
       const deleting = ahead.deleteSessionIfEmpty(session.id);
@@ -141,6 +136,6 @@ test(
       pg.Client.prototype.query = query;
       releaseCommit.resolve();
     }
-    assert.equal((await store.getEntries(session.id)).length, 1);
+    assert.equal((await store.getItems(session.id)).length, 1);
   },
 );

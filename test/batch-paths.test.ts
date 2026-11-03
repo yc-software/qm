@@ -74,23 +74,15 @@ for (const backend of ["memory", "postgres"] as const) {
       const writer = { sessionId: session.id };
       const entries = await store.appendMany(
         writer,
-        Array.from({ length: 5 }, (_, n) => ({
-          type: "user" as const,
-          payload: { text: `message ${n}` },
-          scopeLabel: scope,
-        })),
+        Array.from({ length: 5 }, (_, n) => ({ kind: "UserMessage" as const, text: `message ${n}` })),
       );
       assert.deepEqual(
         entries.map((entry) => entry.seq),
         [0, 1, 2, 3, 4],
       );
-      assert.deepEqual((await store.getEntries(session.id)).slice(-5), entries);
+      assert.deepEqual((await store.getItems(session.id)).slice(-5), entries);
       assert.deepEqual(await store.appendMany(writer, []), []);
-      const batch = [5, 6].map((n) => ({
-        type: "user" as const,
-        payload: { text: `message ${n}` },
-        scopeLabel: scope,
-      }));
+      const batch = [5, 6].map((n) => ({ kind: "UserMessage" as const, text: `message ${n}` }));
       if (backend === "postgres") {
         const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
         try {
@@ -100,7 +92,7 @@ for (const backend of ["memory", "postgres"] as const) {
           );
           try {
             await assert.rejects(store.appendMany(writer, batch));
-            assert.equal((await store.getEntries(session.id)).length, 5);
+            assert.equal((await store.getItems(session.id)).length, 5);
           } finally {
             await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
@@ -132,14 +124,14 @@ for (const backend of ["memory", "postgres"] as const) {
       const writer = { sessionId: id };
       await store.setGoal(writer, goal(`first ${i}`));
       const notice = {
-        type: "system" as const,
-        payload: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
-        scopeLabel: scope,
+        kind: "Wake" as const,
+        wakeCause: "system" as const,
+        body: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
       };
       await store.setGoal(writer, { ...goal(`goal ${i}`), status: "paused" }, [notice]);
       assert.deepEqual(
-        (await store.getEntries(id)).map((entry) => entry.payload),
-        [{ ...notice.payload, cause: "system" }],
+        (await store.getItems(id)).map(({ kind, wakeCause, body }) => ({ kind, wakeCause, body })),
+        [notice],
         "the notice lands with the goal",
       );
     }

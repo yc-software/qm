@@ -63,13 +63,16 @@ for (const status of ["active", "paused"] as const) {
 
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
 
-    const entries = await built.sessions.getEntries(session.id);
-    assert.deepEqual(entries.at(-1)?.payload, {
-      kind: "goal_cancelled",
-      cause: "system",
-      objective: "old outreach goal",
-      cancelledBy: "U1",
-    });
+    const entries = await built.sessions.getItems(session.id);
+    const last = entries.at(-1)!;
+    assert.deepEqual(
+      { kind: last.kind, wakeCause: last.wakeCause, body: last.body },
+      {
+        kind: "Wake",
+        wakeCause: "system",
+        body: { kind: "goal_cancelled", objective: "old outreach goal", cancelledBy: "U1" },
+      },
+    );
     const goal = await sessionGoal(built, session.id);
     assert.equal(goal?.status, "cancelled");
     assert.equal(goal?.completionNote, undefined, "cancelling is not completing");
@@ -94,7 +97,7 @@ for (const status of ["active", "paused"] as const) {
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-    const run = await built.runs.claim("w1", 60_000);
+    const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
     assert.equal(run?.sessionId, ref);
     const writer = { sessionId: session.id };
 
@@ -120,7 +123,7 @@ for (const status of ["active", "paused"] as const) {
     assert.equal(goal?.status, "cancelled");
     assert.equal(goal?.tokensUsed, 77, "the cancel builds on the turn's final save");
     assert.deepEqual(
-      (await built.sessions.getEntries(session.id)).map((e) => (e.payload as { kind?: string }).kind),
+      (await built.sessions.getItems(session.id)).map((e) => e.body.kind),
       ["goal_cancelled"],
     );
   });
@@ -132,7 +135,7 @@ test("cancelling with no open goal touches nothing", async () => {
   const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
   await built.sessions.addParticipant(session.id, "U1");
   await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-  const run = await built.runs.claim("w1", 60_000);
+  const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
   assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
     cancelled: false,
     reason: "no_open_goal",

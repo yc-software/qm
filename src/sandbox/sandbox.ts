@@ -1,5 +1,5 @@
 import { errMessage, swallow } from "../util/errors.ts";
-import type { EgressPolicy, WorkspaceLayer } from "../types.ts";
+import type { EgressPolicy, ScopeId } from "../types.ts";
 
 export interface SandboxHandle {
   resourceId?: string;
@@ -99,7 +99,6 @@ export interface ProvisionOptions {
   egress?: EgressPolicy;
   egressToken?: string;
   scratch?: { key: string };
-  routeScopeId?: string;
   onStatus?: (text: string) => void;
 }
 
@@ -218,7 +217,7 @@ export interface TeardownOptions {
 export interface Sandbox {
   readonly profile: AgentComputerProfile;
   profileFor?(scopeId: string, sandboxId?: string): Promise<AgentComputerProfile>;
-  provision(layers: WorkspaceLayer[], opts?: ProvisionOptions): Promise<SandboxHandle>;
+  provision(ownerScopeId: ScopeId, opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   readFile(handle: SandboxHandle, relPath: string): Promise<string | null>;
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
