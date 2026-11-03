@@ -148,7 +148,7 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
               : `
            INSERT INTO channel_policy(org_id, container, orders, bots, ambient_enabled, set_by, updated_at)
            VALUES ($1,$2,COALESCE($3,''),COALESCE($4::jsonb,'{}'::jsonb),CASE WHEN $9 THEN $8::boolean END,$5,$6)
-           ON CONFLICT (org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
+           ON CONFLICT (tenant_id, org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
              bots = COALESCE($4::jsonb, channel_policy.bots),
              ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
              set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at

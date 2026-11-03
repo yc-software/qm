@@ -338,7 +338,7 @@ END $base_schema$`,
         const { rows } = await q(
           `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at, claim_priority)
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
-           ON CONFLICT (idempotency_key) DO NOTHING
+           ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
            RETURNING *, ${NOTIFY_SESSION_AVAILABLE}`,
           [
             id,
