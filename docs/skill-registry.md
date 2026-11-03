@@ -90,4 +90,4 @@ or another person's skills do not linger on a shared computer. Publish changes t
 skill API to update the source.
 
 A skill saved from a conversation or the Skills page keeps only its instructions, so put its scripts
-in the project's Files and have the instructions point to them there.
+in this scope's Files and have the instructions point to them there.
