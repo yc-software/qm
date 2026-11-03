@@ -246,6 +246,33 @@ test("an archived skill name can be reused for a replacement", async () => {
   }
 });
 
+test("POST /v1/skills is a 409 when the name has a live skill beside an archived one", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const draft = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "watch-ci", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.delete(draft.id);
+    await srv.skills.restore({ ...draft, id: "00000000-0000-4000-8000-000000000000", status: "archived" });
+    await publish(srv.skills, home, "watch-ci", "live");
+    const res = await fetch(`${srv.base}/v1/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1", name: "watch-ci", description: "dup", body: "# dup" }),
+    });
+    assert.equal(res.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "watch-ci" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("DELETE /v1/skills/:id refuses a skill the caller doesn't own with 403", async () => {
   const srv = start();
   try {

@@ -332,10 +332,18 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
-      s.scopeId = toScopeId;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return withNameLock(toScopeId, s.manifest.name, async () => {
+        const taken = (await inScopes([toScopeId])).some(
+          (x) => x.id !== id && x.manifest.name === s.manifest.name && x.status !== "archived",
+        );
+        if (taken) throw new Error(`a skill named ${s.manifest.name} already exists there`);
+        const current = await skills.get(id);
+        if (!current) throw new Error(`unknown skill: ${id}`);
+        current.scopeId = toScopeId;
+        current.updatedAt = Date.now();
+        await skills.put(current.id, current);
+        return current;
+      });
     },
   };
 }

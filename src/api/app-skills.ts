@@ -400,9 +400,9 @@ export function createSkillMethods(
         );
       }
       return deps.skills.withNameLock(homeScope, name, async () => {
-        const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
-        if (existing && existing.status !== "archived") return null;
-        if (existing) await deps.skills.delete(existing.id);
+        const sameName = (await deps.skills.list()).filter((s) => s.scopeId === homeScope && s.manifest.name === name);
+        if (sameName.some((s) => s.status !== "archived")) return null;
+        for (const s of sameName) await deps.skills.delete(s.id);
         const manifest: SkillManifest = {
           name,
           description,

@@ -698,6 +698,19 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
   await assert.rejects(() => store.move(created.id, scopeId("org", ORG)), /admin-gated/);
 });
 
+test("SkillStore.move refuses a scope that already has a live skill of that name", async () => {
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const manifest = { name: "tidy", description: "d", requiredCapabilities: [], body: "b" };
+  const resident = await store.create({ scopeId: scopeId("channel", "C1"), manifest, createdBy: "U2" });
+  const incoming = await store.create({ scopeId: scopeId("personal", "U1"), manifest, createdBy: "U1" });
+  await assert.rejects(() => store.move(incoming.id, scopeId("channel", "C1")), /already exists/);
+  const inChannel = (await store.list()).filter((x) => x.scopeId === scopeId("channel", "C1"));
+  assert.deepEqual(
+    inChannel.map((x) => x.id),
+    [resident.id],
+  );
+});
+
 test("SkillStore.promote of two same-name skills at once leaves one org record", async () => {
   const backing = testMap<Skill>();
   const store = createSkillStore({
