@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { grantAppLogin } from "../src/tenants/logins.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { testTenants } from "./support/test-tenants.ts";
+import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
@@ -24,12 +26,6 @@ const UNTENANTED = [
 ];
 const BOUND_BY_ITEMS_TENANT = ["blobs", "items"];
 const TABLES = ["sessions", "runs", "deliveries", "acl_grants", "audit_log", "memory_facts"];
-
-function asRole(databaseUrl: string, role: "qm_app" | "qm_reader"): string {
-  const url = new URL(databaseUrl);
-  url.searchParams.set("options", `-c role=${role}`);
-  return url.toString();
-}
 
 async function inTenant<T>(pool: pg.Pool, tenant: string | null, fn: (client: pg.PoolClient) => Promise<T>) {
   const client = await pool.connect();
@@ -50,14 +46,14 @@ async function inTenant<T>(pool: pg.Pool, tenant: string | null, fn: (client: pg
 let url = "";
 let owner: pg.Pool;
 let app: pg.Pool;
-let reader: pg.Pool;
+let login: AppLogin;
 
 before(async () => {
   if (skip) return;
   url = testMigratedDatabaseUrl();
   owner = new pg.Pool({ connectionString: url });
-  app = new pg.Pool({ connectionString: asRole(url, "qm_app") });
-  reader = new pg.Pool({ connectionString: asRole(url, "qm_reader") });
+  login = await createAppLogin(url);
+  app = new pg.Pool({ connectionString: login.url });
   const store = createPostgresSessionStore(url);
   const session = await store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t"));
   await inTenant(app, a, async (c) => {
@@ -79,9 +75,9 @@ before(async () => {
 });
 
 after(async () => {
-  await owner?.end();
   await app?.end();
-  await reader?.end();
+  await login?.drop();
+  await owner?.end();
 });
 
 test("every typed table carries a tenant with row security enabled but not forced", { skip }, async () => {
@@ -103,11 +99,7 @@ test("every typed table carries a tenant with row security enabled but not force
   assert.deepEqual(
     typed.filter(
       (row) =>
-        !row.tenanted ||
-        !row.enabled ||
-        row.forced ||
-        row.policies?.join() !== "tenant_app,tenant_reader" ||
-        !row.tenant_key,
+        !row.tenanted || !row.enabled || row.forced || row.policies?.join() !== "tenant_isolation" || !row.tenant_key,
     ),
     [],
   );
@@ -159,14 +151,19 @@ test("unbound app queries on typed tables fail closed", { skip }, async () => {
   }
 });
 
-test("the reader login sees only its tenant's rows and cannot write", { skip }, async () => {
-  for (const table of TABLES) {
-    const count = `SELECT count(*)::int AS n FROM ${table}`;
-    assert.deepEqual((await inTenant(reader, a, (c) => c.query(count))).rows, [{ n: 1 }], table);
-    assert.deepEqual((await inTenant(reader, b, (c) => c.query(count))).rows, [{ n: 0 }], table);
-  }
-  await assert.rejects(
-    inTenant(reader, a, (c) => c.query("DELETE FROM runs")),
-    /permission denied/,
-  );
+test("the app login reads tenants but cannot change them or the migration ledger", { skip }, async () => {
+  assert.ok((await app.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n >= 2);
+  await assert.rejects(app.query("DELETE FROM tenants"), /permission denied/);
+  await assert.rejects(app.query("DELETE FROM qm_schema_migrations"), /permission denied/);
+  await assert.rejects(app.query("CREATE TABLE app_owned(id int)"), /permission denied/);
+});
+
+test("granting refuses a login that is missing or owns the tables", { skip }, async () => {
+  const missing = new URL(url);
+  missing.username = `qmt_missing_${randomUUID().slice(0, 8)}`;
+  await assert.rejects(grantAppLogin(owner, missing.toString()), /does not exist/);
+  const self = (await owner.query("SELECT current_user AS u")).rows[0].u as string;
+  const named = new URL(url);
+  named.username = self;
+  await assert.rejects(grantAppLogin(owner, named.toString()), /owns the tables or bypasses row security/);
 });
