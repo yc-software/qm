@@ -78,7 +78,7 @@ test("the single-session read applies the managed-project check the session list
     null,
     "a dropped project member cannot read the session one at a time",
   );
-  assert.equal(await built.app.getSessionEntryForViewer(sessionId, "member", 1), null, "nor a single entry");
+  assert.equal(await built.app.getSessionItemForViewer(sessionId, "member", 1), null, "nor a single item");
   assert.equal(await built.app.sessionBackground(sessionId, "member"), null, "nor its background work");
   assert.equal(await built.app.updateSession(sessionId, "member", { title: "stolen" }), null, "nor rename it");
   assert.ok(

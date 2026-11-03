@@ -71,6 +71,12 @@ export const turnFailureItem = (message: string, runId?: string): NewItem<"Error
   turnId: runId ?? null,
 });
 
+export const steerWithheldItem = (sender: string): NewItem<"Error"> => ({
+  kind: "Error",
+  errorCode: "steer_withheld",
+  text: `A message from ${sender} arrived mid-turn and was withheld: security screening did not clear it.`,
+});
+
 const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The details are in the operator error log.";
 
 export const MODEL_BUDGET_TEXT =

@@ -22,7 +22,7 @@ export function createReaperKillHook(
   const killGraceMs = opts?.killGraceMs ?? 2_000;
   return async (rec) => {
     if (!rec.sandboxId) return;
-    const handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+    const handle = await sandbox.provision(rec.scopeId, {
       sandboxId: rec.sandboxId,
     });
     try {

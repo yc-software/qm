@@ -427,7 +427,7 @@ async function webTurnBase(
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    liveActor: true,
+    origin: { kind: "human" },
     deliveryTarget: threadRef,
     ...(inboxContext ? { conversationHeader: inboxContext } : {}),
     ...(appSlug
@@ -2173,7 +2173,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id/entries/:seq",
+    path: "/api/sessions/:id/items/:seq",
     handle: async (c) => {
       const { res, user } = c;
       const { id, seq } = c.params as { id: string; seq: string };
@@ -2181,7 +2181,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
       );
     },
   },
@@ -2670,8 +2670,10 @@ const apiRoutes: readonly WebRoute[] = [
       let idempotencyKey: string | undefined;
       let clientTools: unknown[] | undefined;
       let surfaceBriefing: Record<string, unknown> | undefined;
+      let midTurn: unknown;
       try {
         const p = JSON.parse(await readBody(req));
+        midTurn = p.midTurn;
         text = String(p.text ?? "");
         if (typeof p.desktopClientId === "string" && p.desktopClientId.length === 36)
           desktopClientId = p.desktopClientId;
@@ -2743,6 +2745,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(midTurn ? { midTurn } : {}),
       };
       return postTurnAndMint(req, res, turn, user, threadRef);
     },

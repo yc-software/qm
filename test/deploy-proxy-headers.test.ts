@@ -404,7 +404,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const auditEvents: Array<{ principalId: string; action: string; resource: string; scopeLabel: string }> = [];
   let bypassAcl: boolean | undefined;
   const app = {
-    listDeployments: async () => [{ id: "d1", ownerScopeId: "personal:U1" }],
+    getDeployment: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
     reachDeployment: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;
       return opts?.bypassAcl

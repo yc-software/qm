@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -9,7 +8,6 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
 import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
@@ -250,14 +248,12 @@ function buildScenario() {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tool-call-resume-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
@@ -348,5 +344,70 @@ for (const [label, payload] of [
     assert.equal(result.isError, true);
     assert.match(result.text ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
     assert.ok(turn.historyKinds.includes("ToolResult"), "the model sees the recorded result");
+  });
+}
+
+test("a retry with two dangling calls records both as interrupted and re-runs neither, even if one is retry-safe", async () => {
+  const { orchestrator, sessions, runs, received, input } = buildScenario();
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const { sessionId, userSeq } = await seedDeadAttempt(sessions, {
+    kind: "ToolCall",
+    tool: "history",
+    callId: "c-budget",
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
+  });
+  await sessions.append({ sessionId }, { kind: "ToolCall", tool: "execute", callId: "c-build", body: {} });
+  await runs.noteTurnUserSeq(run.id, userSeq);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.equal(received[0]!.resumeToolCall, undefined);
+  const results = (await sessions.getItems(sessionId)).filter((item) => item.kind === "ToolResult");
+  assert.deepEqual(
+    results.map((item) => [item.callId, item.isError, item.body.interrupted]),
+    [
+      ["c-budget", true, true],
+      ["c-build", true, true],
+    ],
+  );
+});
+
+for (const [label, resultTurn] of [
+  ["in its own turn", undefined],
+  ["under another turn", "00000000-0000-4000-8000-0000000000ff"],
+] as const) {
+  test(`a retry-safe call whose result is already recorded ${label} is not re-run or answered twice`, async () => {
+    const { orchestrator, sessions, runs, received, input } = buildScenario();
+    const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+    const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
+    const writer = { sessionId: session.id, turnId: run.id };
+    const user = await sessions.append(writer, { kind: "UserMessage", text: ASK });
+    await sessions.append(writer, {
+      kind: "ToolCall",
+      tool: "history",
+      callId: "c-budget",
+      body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
+    });
+    await sessions.append(
+      { sessionId: session.id, turnId: resultTurn ?? run.id },
+      {
+        kind: "ToolResult",
+        tool: "history",
+        callId: "c-budget",
+        isError: true,
+        text: "[exit 143]",
+        body: { interrupted: true, stop: { kind: "shutdown" } },
+      },
+    );
+    await runs.noteTurnUserSeq(run.id, user.seq);
+
+    const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+    assert.equal(retry.status, "ok");
+    assert.equal(received[0]!.resumeToolCall, undefined);
+    const results = (await sessions.getItems(session.id)).filter((item) => item.kind === "ToolResult");
+    assert.deepEqual(
+      results.map((item) => item.text),
+      ["[exit 143]"],
+    );
   });
 }

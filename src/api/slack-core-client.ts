@@ -31,11 +31,12 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { RunStore } from "../runs/run-store.ts";
+import type { RunStore, SessionWatch } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
@@ -94,9 +95,6 @@ export interface SlackCoreClient {
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
   submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
   waitRun(runId: string, hooks?: SlackRunHooks): Promise<TurnResult | null>;
-  activeRunForThread(threadRef: string): Promise<string | undefined>;
-  signalRunAbort(runId: string): Promise<void>;
-  stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
@@ -172,10 +170,6 @@ const RUN_STALL_BUDGET_MS = 300_000;
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
-  const terminalWaiters = new Map<string, Set<() => void>>();
-  deps.runs.onTerminal((run) => {
-    for (const wake of terminalWaiters.get(run.id) ?? []) wake();
-  });
 
   return {
     decideDeploymentAccess: (value, actor, approve) =>
@@ -274,7 +268,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async privateContinuationSource(runId) {
       const run = await deps.runs.get(runId);
       if (
-        !run?.request.externalSlack ||
+        run?.request.surfaceOrigin?.audience !== "external" ||
         run.request.origin.kind !== "human" ||
         isSessionTurn(run.request) ||
         run.request.actor.type !== "internal"
@@ -306,8 +300,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         surfaceSignaled = true;
         hooks.onSurfacePosted?.();
       };
-      const waiters = terminalWaiters.get(runId) ?? new Set();
-      terminalWaiters.set(runId, waiters);
+      let watch: SessionWatch | undefined;
       const unsubscribe = deps.turnStream.subscribe(runId, {
         onFirstBlock: signalFirstBlock,
         onSurfacePosted: signalSurface,
@@ -335,6 +328,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           }
           if (run !== undefined) {
             if (!run) throw new Error(`run ${runId} not found`);
+            watch ??= deps.runs.watchSession(run.sessionId);
             if (deps.turnStream.surfacePosted(runId)) signalSurface();
             if (isTerminal(run.status)) {
               const view = await deps.app.getRun(runId);
@@ -358,33 +352,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
               );
             }
           }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(done, RUN_FALLBACK_POLL_MS);
-            function done(): void {
-              clearTimeout(timer);
-              waiters.delete(done);
-              resolve();
-            }
-            waiters.add(done);
-          });
+          await (watch ? watch.changed(RUN_FALLBACK_POLL_MS) : sleep(RUN_FALLBACK_POLL_MS));
         }
       } finally {
         unsubscribe();
-        if (waiters.size === 0) terminalWaiters.delete(runId);
+        watch?.close();
       }
-    },
-
-    async activeRunForThread(threadRef) {
-      return (await deps.app.activeRunForThread(threadRef))?.runId;
-    },
-
-    stopConversation(threadRef) {
-      return deps.app.stopConversation(threadRef);
-    },
-
-    async signalRunAbort(runId) {
-      const outcome = await deps.app.signalRun(runId, { kind: "abort" });
-      if (!outcome.accepted) throw new Error(`signal abort not accepted: ${outcome.reason ?? "unknown"}`);
     },
 
     async ackRunDelivery(runId) {

@@ -54,7 +54,6 @@ export type RenderWorkload = RenderBuild & {
 export function renderManagedCoreEnv(render: RenderConfig, baseImage?: string): Record<string, string> {
   return {
     DATA_DIR: "/data",
-    WORKSPACE_STORE: "postgres",
     SNAPSHOT_STORE: "s3",
     TRANSFER_STORE: "s3",
     SANDBOX_BACKEND: "render",

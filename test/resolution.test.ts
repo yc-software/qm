@@ -16,16 +16,16 @@ async function setup() {
   return createResolutionService("default-org", config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
 }
 
-test("DM mounts global + personal (the user's own workspace)", async () => {
+test("DM writes to personal and reads org", async () => {
   const res = await setup();
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const r = await res.resolve(conv, actor);
-  const mounts = r.layers.map((l) => l.scopeId);
-  assert.deepEqual(mounts, [scopeId("org", "default-org"), scopeId("personal", "U1")]);
+  assert.equal(r.writableScopeId, scopeId("personal", "U1"));
+  assert.deepEqual(r.readOnlyScopeIds, [scopeId("org", "default-org")]);
   assert.match(r.systemPrompt, /PERSONAL_SOUL/);
 });
 
-test("channel mounts ONLY global + that channel — never personal (spec §9)", async () => {
+test("channel sees ONLY org + that channel — never personal (spec §9)", async () => {
   const res = await setup();
   const conv: Conversation = {
     kind: "channel",
@@ -34,9 +34,8 @@ test("channel mounts ONLY global + that channel — never personal (spec §9)", 
     audience: [actor],
   };
   const r = await res.resolve(conv, actor);
-  const mounts = r.layers.map((l) => l.scopeId);
-  assert.deepEqual(mounts, [scopeId("org", "default-org"), scopeId("channel", "C1")]);
-  assert.equal(mounts.includes(scopeId("personal", "U1")), false);
+  assert.equal(r.writableScopeId, scopeId("channel", "C1"));
+  assert.deepEqual(r.readOnlyScopeIds, [scopeId("org", "default-org")]);
   assert.match(r.systemPrompt, /CHANNEL_SOUL/);
   assert.doesNotMatch(r.systemPrompt, /PERSONAL_SOUL/);
 });
@@ -85,16 +84,6 @@ test("egress floor includes the conversation scope policy for shared rooms", asy
   const r = await res.resolve(conv, actor);
   assert.deepEqual(r.egress.allowedHosts, ["channel-api.test"]);
   assert.deepEqual(r.egress.deniedHosts, ["channel-bad.test"]);
-});
-
-test("the writable layer is the scope, global is read-only", async () => {
-  const res = await setup();
-  const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
-  const r = await res.resolve(conv, actor);
-  const org = r.layers.find((l) => l.scopeId === scopeId("org", "default-org"));
-  const personal = r.layers.find((l) => l.scopeId === scopeId("personal", "U1"));
-  assert.equal(org?.mode, "ro");
-  assert.equal(personal?.mode, "rw");
 });
 
 test("resolution carries the durable effective security posture", async () => {

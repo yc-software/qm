@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -15,7 +13,7 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import { itemFromEntry, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { type Item, type NewItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -55,9 +53,11 @@ function buildScenario(interruptAfterToolResult = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
+  const histories: Item[][] = [];
   const sandbox = fakeSandbox();
   const agent: Agent = {
     async runTurn(turn) {
+      histories.push([...turn.history]);
       turns.push(turn.input);
       continued.push(turn.continueTurn);
       environments.push(turn.environment);
@@ -79,14 +79,12 @@ function buildScenario(interruptAfterToolResult = false) {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
@@ -117,7 +115,7 @@ function buildScenario(interruptAfterToolResult = false) {
       (item) => USER_ITEM_KINDS.includes(item.kind) && (item.text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, environments, histories, sandbox, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -180,15 +178,12 @@ test("a retry does not claim a later message's answer as its own", async () => {
   assert.equal((await asks()).length, 1, "resuming does not append the ask again");
 });
 
-async function seedTurn(
-  sessions: ReturnType<typeof buildScenario>["sessions"],
-  entries: Array<{ type: "user" | "assistant" | "tool_call" | "tool_result"; payload: Record<string, unknown> }>,
-): Promise<number> {
+async function seedTurn(sessions: ReturnType<typeof buildScenario>["sessions"], items: NewItem[]): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const writer = { sessionId: session.id };
   let first = -1;
-  for (const e of entries) {
-    const appended = await sessions.append(writer, itemFromEntry(e));
+  for (const item of items) {
+    const appended = await sessions.append(writer, item);
     if (first < 0) first = appended.seq;
   }
   return first;
@@ -198,10 +193,10 @@ test("a steer mid-turn does not make an answered turn look unanswered", async ()
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
-    { type: "user", payload: { text: "also check the log", ts: "1", steered: true } },
-    { type: "assistant", payload: { text: "checked both" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
+    { kind: "SteeringMessage", text: "also check the log", body: { ts: "1" } },
+    { kind: "AgentMessage", text: "checked both" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -216,8 +211,8 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
   const { orchestrator, sessions, runs, turns, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "assistant", payload: { text: "" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -247,8 +242,8 @@ test("a resume whose last tool call has no recorded result settles it and contin
   const { orchestrator, sessions, runs, turns, continued, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -294,4 +289,36 @@ test("a retry does not resume another run's interrupted turn that asked the same
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, undefined]);
   assert.equal((await asks()).length, 2);
+});
+
+test("a turn that overtakes a paused one shares its history, and the paused turn resumes after it with a note", async () => {
+  const { orchestrator, runs, turns, continued, histories, input } = buildScenario(true);
+  const shape = (items: Item[]) => items.map((e) => `${e.kind}:${e.callId ?? e.text}`);
+  const paused = (await runs.enqueue({ sessionId: conversation.threadRef, request: input("nightly report") })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 1 })),
+    /interrupted/,
+  );
+
+  const person = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  assert.equal((await orchestrator.handleTurn(input(ASK, { runId: person.id, attempt: 1 }))).status, "ok");
+  assert.deepEqual(
+    shape(histories[1]!),
+    ["UserMessage:nightly report", "ToolCall:c1", "ToolResult:c1"],
+    "the person's turn sees the paused turn's work so far",
+  );
+
+  assert.equal((await orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 2 }))).status, "ok");
+  assert.deepEqual(continued, [undefined, undefined, undefined], "the paused turn is prompted, not silently continued");
+  assert.match(
+    turns[2]!,
+    /^\[system\] This turn paused while another turn ran in this conversation\..*Original task: nightly report$/,
+  );
+  assert.deepEqual(shape(histories[2]!), [
+    "UserMessage:nightly report",
+    "ToolCall:c1",
+    "ToolResult:c1",
+    `UserMessage:${ASK}`,
+    "AgentMessage:it runs on this conversation's computer",
+  ]);
 });

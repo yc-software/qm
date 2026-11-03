@@ -8,7 +8,6 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -168,8 +167,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   const c = input.conversation;
   return {
     surface: input.surface ?? "unknown",
-    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
-    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
+    ...(input.surfaceOrigin ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
@@ -190,7 +188,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.gatewayContext ? { gatewayContext: input.gatewayContext } : {}),
     ...(input.analyticsSuppressed ? { analyticsSuppressed: true } : {}),
     ...(input.proactiveOpener ? { proactiveOpener: true } : {}),
-    ...turnOriginRequestFields(input.origin),
+    origin: input.origin,
     ...(input.conversationHeader ? { conversationHeader: input.conversationHeader } : {}),
     ...(input.priorTurns?.length ? { priorTurns: input.priorTurns } : {}),
     ...(input.overheard?.length ? { overheard: input.overheard } : {}),

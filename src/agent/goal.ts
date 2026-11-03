@@ -1,7 +1,7 @@
 import { outermostJsonObject } from "../util/text.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
-import { isUserItem, itemFields, type Item } from "../sessions/items.ts";
+import { isUserItem, itemFields, type Item, type NewItem } from "../sessions/items.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -490,8 +490,12 @@ export function cancelGoal(goal: GoalRecord, note: string, now = Date.now()): vo
   delete goal.governor;
 }
 
-export function goalCancelledPayload(goal: GoalRecord, cancelledBy: string) {
-  return { kind: "goal_cancelled", objective: goal.objective, cancelledBy };
+export function goalCancelledItem(goal: GoalRecord, cancelledBy: string): NewItem<"Wake"> {
+  return {
+    kind: "Wake",
+    wakeCause: "system",
+    body: { kind: "goal_cancelled", objective: goal.objective, cancelledBy },
+  };
 }
 
 export function goalCancelledNote(objective: string): string {

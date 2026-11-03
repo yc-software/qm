@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { windowedTranscript, type SessionStore } from "../src/sessions/session-store.ts";
-import { scopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
-import { entryFromItem, type Item, type NewItem } from "../src/sessions/items.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
+import type { Item, NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp() {
@@ -21,27 +21,26 @@ function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
 
-test("a tailTurns view is bounded yet reports the same earlierEntries as the full read", async () => {
+test("a tailTurns view is bounded yet reports the same earlierItems as the full read", async () => {
   const { app, runtime } = freshApp();
   runtime.start();
   try {
     for (let i = 0; i < 45; i++) await app.turn(dm(`question number ${i}`, "web:U1:bounds"));
     const sid = (await app.turn(dm("final question", "web:U1:bounds"))).sessionId!;
     const full = (await app.getSessionForViewer(sid, "U1"))!;
-    const expected = windowedTranscript(
-      (await app.getSessionForViewer(sid, "U1", { tailTurns: 9999 }))!.entries as SessionEntry[],
-      { tailTurns: 2 },
-    );
+    const expected = windowedTranscript((await app.getSessionForViewer(sid, "U1", { tailTurns: 9999 }))!.items, {
+      tailTurns: 2,
+    });
     const bounded = (await app.getSessionForViewer(sid, "U1", { tailTurns: 2 }))!;
     assert.deepEqual(
-      bounded.entries.map((e) => [e.seq, e.type]),
-      expected.entries.map((e) => [e.seq, e.type]),
+      bounded.items.map((e) => [e.seq, e.kind]),
+      expected.items.map((e) => [e.seq, e.kind]),
     );
-    const fullCount = full.entries.length + (full.earlierEntries ?? 0);
+    const fullCount = full.items.length + (full.earlierItems ?? 0);
     assert.equal(
-      bounded.entries.length + (bounded.earlierEntries ?? 0),
+      bounded.items.length + (bounded.earlierItems ?? 0),
       fullCount,
-      "bounded earlierEntries accounts for exactly the renderable entries above the window",
+      "bounded earlierItems accounts for exactly the renderable items above the window",
     );
   } finally {
     await runtime.stop();
@@ -77,14 +76,11 @@ test("transcripts retain tool detail and exact bounded counts", async () => {
   try {
     const { session, narration } = await toolHeavySession(built.sessions, 30);
     const full = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 9999 }))!;
-    assert.deepEqual(
-      full.entries,
-      (await built.sessions.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId)),
-    );
-    assert.equal(full.entries.length, 150);
+    assert.deepEqual(full.items, await built.sessions.getItems(session.id));
+    assert.equal(full.items.length, 150);
     const bounded = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
-    assert.deepEqual(bounded.entries, full.entries.slice(-5));
-    assert.equal(bounded.earlierEntries, 145);
+    assert.deepEqual(bounded.items, full.items.slice(-5));
+    assert.equal(bounded.earlierItems, 145);
     const pinned = await built.app.pinConversationItem("web:U1:tool-pins", "U1", { entrySeq: narration.seq });
     assert.ok("pin" in pinned && pinned.pin);
     assert.equal(pinned.pin.preview, "queue narration detail");
@@ -107,13 +103,13 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
       const full = (await built.app.getSessionForViewer(session.id, "U1"))!;
       calls.length = 0;
       const window = { beforeSeq, tailTurns: 2 };
-      const expected = windowedTranscript(full.entries as SessionEntry[], window);
+      const expected = windowedTranscript(full.items, window);
       for (const page of [
         await built.app.getSessionForViewer(session.id, "U1", window),
         await built.app.getSession(session.id, window),
       ]) {
-        assert.deepEqual(page!.entries, expected.entries);
-        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+        assert.deepEqual(page!.items, expected.items);
+        assert.equal(page!.earlierItems ?? 0, expected.earlier);
       }
       assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq && opts.limit === 80));
     }
@@ -122,7 +118,7 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
       await built.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: `detail ${i}` });
     calls.length = 0;
     const page = await built.app.getSession(session.id, { beforeSeq: 680, tailTurns: 1 });
-    assert.equal(page!.entries[0]!.seq, 495);
+    assert.equal(page!.items[0]!.seq, 495);
     assert.deepEqual(
       calls.map((opts) => opts?.limit),
       [40, 80, 160, 320],
@@ -150,9 +146,9 @@ test("earlier pages respect viewer tenure boundaries", async () => {
           assert.equal(page, null);
           continue;
         }
-        const expected = windowedTranscript(full.entries as SessionEntry[], { beforeSeq, tailTurns: 2 });
-        assert.deepEqual(page!.entries, expected.entries);
-        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+        const expected = windowedTranscript(full.items, { beforeSeq, tailTurns: 2 });
+        assert.deepEqual(page!.items, expected.items);
+        assert.equal(page!.earlierItems ?? 0, expected.earlier);
       }
     }
   } finally {
@@ -175,13 +171,13 @@ test("incremental transcript reads bound entry storage and preserve windows and 
       return rows;
     };
     const page = (await built.app.getSession(session.id, { sinceSeq: 490 }))!;
-    assert.equal(page.entries.length, 10);
-    assert.equal(page.earlierEntries, 490);
+    assert.equal(page.items.length, 10);
+    assert.equal(page.earlierItems, 490);
     assert.equal(loadedRows, 10);
     assert.ok(calls.every((opts) => opts?.sinceSeq === 490));
     const viewerPage = (await built.app.getSessionForViewer(session.id, "U1", { sinceSeq: 490 }))!;
-    assert.deepEqual(viewerPage.entries, page.entries);
-    assert.equal(viewerPage.earlierEntries, 490);
+    assert.deepEqual(viewerPage.items, page.items);
+    assert.equal(viewerPage.earlierItems, 490);
     await built.sessions.addParticipant(session.id, "late");
     const writer = { sessionId: session.id };
     for (let i = 0; i < 10; i++) {
@@ -208,9 +204,9 @@ test("incremental transcript reads bound entry storage and preserve windows and 
           assert.equal(page, null);
           continue;
         }
-        const expected = windowedTranscript(full.entries as SessionEntry[], window);
-        assert.deepEqual(page!.entries, expected.entries);
-        assert.equal(page!.earlierEntries ?? 0, expected.earlier);
+        const expected = windowedTranscript(full.items, window);
+        assert.deepEqual(page!.items, expected.items);
+        assert.equal(page!.earlierItems ?? 0, expected.earlier);
         assert.deepEqual(page!.pins, full.pins);
         if (viewer === undefined) assert.ok(calls.some((opts) => opts?.sinceSeq === window.sinceSeq));
       }

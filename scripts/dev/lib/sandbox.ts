@@ -208,7 +208,6 @@ export async function resolveSandbox(opts: {
     }
     const env: Record<string, string> = {
       SANDBOX_BACKEND: "render",
-      WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: apiKey,
       RENDER_WORKSPACE_ID: workspaceId,
       RENDER_SANDBOX_IMAGE: image,

@@ -1,8 +1,4 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
@@ -32,8 +28,7 @@ function assert(cond: unknown, msg: string): void {
 }
 
 const scope = scopeId("personal", "qm-skills-smoke");
-const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "skills-smoke-")));
-const sb = createSpritesSandbox(ws, {
+const sb = createSpritesSandbox({
   ...loadConfig().spritesSandbox,
   initializationStore: smokeMap("sprites_initialization"),
   advisoryLock: createNoopAdvisoryLock(),
@@ -42,7 +37,7 @@ const sb = createSpritesSandbox(ws, {
 let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
 try {
   console.log("provisioning sprite for", scope, "…");
-  h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
+  h = await sb.provision(scope);
   console.log("  sprite:", h.id, "coldStart:", h.coldStart);
 
   const heavy = res("popular-web-designs", "# Popular web designs\nthe entry point", [

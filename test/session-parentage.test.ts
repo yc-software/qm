@@ -79,11 +79,7 @@ test("a late child steer remains pending when admission fails, then replays once
   const full = [];
   for (let i = 0; i < SUBAGENT_TREE_RUN_CAP; i++)
     full.push((await built.runs.enqueue({ sessionId: child.threadRef, request })).run);
-  await built.signals.send(run.id, {
-    kind: "steer",
-    text: "late update",
-    sessionRequest: { ...request, text: "late update" },
-  });
+  await built.signals.send(run.id, { kind: "steer", text: "late update" });
   await assert.rejects(built.app.replayOrphanedRunSignals(run.id), /slots/);
   assert.equal((await built.signals.pending(run.id)).length, 1);
   await built.runs.withdraw(full[0]!.id);

@@ -1,7 +1,7 @@
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 
 export function turnRuntimePurpose(
-  input: { surface?: string; triggered?: boolean },
+  input: { surface?: string; triggered: boolean },
   subagent = false,
 ): RuntimePurpose | undefined {
   if (subagent) return "subagent";
