@@ -6,7 +6,7 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({

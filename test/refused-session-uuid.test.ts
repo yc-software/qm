@@ -5,7 +5,7 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());

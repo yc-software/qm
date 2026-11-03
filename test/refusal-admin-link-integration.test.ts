@@ -23,7 +23,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -76,7 +75,6 @@ function buildOrchestrator(sessions: SessionStore) {
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -102,7 +100,7 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
 
   const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
   assert.ok(claimed, "claimed for processing");
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
+  await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs }, claimed!), /boom/);
 
   const stored = await runs.get(run.id);
   assert.equal(stored?.result?.status, "failed");

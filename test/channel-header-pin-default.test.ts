@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ScopeId } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const org = TEST_ROOT_SCOPE;
 const channel = "channel:C123" as ScopeId;

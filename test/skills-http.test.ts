@@ -13,7 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT, TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start() {
   const built = buildApp(
@@ -22,7 +22,7 @@ function start() {
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(TEST_TENANT, built.app);
+  const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return {

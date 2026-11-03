@@ -7,7 +7,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const turns: AgentTurnInput[] = [];
 let piOptions: Parameters<typeof agentRun.createAgent>[0];

@@ -9,7 +9,7 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant-root.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),

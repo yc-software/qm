@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("interactive fast mode defaults off and persists across instances", async () => {
   const interactiveFastMode = testMap<PersistedScopedFlag>();

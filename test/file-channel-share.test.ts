@@ -13,7 +13,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const initiator = "U1";
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;

@@ -20,7 +20,6 @@ const PRESSURE_WARN_FULL60 = 50;
 
 export function computerTools(kit: ToolKit) {
   const { ref, opts, log, recordCall, recordResult, blockOnApproval } = kit;
-  const reachExec = !!opts?.reachExec;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -80,16 +79,11 @@ export function computerTools(kit: ToolKit) {
       purpose?: string;
       credentials?: string[];
     },
-    route?: { scratch?: boolean; reachTarget?: string },
+    route?: { scratch?: boolean },
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    let scopeNote: { scope?: string } = {};
-    if (route?.reachTarget !== undefined) {
-      scopeNote = { scope: route.reachTarget };
-    } else if (route !== undefined) {
-      scopeNote = { scope: route.scratch ? "scratch" : "scoped" };
-    }
+    const scopeNote: { scope?: string } = route !== undefined ? { scope: route.scratch ? "scratch" : "scoped" } : {};
     await recordCall(callId, {
       tool: "execute",
       command: params.command,
@@ -102,7 +96,6 @@ export function computerTools(kit: ToolKit) {
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
-        ...(route?.reachTarget !== undefined ? { reachTarget: route.reachTarget } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
@@ -110,12 +103,10 @@ export function computerTools(kit: ToolKit) {
       const { stdout: _stdout, stderr: _stderr, scratchReroute, ...execMeta } = r;
       const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
-      let placePrefix = "";
-      if (r.reached) placePrefix = `[ran on ${r.reached.label}'s computer]\n`;
-      else if (scratchReroute)
-        placePrefix =
-          "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n";
-      const localExec = !route?.scratch && !scratchReroute && route?.reachTarget === undefined && !r.reached;
+      const placePrefix = scratchReroute
+        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n"
+        : "";
+      const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
           ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
@@ -133,9 +124,6 @@ export function computerTools(kit: ToolKit) {
           details: r,
         },
         r.timedOut,
-        undefined,
-        false,
-        r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
       if (e instanceof MaskedExecutionError) {
@@ -164,20 +152,10 @@ export function computerTools(kit: ToolKit) {
   const FILE_SEND_GUIDANCE =
     "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";
 
-  const reachScopeDescription =
-    '"scoped" (default) | "scratch" | ' +
-    'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
   const scratchLine =
     '- "scratch": blank per-turn computer with the same tooling, read-only skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
-  const reachDescription =
-    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
-    scopedLine +
-    scratchLine +
-    "- a room like \"#project-alpha\" (a shared channel): runs on that room's computer. Visit only — read, search, fetch; don't rearrange. It has none of this conversation's logins or tokens; say where anything you bring back came from. Before calling work lost, check the rooms under 'Other computers you can reach'.\n" +
-    FILE_SEND_GUIDANCE +
-    EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +
@@ -195,11 +173,8 @@ export function computerTools(kit: ToolKit) {
       credentials?: string[];
     },
   ) => {
-    const scope = (params.scope ?? "scoped").trim();
-    const keyword = scope.toLowerCase();
-    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
-    if (keyword === "scratch") return runExecute(callId, params, { scratch: true });
-    return runExecute(callId, params, { reachTarget: scope });
+    const scratch = (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
+    return runExecute(callId, params, { scratch });
   };
 
   const runCommand = (
@@ -210,15 +185,13 @@ export function computerTools(kit: ToolKit) {
   const execute = defineTool({
     name: "execute",
     label: "execute",
-    description: reachExec ? reachDescription : scopeDescription,
+    description: scopeDescription,
     parameters: Type.Object({
       ...executeBaseParams,
       scope: Type.Optional(
-        reachExec
-          ? Type.String({ description: reachScopeDescription })
-          : Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-              description: "Which computer runs this; see the tool description.",
-            }),
+        Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+          description: "Which computer runs this; see the tool description.",
+        }),
       ),
     }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),

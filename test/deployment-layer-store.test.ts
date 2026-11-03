@@ -15,7 +15,7 @@ import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-b
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { testDatabaseUrl, testMap, testAdvisoryLock } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",

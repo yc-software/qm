@@ -11,7 +11,6 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
@@ -28,7 +27,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
   assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
 
-  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
+  const server = createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

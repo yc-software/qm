@@ -39,7 +39,6 @@ import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
-import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
 import type { Agent } from "../../agent/agent.ts";
@@ -129,7 +128,6 @@ export interface OrchestratorDeps {
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
   auditLog: AuditLog;
-  rateLimiter: RateLimiter;
   budget?: BudgetTracker;
   maxContextTokens?: number;
   execTimeoutMs?: number;
@@ -196,7 +194,6 @@ export interface OrchestratorDeps {
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
-  reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];

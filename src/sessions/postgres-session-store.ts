@@ -58,6 +58,7 @@ import {
   USER_ITEM_KINDS,
   USER_KINDS,
 } from "./items.ts";
+import { TENANT } from "../tenants/migrations.ts";
 
 const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
@@ -166,7 +167,6 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
-const TENANT = "qm_bound_tenant()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -672,6 +672,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
     },
 
+    async fenceTurnLease(sessionId, until): Promise<void> {
+      const t = now();
+      await q(
+        `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
+           SELECT $1, $2, $3, 'turn', $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
+         ON CONFLICT (session_id) DO UPDATE SET token = $2, expires_at = $3, holder = 'turn', acquired_at = $4
+           WHERE session_leases.holder = 'turn' OR session_leases.expires_at <= $4`,
+        [sessionId, randomUUID(), until, t],
+      );
+    },
+
     async append(lease, entry: NewEntry): Promise<SessionEntry> {
       return (await this.appendMany(lease, [entry]))[0]!;
     },
@@ -1012,6 +1023,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {
       return participantSession(sessionId, principalId);
+    },
+
+    async sameScopeAncestors(threadRefs) {
+      const rows = await q(
+        `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (
+           SELECT l.scope_id, p.id, p.scope_id, p.parent_session_id, 1, ARRAY[l.id, p.id]
+             FROM sessions l JOIN sessions p ON p.id = l.parent_session_id AND p.id <> l.id WHERE l.thread_ref = ANY($1::text[])
+           UNION ALL
+           SELECT u.leaf_scope, p.id, p.scope_id, p.parent_session_id, u.depth + 1, u.path || p.id FROM up u
+             CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = u.parent_id OFFSET 0) p WHERE NOT p.id = ANY(u.path)
+         ), hits AS (SELECT id, min(depth) AS depth FROM up WHERE scope_id = leaf_scope GROUP BY id)
+         SELECT s.* FROM hits JOIN sessions s ON s.id = hits.id ORDER BY hits.depth, s.id`,
+        [[...threadRefs]],
+      );
+      return rows.map(rowToSession);
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const oxAlphaCatalog: typeof fetch = async () =>
   Response.json({

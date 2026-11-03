@@ -29,7 +29,7 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -125,7 +125,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
       },
       captureLlmRequests: false,
 
-      reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
       turnWallClockMs: 111_000,
@@ -149,7 +148,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
     },
     captureRequests: false,
     sandboxResources: true,
-    reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
     execTimeoutMs: 22_000,

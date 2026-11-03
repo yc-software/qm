@@ -11,7 +11,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function freshApp() {
   const config: Config = testConfig({

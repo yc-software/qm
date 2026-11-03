@@ -19,7 +19,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant-root.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;

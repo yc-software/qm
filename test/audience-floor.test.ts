@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { audienceEgressFloor, audienceDeniedFloor } from "../src/resolution/audience-floor.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 

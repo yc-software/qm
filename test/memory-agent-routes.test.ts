@@ -17,7 +17,7 @@ import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
 

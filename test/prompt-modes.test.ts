@@ -23,11 +23,10 @@ import { FEATURE_NAMES } from "../src/feature-flags.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
@@ -74,9 +73,10 @@ async function buildOrchestrator(
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
+    config?: ReturnType<typeof testConfigStore>;
   } = {},
 ) {
-  const config = testConfigStore();
+  const config = opts.config ?? testConfigStore();
   if (opts.orgSoul !== undefined) await config.setSoul(TEST_ROOT_SCOPE, opts.orgSoul);
   if (opts.branding) await config.setBranding(TEST_ROOT_SCOPE, opts.branding);
 
@@ -110,7 +110,6 @@ async function buildOrchestrator(
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory,
     deploy,
@@ -483,4 +482,23 @@ test("web group conversations are not described as private 1:1s", async () => {
   });
   assert.match(prompt, /live group conversation with Alice/);
   assert.doesNotMatch(prompt, /private 1:1/);
+});
+
+test("a guidance change from another session is announced on this session's next turn, once", async () => {
+  const config = testConfigStore();
+  const orch = await buildOrchestrator({ config, scopeSoulFor: { conversation: dmConversation, soul: "Be brief." } });
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /standing guidance/);
+  await config.setSoul(
+    scopeId("personal", "U1"),
+    "Be brief.\nNever cite a PR by bare number.",
+    "U1",
+    "1aedf13a-0000-4000-8000-000000000000",
+  );
+  const next = await sysprompt(orch, slackDm(""));
+  assert.match(next, /Never cite a PR by bare number\./, "the system prompt carries the new guidance");
+  assert.match(
+    next,
+    /<environment>[\s\S]*In a different session \(1aedf13\) the user updated their standing guidance: "Never cite a PR by bare number\."\. Follow it moving forward but no need to directly mention you're doing so\.[\s\S]*<\/environment>/,
+  );
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /updated their standing guidance/);
 });

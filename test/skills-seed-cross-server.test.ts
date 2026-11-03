@@ -8,7 +8,7 @@ import { createPostgresMapFactory, type DurableMap } from "../src/persistence/du
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;

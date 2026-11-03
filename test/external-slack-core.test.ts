@@ -14,7 +14,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -148,7 +148,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   );
   await tools.execute("printf safe");
   assert.equal(runs, 1);
-  for (const opts of [{ scratch: true }, { reachTarget: "private" }, { sandboxId: "private" }])
+  for (const opts of [{ scratch: true }, { sandboxId: "private" }])
     await assert.rejects(tools.execute("unsafe", opts), /private access/);
   for (const call of [
     () => tools.memoryRead(),

@@ -1,11 +1,5 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import {
-  renderSourceInboxTask,
-  renderInboxSyncTask,
-  isReplyLoop,
-  applyReplyResolution,
-  REPLY_DECISION,
-} from "./inbox-loop.ts";
+import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -13,6 +7,7 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
+import { inTenantOf, type Claimed } from "../tenants/claim.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -729,7 +724,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
-    if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && options?.enumerate !== false) {
+    if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       let failure: unknown;
       try {
@@ -737,7 +732,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           loop,
           `${fireKey}:sync`,
           threadRef,
-          loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
+          renderSourceInboxTask(loop.id, loop.sources![0]!),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error;
@@ -954,13 +949,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
+    const loops: Array<Claimed<Loop>> = await deps.loops.list();
+    for (const loop of loops) {
       if (
         loop.state === "enabled" &&
         loop.governor?.staleFireMs !== undefined &&
         now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
       ) {
-        await applyGovernor(loop.id, undefined, now);
+        await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
       }
     }
   }

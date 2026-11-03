@@ -10,7 +10,7 @@ import {
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
@@ -95,6 +95,24 @@ test("setSoul advances the canonical row without trusting a stale instance cache
     [
       { version: 2, content: "right" },
       { version: 1, content: "left" },
+    ],
+  );
+});
+
+test("a guidance revision keeps the session that wrote it after another instance hydrates it", async () => {
+  const souls = testMap<PersistedSoul>();
+  const writer = testConfigStore({ souls });
+  const channel = scopeId("channel", "revision-session");
+  await writer.setSoul(channel, "first", "alice", "session-a");
+  await writer.setSoulIfVersion(channel, 1, "second", "alice", "session-b");
+
+  const reader = testConfigStore({ souls });
+  await reader.refreshScope(channel);
+  assert.deepEqual(
+    reader.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
+    [
+      { version: 2, sessionId: "session-b" },
+      { version: 1, sessionId: "session-a" },
     ],
   );
 });

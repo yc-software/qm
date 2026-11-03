@@ -19,7 +19,7 @@ import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts"
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 interface FakeState {
   artifacts: Record<string, ArtifactHome & { type: ArtifactType }>;

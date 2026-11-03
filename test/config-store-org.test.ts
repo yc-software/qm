@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
   const baseModels = testMap<import("../src/resolution/config-store.ts").PersistedBaseModel>();

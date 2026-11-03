@@ -9,7 +9,7 @@ import {
 } from "../src/connectors/connector-client-store.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const envWithSlack = {
   SLACK_OAUTH_CLIENT_ID: "env-sid",

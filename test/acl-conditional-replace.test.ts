@@ -4,7 +4,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Grant } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const owner = TEST_ROOT_SCOPE;
 const ref = "service-cred:k";

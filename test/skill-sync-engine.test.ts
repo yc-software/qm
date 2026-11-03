@@ -5,7 +5,7 @@ import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import type { SkillPackFetcher } from "../src/skills/pack-fetcher.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const base: NewSkillPack = {
   kind: "git",

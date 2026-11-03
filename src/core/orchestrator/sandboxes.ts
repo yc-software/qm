@@ -405,17 +405,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     });
   };
-  const provisionForReach = (target: ScopeId): Promise<SandboxHandle> =>
-    pool.get(`reach:${target}`)?.opening ??
-    open(`reach:${target}`, async (slot) => {
-      const handle = await deps.sandbox.provision([{ scopeId: target, mountPath: "", mode: "rw" }], {
-        egress: resolution.egress,
-        ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-      });
-      slot.handles.push(handle);
-      await holdResource(handle);
-      return handle;
-    });
   const clearTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
@@ -568,7 +557,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     accessResource,
     provisionResource,
     useSkill,
-    provisionForReach,
     reclaimBox,
     invalidateProvision: () => {
       const slot = pool.get(SCOPED);

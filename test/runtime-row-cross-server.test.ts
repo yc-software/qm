@@ -4,7 +4,7 @@ import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;

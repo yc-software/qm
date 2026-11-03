@@ -5,7 +5,7 @@ import pg from "pg";
 import { applyPgMigrations, createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { composioNamespaceReader } from "../src/tenants/tenant-record.ts";
+import { composioNamespaceReader, tenantNameReader } from "../src/tenants/tenant-record.ts";
 import { hashId } from "../src/util/crypto.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -46,6 +46,7 @@ test(
         raw,
         migrations.filter((migration) => migration.id < "sessions/store/0052"),
       );
+      await raw.query("UPDATE tenants SET name = 'Main'");
       for (const table of KV_TABLES) await raw.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await raw.query(`CREATE TABLE org_rows(scope_label TEXT, scopes TEXT[], note TEXT)`);
       const oldBroker = hashId(["org:acme", "openai", "broker"]);
@@ -124,6 +125,7 @@ test(
       ]);
       const namespace = composioNamespaceReader(app);
       assert.equal(await withTenant(tenant, () => namespace()), "acme");
+      assert.equal(await withTenant(tenant, () => tenantNameReader(app)()), "Main");
       await raw.query("UPDATE tenants SET composio_namespace = NULL");
       assert.equal(await withTenant(tenant, () => composioNamespaceReader(app)()), tenant);
     } finally {
@@ -165,7 +167,7 @@ async function upgradeFromOrg(
 test("pg upgrade refuses to pick one of several tenants for the org", { skip }, async () => {
   await upgradeFromOrg(
     async (raw) => {
-      await raw.query(`INSERT INTO tenants(id) VALUES ($1)`, [randomUUID()]);
+      await raw.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'two', 'Two')`, [randomUUID()]);
     },
     async (raw, upgrade) => {
       await assert.rejects(upgrade, /Org acme needs one tenant to move onto, but this database has 2 tenants/);

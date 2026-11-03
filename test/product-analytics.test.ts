@@ -4,7 +4,7 @@ import type { Run } from "../src/runs/run-store.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant-root.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;

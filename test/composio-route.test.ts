@@ -14,7 +14,7 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant-root.ts";
 
 function fixture() {
   const keychain = createKeychain({

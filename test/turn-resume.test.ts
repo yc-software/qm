@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/agent/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt: seq };
@@ -255,10 +255,10 @@ test("the runtime switch note names the new runtime", () => {
   assert.match(runtimeSwitchNote(undefined), /^\[system\] Context was trimmed without a new summary\./);
 });
 
-test("a tool_result marked interrupted does not answer its call, so the call is still resumable", () => {
+test("a call whose interruption is already recorded is not re-run, since a call holds one result", () => {
   const killed = ent("tool_result", { callId: "c4", result: "[exit 143]", interrupted: true }, 5);
   const entries = [user("build and deploy the release", 1), safeCall(4, true), killed];
-  assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }).kind, "retry");
+  assert.deepEqual(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }), { kind: "continue" });
   const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
   assert.deepEqual(
     resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }),
@@ -293,7 +293,7 @@ test("resumeStrategy continues silently whenever every call is answered", () => 
       userSeq: 1,
       workEntries: 4,
     }).kind,
-    "retry",
+    "continue",
   );
 });
 
@@ -301,4 +301,10 @@ test("an unrelated message does not close an interrupted turn or supply its answ
   const entries = [ent("user", { text: "mine", runId: "my-turn" }, 10), toolCall(11), delivered("Nightly report", 12)];
   assert.deepEqual(findTrailingPartialTurn(entries, "my-turn"), { userSeq: 10, workEntries: 1 });
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
+});
+
+test("a recorded interruption does not stop a later lone unrecorded call from being re-run", () => {
+  const killed = ent("tool_result", { callId: "c2", result: "[exit 143]", interrupted: true }, 3);
+  const entries = [user("build and deploy the release", 1), safeCall(2, true), killed, safeCall(4, true)];
+  assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 3 }).kind, "retry");
 });

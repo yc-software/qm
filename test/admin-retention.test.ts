@@ -11,7 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT, TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -66,7 +66,7 @@ test("computeRetention: empty input yields zeros, never NaN", () => {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-ret-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
