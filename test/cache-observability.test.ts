@@ -11,6 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cache-obs-")) }));
@@ -25,7 +26,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE = { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await fetch(base + path, { headers })).json();
 
@@ -46,7 +47,7 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },
       text: "what's the weather",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
     const conv = sess.sessions[0];

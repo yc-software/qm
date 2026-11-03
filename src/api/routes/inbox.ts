@@ -60,7 +60,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     );
     const mail = (await Promise.all(mailLoops.map((loop) => deps.items.byLoop(loop.id))))
       .flat()
-      .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
+      .filter((item) => !isResolved(item) && item.source === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
   const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(

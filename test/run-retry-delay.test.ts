@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, pointOwnerAtSchema, restoreFileOwner } from "./support/test-database.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
 
 const request: OrchestratorInput = {
@@ -32,6 +32,7 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         await seedTestTenants(url.toString());
         connectionString = url.toString();
+        pointOwnerAtSchema(schema);
       }
       const runtime =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
@@ -73,6 +74,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.close?.();
         if (admin) {
           try {
+            restoreFileOwner();
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
             await admin.end();
@@ -97,6 +99,7 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         await seedTestTenants(url.toString());
         connectionString = url.toString();
+        pointOwnerAtSchema(schema);
       }
       let { runs } =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
@@ -144,6 +147,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.close?.();
         if (admin) {
           try {
+            restoreFileOwner();
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
             await admin.end();

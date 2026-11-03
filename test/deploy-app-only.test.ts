@@ -21,6 +21,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
@@ -70,20 +71,24 @@ test("app-only gateway checks exact current personal read grants without inherit
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const ownerScopeId = scopeId("personal", "owner@example.test");
-  const shared = await app.deploy({
-    ownerScopeId,
-    createdBy: "owner@example.test",
-    entrypoint: "node app.js",
-    files: [],
-    name: "shared",
-  });
-  await app.deploy({
-    ownerScopeId: scopeId("org", "acme"),
-    createdBy: "owner@example.test",
-    entrypoint: "node app.js",
-    files: [],
-    name: "org-app",
-  });
+  const shared = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId,
+      createdBy: "owner@example.test",
+      entrypoint: "node app.js",
+      files: [],
+      name: "shared",
+    }),
+  );
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("org", "acme"),
+      createdBy: "owner@example.test",
+      entrypoint: "node app.js",
+      files: [],
+      name: "org-app",
+    }),
+  );
   app.canManageDeployment = async () => {
     throw new Error("app-only must not consult management authority");
   };
@@ -134,50 +139,62 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.equal((await get("shared")).status, 403);
     assert.equal((await get("org-app")).status, 403, "org ownership is not an app-only entitlement");
     for (const granteeScopeId of [scopeId("org", "acme"), scopeId("channel", "C1")]) {
-      await acl.grant({
-        ownerScopeId,
-        ref: encodeRef(deployRef(shared.id)),
-        granteeScopeId,
-        permission: "read",
-        grantedBy: "owner@example.test",
-      });
+      await inTestTenant(() =>
+        acl.grant({
+          ownerScopeId,
+          ref: encodeRef(deployRef(shared.id)),
+          granteeScopeId,
+          permission: "read",
+          grantedBy: "owner@example.test",
+        }),
+      );
     }
     assert.equal((await get("shared")).status, 403, "scope grants never admit app-only sessions");
-    await acl.grant({
-      ownerScopeId,
-      ref: encodeRef(deployRef(shared.id)),
-      granteeScopeId: scopeId("personal", guest),
-      permission: "write",
-      grantedBy: "owner@example.test",
-    });
+    await inTestTenant(() =>
+      acl.grant({
+        ownerScopeId,
+        ref: encodeRef(deployRef(shared.id)),
+        granteeScopeId: scopeId("personal", guest),
+        permission: "write",
+        grantedBy: "owner@example.test",
+      }),
+    );
     assert.equal((await get("shared")).status, 403, "a write grant cannot confer app-only management access");
     assert.equal(upstreamHits, 0);
-    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
+    await inTestTenant(() =>
+      app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" }),
+    );
     const granted = await get("shared", "/api/data", "POST");
     assert.equal(granted.status, 200, "read grants allow using the app, including its POST API");
     assert.equal(JSON.parse(granted.body).cookie, undefined, "gateway cookie never reaches app");
     assert.notEqual(JSON.parse(granted.body)["x-portal-identity"], "forged");
     assert.equal((await get("shared", "/__claw__/version")).status, 200, "request goes to app, never management shell");
     assert.equal((await get("org-app")).status, 403, "grant is for one deployment only");
-    await identity.deactivate(guest, "manual");
+    await inTestTenant(() => identity.deactivate(guest, "manual"));
     assert.equal((await get("shared")).status, 403, "manual deactivation overrides the current direct grant");
-    await identity.reactivate(guest);
-    await app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" });
+    await inTestTenant(() => identity.reactivate(guest));
+    await inTestTenant(() =>
+      app.shareDeployment(shared.id, scopeId("personal", guest), null, { createdBy: "owner@example.test" }),
+    );
     assert.equal((await get("shared")).status, 403, "same session is refused immediately after revoke");
-    await app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" });
-    await app.renameDeployment(shared.id, "renamed");
-    await app.deploy({
-      ownerScopeId,
-      createdBy: "owner@example.test",
-      entrypoint: "node app.js",
-      files: [],
-      name: "shared",
-    });
+    await inTestTenant(() =>
+      app.shareDeployment(shared.id, scopeId("personal", guest), "read", { createdBy: "owner@example.test" }),
+    );
+    await inTestTenant(() => app.renameDeployment(shared.id, "renamed"));
+    await inTestTenant(() =>
+      app.deploy({
+        ownerScopeId,
+        createdBy: "owner@example.test",
+        entrypoint: "node app.js",
+        files: [],
+        name: "shared",
+      }),
+    );
     assert.equal((await get("shared")).status, 403, "reused name does not inherit old immutable-ID grant");
     assert.equal((await get("renamed")).status, 200, "same immutable app retains its grant after rename");
-    await app.archiveDeployment(shared.id);
+    await inTestTenant(() => app.archiveDeployment(shared.id));
     assert.equal((await get("renamed")).status, 404, "archived app cannot be reached even with its grant");
-    await app.setDeploymentPublic("shared", true, { createdBy: "owner@example.test" });
+    await inTestTenant(() => app.setDeploymentPublic("shared", true, { createdBy: "owner@example.test" }));
     const publicVisit = await get("shared");
     assert.equal(publicVisit.status, 200);
     assert.equal(JSON.parse(publicVisit.body)["x-portal-identity"], undefined, "public link access remains anonymous");

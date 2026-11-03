@@ -1,123 +1,130 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { migrateTestDatabase } from "./support/test-database.ts";
+import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";
 
-async function reset(dropOldMap: boolean): Promise<void> {
+async function ownerSql(...statements: string[]): Promise<void> {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS audit_log CASCADE");
-  if (dropOldMap) await p.query("DROP TABLE IF EXISTS audit_events CASCADE");
-  await p.end();
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+  try {
+    for (const statement of statements) await p.query(statement);
+  } finally {
+    await p.end();
+  }
 }
 
 function ev(at: number, action: string, scope = scopeId("personal", "U1")): AuditEvent {
   return { at, principalId: "U1", action, resource: `r-${action}`, scopeLabel: scope };
 }
 
-before(async () => {
-  await reset(true);
-});
+test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", { skip }, () =>
+  inTestTenant(async () => {
+    await ownerSql("TRUNCATE audit_log");
+    const log = createPostgresAuditLog(URL!);
+    const s1 = scopeId("personal", "U1");
+    const s2 = scopeId("channel", "C1");
+    for (let i = 1; i <= 5; i++) log.record(ev(i, `a${i}`, i % 2 === 0 ? s2 : s1));
 
-test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", { skip }, async () => {
-  await reset(true);
-  const log = createPostgresAuditLog(URL!);
-  const s1 = scopeId("personal", "U1");
-  const s2 = scopeId("channel", "C1");
-  for (let i = 1; i <= 5; i++) log.record(ev(i, `a${i}`, i % 2 === 0 ? s2 : s1));
+    const tail = await log.tail({ limit: 2 });
+    assert.deepEqual(
+      tail.map((e) => e.action),
+      ["a5", "a4"],
+      "newest-first, limited",
+    );
 
-  const tail = await log.tail({ limit: 2 });
-  assert.deepEqual(
-    tail.map((e) => e.action),
-    ["a5", "a4"],
-    "newest-first, limited",
-  );
+    const scoped = await log.tail({ limit: 10, scopeLabel: s1 });
+    assert.deepEqual(
+      scoped.map((e) => e.action),
+      ["a5", "a3", "a1"],
+      "scope filter",
+    );
 
-  const scoped = await log.tail({ limit: 10, scopeLabel: s1 });
-  assert.deepEqual(
-    scoped.map((e) => e.action),
-    ["a5", "a3", "a1"],
-    "scope filter",
-  );
+    const byActions = await log.tail({ limit: 10, action: ["a1", "a4"] });
+    assert.deepEqual(
+      byActions.map((e) => e.action),
+      ["a4", "a1"],
+      "action list filter",
+    );
 
-  const byActions = await log.tail({ limit: 10, action: ["a1", "a4"] });
-  assert.deepEqual(
-    byActions.map((e) => e.action),
-    ["a4", "a1"],
-    "action list filter",
-  );
+    const all = await log.events();
+    assert.deepEqual(
+      all.map((e) => e.action),
+      ["a1", "a2", "a3", "a4", "a5"],
+      "events() oldest-first",
+    );
 
-  const all = await log.events();
-  assert.deepEqual(
-    all.map((e) => e.action),
-    ["a1", "a2", "a3", "a4", "a5"],
-    "events() oldest-first",
-  );
+    log.record(ev(6, "a6", s1));
+    assert.equal((await log.tail({ limit: 1 }))[0]!.action, "a6", "read-your-write");
+  }),
+);
 
-  log.record(ev(6, "a6", s1));
-  assert.equal((await log.tail({ limit: 1 }))[0]!.action, "a6", "read-your-write");
-});
+test("pg audit log: migrates rows once from the legacy audit_events JSONB map", { skip }, () =>
+  inTestTenant(async () => {
+    await ownerSql("DROP TABLE audit_log", "DELETE FROM qm_schema_migrations WHERE id LIKE 'admin/audit-log/%'");
+    const pg = (await import("pg")).default;
+    const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+    await p.query("CREATE TABLE audit_events (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
+    await p.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+    const rows: AuditEvent[] = [ev(10, "old-a"), ev(30, "old-c"), ev(20, "old-b")];
+    for (const r of rows)
+      await p.query("INSERT INTO audit_events (id, json) VALUES ($1,$2)", [`${r.at}-${r.action}`, JSON.stringify(r)]);
+    await p.end();
 
-test("pg audit log: migrates rows once from the legacy audit_events JSONB map", { skip }, async () => {
-  await reset(true);
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("CREATE TABLE audit_events (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-  await p.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
-  const rows: AuditEvent[] = [ev(10, "old-a"), ev(30, "old-c"), ev(20, "old-b")];
-  for (const r of rows)
-    await p.query("INSERT INTO audit_events (id, json) VALUES ($1,$2)", [`${r.at}-${r.action}`, JSON.stringify(r)]);
-  await p.end();
+    const log = createPostgresAuditLog(URL!);
+    await migrateTestDatabase(URL);
+    const migrated = await log.events();
+    assert.deepEqual(
+      migrated.map((e) => e.action),
+      ["old-a", "old-b", "old-c"],
+      "legacy rows migrated, oldest-first",
+    );
 
-  const log = createPostgresAuditLog(URL!);
-  const migrated = await log.events();
-  assert.deepEqual(
-    migrated.map((e) => e.action),
-    ["old-a", "old-b", "old-c"],
-    "legacy rows migrated, oldest-first",
-  );
+    const log2 = createPostgresAuditLog(URL!);
+    assert.equal((await log2.events()).length, 3, "no duplicate copy on a second boot");
+  }),
+);
 
-  const log2 = createPostgresAuditLog(URL!);
-  assert.equal((await log2.events()).length, 3, "no duplicate copy on a second boot");
-});
+test("pg audit log: recordOnce is durable and idempotent across instances", { skip }, () =>
+  inTestTenant(async () => {
+    await ownerSql("TRUNCATE audit_log");
+    const first = createPostgresAuditLog(URL!);
+    const second = createPostgresAuditLog(URL!);
+    await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
+    await second.recordOnce!("deployment-layer:org:default-org:1", ev(2, "duplicate"));
+    const events = await first.events();
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.action, "layer-updated");
+  }),
+);
 
-test("pg audit log: recordOnce is durable and idempotent across instances", { skip }, async () => {
-  await reset(true);
-  const first = createPostgresAuditLog(URL!);
-  const second = createPostgresAuditLog(URL!);
-  await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
-  await second.recordOnce!("deployment-layer:org:default-org:1", ev(2, "duplicate"));
-  const events = await first.events();
-  assert.equal(events.length, 1);
-  assert.equal(events[0]?.action, "layer-updated");
-});
+test("pg audit log: resource filter treats % and _ as literal characters", { skip }, () =>
+  inTestTenant(async () => {
+    await ownerSql("TRUNCATE audit_log");
+    const log = createPostgresAuditLog(URL!);
+    const s1 = scopeId("personal", "U1");
+    log.record({ ...ev(1, "file.read", s1), resource: "my_report.pdf" });
+    log.record({ ...ev(2, "file.read", s1), resource: "myXreport.pdf" });
+    log.record({ ...ev(3, "file.read", s1), resource: "100% done" });
+    log.record({ ...ev(4, "file.read", s1), resource: "100 done" });
 
-test("pg audit log: resource filter treats % and _ as literal characters", { skip }, async () => {
-  await reset(true);
-  const log = createPostgresAuditLog(URL!);
-  const s1 = scopeId("personal", "U1");
-  log.record({ ...ev(1, "file.read", s1), resource: "my_report.pdf" });
-  log.record({ ...ev(2, "file.read", s1), resource: "myXreport.pdf" });
-  log.record({ ...ev(3, "file.read", s1), resource: "100% done" });
-  log.record({ ...ev(4, "file.read", s1), resource: "100 done" });
-
-  const underscore = await log.tail({ limit: 10, resourceContains: "my_report" });
-  assert.deepEqual(
-    underscore.map((e) => e.resource),
-    ["my_report.pdf"],
-  );
-  const percent = await log.tail({ limit: 10, resourceContains: "100%" });
-  assert.deepEqual(
-    percent.map((e) => e.resource),
-    ["100% done"],
-  );
-});
+    const underscore = await log.tail({ limit: 10, resourceContains: "my_report" });
+    assert.deepEqual(
+      underscore.map((e) => e.resource),
+      ["my_report.pdf"],
+    );
+    const percent = await log.tail({ limit: 10, resourceContains: "100%" });
+    assert.deepEqual(
+      percent.map((e) => e.resource),
+      ["100% done"],
+    );
+  }),
+);

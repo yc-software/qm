@@ -209,7 +209,6 @@ export function createPostgresApprovalStore(
       },
       async slackPending() {
         const { rows } = await claimAcrossTenants(
-          connectionString,
           `SELECT tenant_id, ${COLUMNS} FROM approvals WHERE request->>'surface' = 'slack' ORDER BY tenant_id, id`,
         );
         return rows.map((row) => ({ id: String(row.id), record: fromRow(row), ...rowTenant(row) }));

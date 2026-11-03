@@ -20,7 +20,19 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -61,26 +73,28 @@ async function fixture() {
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    app,
-    deploy,
-    acl,
-    directory,
-    sessions,
+    app: tenantBound(app),
+    deploy: tenantBound(deploy),
+    acl: tenantBound(acl),
+    directory: tenantBound(directory),
+    sessions: tenantBound(sessions),
     base,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
 
 const capFor = (actorId: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId,
+        scopeId: scopeId("personal", actorId),
+        aud: CONTROL_PLANE_AUD,
+        liveActor: true,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
+      SECRET,
+    ),
   );
 
 const gitPerm = async (base: string, id: string, actor: string): Promise<{ status: number; permission?: string }> => {

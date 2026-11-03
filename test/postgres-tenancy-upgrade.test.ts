@@ -8,7 +8,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
-const URL = process.env.DATABASE_URL;
+const URL = process.env.DATABASE_OWNER_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy upgrade test";
 const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/005[01]-/;
 

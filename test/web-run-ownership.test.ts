@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { scopeId } from "../src/types.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "web-run-ownership-secret".repeat(2);
 
@@ -78,19 +79,17 @@ test("another user cannot see a run's queued text, or edit, withdraw or answer i
     (await fetch(`${webBase}/api/runs/${live}/signal`, as("bob", { method: "POST", body: answer }))).status,
     404,
   );
-  assert.deepEqual(await built.signals.takePending(live), []);
-  const untouched = await built.runs.get(queued);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(live)), []);
+  const untouched = await inTestTenant(() => built.runs.get(queued));
   assert.equal(untouched?.status, "pending");
   assert.equal(untouched?.request.text, "alice private second");
 });
 
 test("another user cannot inspect or control a session's swarm", async () => {
-  const session = await built.sessions.getOrCreateByThread(
-    `web:alice:${crypto.randomUUID()}`,
-    "dm",
-    scopeId("personal", "alice"),
+  const session = await inTestTenant(() =>
+    built.sessions.getOrCreateByThread(`web:alice:${crypto.randomUUID()}`, "dm", scopeId("personal", "alice")),
   );
-  await built.sessions.addParticipant(session.id, "alice");
+  await inTestTenant(() => built.sessions.addParticipant(session.id, "alice"));
   const path = `${webBase}/api/sessions/${encodeURIComponent(session.id)}/swarm`;
   const control = JSON.stringify({ action: "control", memberId: "m1", state: "stopped" });
   assert.notEqual((await fetch(path, as("alice"))).status, 403);

@@ -56,24 +56,11 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
     ],
   }));
   for (const migration of migrations) pg.registerMigration(migration);
-  const ready = new Map<IndexedResourceKind, Promise<void>>();
-  const ensure = (kind: IndexedResourceKind): Promise<void> => {
-    let pending = ready.get(kind);
-    if (!pending) {
-      pending = pg.migrate(migrations[Object.keys(sources).indexOf(kind)]!).catch((error) => {
-        ready.delete(kind);
-        throw error;
-      });
-      ready.set(kind, pending);
-    }
-    return pending;
-  };
   return {
     async search(kind, query, limit) {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];
       const source = sources[kind];
-      await ensure(kind);
       const vector = `to_tsvector('simple', ${source.title} || ' ' || ${source.description})`;
       const rows = await pg.q(
         `SELECT id, ${source.title} AS title, ${source.description} AS description,

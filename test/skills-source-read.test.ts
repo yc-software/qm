@@ -1,5 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
+import { inTestTenant } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -8,10 +9,12 @@ import type { TurnRequest } from "../src/types.ts";
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
   await built.deploymentLayerReady();
-  for (const actor of ["U1", "U2"]) {
-    const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
-    await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
-  }
+  await inTestTenant(async () => {
+    for (const actor of ["U1", "U2"]) {
+      const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
+      await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
+    }
+  });
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();
@@ -53,8 +56,14 @@ async function fixture(t: TestContext) {
   return { ...built, turn, publish, provisions: () => provisions };
 }
 
-test("published skill sources and assets read without a sandbox, respecting scope and archive", async (t) => {
-  const b = await fixture(t);
+function fixtureTest(name: string, fn: (b: Awaited<ReturnType<typeof fixture>>) => Promise<void>): void {
+  test(name, async (t) => {
+    const b = await fixture(t);
+    await inTestTenant(() => fn(b));
+  });
+}
+
+fixtureTest("published skill sources and assets read without a sandbox, respecting scope and archive", async (b) => {
   const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
   assert.match(await b.turn("!sysprompt"), /^- source-helper — /m);
   assert.match(
@@ -69,8 +78,7 @@ test("published skill sources and assets read without a sandbox, respecting scop
   assert.equal(b.provisions(), 3);
 });
 
-test("a body-only skill loads without any sandbox work", async (t) => {
-  const b = await fixture(t);
+fixtureTest("a body-only skill loads without any sandbox work", async (b) => {
   const skill = await b.skills.create({
     scopeId: "personal:U1",
     createdBy: "U1",
@@ -83,8 +91,7 @@ test("a body-only skill loads without any sandbox work", async (t) => {
   assert.equal(b.provisions(), 1);
 });
 
-test("published skill loads reject invalid and control paths without provisioning", async (t) => {
-  const b = await fixture(t);
+fixtureTest("published skill loads reject invalid and control paths without provisioning", async (b) => {
   await b.publish("personal:U1", "PUBLISHED_BODY");
   for (const [name, path] of [
     ["missing", "SKILL.md"],
@@ -100,8 +107,7 @@ test("published skill loads reject invalid and control paths without provisionin
   assert.equal(b.provisions(), 0);
 });
 
-test("published source follows scope shadowing and preserves sandbox-authored working copies", async (t) => {
-  const b = await fixture(t);
+fixtureTest("published source follows scope shadowing and preserves sandbox-authored working copies", async (b) => {
   await b.publish("org:default-org", "ORG_BODY");
   const personal = await b.publish("personal:U1", "PERSONAL_BODY");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
@@ -219,9 +225,8 @@ test("a body read avoids sandbox work and a file request materializes that skill
   );
 });
 
-test("pack assets run from the skills root and stay across turns", async (t) => {
+fixtureTest("pack assets run from the skills root and stay across turns", async (b) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");
-  const b = await fixture(t);
   const skill = await b.publish("personal:U1", "PACK_BODY", "source-pack");
   const files = [{ path: "example.sh", content: "printf PACK_ASSET" }];
   await b.skillBundles.put({ packId: "source-pack", commit: "c", files, hash: computeBundleHash(files) });

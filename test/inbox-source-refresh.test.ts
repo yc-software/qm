@@ -4,6 +4,7 @@ import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-so
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testFeatureFlagStore } from "./support/typed-stores.ts";
 
@@ -15,7 +16,7 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
       dedupeKey: "ask",
       source,
       sourceAt: 1000,
-      sourcePayload: { source, [source]: meta, context: [{ author: "Elsewhere", text: "UNRELATED CHANNEL TAIL" }] },
+      sourcePayload: { [source]: meta, context: [{ author: "Elsewhere", text: "UNRELATED CHANNEL TAIL" }] },
       proposal: { by: "human", data: { body: "Keep my edit" } },
     },
   ]);
@@ -654,51 +655,53 @@ test("saved participants do not supply a missing sender identity", async () => {
   }
 });
 
-test("profile failures retain diagnostics without exposing credentials", async () => {
-  for (const mode of [undefined, "avatars"] as const) {
+test("profile failures retain diagnostics without exposing credentials", () =>
+  inTestTenant(async () => {
+    for (const mode of [undefined, "avatars"] as const) {
+      const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+      const errors = createPostgresErrorLog(testDatabaseUrl());
+      await createInboxSourceRefresh({
+        featureFlags,
+        items,
+        tokens,
+        directory: directoryOf({}, () => {
+          throw new Error("lookup failed token=xoxb-private-credential");
+        }),
+        errors,
+        fetchImpl: slackFetch([]),
+      })("owner", [item], mode);
+      const events = await errors.list();
+      assert.ok(events.length > 0);
+      assert.ok(events.every((event) => event.scopeLabel === "personal:owner"));
+      assert.match(events[0]!.message, /Slack profile U1: lookup failed/);
+      assert.doesNotMatch(JSON.stringify(events), /private-credential/);
+      assert.equal((await items.get(item.id))!.status, "ready");
+    }
+  }));
+
+test("cosmetic refresh records ledger failures without rejecting the inbox request", () =>
+  inTestTenant(async () => {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
     const errors = createPostgresErrorLog(testDatabaseUrl());
     await createInboxSourceRefresh({
       featureFlags,
-      items,
-      tokens,
-      directory: directoryOf({}, () => {
-        throw new Error("lookup failed token=xoxb-private-credential");
-      }),
-      errors,
-      fetchImpl: slackFetch([]),
-    })("owner", [item], mode);
-    const events = await errors.list();
-    assert.ok(events.length > 0);
-    assert.ok(events.every((event) => event.scopeLabel === "personal:owner"));
-    assert.match(events[0]!.message, /Slack profile U1: lookup failed/);
-    assert.doesNotMatch(JSON.stringify(events), /private-credential/);
-    assert.equal((await items.get(item.id))!.status, "ready");
-  }
-});
-
-test("cosmetic refresh records ledger failures without rejecting the inbox request", async () => {
-  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-  const errors = createPostgresErrorLog(testDatabaseUrl());
-  await createInboxSourceRefresh({
-    featureFlags,
-    items: {
-      ...items,
-      annotate: async () => {
-        throw new Error("database unavailable");
+      items: {
+        ...items,
+        annotate: async () => {
+          throw new Error("database unavailable");
+        },
       },
-    },
-    tokens,
-    directory,
-    errors,
-    fetchImpl: async () => json({ ok: true, user: { name: "Alex" } }),
-  })("owner", [item], "avatars");
-  const events = await errors.list();
-  assert.equal(events.length, 1);
-  assert.match(events[0]!.message, new RegExp(item.id));
-  assert.match(events[0]!.message, /database unavailable/);
-  assert.equal(events[0]!.scopeLabel, "personal:owner");
-});
+      tokens,
+      directory,
+      errors,
+      fetchImpl: async () => json({ ok: true, user: { name: "Alex" } }),
+    })("owner", [item], "avatars");
+    const events = await errors.list();
+    assert.equal(events.length, 1);
+    assert.match(events[0]!.message, new RegExp(item.id));
+    assert.match(events[0]!.message, /database unavailable/);
+    assert.equal(events[0]!.scopeLabel, "personal:owner");
+  }));
 
 test("Inbox source refresh checks the owner rollout before credentials, reads, or writes in either mode", async () => {
   const flags = testFeatureFlagStore();
@@ -754,13 +757,13 @@ test("Slack-id principals and items without a known sender use only the director
   assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
     { id: "U1", name: "Alex", avatarUrl: ALEX },
   ]);
-  const legacy = await fixture("slack", { channelId: "D2", ts: "1.0" });
-  await createInboxSourceRefresh({ featureFlags, items: legacy.items, tokens, directory, fetchImpl })(
+  const noSender = await fixture("slack", { channelId: "D2", ts: "1.0" });
+  await createInboxSourceRefresh({ featureFlags, items: noSender.items, tokens, directory, fetchImpl })(
     "owner",
-    [legacy.item],
+    [noSender.item],
     "avatars",
   );
-  assert.deepEqual(await legacy.items.get(legacy.item.id), legacy.item);
+  assert.deepEqual(await noSender.items.get(noSender.item.id), noSender.item);
 });
 
 test("people outside the directory keep the profile Slack returned with their message", async () => {

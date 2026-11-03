@@ -7,13 +7,13 @@ import {
   MAX_ACTIVE_UPLOADS,
   type FileUpload,
 } from "../src/files/file-upload-store.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const url = process.env.DATABASE_URL;
-test(
-  "upload sessions survive recreation; quota and state transitions serialize across cores",
-  { skip: !url },
-  async () => {
+test("upload sessions survive recreation; quota and state transitions serialize across cores", { skip: !url }, () =>
+  inTestTenant(async () => {
     const actorId = `upload-test-${randomUUID()}`;
     const first = createPostgresFileUploadStore(url!);
     const second = createPostgresFileUploadStore(url!);
@@ -48,78 +48,80 @@ test(
       second.transition(accepted.id, ["pending"], "aborting"),
     ]);
     assert.equal(claims.filter(Boolean).length, 1);
-    assert.ok((await second.expired(Date.now() + 120_000)).some((r) => r.id === accepted.id));
+    assert.ok((await withoutTenant(() => second.expired(Date.now() + 120_000))).some((r) => r.id === accepted.id));
     for (const item of uploads) await first.transition(item.id, ["pending", "completing", "aborting"], "aborted");
     await second.insert(row());
-  },
+  }),
 );
 
-test("expired upload batches rotate durably without starving later rows", { skip: !url }, async () => {
-  const first = createPostgresFileUploadStore(url!);
-  const second = createPostgresFileUploadStore(url!);
-  const now = Date.now();
-  const ids: string[] = [];
-  for (let i = 0; i < 103; i++) {
-    const id = randomUUID().replaceAll("-", "");
-    ids.push(id);
-    await first.insert({
-      id,
-      actorId: `sweep-${id}`,
-      scopeId: scopeId("personal", id),
-      name: "file",
-      mimetype: "text/plain",
-      sizeBytes: 1,
-      partSize: 64 * 1024 * 1024,
-      checksums: ["hash"],
-      uploadId: "upload",
-      state: "completing",
-      createdAt: now,
-      lastActivityAt: now,
-      expiresAt: i,
-    });
-  }
-  const batch1 = await first.expired(now);
-  const batch2 = await second.expired(now);
-  assert.equal(batch1.length, 100);
-  assert.ok(batch2.length >= 3);
-  assert.ok(batch2.every((r) => !batch1.some((earlier) => earlier.id === r.id)));
-  const seen = new Set([...batch1, ...batch2].map((r) => r.id));
-  assert.ok(ids.every((id) => seen.has(id)));
-  for (const id of ids) await first.transition(id, ["completing"], "failed");
-  assert.ok(!(await second.expired(now + 120_000)).some((r) => ids.includes(r.id)));
-});
+test("expired upload batches rotate durably without starving later rows", { skip: !url }, () =>
+  inTestTenant(async () => {
+    const first = createPostgresFileUploadStore(url!);
+    const second = createPostgresFileUploadStore(url!);
+    const now = Date.now();
+    const ids: string[] = [];
+    for (let i = 0; i < 103; i++) {
+      const id = randomUUID().replaceAll("-", "");
+      ids.push(id);
+      await first.insert({
+        id,
+        actorId: `sweep-${id}`,
+        scopeId: scopeId("personal", id),
+        name: "file",
+        mimetype: "text/plain",
+        sizeBytes: 1,
+        partSize: 64 * 1024 * 1024,
+        checksums: ["hash"],
+        uploadId: "upload",
+        state: "completing",
+        createdAt: now,
+        lastActivityAt: now,
+        expiresAt: i,
+      });
+    }
+    const batch1 = await withoutTenant(() => first.expired(now));
+    const batch2 = await withoutTenant(() => second.expired(now));
+    assert.equal(batch1.length, 100);
+    assert.ok(batch2.length >= 3);
+    assert.ok(batch2.every((r) => !batch1.some((earlier) => earlier.id === r.id)));
+    const seen = new Set([...batch1, ...batch2].map((r) => r.id));
+    assert.ok(ids.every((id) => seen.has(id)));
+    for (const id of ids) await first.transition(id, ["completing"], "failed");
+    assert.ok(!(await withoutTenant(() => second.expired(now + 120_000))).some((r) => ids.includes(r.id)));
+  }),
+);
 
-test("terminal failed uploads release active quota", { skip: !url }, async () => {
-  const store = createPostgresFileUploadStore(url!);
-  const actorId = `failed-quota-${randomUUID()}`;
-  const ids: string[] = [];
-  for (let i = 0; i <= MAX_ACTIVE_UPLOADS; i++) {
-    const id = randomUUID().replaceAll("-", "");
-    ids.push(id);
-    await store.insert({
-      id,
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      name: "file",
-      mimetype: "text/plain",
-      sizeBytes: 1,
-      partSize: 64 * 1024 * 1024,
-      checksums: ["hash"],
-      uploadId: "upload",
-      state: "completing",
-      createdAt: Date.now(),
-      lastActivityAt: Date.now(),
-      expiresAt: Date.now(),
-    });
-    await store.transition(id, ["completing"], "failed");
-  }
-  assert.equal((await store.get(ids.at(-1)!))!.state, "failed");
-});
+test("terminal failed uploads release active quota", { skip: !url }, () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileUploadStore(url!);
+    const actorId = `failed-quota-${randomUUID()}`;
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_ACTIVE_UPLOADS; i++) {
+      const id = randomUUID().replaceAll("-", "");
+      ids.push(id);
+      await store.insert({
+        id,
+        actorId,
+        scopeId: scopeId("personal", actorId),
+        name: "file",
+        mimetype: "text/plain",
+        sizeBytes: 1,
+        partSize: 64 * 1024 * 1024,
+        checksums: ["hash"],
+        uploadId: "upload",
+        state: "completing",
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        expiresAt: Date.now(),
+      });
+      await store.transition(id, ["completing"], "failed");
+    }
+    assert.equal((await store.get(ids.at(-1)!))!.state, "failed");
+  }),
+);
 
-test(
-  "active lists the actor's unfinished uploads that hold quota; touch records activity",
-  { skip: !url },
-  async () => {
+test("active lists the actor's unfinished uploads that hold quota; touch records activity", { skip: !url }, () =>
+  inTestTenant(async () => {
     const store = createPostgresFileUploadStore(url!);
     const actorId = `active-uploads-${randomUUID()}`;
     const now = Date.now();
@@ -150,5 +152,5 @@ test(
     assert.equal(await store.touch(aborted.id, now + 5_000), false);
     assert.deepEqual(await store.active(actorId, now), [{ ...live, lastActivityAt: now + 5_000 }]);
     assert.equal((await store.get(aborted.id))!.lastActivityAt, now);
-  },
+  }),
 );

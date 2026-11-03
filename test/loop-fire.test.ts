@@ -18,6 +18,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testIdempotencyStore } from "./support/typed-stores.ts";
 
@@ -362,11 +363,13 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
-    { principalId: "josh", displayName: "Josh", type: "internal" },
-    { principalId: "U2", displayName: "Bob", type: "internal" },
-  ]);
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  await inTestTenant(async () => {
+    await directory.replace([
+      { principalId: "josh", displayName: "Josh", type: "internal" },
+      { principalId: "U2", displayName: "Bob", type: "internal" },
+    ]);
+    await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  });
   const s = service(HAPPY, { directory });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
@@ -646,7 +649,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
       fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
     });
     await scheduler.tick(cron.createdAt + 60_000);
-    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+    assert.equal((await inTestTenant(() => s.crons.listFires(cron.id))).runs[0]?.status, "ok");
     assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
     await s.fire.fire(loop.id, "manual");
     const output = (await s.outputs.awaitingReview(loop.id))[0]!;
@@ -970,7 +973,7 @@ test("event-only Email work skips scanning and holds its draft instead of markin
       dedupeKey: "thread1",
       source: "gmail",
       sourceAt: 1000,
-      sourcePayload: { source: "gmail", snippet: "Hello from email", gmail: { threadId: "thread1" } },
+      sourcePayload: { snippet: "Hello from email", gmail: { threadId: "thread1" } },
     },
   ]);
   const result = await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
@@ -1250,7 +1253,6 @@ test("a reply Loop's work stage can settle an event as replied or no reply neede
         source: "gmail",
         sourceAt: 2000,
         sourcePayload: {
-          source: "gmail",
           snippet: "Can you send the deck?",
           gmail: { threadId: "thread1" },
           latestEvent: { author: "owner", at: 2000, text: "Sent it over" },

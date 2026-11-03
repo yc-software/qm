@@ -42,13 +42,13 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
 const testLinks = (store = createPostgresPrincipalLinkStore(testDatabaseUrl())) =>
   createPrincipalLinkService(store, testAdvisoryLock());
-
 const OIDC = "oidc:1111111111111111111111111111111111111111111111111111111111111111:am9yZGFu";
 const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified directory email";
 
@@ -150,13 +150,14 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(samePerson(OIDC, "casey@acme.test"), false);
   });
 
-  it("the directory bridge reaches a linked sign-in through the roster row", async () => {
-    await installed();
-    const dir = createPostgresDirectoryStore(testDatabaseUrl());
-    await dir.replace([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
-    assert.equal(await samePersonInDirectory(dir, OIDC, SLACK), true);
-    assert.equal(await samePersonInDirectory(dir, OIDC, "U0CASEY"), false);
-  });
+  it("the directory bridge reaches a linked sign-in through the roster row", () =>
+    inTestTenant(async () => {
+      await installed();
+      const dir = createPostgresDirectoryStore(testDatabaseUrl());
+      await dir.replace([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+      assert.equal(await samePersonInDirectory(dir, OIDC, SLACK), true);
+      assert.equal(await samePersonInDirectory(dir, OIDC, "U0CASEY"), false);
+    }));
 
   it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
     const links = testLinks();
@@ -262,7 +263,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     return fetch(`${base}${path}`, {
       method,
       headers: {
-        ...signedRequestHeaders(SECRET, method, path, body),
+        ...signedRequestHeaders(SECRET, method, path, body, testTenantHeaders()),
         ...(body ? { "content-type": "application/json" } : {}),
         ...headers,
       },
@@ -271,11 +272,13 @@ describe("linked sign-ins across the HTTP surface", () => {
   };
   const admin = { "x-admin-actor": "admin-alice@default-org" };
   const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
+    inTestTenant(() => mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET));
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-")), signingSecret: SECRET }));
-    await built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]),
+    );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -329,7 +332,10 @@ describe("linked sign-ins across the HTTP surface", () => {
     );
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
     assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
-    assert.equal(adminStatusFromGrants(await built.admin.listGrants(), "casey@acme.test").isAdmin, false);
+    assert.equal(
+      adminStatusFromGrants(await inTestTenant(() => built.admin.listGrants()), "casey@acme.test").isAdmin,
+      false,
+    );
     const created = await signed("POST", "/v1/admin/principal-links", body, admin);
     assert.equal(created.status, 200);
     const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
@@ -337,7 +343,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     };
     assert.equal(listed.links.length, 1);
     assert.equal(listed.links[0]!.linkedBy, "admin-alice");
-    const audit = await built.auditLog.tail({ limit: 50, action: "principal_link.create" });
+    const audit = await inTestTenant(() => built.auditLog.tail({ limit: 50, action: "principal_link.create" }));
     assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
   });
 
@@ -383,7 +389,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(redeemed.status, 200);
     const { credential } = (await redeemed.json()) as { credential: { id: string; ownerId: string } };
     assert.equal(credential.ownerId, EMAIL, "the credential belongs to the canonical principal");
-    assert.equal(await built.keychain!.readOwnSecret(OIDC, credential.id), "sk_live_x");
+    assert.equal(await inTestTenant(() => built.keychain!.readOwnSecret(OIDC, credential.id)), "sk_live_x");
   });
 
   it("deleting the link restores two separate principals", async () => {
@@ -406,8 +412,10 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
-    await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
-    await built.identity.refresh(true);
+    await inTestTenant(async () => {
+      await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
+      await built.identity.refresh(true);
+    });
     server = createInsecureTestServer(built.app, {
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
@@ -425,7 +433,10 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
   const get = async (p: string, viewer: string) =>
     fetch(`${base}/v1/sessions/nope?viewer=${encodeURIComponent(viewer)}`, {
-      headers: { "x-portal-identity": await mintSignedPayload({ p, exp: Date.now() + 60_000 }, PID) },
+      headers: {
+        ...testTenantHeaders(),
+        "x-portal-identity": await mintSignedPayload({ t: testTenants()[0], p, exp: Date.now() + 60_000 }, PID),
+      },
     });
 
   it("passes for the canonical viewer, the sign-in itself, and rejects another person", async () => {
@@ -536,8 +547,9 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
       (
         await fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
           headers: {
+            ...testTenantHeaders(),
             "x-portal-identity": await mintSignedPayload(
-              { p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+              { t: testTenants()[0], p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
               secret,
             ),
           },
@@ -561,8 +573,10 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
-    await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
-    await app.identity.refresh(true);
+    await inTestTenant(async () => {
+      await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+      await app.identity.refresh(true);
+    });
     const server = createInsecureTestServer(app.app, {
       portalIdentitySecret: secret,
       requireSignedPortalIdentity: true,
@@ -570,23 +584,26 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const token = await mintSignedPayload({ p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 }, secret);
+    const token = await mintSignedPayload(
+      { t: testTenants()[0], p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+      secret,
+    );
     const get = () =>
       fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
-        headers: { "x-portal-identity": token },
+        headers: { ...testTenantHeaders(), "x-portal-identity": token },
       });
     try {
       assert.equal((await get()).status, 404);
       const impersonation = await mintSignedPayload(
-        { p: "another-person", imp: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+        { t: testTenants()[0], p: "another-person", imp: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
         secret,
       );
       const impersonate = () =>
         fetch(`${base}/v1/sessions/missing?viewer=another-person`, {
-          headers: { "x-portal-identity": impersonation },
+          headers: { ...testTenantHeaders(), "x-portal-identity": impersonation },
         });
       assert.equal((await impersonate()).status, 404);
-      await app.principalLinks.unlink(OIDC);
+      await inTestTenant(() => app.principalLinks.unlink(OIDC));
       assert.equal((await impersonate()).status, 401);
       assert.equal((await get()).status, 401);
     } finally {

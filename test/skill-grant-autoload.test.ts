@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, skillRef, parseRef } from "../src/acl/resource-ref.ts";
@@ -7,7 +7,12 @@ import { skillStore, type SkillManifest, type SkillRows, type SkillStore } from 
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testSkillStore } from "./support/typed-stores.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const ORG = scopeId("org", "default-org");
 const JOSH = scopeId("personal", "josh");

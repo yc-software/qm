@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -6,6 +6,11 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const ACTOR = "U1";
 const CHANNEL = scopeId("channel", "C9");

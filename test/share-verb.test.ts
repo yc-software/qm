@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { createControlService } from "../src/api/control-service.ts";
 import { AdminError } from "../src/admin/admin-service.ts";
@@ -18,7 +18,12 @@ import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts"
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testSkillStore } from "./support/typed-stores.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const ORG = "default-org";
 

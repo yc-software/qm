@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,11 @@ import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const at = Date.UTC(2026, 4, 31);
 

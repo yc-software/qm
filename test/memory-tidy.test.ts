@@ -10,6 +10,7 @@ import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 function fixture() {
@@ -129,7 +130,7 @@ test("a scheduled fire runs the tidy only when the notebook changed since the la
 
   await f.fireAt(alice, Date.now() + 240_000);
   assert.equal(f.calls.length, 1);
-  const { runs } = await f.crons.listFires(id);
+  const { runs } = await inTestTenant(() => f.crons.listFires(id));
   assert.equal(runs.at(-1)!.status, "silent");
   assert.equal(runs.at(-1)!.sessionId, undefined);
 
@@ -143,12 +144,16 @@ test("a failed tidy does not count, and run-now always runs", async () => {
   f.notebooks.set(alice, [f.fact(1)]);
   await f.service.ensure(alice);
   const id = (await f.cronOf(alice)).id;
-  await f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 5, endedAt: 6, status: "failed" });
-  assert.equal(await f.service.skipFire(await f.cronOf(alice)), undefined);
+  await inTestTenant(() =>
+    f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 5, endedAt: 6, status: "failed" }),
+  );
+  assert.equal(await inTestTenant(async () => f.service.skipFire(await f.cronOf(alice))), undefined);
 
-  await f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" });
-  assert.ok(await f.service.skipFire(await f.cronOf(alice)));
-  const result = await f.scheduler.runNow(id);
+  await inTestTenant(() =>
+    f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" }),
+  );
+  assert.ok(await inTestTenant(async () => f.service.skipFire(await f.cronOf(alice))));
+  const result = await inTestTenant(() => f.scheduler.runNow(id));
   assert.ok(result.started);
   await result.settled;
   assert.equal(f.calls.length, 1);

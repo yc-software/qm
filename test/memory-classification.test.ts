@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { classifiedMemory } from "../src/memory/classification.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -6,6 +6,11 @@ import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());

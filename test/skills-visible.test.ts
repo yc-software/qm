@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { skillStore, type SkillRows } from "../src/skills/skill-store.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { testSkillStore } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function freshApp() {
   const config: Config = testConfig({
@@ -20,6 +21,13 @@ function freshApp() {
     seedSkills: false,
   });
   return buildApp(config);
+}
+
+function appTest(name: string, fn: (built: ReturnType<typeof buildApp>) => Promise<void>): void {
+  test(name, async () => {
+    const built = freshApp();
+    await inTestTenant(() => fn(built));
+  });
 }
 
 async function publish(
@@ -37,8 +45,7 @@ async function publish(
   return skills.publish(sk.id);
 }
 
-test("listVisibleSkills returns a principal's personal + org skills with scope labels", async () => {
-  const { app, skills } = freshApp();
+appTest("listVisibleSkills returns a principal's personal + org skills with scope labels", async ({ app, skills }) => {
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
   await publish(skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
 
@@ -48,29 +55,29 @@ test("listVisibleSkills returns a principal's personal + org skills with scope l
   assert.equal(byName.get("deploy-bot")!.skill!.scopeId, scopeId("org", "default-org"));
 });
 
-test("a personal skill shadows a same-named org skill (most-specific wins, shadow surfaced)", async () => {
-  const { app, skills } = freshApp();
-  await publish(skills, scopeId("org", "default-org"), "notes", "the org-wide notes skill");
-  await publish(skills, scopeId("personal", "U1"), "notes", "U1's own notes skill");
+appTest(
+  "a personal skill shadows a same-named org skill (most-specific wins, shadow surfaced)",
+  async ({ app, skills }) => {
+    await publish(skills, scopeId("org", "default-org"), "notes", "the org-wide notes skill");
+    await publish(skills, scopeId("personal", "U1"), "notes", "U1's own notes skill");
 
-  const visible = await app.listVisibleSkills("U1");
-  const notes = visible.filter((r) => r.skill!.manifest.name === "notes");
-  assert.equal(notes.length, 1, "one winner per name");
-  assert.equal(notes[0]!.skill!.scopeId, scopeId("personal", "U1"), "personal wins over org");
-  assert.equal(notes[0]!.shadowed.length, 1, "the org skill it shadows is surfaced");
-  assert.equal(notes[0]!.shadowed[0]!.scopeId, scopeId("org", "default-org"));
-});
+    const visible = await app.listVisibleSkills("U1");
+    const notes = visible.filter((r) => r.skill!.manifest.name === "notes");
+    assert.equal(notes.length, 1, "one winner per name");
+    assert.equal(notes[0]!.skill!.scopeId, scopeId("personal", "U1"), "personal wins over org");
+    assert.equal(notes[0]!.shadowed.length, 1, "the org skill it shadows is surfaced");
+    assert.equal(notes[0]!.shadowed[0]!.scopeId, scopeId("org", "default-org"));
+  },
+);
 
-test("another principal does not see U1's personal skill (scope boundary)", async () => {
-  const { app, skills } = freshApp();
+appTest("another principal does not see U1's personal skill (scope boundary)", async ({ app, skills }) => {
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
 
   const visible = await app.listVisibleSkills("U2");
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "make-digest"));
 });
 
-test("an unpublished (draft/reviewed) skill is not visible", async () => {
-  const { app, skills } = freshApp();
+appTest("an unpublished (draft/reviewed) skill is not visible", async ({ app, skills }) => {
   const draft = await skills.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "wip", description: "not ready", requiredCapabilities: [], body: "# wip" },

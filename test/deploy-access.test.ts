@@ -23,6 +23,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
 const owner = "alice@example.com";
@@ -132,173 +133,181 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     assert.throws(() => parseDeployAccess(value));
 });
 
-test("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", async (t) => {
-  const f = await fixture(t);
-  assert.match(await f.decide(), /^Approved\./);
-  await f.decide();
-  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
-  const notices = await f.notices();
-  assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, requester);
-  assert.match(notices[0]!.text, /gave you access.*https:\/\/mysite.apps.example.com\//);
-  assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
-  await f.share(null);
-  assert.deepEqual(await f.grants(), []);
-  await assert.rejects(f.decide(requester), /owner/);
-  await f.decide();
-  assert.equal((await f.grants()).length, 1);
-  assert.equal((await f.notices()).length, 1);
-  await f.share("write");
-  await f.decide();
-  assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
-  assert.equal((await f.notices()).length, 2);
-  await f.app.moveArtifactHome("deploy", f.d.id, person(requester), owner);
-  await assert.rejects(f.decide(), /owner/);
-  await assert.rejects(f.decide(owner, false), /owner/);
-});
+test("approve is audited and idempotent, preserves manage access, and respects transfers/revokes", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    assert.match(await f.decide(), /^Approved\./);
+    await f.decide();
+    assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "read" }]);
+    const notices = await f.notices();
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]!.destination.target, requester);
+    assert.match(notices[0]!.text, /gave you access.*https:\/\/mysite.apps.example.com\//);
+    assert.ok((await f.auditLog.events()).some((e) => e.action === "grant"));
+    await f.share(null);
+    assert.deepEqual(await f.grants(), []);
+    await assert.rejects(f.decide(requester), /owner/);
+    await f.decide();
+    assert.equal((await f.grants()).length, 1);
+    assert.equal((await f.notices()).length, 1);
+    await f.share("write");
+    await f.decide();
+    assert.deepEqual(await f.grants(), [{ scope: person(requester), permission: "write" }]);
+    assert.equal((await f.notices()).length, 2);
+    await f.app.moveArtifactHome("deploy", f.d.id, person(requester), owner);
+    await assert.rejects(f.decide(), /owner/);
+    await assert.rejects(f.decide(owner, false), /owner/);
+  }));
 
-test("requester, stranger, guest and deactivated owner cannot approve or decline", async (t) => {
-  const f = await fixture(t);
-  for (const approve of [true, false]) {
-    for (const id of [requester, "carol@example.com"]) await assert.rejects(f.decide(id, approve), /owner/);
-    await assert.rejects(f.decide(owner, approve, { isExternalGuest: true }), /owner/);
-  }
-  await f.identity.deactivate(owner);
-  await assert.rejects(f.decide(), /owner/);
-  await assert.rejects(f.decide(owner, false), /owner/);
-  assert.deepEqual(await f.grants(), []);
-  assert.deepEqual(await f.notices(), []);
-});
+test("requester, stranger, guest and deactivated owner cannot approve or decline", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    for (const approve of [true, false]) {
+      for (const id of [requester, "carol@example.com"]) await assert.rejects(f.decide(id, approve), /owner/);
+      await assert.rejects(f.decide(owner, approve, { isExternalGuest: true }), /owner/);
+    }
+    await f.identity.deactivate(owner);
+    await assert.rejects(f.decide(), /owner/);
+    await assert.rejects(f.decide(owner, false), /owner/);
+    assert.deepEqual(await f.grants(), []);
+    assert.deepEqual(await f.notices(), []);
+  }));
 
-test("tampering the deployment ID cannot authorize another owner's app", async (t) => {
-  const f = await fixture(t);
-  const other = await f.app.deploy(publishInput(requester, "other"));
-  const value = JSON.stringify({ ...request, deploymentId: other.id });
-  for (const approve of [true, false])
-    await assert.rejects(decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, approve), /owner/);
-});
+test("tampering the deployment ID cannot authorize another owner's app", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const other = await f.app.deploy(publishInput(requester, "other"));
+    const value = JSON.stringify({ ...request, deploymentId: other.id });
+    for (const approve of [true, false])
+      await assert.rejects(decideDeploymentAccess(f.app, f.identity, value, { externalId: owner }, approve), /owner/);
+  }));
 
-test("decline only notifies and leaves access unchanged; duplicate clicks dedupe", async (t) => {
-  const f = await fixture(t);
-  assert.match(await f.decide(owner, false), /^Declined\./);
-  await f.decide(owner, false);
-  assert.deepEqual(await f.grants(), []);
-  const notices = await f.notices();
-  assert.equal(notices.length, 1);
-  assert.match(notices[0]!.text, /declined your request/);
-});
+test("decline only notifies and leaves access unchanged; duplicate clicks dedupe", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    assert.match(await f.decide(owner, false), /^Declined\./);
+    await f.decide(owner, false);
+    assert.deepEqual(await f.grants(), []);
+    const notices = await f.notices();
+    assert.equal(notices.length, 1);
+    assert.match(notices[0]!.text, /declined your request/);
+  }));
 
-test("direct share paths notify only after successful grants; org, self and revoke stay silent", async (t) => {
-  const f = await fixture(t);
-  await f.share(null);
-  await f.share("read", person(owner));
-  await f.share("read", scopeId("org", "acme"));
-  const control = createControlService(f.app);
-  const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
-  const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
-  assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
-  assert.deepEqual(await f.notices(), []);
-  assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
-  await f.share("read");
-  assert.equal((await f.notices()).length, 1);
-  f.deliveries.enqueue = async () => {
-    throw new Error("outbox unavailable");
-  };
-  assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
-});
+test("direct share paths notify only after successful grants; org, self and revoke stay silent", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    await f.share(null);
+    await f.share("read", person(owner));
+    await f.share("read", scopeId("org", "acme"));
+    const control = createControlService(f.app);
+    const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
+    const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
+    assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
+    assert.deepEqual(await f.notices(), []);
+    assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
+    await f.share("read");
+    assert.equal((await f.notices()).length, 1);
+    f.deliveries.enqueue = async () => {
+      throw new Error("outbox unavailable");
+    };
+    assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
+  }));
 
-test("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
-  const f = await fixture(t);
-  const sent: string[] = [];
-  const app = createApp({
-    deploy: f.deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    identity: f.identity,
-    deliveries: f.deliveries,
-    auditLog: f.auditLog,
-    directory: f.directory,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    advisoryLock: testAdvisoryLock(),
-    deployAppsDomain: "apps.example.com",
-    inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
-  } as unknown as Parameters<typeof createApp>[0]);
-  const control = createControlService(app);
-  const cap = { actorId: owner, scopeId: person(owner), liveActor: true } as CapabilityClaims;
-  const quiet = { notify: false };
-  assert.equal(
-    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
-    true,
-  );
-  await app.shareDeployment(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
-  const invited = await control.shareArtifact(
-    { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
-    cap,
-  );
-  assert.ok(invited.ok);
-  assert.deepEqual(invited.invitation, {
-    emailSent: false,
-    emailProblem: "notify was false",
-    appUrl: "https://mysite.apps.example.com/",
-  });
-  assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
-    { scope: person(requester), permission: "write" },
-    { scope: person("carol@example.com"), permission: "read" },
-  ]);
-  assert.deepEqual(await f.notices(), []);
-  assert.deepEqual(sent, []);
-  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap);
-  assert.equal((await f.notices()).length, 1);
-});
+test("notify:false grants access on every direct share path without a DM or invitation email", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const sent: string[] = [];
+    const app = createApp({
+      deploy: f.deploy,
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      identity: f.identity,
+      deliveries: f.deliveries,
+      auditLog: f.auditLog,
+      directory: f.directory,
+      sessions: createPostgresSessionStore(testDatabaseUrl()),
+      advisoryLock: testAdvisoryLock(),
+      deployAppsDomain: "apps.example.com",
+      inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
+    } as unknown as Parameters<typeof createApp>[0]);
+    const control = createControlService(app);
+    const cap = { actorId: owner, scopeId: person(owner), liveActor: true } as CapabilityClaims;
+    const quiet = { notify: false };
+    assert.equal(
+      (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
+      true,
+    );
+    await app.shareDeployment(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
+    const invited = await control.shareArtifact(
+      { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
+      cap,
+    );
+    assert.ok(invited.ok);
+    assert.deepEqual(invited.invitation, {
+      emailSent: false,
+      emailProblem: "notify was false",
+      appUrl: "https://mysite.apps.example.com/",
+    });
+    assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
+      { scope: person(requester), permission: "write" },
+      { scope: person("carol@example.com"), permission: "read" },
+    ]);
+    assert.deepEqual(await f.notices(), []);
+    assert.deepEqual(sent, []);
+    await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap);
+    assert.equal((await f.notices()).length, 1);
+  }));
 
-test("button dispatch classifies the clicker, settles the card, and keeps failed cards actionable", async (t) => {
-  const f = await fixture(t);
-  let handler!: (a: any) => Promise<void>;
-  let acked = 0;
-  const updates: any[] = [];
-  const errors: any[] = [];
-  registerDeployAccessActions(
-    {
-      action: (_p, h) => {
-        handler = h;
-      },
-    },
-    {
-      directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
-      core: {
-        decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
-          decideDeploymentAccess(f.app, f.identity, value, actor, approve),
-      } as never,
-    },
-  );
-  const click = (id: string) =>
-    handler({
-      ack: async () => void acked++,
-      body: { user: { id }, channel: { id: "D1" }, message: { ts: "1.1" } },
-      action: { action_id: "deploy_access_approve", value: f.value },
-      client: {
-        chat: {
-          update: async (d: any) => void updates.push(d),
-          postEphemeral: async (d: any) => void errors.push(d),
+test("button dispatch classifies the clicker, settles the card, and keeps failed cards actionable", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    let handler!: (a: any) => Promise<void>;
+    let acked = 0;
+    const updates: any[] = [];
+    const errors: any[] = [];
+    registerDeployAccessActions(
+      {
+        action: (_p, h) => {
+          handler = h;
         },
       },
-    });
-  await click(requester);
-  assert.equal(updates.length, 0);
-  assert.equal(errors.length, 1);
-  await click(owner);
-  assert.equal(acked, 2);
-  assert.match(updates[0].text, /^Approved\./);
-  assert.equal(
-    updates[0].blocks.some((b: any) => b.type === "actions"),
-    false,
-  );
-});
+      {
+        directory: { classifyActor: async (_c: unknown, id: string) => ({ externalId: id }) } as never,
+        core: {
+          decideDeploymentAccess: (value: string, actor: ActorAssertion, approve: boolean) =>
+            decideDeploymentAccess(f.app, f.identity, value, actor, approve),
+        } as never,
+      },
+    );
+    const click = (id: string) =>
+      handler({
+        ack: async () => void acked++,
+        body: { user: { id }, channel: { id: "D1" }, message: { ts: "1.1" } },
+        action: { action_id: "deploy_access_approve", value: f.value },
+        client: {
+          chat: {
+            update: async (d: any) => void updates.push(d),
+            postEphemeral: async (d: any) => void errors.push(d),
+          },
+        },
+      });
+    await click(requester);
+    assert.equal(updates.length, 0);
+    assert.equal(errors.length, 1);
+    await click(owner);
+    assert.equal(acked, 2);
+    assert.match(updates[0].text, /^Approved\./);
+    assert.equal(
+      updates[0].blocks.some((b: any) => b.type === "actions"),
+      false,
+    );
+  }));
 
-test("shared-home members can approve and decline, outsiders cannot", async (t) => {
-  const f = await fixture(t);
-  await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
-  await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
-  assert.match(await f.decide("carol@example.com", false), /^Declined\./);
-  assert.match(await f.decide("carol@example.com"), /^Approved\./);
-  await assert.rejects(f.decide(requester, false), /owner/);
-});
+test("shared-home members can approve and decline, outsiders cannot", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    await f.directory.upsertGroup("G1", [owner, "carol@example.com"]);
+    await f.app.moveArtifactHome("deploy", f.d.id, scopeId("group", "G1"), owner);
+    assert.match(await f.decide("carol@example.com", false), /^Declined\./);
+    assert.match(await f.decide("carol@example.com"), /^Approved\./);
+    await assert.rejects(f.decide(requester, false), /owner/);
+  }));

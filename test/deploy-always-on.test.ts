@@ -12,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function svc(
   opts: {
@@ -70,102 +71,107 @@ const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1" };
 
 for (const operation of ["redeploy", "rollback"] as const) {
   for (const initial of [false, true]) {
-    test(`failed ${operation} preserves always-on=${initial} and permits a subsequent settings retry`, async () => {
-      let reject = false;
-      const seen: Array<boolean | undefined> = [];
-      const toggled: boolean[] = [];
-      const { deploy, deployStore } = svc({
-        apply: async (d) => {
-          seen.push(d.alwaysOn);
-          if (reject) throw new Error("publication failed");
-          return { host: "127.0.0.1", port: 5000 };
-        },
-        setAlwaysOn: async (_d, enabled) => {
-          toggled.push(enabled);
-        },
-      });
-      const d = await deploy.deploy({ ...owner, entrypoint: "first", files: [], alwaysOn: initial });
-      await deploy.redeploy(d.id, { entrypoint: "second", files: [] });
-      const accepted = (await deployStore.get(d.id))!;
-      reject = true;
-      await assert.rejects(
-        operation === "redeploy"
-          ? deploy.redeploy(d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
-          : deploy.rollbackDeployment(d.id, 1, { alwaysOn: !initial }),
-        /publication failed/,
-      );
-      assert.equal(seen.at(-1), !initial);
-      const after = (await deployStore.get(d.id))!;
-      assert.equal(!!after.alwaysOn, initial);
-      assert.equal(after.appliedVersion, accepted.appliedVersion);
-      assert.deepEqual(after.endpoint, accepted.endpoint);
-      await deploy.setDeploymentAlwaysOn(d.id, !initial);
-      assert.deepEqual(toggled, [!initial]);
-      assert.equal((await deployStore.get(d.id))!.alwaysOn, !initial);
-    });
+    test(`failed ${operation} preserves always-on=${initial} and permits a subsequent settings retry`, () =>
+      inTestTenant(async () => {
+        let reject = false;
+        const seen: Array<boolean | undefined> = [];
+        const toggled: boolean[] = [];
+        const { deploy, deployStore } = svc({
+          apply: async (d) => {
+            seen.push(d.alwaysOn);
+            if (reject) throw new Error("publication failed");
+            return { host: "127.0.0.1", port: 5000 };
+          },
+          setAlwaysOn: async (_d, enabled) => {
+            toggled.push(enabled);
+          },
+        });
+        const d = await deploy.deploy({ ...owner, entrypoint: "first", files: [], alwaysOn: initial });
+        await deploy.redeploy(d.id, { entrypoint: "second", files: [] });
+        const accepted = (await deployStore.get(d.id))!;
+        reject = true;
+        await assert.rejects(
+          operation === "redeploy"
+            ? deploy.redeploy(d.id, { entrypoint: "third", files: [], alwaysOn: !initial })
+            : deploy.rollbackDeployment(d.id, 1, { alwaysOn: !initial }),
+          /publication failed/,
+        );
+        assert.equal(seen.at(-1), !initial);
+        const after = (await deployStore.get(d.id))!;
+        assert.equal(!!after.alwaysOn, initial);
+        assert.equal(after.appliedVersion, accepted.appliedVersion);
+        assert.deepEqual(after.endpoint, accepted.endpoint);
+        await deploy.setDeploymentAlwaysOn(d.id, !initial);
+        assert.deepEqual(toggled, [!initial]);
+        assert.equal((await deployStore.get(d.id))!.alwaysOn, !initial);
+      }));
   }
 }
 
-test("setDeploymentAlwaysOn flips the flag on and off, and persists", async () => {
-  const { deploy, deployStore } = svc();
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, undefined);
+test("setDeploymentAlwaysOn flips the flag on and off, and persists", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc();
+    const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, undefined);
 
-  const on = await deploy.setDeploymentAlwaysOn(d.id, true);
-  assert.equal(on.alwaysOn, true);
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+    const on = await deploy.setDeploymentAlwaysOn(d.id, true);
+    assert.equal(on.alwaysOn, true);
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  const off = await deploy.setDeploymentAlwaysOn(d.id, false);
-  assert.ok(!off.alwaysOn);
-  assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
-});
+    const off = await deploy.setDeploymentAlwaysOn(d.id, false);
+    assert.ok(!off.alwaysOn);
+    assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
+  }));
 
-test("deployOrUpdate carries alwaysOn on create and on update", async () => {
-  const { deploy, deployStore } = svc();
-  const d = await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: true });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+test("deployOrUpdate carries alwaysOn on create and on update", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc();
+    const d = await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: true });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [] });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+    await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [] });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: false });
-  assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
-});
+    await deploy.deployOrUpdate({ ...owner, name: "warm-app", entrypoint: "x", files: [], alwaysOn: false });
+    assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
+  }));
 
-test("alwaysOn is visible to the provider at first launch (not applied after the fact)", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
-  const seen: Array<boolean | undefined> = [];
-  const provider: DeployProvider = {
-    profile: { managedScaleToZero: true },
-    apply: async (d) => {
-      seen.push(d.alwaysOn);
-      return { host: "127.0.0.1", port: 5000 };
-    },
-    destroy: async () => {},
-  };
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
-  });
-  await deploy.deployOrUpdate({ ...owner, name: "warm-launch", entrypoint: "x", files: [], alwaysOn: true });
-  assert.deepEqual(seen, [true]);
-});
+test("alwaysOn is visible to the provider at first launch (not applied after the fact)", () =>
+  inTestTenant(async () => {
+    const deployStore = createDeployStore(testDeployBackings());
+    const seen: Array<boolean | undefined> = [];
+    const provider: DeployProvider = {
+      profile: { managedScaleToZero: true },
+      apply: async (d) => {
+        seen.push(d.alwaysOn);
+        return { host: "127.0.0.1", port: 5000 };
+      },
+      destroy: async () => {},
+    };
+    const deploy = createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      provider,
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
+    });
+    await deploy.deployOrUpdate({ ...owner, name: "warm-launch", entrypoint: "x", files: [], alwaysOn: true });
+    assert.deepEqual(seen, [true]);
+  }));
 
-test("rename and rollback branches carry alwaysOn too", async () => {
-  const { deploy, deployStore } = svc();
-  const d = await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
-  await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
+test("rename and rollback branches carry alwaysOn too", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc();
+    const d = await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
+    await deploy.deployOrUpdate({ ...owner, name: "app-a", entrypoint: "x", files: [] });
 
-  await deploy.deployOrUpdate({ ...owner, name: "app-b", renameFrom: "app-a", alwaysOn: true });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+    await deploy.deployOrUpdate({ ...owner, name: "app-b", renameFrom: "app-a", alwaysOn: true });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
 
-  await deploy.deployOrUpdate({ ...owner, name: "app-b", rollbackTo: 1, alwaysOn: false });
-  assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
-});
+    await deploy.deployOrUpdate({ ...owner, name: "app-b", rollbackTo: 1, alwaysOn: false });
+    assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
+  }));
 
 test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy)", async () => {
   const deployStore = createDeployStore(testDeployBackings());
@@ -185,26 +191,26 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+  const d = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
 
   const realList = deployStore.list.bind(deployStore);
   deployStore.list = async () => {
     const snapshot = (await realList()).map((x) => ({ ...x, alwaysOn: undefined }));
-    await deployStore.setAlwaysOn(d.id, true);
+    await inTestTenant(() => deployStore.setAlwaysOn(d.id, true));
     return snapshot;
   };
   const stopped = await deploy.reapIdleDeployments(1, Date.now() + 1_000_000);
   assert.equal(stopped, 0);
   assert.equal(destroys, 0);
-  assert.equal((await deployStore.get(d.id))!.status, "running");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
 });
 
 test("maintainDeployments re-ensures a live endpoint only for running always-on deployments", async () => {
   const ctx = svc({ resolve: async () => ({ host: "127.0.0.1", port: 5001 }) });
   const { deploy } = ctx;
-  const cold = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  const warm = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(warm.id, true);
+  const cold = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
+  const warm = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
+  await inTestTenant(() => deploy.setDeploymentAlwaysOn(warm.id, true));
   const resolvesBefore = ctx.resolves;
 
   const warmed = await deploy.maintainDeployments();
@@ -216,12 +222,12 @@ test("maintainDeployments re-ensures a live endpoint only for running always-on 
 test("maintainDeployments skips a deployment whose flag was turned off after the list snapshot", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  const d = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
+  await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
   const realList = deployStore.list.bind(deployStore);
   deployStore.list = async () => {
     const snapshot = await realList();
-    await deployStore.setAlwaysOn(d.id, false);
+    await inTestTenant(() => deployStore.setAlwaysOn(d.id, false));
     return snapshot;
   };
   const appliesBefore = ctx.applies;
@@ -233,14 +239,14 @@ test("maintainDeployments skips a deployment whose flag was turned off after the
 test("maintainDeployments relaunches when the platform has torn the app down", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  const d = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
+  await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
   const appliesBefore = ctx.applies;
 
   const warmed = await deploy.maintainDeployments();
   assert.equal(warmed, 1);
   assert.ok(ctx.applies > appliesBefore, "expected a re-apply when no live endpoint exists");
-  assert.equal((await deployStore.get(d.id))!.status, "running");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
 });
 
 test("maintainDeployments replaces a due app's machine in the background and parks the replacement", async () => {
@@ -254,49 +260,51 @@ test("maintainDeployments replaces a due app's machine in the background and par
     },
   });
   const { deploy, deployStore } = ctx;
-  const stale = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+  const stale = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
+  await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
   due.add(stale.id);
   const appliesBefore = ctx.applies;
 
   const maintained = await deploy.maintainDeployments();
   assert.equal(maintained, 1, "only the due app is rotated");
   assert.equal(ctx.applies, appliesBefore + 1);
-  assert.equal((await deployStore.get(stale.id))!.status, "running");
+  assert.equal((await inTestTenant(() => deployStore.get(stale.id)))!.status, "running");
   assert.deepEqual(parked, [stale.id], "the replacement is suspended so the next visit is a fast resume");
 });
 
-test("always-on reaches the provider before persisting and retains the flag on failure", async () => {
-  const seen: boolean[] = [];
-  let reject = false;
-  const { deploy, deployStore } = svc({
-    setAlwaysOn: async (_d, enabled) => {
-      if (reject) throw new Error("provider unavailable");
-      seen.push(enabled);
-    },
-  });
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
-  assert.deepEqual(seen, [true]);
-  reject = true;
-  await assert.rejects(deploy.setDeploymentAlwaysOn(d.id, false), /provider unavailable/);
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
-  await deploy.archiveDeployment(d.id);
-  await deploy.setDeploymentAlwaysOn(d.id, false);
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
-  assert.deepEqual(seen, [true]);
-});
+test("always-on reaches the provider before persisting and retains the flag on failure", () =>
+  inTestTenant(async () => {
+    const seen: boolean[] = [];
+    let reject = false;
+    const { deploy, deployStore } = svc({
+      setAlwaysOn: async (_d, enabled) => {
+        if (reject) throw new Error("provider unavailable");
+        seen.push(enabled);
+      },
+    });
+    const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+    await deploy.setDeploymentAlwaysOn(d.id, true);
+    assert.deepEqual(seen, [true]);
+    reject = true;
+    await assert.rejects(deploy.setDeploymentAlwaysOn(d.id, false), /provider unavailable/);
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+    await deploy.archiveDeployment(d.id);
+    await deploy.setDeploymentAlwaysOn(d.id, false);
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
+    assert.deepEqual(seen, [true]);
+  }));
 
-test("repair publication and rollback apply always-on with the version instead of restarting the old app", async () => {
-  const { deploy, deployStore } = svc({
-    setAlwaysOn: async () => {
-      throw new Error("old runtime is broken");
-    },
-  });
-  const d = await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "first", files: [] });
-  await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "fixed", files: [], alwaysOn: true });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
-  await deploy.deployOrUpdate({ ...owner, name: "repair-app", rollbackTo: 1, alwaysOn: false });
-  assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
-  assert.equal((await deployStore.get(d.id))!.appliedVersion, 1);
-});
+test("repair publication and rollback apply always-on with the version instead of restarting the old app", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc({
+      setAlwaysOn: async () => {
+        throw new Error("old runtime is broken");
+      },
+    });
+    const d = await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "first", files: [] });
+    await deploy.deployOrUpdate({ ...owner, name: "repair-app", entrypoint: "fixed", files: [], alwaysOn: true });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, true);
+    await deploy.deployOrUpdate({ ...owner, name: "repair-app", rollbackTo: 1, alwaysOn: false });
+    assert.equal((await deployStore.get(d.id))!.alwaysOn, false);
+    assert.equal((await deployStore.get(d.id))!.appliedVersion, 1);
+  }));

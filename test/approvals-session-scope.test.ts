@@ -7,6 +7,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,
@@ -21,48 +22,49 @@ const approval = (sessionId: string, actor: string, command: string, blocksInput
   },
 });
 
-test("session approvals list only the session's own records and respect viewer visibility", async () => {
-  const url = testDatabaseUrl();
-  const sessions = createPostgresSessionStore(url);
-  const mine = await sessions.getOrCreateByThread("dm:alice:t1", "dm", "personal:alice");
-  const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
-  await sessions.addParticipant(mine.id, "alice");
-  await sessions.addParticipant(mine.id, "bob");
-  const approvals = createPostgresApprovalStore(url, createDeliveryStore());
-  await approvals.put("a-blocking", approval(mine.id, "alice", "git push --force"));
-  await approvals.put("a-input", approval(mine.id, "alice", "ask", false));
-  await approvals.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
-  await approvals.put("orphan", approval("no-such-session", "alice", "noop"));
-  await approvals.put("unicode", approval("sesión-ü", "alice", "echo"));
-  const expected = ["a-blocking", "a-input"];
-  assert.deepEqual(
-    (await approvals.forSessions([mine.id])).map(([id]) => id),
-    expected,
-  );
+test("session approvals list only the session's own records and respect viewer visibility", () =>
+  inTestTenant(async () => {
+    const url = testDatabaseUrl();
+    const sessions = createPostgresSessionStore(url);
+    const mine = await sessions.getOrCreateByThread("dm:alice:t1", "dm", "personal:alice");
+    const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
+    await sessions.addParticipant(mine.id, "alice");
+    await sessions.addParticipant(mine.id, "bob");
+    const approvals = createPostgresApprovalStore(url, createDeliveryStore());
+    await approvals.put("a-blocking", approval(mine.id, "alice", "git push --force"));
+    await approvals.put("a-input", approval(mine.id, "alice", "ask", false));
+    await approvals.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
+    await approvals.put("orphan", approval("no-such-session", "alice", "noop"));
+    await approvals.put("unicode", approval("sesión-ü", "alice", "echo"));
+    const expected = ["a-blocking", "a-input"];
+    assert.deepEqual(
+      (await approvals.forSessions([mine.id])).map(([id]) => id),
+      expected,
+    );
 
-  const app = createApp({
-    sessions,
-    approvals,
-    identity: testIdentityService(),
-  } as unknown as Parameters<typeof createApp>[0]);
+    const app = createApp({
+      sessions,
+      approvals,
+      identity: testIdentityService(),
+    } as unknown as Parameters<typeof createApp>[0]);
 
-  const listed = await app.listSessionApprovals(mine.id, "alice");
-  assert.deepEqual(
-    listed.map((a) => a.requestId),
-    expected,
-    "the filtered read returns exactly what the old full scan + filter did",
-  );
-  assert.deepEqual(
-    listed.map((a) => a.blocksInput),
-    [true, false],
-  );
-  assert.deepEqual(await app.listSessionApprovals(mine.id, "bob"), [], "viewer visibility still applies");
+    const listed = await app.listSessionApprovals(mine.id, "alice");
+    assert.deepEqual(
+      listed.map((a) => a.requestId),
+      expected,
+      "the filtered read returns exactly what the old full scan + filter did",
+    );
+    assert.deepEqual(
+      listed.map((a) => a.blocksInput),
+      [true, false],
+    );
+    assert.deepEqual(await app.listSessionApprovals(mine.id, "bob"), [], "viewer visibility still applies");
 
-  const blocking = await app.pendingApprovalForThread(mine.threadRef);
-  assert.equal(blocking?.status, "pending_approval");
-  assert.deepEqual(
-    blocking?.pendingApprovals?.map((a) => a.requestId),
-    ["a-blocking"],
-    "blockingOnly still drops non-blocking approvals",
-  );
-});
+    const blocking = await app.pendingApprovalForThread(mine.threadRef);
+    assert.equal(blocking?.status, "pending_approval");
+    assert.deepEqual(
+      blocking?.pendingApprovals?.map((a) => a.requestId),
+      ["a-blocking"],
+      "blockingOnly still drops non-blocking approvals",
+    );
+  }));
