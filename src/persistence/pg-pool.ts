@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { ClientConfig, Pool, PoolClient, PoolConfig, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
-import { boundTenant } from "../tenants/context.ts";
+import { boundTenant, pinTenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
@@ -184,7 +184,7 @@ export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) 
   let rollbackError: Error | undefined;
   try {
     await beginTransaction(client);
-    const result = await fn(client);
+    const result = await pinTenant(() => fn(client));
     await client.query("COMMIT");
     return result;
   } catch (error) {
