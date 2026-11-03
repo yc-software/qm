@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isAgentReply, isUserItem, type Item } from "../src/sessions/items.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -57,12 +58,12 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     const tx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}?scope=org:default-org`);
     assert.equal(tx.status, 200);
     const txd = await tx.json();
-    const transcript = txd as { entries: { type: string }[] };
+    const transcript = txd as { items: Item[] };
+    assert.ok(transcript.items.some(isUserItem), "transcript includes the user message");
     assert.ok(
-      transcript.entries.some((e) => e.type === "user"),
-      "transcript includes the user message",
+      !transcript.items.some((item) => (item.kind as string) === "soul"),
+      "resolved prompt context is not a transcript item",
     );
-    assert.ok(!transcript.entries.some((e) => e.type === "soul"), "resolved prompt context is not a transcript entry");
 
     await s.built.files.put({
       id: "todo-art-1",
@@ -309,11 +310,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
-    assert.equal(
-      orgBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-      "recipient transcript is not copied assistant history",
-    );
+    assert.equal(orgBody.items.some(isAgentReply), false, "recipient transcript is not copied assistant history");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivered output inline");
     const event = orgBody.deliveryEvents[0];
     assert.equal(event.type, "principal_delivery");
@@ -333,10 +330,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(
-      scopedBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-    );
+    assert.equal(scopedBody.items.some(isAgentReply), false);
     assert.equal(scopedBody.deliveryEvents.length, 1);
     assert.equal(scopedBody.deliveryEvents[0].provenance.sourceSessionId, source.id);
     assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
@@ -543,7 +537,7 @@ test("a cron-fired transcript carries its originating cron", async () => {
     assert.equal(body.origin.fireSlot, "42");
     assert.equal(body.origin.cron.title, "Daily security audit");
     assert.equal(body.origin.cron.ownerScopeId, scope);
-    assert.equal(body.entries[0].type, "user");
+    assert.equal(body.items[0].kind, "UserMessage");
   } finally {
     await s.close();
   }
@@ -587,7 +581,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
     const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=org:default-org`);
     assert.equal(orgTx.status, 200);
     const orgBody = (await orgTx.json()) as any;
-    assert.equal(orgBody.entries.length, 0, "delivery is not a transcript entry");
+    assert.equal(orgBody.items.length, 0, "delivery is not a transcript item");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivery rows inline");
     assert.equal(orgBody.deliveryEvents[0].text, "the deploy is done");
     assert.deepEqual(orgBody.deliveryEvents[0].attachments, [

@@ -10,47 +10,47 @@ import { sharedMessages, type SessionShare } from "../src/sessions/session-share
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { scopeId, type SessionEntry } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testMap } from "./support/test-database.ts";
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return {
-    sessionId: "s1",
-    seq,
-    parentSeq: null,
-    type,
-    payload,
-    scopeLabel: scopeId("personal", "alice"),
-    createdAt: seq,
-  };
+function at(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
 }
 
-const entries = [
-  entry("user", { text: "RAW_CONTEXT_SECRET", display: "Hello", attachments: [{ secret: "ATTACHMENT_SECRET" }] }, 1),
-  entry("thinking", { text: "THINKING_SECRET" }, 2),
-  entry("tool_call", { action: "execute", command: "COMMAND_SECRET", callId: "exec" }, 3),
-  entry("tool_result", { text: "RESULT_SECRET", callId: "exec" }, 4),
-  entry("text", { text: "INTERMEDIATE_SECRET" }, 5),
-  entry("assistant", { text: "Hello back", metadata: "METADATA_SECRET" }, 6),
-  entry("user", { text: "HIDDEN_SECRET", hidden: true }, 7),
-  entry("user", { text: "OVERHEARD_SECRET", overheard: true }, 8),
-  entry("tool_call", { action: "post", callId: "post", text: "Published reply", secret: "POST_SECRET" }, 9),
-  entry("tool_result", { callId: "post", ok: true, secret: "POST_RESULT_SECRET" }, 10),
-  entry("assistant", { text: "UNPUBLISHED_SECRET" }, 11),
+const transcript = [
+  at(
+    {
+      kind: "UserMessage",
+      text: "RAW_CONTEXT_SECRET",
+      body: { display: "Hello", attachments: [{ secret: "ATTACHMENT_SECRET" }] },
+    },
+    1,
+  ),
+  at({ kind: "Reasoning", text: "THINKING_SECRET" }, 2),
+  at({ kind: "ToolCall", callId: "exec", body: { action: "execute", command: "COMMAND_SECRET" } }, 3),
+  at({ kind: "ToolResult", callId: "exec", text: "RESULT_SECRET" }, 4),
+  at({ kind: "AgentMessage", variant: "narration", text: "INTERMEDIATE_SECRET" }, 5),
+  at({ kind: "AgentMessage", text: "Hello back", body: { metadata: "METADATA_SECRET" } }, 6),
+  at({ kind: "UserMessage", text: "HIDDEN_SECRET", hidden: true }, 7),
+  at({ kind: "UserMessage", text: "OVERHEARD_SECRET", body: { overheard: true } }, 8),
+  at({ kind: "ToolCall", callId: "post", body: { action: "post", text: "Published reply", secret: "POST_SECRET" } }, 9),
+  at({ kind: "ToolResult", callId: "post", body: { ok: true, secret: "POST_RESULT_SECRET" } }, 10),
+  at({ kind: "AgentMessage", text: "UNPUBLISHED_SECRET" }, 11),
 ];
 
 test("shared transcript allowlists visible message fields and published replies", () => {
-  assert.deepEqual(sharedMessages(entries), [
+  assert.deepEqual(sharedMessages(transcript), [
     { role: "user", text: "Hello" },
     { role: "assistant", text: "Hello back" },
     { role: "assistant", text: "Published reply" },
   ]);
-  assert.equal(JSON.stringify(sharedMessages(entries)).includes("SECRET"), false);
+  assert.equal(JSON.stringify(sharedMessages(transcript)).includes("SECRET"), false);
   assert.deepEqual(
     sharedMessages([
-      entry("tool_call", { action: "post", text: "FAILED_SECRET", callId: "p" }, 1),
-      entry("tool_result", { callId: "p", ok: false }, 2),
-      entry("assistant", { text: "Final answer" }, 3),
+      at({ kind: "ToolCall", callId: "p", body: { action: "post", text: "FAILED_SECRET" } }, 1),
+      at({ kind: "ToolResult", callId: "p", body: { ok: false } }, 2),
+      at({ kind: "AgentMessage", text: "Final answer" }, 3),
     ]),
     [{ role: "assistant", text: "Final answer" }],
   );
@@ -58,7 +58,10 @@ test("shared transcript allowlists visible message fields and published replies"
 
 test("a delivery into the conversation is shared as the assistant's message", () => {
   assert.deepEqual(
-    sharedMessages([entry("user", { text: "remind me" }, 1), entry("assistant", { text: "Standup now" }, 2)]),
+    sharedMessages([
+      at({ kind: "UserMessage", text: "remind me" }, 1),
+      at({ kind: "AgentMessage", text: "Standup now" }, 2),
+    ]),
     [
       { role: "user", text: "remind me" },
       { role: "assistant", text: "Standup now" },
@@ -69,15 +72,21 @@ test("a delivery into the conversation is shared as the assistant's message", ()
 test("work phases and approval decisions remain outside the shared message snapshot", () => {
   assert.deepEqual(
     sharedMessages([
-      entry("user", { text: "Run the check" }, 1),
-      entry("text_start", { phase: "commentary", streamOffset: 0 }, 2),
-      entry("text", { text: "PRIVATE_WORK_NARRATION" }, 3),
-      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 4),
-      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: false }, 5),
-      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 6),
-      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: true, scope: "once" }, 7),
-      entry("text_start", { phase: "final_answer", streamOffset: 22 }, 8),
-      entry("assistant", { text: "Check complete", stopped: true }, 9),
+      at({ kind: "UserMessage", text: "Run the check" }, 1),
+      at({ kind: "AgentMessage", variant: "narration", text: "PRIVATE_WORK_NARRATION" }, 3),
+      at({ kind: "Elicitation", elicitId: "r", body: { command: "PRIVATE_COMMAND" } }, 4),
+      at({ kind: "ElicitationResponse", elicitId: "r", approved: false, body: { command: "PRIVATE_COMMAND" } }, 5),
+      at({ kind: "Elicitation", elicitId: "r", body: { command: "PRIVATE_COMMAND" } }, 6),
+      at(
+        {
+          kind: "ElicitationResponse",
+          elicitId: "r",
+          approved: true,
+          body: { command: "PRIVATE_COMMAND", scope: "once" },
+        },
+        7,
+      ),
+      at({ kind: "AgentMessage", text: "Check complete", body: { stopped: true } }, 9),
     ]),
     [
       { role: "user", text: "Run the check" },
@@ -100,8 +109,8 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const deliveries = createDeliveryStore();
   const original = [
-    ...entries,
-    entry("user", { text: "File", attachments: [{ artifactId: "f1", secret: "SECRET" }] }, 12),
+    ...transcript,
+    at({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
   ];
   let visible = original;
   let accessible = true;
@@ -142,7 +151,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
           accessible && user === "alice"
             ? {
                 session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
-                entries: visible,
+                items: visible,
               }
             : null,
         openFileForViewer: async (id: string, user: string) =>
@@ -182,7 +191,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.notEqual(fileId, "f1");
   assert.equal((await read(token, "external")).status, 404);
   assert.equal((await read(token, "internal", "", "")).status, 403);
-  visible = [...original, entry("user", { text: "New message" }, 13)];
+  visible = [...original, at({ kind: "UserMessage", text: "New message" }, 13)];
   const second = (await (await create()).json()) as { share: { token: string } };
   assert.notEqual(second.share.token, token);
   assert.equal((await (await read(token)).text()).includes("New message"), false);
@@ -191,7 +200,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
-  visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
+  visible = [at({ kind: "UserMessage", text: "Generate file" }, 1), at({ kind: "AgentMessage", text: "Generated" }, 2)];
   const delivery = await deliveries.enqueue({
     destination: { type: "web", target: "web:alice:s1" },
     text: "Generated",
@@ -234,7 +243,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await (await read(generatedShare.share.token)).text()).includes("example.html"), true);
   visible = original;
   const beforePuts = puts;
-  visible = [...original, entry("user", { attachments: [{ artifactId: "missing" }] }, 13)];
+  visible = [...original, at({ kind: "UserMessage", body: { attachments: [{ artifactId: "missing" }] } }, 13)];
   assert.equal((await create()).status, 409);
   assert.equal(puts, beforePuts);
   visible = original;
@@ -258,15 +267,18 @@ test("fresh shares freeze messages and authorized attachments with separate audi
 
 test("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
-    entry("user", { attachments: [{ artifactId: "user" }] }, 1),
-    entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "failed" }], isError: true }, 3),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "old", name: "a" }] }, 4),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "new", name: "a" }] }, 5),
-    entry("assistant", { text: "Here" }, 6),
-    entry("tool_call", { action: "post", callId: "p", text: "Posted" }, 8),
-    entry("tool_result", { callId: "p", files: [{ artifactId: "posted" }] }, 9),
-    entry("assistant", { text: "private final" }, 10),
+    at({ kind: "UserMessage", body: { attachments: [{ artifactId: "user" }] } }, 1),
+    at({ kind: "ToolResult", tool: "execute", callId: "", body: { files: [{ artifactId: "private" }] } }, 2),
+    at(
+      { kind: "ToolResult", tool: "attach", isError: true, callId: "", body: { files: [{ artifactId: "failed" }] } },
+      3,
+    ),
+    at({ kind: "ToolResult", tool: "attach", callId: "", body: { files: [{ artifactId: "old", name: "a" }] } }, 4),
+    at({ kind: "ToolResult", tool: "attach", callId: "", body: { files: [{ artifactId: "new", name: "a" }] } }, 5),
+    at({ kind: "AgentMessage", text: "Here" }, 6),
+    at({ kind: "ToolCall", callId: "p", body: { action: "post", text: "Posted" } }, 8),
+    at({ kind: "ToolResult", callId: "p", body: { files: [{ artifactId: "posted" }] } }, 9),
+    at({ kind: "AgentMessage", text: "private final" }, 10),
   ]);
   assert.deepEqual(messages, [
     { role: "user", text: "", attachmentIds: ["user"] },
@@ -308,14 +320,22 @@ test("snapshot authorization checks mixed tenure bounds without reading transcri
 });
 
 test("staged tool attachments are never shared without confirmed delivery", () => {
-  const staged = entry("tool_result", { tool: "attach", ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] }, 1);
+  const staged = at(
+    {
+      kind: "ToolResult",
+      tool: "attach",
+      callId: "",
+      body: { ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] },
+    },
+    1,
+  );
   for (const following of [
     [],
-    [entry("assistant", { text: "Done" }, 2)],
-    [entry("user", { text: "Next turn" }, 2)],
+    [at({ kind: "AgentMessage", text: "Done" }, 2)],
+    [at({ kind: "UserMessage", text: "Next turn" }, 2)],
     [
-      entry("tool_call", { action: "post", callId: "p", text: "Posted" }, 2),
-      entry("tool_result", { callId: "p", ok: true }, 3),
+      at({ kind: "ToolCall", callId: "p", body: { action: "post", text: "Posted" } }, 2),
+      at({ kind: "ToolResult", callId: "p", body: { ok: true } }, 3),
     ],
   ]) {
     assert.equal(JSON.stringify(sharedMessages([staged, ...following])).includes("PRIVATE_STAGED_FILE"), false);
