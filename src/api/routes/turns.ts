@@ -3,7 +3,7 @@ import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } 
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { LEGACY_ORIGIN_KEYS } from "../../surfaces/origin-migration.ts";
+import { RETIRED_ORIGIN_KEYS } from "../../core/turn-origin.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -103,7 +103,7 @@ function zodMessage(field: string, error: z.ZodError): string {
 }
 
 const removedOriginFieldsSchema = z.object(
-  Object.fromEntries(LEGACY_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
+  Object.fromEntries(RETIRED_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
 );
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {

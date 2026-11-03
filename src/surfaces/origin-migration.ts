@@ -1,4 +1,6 @@
+import type { Pool, PoolClient } from "pg";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
+import { RETIRED_ORIGIN_KEYS } from "../core/turn-origin.ts";
 import { errMessage } from "../util/errors.ts";
 
 const DESTINATION_FIELDS: [table: string, field: string][] = [
@@ -86,16 +88,6 @@ const migration = (id: string, statements: string[]) => ({
   statements: [`SET LOCAL lock_timeout = '3s'`, ...HELPERS, ...statements, ...DROPS],
 });
 
-export const LEGACY_ORIGIN_KEYS = [
-  "triggered",
-  "unprompted",
-  "liveActor",
-  "triggerTs",
-  "entryTs",
-  "securityScreenData",
-  "triggerDestination",
-  "ownerKeychainUnion",
-] as const;
 const ORIGIN_HELPERS = [
   `CREATE FUNCTION pg_temp.qm_truthy(v jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$
       SELECT v IS NOT NULL AND v NOT IN ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb)
@@ -172,7 +164,7 @@ const ORIGIN_HELPERS = [
         END IF;
         IF typed IS NULL THEN RETURN r || jsonb_build_object('origin', o); END IF;
         IF o = typed THEN RETURN r; END IF;
-        RETURN (r - ${LEGACY_ORIGIN_KEYS.map((key) => `'${key}'`).join(" - ")}) || jsonb_build_object('origin', o);
+        RETURN (r - ${RETIRED_ORIGIN_KEYS.map((key) => `'${key}'`).join(" - ")}) || jsonb_build_object('origin', o);
       END $f$`,
   `CREATE FUNCTION pg_temp.qm_turn_origin_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
       SELECT COALESCE(pg_temp.qm_turn_origin_request(pg_temp.qm_jsonb_or_null(t))::text, t)
@@ -248,6 +240,14 @@ const LIVE_ORIGIN_REWRITES = [
 
 const SETTLED_CANDIDATES = "surface_origin_settled_candidates";
 const SETTLED_COLLECTED = "surface_origin_settled_collected";
+const REWRITE_LOCK = "SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))";
+const BATCH_LOCK = "SELECT pg_advisory_xact_lock_shared(hashtext('qm:surface-origin-rewrite'))";
+const SETTLED_BATCH = 1000;
+const SETTLED_BATCH_WORKERS = 4;
+const mayNeedOrigin = (alias: string) =>
+  `(${["triggered", "unprompted", "liveActor"].map((key) => `${alias}.request LIKE '%"${key}"%'`).join(" OR ")}
+    OR ${alias}.request NOT LIKE '%"origin"%'
+    OR jsonb_typeof(pg_temp.qm_jsonb_or_null(${alias}.request) -> 'origin') IS DISTINCT FROM 'object')`;
 
 export const SETTLED_CANDIDATES_MIGRATION = migration("surfaces/0003-settled-run-candidates", [
   `CREATE TABLE IF NOT EXISTS ${SETTLED_CANDIDATES} (id TEXT PRIMARY KEY)`,
@@ -259,34 +259,54 @@ export const SETTLED_CANDIDATES_MIGRATION = migration("surfaces/0003-settled-run
     "runs",
     `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
        WHERE r.status IN ('done', 'failed')
-         AND ${oldKeysIn("r.request")}
-         AND (r.request LIKE '%"externalSlack"%'
-           OR ${newerRun()}
-           OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})
+         AND (${mayNeedOrigin("r")}
+           OR ${oldKeysIn("r.request")}
+             AND (r.request LIKE '%"externalSlack"%'
+               OR ${newerRun()}
+               OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)}))
        ON CONFLICT DO NOTHING`,
   ),
 ]);
 
+const SETTLED_CATCH_UP = originMigration("surface-origin-rewrite/settled-since-collection", [
+  `SET LOCAL enable_seqscan = off`,
+  ifTable(
+    SETTLED_COLLECTED,
+    `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
+       WHERE r.status IN ('done', 'failed')
+         AND r.finished_at >= (SELECT min(collected_at) FROM ${SETTLED_COLLECTED})
+         AND (${oldKeysIn("r.request")} OR ${mayNeedOrigin("r")})
+       ON CONFLICT DO NOTHING`,
+  ),
+]);
+
+const SETTLED_BATCH_REWRITE = originMigration("surface-origin-rewrite/settled-batch", [
+  `WITH batch AS (
+     DELETE FROM ${SETTLED_CANDIDATES} WHERE id IN (SELECT id FROM ${SETTLED_CANDIDATES} ORDER BY id LIMIT ${SETTLED_BATCH} FOR UPDATE SKIP LOCKED)
+     RETURNING id
+   ), locked AS (
+     SELECT r.id, pg_temp.qm_jsonb_or_null(r.request) AS stored FROM runs r WHERE r.id IN (SELECT id FROM batch) FOR UPDATE
+   ), folded AS MATERIALIZED (
+     SELECT id, stored, pg_temp.qm_turn_origin_request(pg_temp.qm_surface_request(stored)) AS rewritten FROM locked
+   ), rewritten AS (
+     UPDATE runs r SET request = folded.rewritten::text FROM folded
+       WHERE r.id = folded.id AND folded.rewritten IS DISTINCT FROM folded.stored
+   )
+   SELECT count(*)::int AS taken FROM batch`,
+]);
+
 export const SETTLED_ORIGIN_MIGRATION = {
-  ...migration("surfaces/0004-settled-runs-rewrite", [
-    `SET LOCAL enable_seqscan = off`,
-    ifTable(
-      SETTLED_COLLECTED,
-      `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
-         WHERE r.status IN ('done', 'failed')
-           AND r.finished_at >= (SELECT min(collected_at) FROM ${SETTLED_COLLECTED})
-           AND ${oldKeysIn("r.request")}
-         ON CONFLICT DO NOTHING`,
-    ),
+  id: "surfaces/0004-settled-runs-rewrite",
+  statements: [
+    REWRITE_LOCK,
     ifTable(
       SETTLED_CANDIDATES,
-      `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
-         WHERE r.id = ANY (ARRAY(SELECT id FROM ${SETTLED_CANDIDATES})) AND ${oldKeysIn("r.request")}`,
+      `IF EXISTS (SELECT 1 FROM ${SETTLED_CANDIDATES}) THEN RAISE EXCEPTION 'settled run candidates remain'; END IF`,
     ),
     `DROP TABLE IF EXISTS ${SETTLED_CANDIDATES}`,
     `DROP TABLE IF EXISTS ${SETTLED_COLLECTED}`,
-  ]),
-  expectedChecksum: "869952729700ecff8669586f8144812079290f6f0609397b5a3d1ad7674d56d0",
+  ],
+  expectedChecksum: "7c872adade650af67e840f2ce8c6655dcdb766d7857969cda344d76d03e8c838",
 };
 
 const rewriteRuns = (rows: string) =>
@@ -294,10 +314,8 @@ const rewriteRuns = (rows: string) =>
     "runs",
     `UPDATE runs r SET request = pg_temp.qm_turn_origin_request_text(r.request) WHERE ${rows} AND ${runOriginChanges("r")}`,
   );
-const LIVE_RUNS = "r.status IN ('pending', 'running')";
-const SETTLED_SINCE_START =
-  "r.status IN ('done', 'failed') AND r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint";
-const REPLAYABLE_ORIGIN_REWRITES = [
+const OVERLAP_TURN_ORIGIN_REWRITE = originMigration("surface-origin-rewrite/overlap-turn-origins", [
+  rewriteRuns("r.status IN ('pending', 'running')"),
   ifTable(
     "run_signals",
     `UPDATE run_signals SET payload = payload
@@ -311,29 +329,44 @@ const REPLAYABLE_ORIGIN_REWRITES = [
     `UPDATE approvals SET json = jsonb_set(json, '{request}', pg_temp.qm_turn_origin_request(json -> 'request'))
      WHERE jsonb_typeof(json -> 'request') = 'object' AND ${originChanges("json -> 'request'")}`,
   ),
-];
-
-export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-backfill", [
-  rewriteRuns("r.status NOT IN ('pending', 'running')"),
-  rewriteRuns(LIVE_RUNS),
-  rewriteRuns(SETTLED_SINCE_START),
-  ...REPLAYABLE_ORIGIN_REWRITES,
 ]);
 
-const OVERLAP_TURN_ORIGIN_REWRITE = originMigration("surface-origin-rewrite/overlap-turn-origins", [
-  rewriteRuns(LIVE_RUNS),
-  ...REPLAYABLE_ORIGIN_REWRITES,
-]);
+function rewriteInTransaction<T>(
+  pool: Pool,
+  id: string,
+  lock: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withPgTransaction(pool, async (client) => {
+    await client.query(lock);
+    return fn(client);
+  }).catch((error: unknown) => {
+    throw new Error(`surface origin rewrite ${id} failed: ${errMessage(error)}`, { cause: error });
+  });
+}
+
+async function rewriteSettledBatch(client: PoolClient): Promise<boolean> {
+  const present = await client.query<{ present: boolean }>(
+    `SELECT to_regclass('${SETTLED_CANDIDATES}') IS NOT NULL AS present`,
+  );
+  if (!present.rows[0]?.present) return false;
+  let taken = 0;
+  for (const statement of SETTLED_BATCH_REWRITE.statements)
+    taken = (await client.query<{ taken?: number }>(statement)).rows[0]?.taken ?? taken;
+  return taken > 0;
+}
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
-  for (const migration of [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES])
-    await withPgTransaction(pool, async (client) => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))");
+  for (const migration of [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES, SETTLED_CATCH_UP])
+    await rewriteInTransaction(pool, migration.id, REWRITE_LOCK, async (client) => {
       for (const statement of migration.statements) await client.query(statement);
-    }).catch((error: unknown) => {
-      throw new Error(`surface origin rewrite ${migration.id} failed: ${errMessage(error)}`, { cause: error });
     });
+  await Promise.all(
+    Array.from({ length: SETTLED_BATCH_WORKERS }, async () => {
+      while (await rewriteInTransaction(pool, SETTLED_BATCH_REWRITE.id, BATCH_LOCK, rewriteSettledBatch));
+    }),
+  );
   await pg.migrate(SETTLED_ORIGIN_MIGRATION).catch((error: unknown) => {
     throw new Error(`surface origin rewrite ${SETTLED_ORIGIN_MIGRATION.id} failed: ${errMessage(error)}`, {
       cause: error,
