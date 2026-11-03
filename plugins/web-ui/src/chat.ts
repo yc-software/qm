@@ -3315,27 +3315,27 @@ export function createChatSurface(
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-    execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-    read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
-    write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-    publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-    recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-    memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
+    execute: { icon: Terminal, active: "Running command", done: "Running command", attempted: "Tried command" },
+    read: { icon: BookOpen, active: "Reading file", done: "Reading file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", done: "Loading skill", attempted: "Tried loading skill" },
+    write: { icon: Pencil, active: "Writing file", done: "Writing file", attempted: "Tried writing file" },
+    publish: { icon: Rocket, active: "Publishing", done: "Publishing", attempted: "Tried publishing" },
+    recall: { icon: Brain, active: "Searching memory", done: "Searching memory", attempted: "Tried searching memory" },
+    memory: { icon: Brain, active: "Using memory", done: "Using memory", attempted: "Tried using memory" },
     history: {
       icon: ScrollText,
       active: "Searching history",
-      done: "Searched history",
+      done: "Searching history",
       attempted: "Tried searching history",
     },
     background: {
       icon: Terminal,
       active: "Managing process",
-      done: "Managed process",
+      done: "Managing process",
       attempted: "Tried managing process",
     },
   };
-  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Working", attempted: "Tried step" };
 
   function toolName(tool: string): string {
     const parts = tool.split(/__|[/:.]/).filter(Boolean);
