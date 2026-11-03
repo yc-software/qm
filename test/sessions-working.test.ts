@@ -119,7 +119,7 @@ test("sidebar batches visible goals from the session rows and drops inactive one
     }
   }
   const goals = sessions.goals.bind(sessions);
-  const current = runs.inFlightForThreads.bind(runs);
+  const current = runs.activeForThreads.bind(runs);
   let reads = 0;
   let runReads = 0;
   sessions.goals = async (ids) => {
@@ -127,7 +127,7 @@ test("sidebar batches visible goals from the session rows and drops inactive one
     assert.deepEqual(new Set(ids), new Set(visible));
     return goals(ids);
   };
-  runs.inFlightForThreads = async (ids) => {
+  runs.activeForThreads = async (ids) => {
     runReads++;
     assert.deepEqual(new Set(ids), new Set(refs));
     return current(ids);

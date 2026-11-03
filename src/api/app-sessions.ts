@@ -260,7 +260,7 @@ export function createSessionMethods(
   };
 
   async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
-    const all = rows.map(({ spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...row }) => row);
+    const all = rows.map(withoutStoredFacts);
     const visibleById = new Map(all.map((session) => [session.id, session]));
     const roots = all.map((session) => session.id);
     const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
@@ -328,7 +328,7 @@ export function createSessionMethods(
     const [failedChildren, sessionGoals, currentRuns] = await Promise.all([
       deps.sessions.endedInFailure(idleChildren.map((s) => s.id)),
       deps.sessions.goals(working.map((s) => s.id)),
-      deps.runs.inFlightForThreads(working.map((s) => s.threadRef)),
+      deps.runs.activeForThreads(working.map((s) => s.threadRef)),
     ]);
     const goals = new Map<
       string,
@@ -442,8 +442,7 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, principalId, window) {
       const found = await sessionForViewer(sessionId, principalId);
       if (!found) return null;
-      const { spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...shown } = found;
-      const session = { ...shown, canContinue: await canContinueOnWeb(principalId, found) };
+      const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
@@ -662,7 +661,7 @@ export function createSessionMethods(
       if (!id) return null;
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
-      const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...row } = session;
+      const { clientTools: _clientTools, ...row } = withoutStoredFacts(session);
       const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },
@@ -1357,4 +1356,11 @@ export function createSessionMethods(
       return deps.advisoryLock.withLock(`admin-governance:${scopeIdValue}`, write);
     },
   };
+}
+
+function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "slackBinding">>(
+  session: T,
+): Omit<T, "spawnMeta" | "slackBinding"> {
+  const { spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...shown } = session;
+  return shown;
 }

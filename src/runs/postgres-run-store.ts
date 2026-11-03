@@ -374,7 +374,7 @@ END $base_schema$`,
         }),
       );
     },
-    async inFlightForThreads(threadRefs) {
+    async activeForThreads(threadRefs) {
       if (!threadRefs.length) return new Map();
       const { rows } = await q(
         `SELECT current.* FROM unnest($1::text[]) AS threads(id)
@@ -433,11 +433,7 @@ END $base_schema$`,
     get: getRun,
 
     async activeForThread(sessionId: string): Promise<Run | null> {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
-        [sessionId],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
+      return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
     },
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
