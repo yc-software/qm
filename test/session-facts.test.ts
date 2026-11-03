@@ -117,11 +117,21 @@ test("the session facts migration copies each conversation's facts from its late
   }
 
   const filled = (await sessions.get(slack.id))!;
-  assert.deepEqual(
-    filled.surfaceBinding,
-    slackSource,
-    "boot copies the previous release's shape; takeover converts it",
-  );
+  assert.equal(filled.surfaceBinding, undefined, "a binding in the previous release's shape reads as unbound");
+  const copied = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    const bindings = await copied.query<{ id: string; slack_binding: unknown }>(
+      "SELECT id, slack_binding FROM sessions WHERE id = ANY($1)",
+      [[slack.id, mixed.id]],
+    );
+    assert.deepEqual(
+      Object.fromEntries(bindings.rows.map((r) => [r.id, r.slack_binding])),
+      { [slack.id]: slackSource, [mixed.id]: slackSource },
+      "boot copies each binding from the newest run that has one, in the previous release's shape",
+    );
+  } finally {
+    await copied.end();
+  }
   assert.deepEqual(filled.runtime, { modelId: "m2" });
   assert.deepEqual(filled.spawnMeta, sessionContextOf(publicTurn));
   assert.deepEqual((await sessions.get(cron.id))?.spawnMeta, sessionContextOf(fired));
@@ -129,7 +139,6 @@ test("the session facts migration copies each conversation's facts from its late
   assert.deepEqual(sessionTurn.runtime, { modelId: "m3" });
   assert.equal(sessionTurn.spawnMeta, undefined);
   const mixedFilled = (await sessions.get(mixed.id))!;
-  assert.deepEqual(mixedFilled.surfaceBinding, slackSource, "the binding comes from the newest run that has one");
   assert.deepEqual(mixedFilled.runtime, { modelId: "m4" }, "the label comes from the newest run that reported one");
   assert.deepEqual(mixedFilled.spawnMeta, sessionContextOf(owning), "context comes from the newest owning turn");
   const untouched = (await sessions.get(quiet.id))!;

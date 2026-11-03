@@ -100,7 +100,9 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
-    ...(r.slack_binding != null ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] } : {}),
+    ...((r.slack_binding as { author?: unknown } | null)?.author
+      ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
+      : {}),
     ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
   };
 }
