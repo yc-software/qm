@@ -460,3 +460,17 @@ test("an edit of a message that no longer exists fails the delivery instead of r
   assert.deepEqual(posts, []);
   assert.deepEqual(failures, [["D1", "edit_target_not_found"]]);
 });
+
+test("a reply revised by the reply check carries a plain-text edit note footer", async () => {
+  const { posts } = await deliver(
+    { type: "slack", editNote: "Edited after a reply check: em dash" },
+    undefined,
+    undefined,
+    "Clean reply",
+  );
+  const blocks = posts.at(-1)!.blocks as Array<{ type: string; elements?: unknown[] }>;
+  assert.deepEqual(blocks.at(-1), {
+    type: "context",
+    elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
+  });
+});

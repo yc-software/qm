@@ -21,7 +21,6 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     config: built.config,
     deliveries: built.deliveries,
@@ -994,7 +993,6 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     sandboxBackend: "sprites",
   });
@@ -1065,7 +1063,6 @@ test("a saved document is read and downloaded by artifact id", async () => {
     auditLog: built.auditLog,
     errors: built.errors,
     runs: built.runs,
-    workspace: built.workspace,
     files: built.files,
     sandboxBackend: "sprites",
   });

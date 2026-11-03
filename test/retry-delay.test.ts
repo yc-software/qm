@@ -40,12 +40,12 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
     },
   } as unknown as Orchestrator;
   for (let i = 0; i < 3; i++) {
-    const claimed = await runs.claim("worker", 60_000);
+    const claimed = (await runs.claim("worker", 60_000))[0] ?? null;
     assert.ok(claimed);
     await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed), error);
     if (i < 2) {
       assert.equal((await runs.get(run.id))?.status, "pending");
-      assert.equal(await runs.claim("other-worker", 60_000), null);
+      assert.equal((await runs.claim("other-worker", 60_000))[0] ?? null, null);
       t.mock.timers.tick(60_000);
     }
   }
@@ -53,7 +53,7 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
   assert.equal((await runs.get(run.id))?.errorAttempts, 3);
   for (const error of [new Error("ordinary"), new NonRetryableTurnError("permanent")]) {
     const { run } = await runs.enqueue({ sessionId: "other", request });
-    const lease = await runs.claim("worker", 60_000);
+    const lease = (await runs.claim("worker", 60_000))[0] ?? null;
     assert.ok(lease);
     const orchestrator = {
       handleTurn: async () => {

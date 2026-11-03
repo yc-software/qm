@@ -41,7 +41,6 @@ import {
   isExternallyShared,
   isMpim,
   type SurfaceHeaderClient,
-  maybeInterceptStop,
   postThenAckRunDelivery,
   type PostMessageArgs,
   postWithVerify,
@@ -55,12 +54,15 @@ import {
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
+  blocksWithContext,
+  plainContext,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -163,7 +165,7 @@ export function createTurnHandler(deps: {
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
-  const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
+  const { callCore, inFlightRuns, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
 
@@ -361,19 +363,6 @@ export function createTurnHandler(deps: {
     const finishTaskAck = async () => {
       if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
-    if (!inc.unprompted) {
-      const intercepted = await maybeInterceptStop({
-        text,
-        botHandle: ids.botHandle,
-        threadRef,
-        getInFlightRun: async (ref) =>
-          (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
-          inFlightRunByThread.get(ref),
-        signalAbort: (runId) => core.signalRunAbort(runId),
-        stopConversation: (ref) => core.stopConversation(ref),
-      }).catch(swallowAs("slack: abort signal", true));
-      if (intercepted) return;
-    }
 
     let ack: AckPresenter | undefined;
     const statusKey = (): string | undefined => (queuedRunId ? statusPlaceholderKey(queuedRunId) : undefined);
@@ -562,7 +551,6 @@ export function createTurnHandler(deps: {
             }),
         onQueued: async (runId) => {
           queuedRunId = runId;
-          inFlightRunByThread.set(threadRef, runId);
           accepted = true;
           inc.ackGate?.persisted();
           await moveTaskAck(runId, inc.ts, true);
@@ -605,7 +593,6 @@ export function createTurnHandler(deps: {
       return;
     } finally {
       if (queuedRunId) {
-        inFlightRunByThread.clear(threadRef, queuedRunId);
         deps.onSettled?.();
       }
     }
@@ -662,7 +649,9 @@ export function createTurnHandler(deps: {
           }
         }
         await ack?.drain();
-        if (postText) await postReply(postText, undefined, runKey);
+        const editNote = replyEditNote(result.retracted);
+        const noteBlocks = editNote ? blocksWithContext(postText, [plainContext(editNote)]) : undefined;
+        if (postText) await postReply(postText, noteBlocks, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);

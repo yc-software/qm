@@ -45,6 +45,11 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export interface TurnPark {
+  requested(): boolean;
+  now(): void;
+}
+
 export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
   return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
 }
@@ -93,21 +98,29 @@ export interface EnqueueResult {
   deduped: boolean;
 }
 
+export const RUN_WAIT_FALLBACK_MS = 2_000;
+
+export interface SessionWatch {
+  changed(timeoutMs: number, signal?: AbortSignal): Promise<void>;
+  close(): void;
+}
+
 export interface RunStore {
   readonly maxClaims?: number;
 
   subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  watchSession(sessionId: string): SessionWatch;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
 
-  claim(workerId: string, ttlMs: number): Promise<Run | null>;
+  claim(workerId: string, ttlMs: number, limit?: number): Promise<Run[]>;
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
-  claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
-
   personWaiting(createdBefore: number): Promise<boolean>;
+
+  personWaitingIn(sessionIds: readonly string[], createdBefore: number): Promise<Set<string>>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
@@ -126,11 +139,7 @@ export interface RunStore {
 
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
-  latestForThreads(
-    threadRefs: readonly string[],
-    opts?: { excludePrivateMessages?: boolean },
-  ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;

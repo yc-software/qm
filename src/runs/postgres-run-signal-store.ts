@@ -3,6 +3,7 @@ import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { resolveTurnOrigin, spokenByPerson } from "../core/turn-origin.ts";
 
 const CHANNEL = "run_signals";
 
@@ -90,9 +91,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.length > 0;
     },
 
-    async hasDedupeKey(dedupeKey) {
-      const { rows } = await q(`SELECT 1 FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
-      return rows.length > 0;
+    async runForDedupeKey(dedupeKey) {
+      const { rows } = await q(`SELECT run_id FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
+      return rows[0]?.run_id as string | undefined;
     },
 
     async steerAuthors(runId) {
@@ -101,7 +102,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         [runId],
       );
       const ids = rows
-        .map((r) => (r.payload as RunSignal).request?.actor?.externalId)
+        .map((r) => (r.payload as RunSignal).request)
+        .filter((request) => request && spokenByPerson(resolveTurnOrigin(request)))
+        .map((request) => request?.actor?.externalId)
         .filter((id): id is string => typeof id === "string" && id !== "");
       return [...new Set(ids)];
     },

@@ -234,7 +234,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   wireRunResultDeliveries(runs, deliveries);
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const c1 = await runs.claim("w1", 5_000);
+  const c1 = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
   await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
   const pending = await deliveries.pending("slack");
@@ -244,7 +244,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
 
   const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-  const c2 = await runs.claim("w2", 5_000);
+  const c2 = (await runs.claim("w2", 5_000))[0] ?? null;
   await deliveries.ackByKey(`run:${live.id}`, 99);
   await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
   await new Promise((r) => setTimeout(r, 0));
@@ -260,7 +260,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
   const recovery = wireRunResultDeliveries(runs, deliveries);
   assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
@@ -280,7 +280,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
     const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(threadRef, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply });
     return run;
   };
@@ -288,7 +288,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const live = await finish("sB", "delivered live");
   await deliveries.ackByKey(`run:${live.id}`, Date.now());
   const silent = (await runs.enqueue({ sessionId: "sC", request: turn("c", "C9:171.001") })).run;
-  await runs.complete(silent.id, (await runs.claimForSession("sC", "w1", 5_000))?.leaseToken ?? "", {
+  await runs.complete(silent.id, (await runs.claimById(silent.id, "w1", 5_000))?.leaseToken ?? "", {
     status: "silent",
   });
   await new Promise((r) => setTimeout(r, 0));
@@ -318,7 +318,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
     finished.add(`run:${run.id}`);
   }
@@ -336,7 +336,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
   wireRunResultDeliveries(runs, deliveries);
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
   await new Promise((r) => setTimeout(r, 0));
 
@@ -434,6 +434,16 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
+test("a withheld-steer note in the transcript does not suppress the run's failure entry", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { steerWithheldItem } = await import("../src/core/turn-error.ts");
+  const { sessions, session } = await failureSessions();
+  await sessions.append({ sessionId: session.id }, steerWithheldItem("U2"));
+
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
+  assert.equal((await sessions.getItems(session.id)).length, 2);
+});
+
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
@@ -448,7 +458,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
   for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
@@ -526,3 +536,11 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
+  const d = runResultDelivery(
+    run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
+  );
+  assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
+  assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});

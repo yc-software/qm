@@ -2,7 +2,6 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,7 +9,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -114,7 +112,6 @@ function buildOrchestrator(
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
   const sessions = swarm?.sessions ?? createPostgresSessionStore(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),
@@ -130,7 +127,6 @@ function buildOrchestrator(
     resolution: createResolutionService(ORG, config, acl),
     sessions,
     ...(runs ? { runs } : {}),
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: swarm?.sandbox ?? fakeSandbox(),
     ...(swarm ? { swarms: swarm.service, sandboxResources: swarm.sandboxes } : {}),

@@ -146,7 +146,8 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
     ))
   )
     return;
-  const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
+  const found = await app.getDeployment(parts.id);
+  const deployment = found?.id === parts.id ? found : undefined;
   const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
@@ -1075,7 +1076,7 @@ function signInFailedHtml(signIn: string): string {
 }
 
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
-  (await app.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName)?.id;
+  (await app.getDeployment(idOrName))?.id;
 
 function deploymentGitParts(pathname: string): { id: string; tail: string } | null {
   const prefix = "/v1/deployments/";
@@ -1412,13 +1413,12 @@ export async function getDeployment(ctx: ApiCtx): Promise<void> {
   const { res, app, url, secret, capability, params } = ctx;
   const principalId = capability ? capability.actorId : url.searchParams.get("principalId");
   const id = params.id!;
-  let deployment;
-  if (principalId) {
-    deployment = (await app.listDeploymentsForViewer(principalId)).find((d) => d.id === id || d.name === id);
-  } else {
-    const stored = (await app.listDeployments()).find((d) => d.id === id || d.name === id);
-    deployment = stored ? deploymentView(stored) : undefined;
-  }
+  const stored = await app.getDeployment(id);
+  const permission = stored && principalId ? await app.deploymentGitPermissionFor(stored.id, principalId) : null;
+  const deployment =
+    stored && (!principalId || permission)
+      ? { ...deploymentView(stored), ...(permission ? { permission } : {}) }
+      : undefined;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   if (!principalId || !secret) return sendJson(res, 200, { deployment });
   const git = await app.deploymentGitUrlFor(deployment.id, principalId, { secret, baseUrl: gitUrlBase(ctx) });

@@ -1,10 +1,10 @@
-import type { Conversation, Principal, Resolution, ScopeId, WorkspaceLayer } from "../types.ts";
+import type { Conversation, Principal, Resolution, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { composePolicy, defaultOrgPolicy } from "../policy/command-policy.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
-import { principalEntitledToScope } from "./context-filter.ts";
+import { entitledScopes } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
 
 export interface ResolutionService {
@@ -57,15 +57,9 @@ export function createResolutionService(
       }
       await config.refreshSecurity([...liveConfigScopes]);
 
-      const layers: WorkspaceLayer[] = [
-        ...(!external ? [{ scopeId: orgScope, mountPath: "global", mode: "ro" as const }] : []),
-        { scopeId: scope, mountPath: "", mode: "rw" },
-      ];
-      if (!external) {
-        for (const tid of (isDm ? actor.teamIds : conversation.teamIds) ?? []) {
-          layers.push({ scopeId: scopeId("team", tid), mountPath: `team-${tid}`, mode: "ro" });
-        }
-      }
+      const readOnlyScopeIds = external
+        ? []
+        : [orgScope, ...((isDm ? actor.teamIds : conversation.teamIds) ?? []).map((tid) => scopeId("team", tid))];
 
       const orgSoul = external ? "" : (config.getSoul(orgScope) ?? "");
       const scopeSoul = external ? null : config.getSoul(scope);
@@ -87,10 +81,11 @@ export function createResolutionService(
 
       const grantedHandles = external
         ? []
-        : await acl.handlesForAudience(conversation.audience, scope, orgScope, principalEntitledToScope);
+        : await acl.handlesForAudience(conversation.audience, scope, orgScope, entitledScopes);
 
       return {
-        layers,
+        writableScopeId: scope,
+        readOnlyScopeIds,
         systemPrompt,
         egress,
         commandPolicy,
@@ -99,6 +94,7 @@ export function createResolutionService(
         approvalGrantModes,
         orgScopeId: orgScope,
         grantedHandles,
+        ...(scopeSoul?.trim() ? { guidance: scopeSoul } : {}),
       };
     },
   };

@@ -23,7 +23,8 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
       events.push("provision");
       return handle;
     },
-    layers: [{ scopeId: scopeId("personal", "credential-tester"), mountPath: "", mode: "rw" }],
+    writableScopeId: scopeId("personal", "credential-tester"),
+    readOnlyScopeIds: [],
     commandPolicy() {
       events.push("policy");
       return { mode: "denylist", rules: [] };
@@ -31,7 +32,6 @@ function context(events: string[], credentials: CommandCredential[], extra: Part
     authorizeCommand: () => false,
     commandCredentials: credentials,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "credential-tester",

@@ -138,6 +138,8 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
   const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
+  if (!z.enum(["steer", "queue"]).optional().safeParse(rest.midTurn).success)
+    return { error: "midTurn must be steer or queue" };
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;

@@ -257,7 +257,8 @@ export function createSessionMethods(
       }));
   };
 
-  async function decorateSessions(principalId: string, all: Session[]): Promise<Session[]> {
+  async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
+    const all = rows.map(withoutStoredFacts);
     const visibleById = new Map(all.map((session) => [session.id, session]));
     const roots = all.map((session) => session.id);
     const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
@@ -322,15 +323,11 @@ export function createSessionMethods(
     const idleChildren = sessions.filter(
       (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
     );
-    const [latestRuns, sessionGoals] = await Promise.all([
-      deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
+    const [failedChildren, sessionGoals, currentRuns] = await Promise.all([
+      deps.sessions.endedInFailure(idleChildren.map((s) => s.id)),
       deps.sessions.goals(working.map((s) => s.id)),
+      deps.runs.activeForThreads(working.map((s) => s.threadRef)),
     ]);
-    const failedChildren = new Set<string>();
-    for (const s of idleChildren) {
-      const run = latestRuns.get(s.threadRef);
-      if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
-    }
     const goals = new Map<
       string,
       { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
@@ -338,7 +335,7 @@ export function createSessionMethods(
     for (const s of working) {
       const goal = openGoal(sessionGoals.get(s.id));
       if (!goal) continue;
-      const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
+      const runningSince = currentRuns.get(s.threadRef)?.startedAt ?? undefined;
       if (goal.status === "active")
         goals.set(s.id, {
           objective: goal.objective,
@@ -348,7 +345,7 @@ export function createSessionMethods(
         });
     }
     const childRuns = working.flatMap((s) => {
-      const run = s.parentSessionId ? latestRuns.get(s.threadRef) : undefined;
+      const run = s.parentSessionId ? currentRuns.get(s.threadRef) : undefined;
       return run ? [{ id: s.id, run }] : [];
     });
     const purposes = childRuns.length
@@ -443,9 +440,9 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, principalId, window) {
       const found = await sessionForViewer(sessionId, principalId);
       if (!found) return null;
-      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
+      const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals, latestRuns] = await Promise.all([
+      const [initialRead, pinRecords, goals] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -453,10 +450,9 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
-        window?.beforeSeq === undefined ? deps.runs.latestForThreads([found.threadRef]) : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
-      const runtime = latestRuns?.get(found.threadRef)?.result?.runtime;
+      const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
       let read = initialRead;
       let visible = read.items;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
@@ -639,7 +635,7 @@ export function createSessionMethods(
       return Promise.all(
         visible
           .filter((row): row is Session => row !== null)
-          .map(async (row) => ({ ...row, canContinue: await canContinueOnWeb(principalId, row) })),
+          .map(async (row) => ({ ...withoutStoredFacts(row), canContinue: await canContinueOnWeb(principalId, row) })),
       );
     },
 
@@ -647,7 +643,8 @@ export function createSessionMethods(
       const session = await sessionForViewer(sessionId, principalId);
       if (!session?.sideChat || !(await mayWriteSession(principalId, session))) return null;
       await deps.sessions.expandSideChat(sessionId);
-      return sessionForViewer(sessionId, principalId);
+      const expanded = await sessionForViewer(sessionId, principalId);
+      return expanded && withoutStoredFacts(expanded);
     },
 
     async sessionChildren(principalId, sessionId) {
@@ -662,7 +659,7 @@ export function createSessionMethods(
       if (!id) return null;
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
-      const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...row } = session;
+      const { clientTools: _clientTools, ...row } = withoutStoredFacts(session);
       const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },
@@ -755,10 +752,7 @@ export function createSessionMethods(
       const sandbox = deps.sandbox;
       const rec = await deps.processes.get(processId);
       if (!rec || rec.kind !== "background" || rec.sessionRef !== session.threadRef) return null;
-      const handle = await sandbox.provision(
-        [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-        rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-      );
+      const handle = await sandbox.provision(rec.scopeId, rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined);
       try {
         const read = await sandbox.readProcess(handle, processId, { sinceCursor, maxBytes: 65_536, waitMs: 0 });
         return {
@@ -1016,7 +1010,7 @@ export function createSessionMethods(
       if (!session) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
-      return updated && { ...updated, canContinue: await canContinueOnWeb(principalId, updated) };
+      return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
     async detachSession(sessionId, principalId) {
@@ -1276,7 +1270,7 @@ export function createSessionMethods(
           ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
           : null;
       }
-      const d = (await deps.deploy.listDeployments()).find((x) => x.id === idOrName || x.name === idOrName);
+      const d = await deps.deploy.getDeployment(idOrName);
       return d
         ? { id: d.id, ownerScopeId: d.ownerScopeId, createdBy: d.createdBy, grantRef: encodeRef(deployRef(d.id)) }
         : null;
@@ -1355,4 +1349,11 @@ export function createSessionMethods(
       return deps.advisoryLock.withLock(`admin-governance:${scopeIdValue}`, write);
     },
   };
+}
+
+function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "slackBinding">>(
+  session: T,
+): Omit<T, "spawnMeta" | "slackBinding"> {
+  const { spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...shown } = session;
+  return shown;
 }
