@@ -72,6 +72,8 @@ test("the pool binds the current tenant to each query and transaction in one bat
     assert.deepEqual(both, [{ t: a, timeout: "4s" }]);
     const signalled = await withTenant(a, () => pool.q(setting, [], { signal: new AbortController().signal }));
     assert.equal(signalled[0]!.t, a);
+    const seen = await Promise.all([a, b, a, b].map((id) => withTenant(id, async () => (await pool.q(setting))[0]!.t)));
+    assert.deepEqual(seen, [a, b, a, b]);
     const inTx = await withTenant(b, async () =>
       withPgTransaction(await pool.pool(), async (client) => {
         await client.query("INSERT INTO tenant_probe(n) VALUES (3)");
@@ -86,6 +88,7 @@ test("the pool binds the current tenant to each query and transaction in one bat
     await withoutTenant(async () => {
       for (let i = 0; i < 8; i++) assert.ok([null, ""].includes((await pool.q(setting))[0]!.t as string | null));
       await assert.rejects(pool.q("SELECT n FROM tenant_probe"), { code: "42501" });
+      await assert.rejects(pool.q("INSERT INTO tenant_probe(n) VALUES (4)"), { code: "42501" });
     });
   } finally {
     await pool.close();
@@ -132,14 +135,24 @@ test("an open transaction refuses work for a different tenant", { skip }, async 
   );
 });
 
-test("work spawned inside a transaction may bind another tenant after it commits", { skip }, async () => {
-  let spawned: Promise<number> | undefined;
+test("work spawned inside a transaction may bind another tenant only after it ends", { skip }, async () => {
+  const outcomes: string[] = [];
+  const attempt = () => {
+    try {
+      withTenant(b, () => outcomes.push("bound"));
+    } catch {
+      outcomes.push("refused");
+    }
+  };
+  const chain = (ticks: number): Promise<void> =>
+    ticks ? Promise.resolve().then(() => chain(ticks - 1)) : Promise.resolve();
   await withTenant(a, () =>
     withPgTransaction(app, async () => {
-      spawned = new Promise<void>((resolve) => setImmediate(resolve)).then(() => withTenant(b, () => 3));
+      for (let ticks = 0; ticks < 6; ticks++) void chain(ticks).then(attempt);
     }),
   );
-  assert.equal(await spawned, 3);
+  attempt();
+  assert.deepEqual(outcomes, [...Array(6).fill("refused"), "bound"]);
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
