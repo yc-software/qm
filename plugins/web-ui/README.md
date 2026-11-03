@@ -40,7 +40,7 @@ Dev (HMR): run `npm run serve` in one terminal and `npm run dev` in another — 
 the front-end on :5173 and proxies `/signin`, `/me`, `/api/*` to the node server.
 
 Env (see `.env.example`): `CORE_API_URL` (default `http://localhost:8080`),
-`CORE_ORG_ID` (default `acme`), `PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
+`PORT` (default 8096), `WEB_UI_PUBLIC_URL`,
 `WEB_UI_PRINCIPALS` (csv allowlist; empty = any id, **dev only**),
 and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
@@ -309,7 +309,7 @@ the portal serves the same web application, so it needs no separate SDK.
 
 Events are explicit pageviews by navigation view, accepted `message_sent` events,
 and `session_started` for the first user message in a chat. Company grouping uses
-`CORE_ORG_ID`; user identities combine company and authenticated principal. Browser
+the tenant id reported by core; user identities combine it with the authenticated principal. Browser
 analytics is disabled during impersonation. Autocapture, replay, exception capture,
 performance capture and feature flags are disabled. Event properties exclude chat
 content, URLs, query strings, titles and referrers. Delivery is best effort.

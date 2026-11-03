@@ -22,8 +22,8 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = "admin-alice@default-org";
-const NOBODY = "user-uma@default-org";
+const ALICE = "admin-alice";
+const NOBODY = "user-uma";
 
 const startImp = (base: string, actor: string, target: string) =>
   fetch(`${base}/v1/admin/impersonate`, {

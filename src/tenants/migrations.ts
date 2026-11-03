@@ -120,8 +120,15 @@ function typedTableStatements({ table, primaryKey, unique = [], replacesOrgId }:
     tenantColumn(table),
     ...(replacesOrgId
       ? [
-          `DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
-             (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)`,
+          `DO $one_org$
+DECLARE
+  orgs text[];
+BEGIN
+  SELECT array_agg(DISTINCT org_id ORDER BY org_id) INTO orgs FROM ${table};
+  IF cardinality(orgs) > 1 THEN
+    RAISE EXCEPTION 'Rows in ${table} belong to more than one org: %', array_to_string(orgs, ', ');
+  END IF;
+END $one_org$`,
           `ALTER TABLE ${table} DROP COLUMN org_id`,
         ]
       : []),

@@ -15,10 +15,10 @@ import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
-  return buildApp(testConfig({ dataDir, orgId: "acme" }));
+  return buildApp(testConfig({ dataDir }));
 }
 
-const actor = { externalId: "U1", orgId: "acme" };
+const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }

@@ -38,7 +38,7 @@ test.after(() => {
 test("self-connect carries the signed portal identity that core requires under requireSignedPortalIdentity", async () => {
   const now = Math.floor(Date.now() / 1000);
   const session = seal(
-    { k: "session", sub: "eve@acme", org: "acme", iat: now, exp: now + 3600 },
+    { k: "session", sub: "eve@acme", iat: now, exp: now + 3600 },
     deriveKey(sessionSecret, "portal.session.v1"),
   );
   const r = await fetch(`${base}/connect/doordash/self-connect`, {

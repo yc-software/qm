@@ -15,6 +15,7 @@ import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -250,7 +251,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-multi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await workspace.ensureScope(personal);
   await workspace.ensureScope(org);
   await memory.capture(personal, ["deploys happen on Fridays"], at);

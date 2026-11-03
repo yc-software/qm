@@ -356,7 +356,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       async (slot) => {
         const layers = crossScope
           ? resolution.layers
-              .filter((layer) => layer.mode === "rw" || layer.mountPath === "global")
+              .filter((layer) => layer.mode === "rw")
               .map((layer) => (layer.mode === "rw" ? { ...layer, scopeId: resource.ownerScopeId } : layer))
           : resolution.layers;
         if (crossScope && egressTokenForTurn && !egressTokenForPolicy)
@@ -387,16 +387,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       scratchStartedAt = Date.now();
       recordScratchLifecycle("provision_started");
       try {
-        const handle = await deps.sandbox.provision(
-          resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-          {
-            env: connectorEnv,
-            egress: resolution.egress,
-            ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-            scratch: { key: scratchKey() },
-            routeScopeId: memoryScopeId,
-          },
-        );
+        const handle = await deps.sandbox.provision([], {
+          env: connectorEnv,
+          egress: resolution.egress,
+          ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+          scratch: { key: scratchKey() },
+          routeScopeId: memoryScopeId,
+        });
         slot.handles.push(handle);
         scratchReadyAt = Date.now();
         recordScratchLifecycle("provision_ready", handle);
@@ -411,16 +408,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const provisionForReach = (target: ScopeId): Promise<SandboxHandle> =>
     pool.get(`reach:${target}`)?.opening ??
     open(`reach:${target}`, async (slot) => {
-      const handle = await deps.sandbox.provision(
-        [
-          { scopeId: resolution.orgScopeId, mountPath: "global", mode: "ro" },
-          { scopeId: target, mountPath: "", mode: "rw" },
-        ],
-        {
-          egress: resolution.egress,
-          ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-        },
-      );
+      const handle = await deps.sandbox.provision([{ scopeId: target, mountPath: "", mode: "rw" }], {
+        egress: resolution.egress,
+        ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+      });
       slot.handles.push(handle);
       await holdResource(handle);
       return handle;

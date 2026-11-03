@@ -12,7 +12,6 @@ interface AdminCtx {
 interface AdminRouteDeps {
   origin: string;
   secret: string | undefined;
-  org: string;
   portalHeaders: () => Record<string, string>;
   impersonated: (req: IncomingMessage) => boolean;
   readBody: (req: IncomingMessage) => Promise<string>;
@@ -63,7 +62,7 @@ const ALLOWED: Record<string, string> = {
 };
 
 export function adminRoutes(d: AdminRouteDeps) {
-  const actorHeaders = (user: string) => ({ "x-admin-actor": `${user}@${d.org}`, ...d.portalHeaders() });
+  const actorHeaders = (user: string) => ({ "x-admin-actor": user, ...d.portalHeaders() });
 
   const relay = (c: AdminCtx, method: HttpMethod, corePath: string, body = "") =>
     relayCoreStream(c.res, {

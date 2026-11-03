@@ -66,7 +66,7 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
       purpose: "need github for CI",
     });
 
-    const r = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "admin-alice@default-org" } });
+    const r = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "admin-alice" } });
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.equal(d.enabled, true);
@@ -87,7 +87,7 @@ test("/v1/admin/keychain returns metadata, grants, and asks without secrets; non
     assert.equal(d.asks[0].id, ask.id);
     assert.ok(!JSON.stringify(d).includes("ghp_secret"), "admin projection must not include secret material");
 
-    const denied = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "user-uma@default-org" } });
+    const denied = await fetch(`${s.base}/v1/admin/keychain`, { headers: { "x-admin-actor": "user-uma" } });
     assert.equal(denied.status, 403);
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "keychain.read"));
   } finally {
@@ -119,12 +119,12 @@ test("credentials-page summary avoids unrelated history and exposes counts only"
   t.mock.method(s.built.sessions, "distinctParticipants", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?summary=1", {
-    headers: { "x-admin-actor": "admin-alice@default-org" },
+    headers: { "x-admin-actor": "admin-alice" },
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { users: 1, standing: 1 });
   const denied = await fetch(s.base + "/v1/admin/keychain?summary=1", {
-    headers: { "x-admin-actor": "nobody@default-org" },
+    headers: { "x-admin-actor": "nobody" },
   });
   assert.equal(denied.status, 403);
 });
@@ -159,7 +159,7 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   t.mock.method(s.built.sessions, "distinctParticipants", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?principal=Alice%40example.com", {
-    headers: { "x-admin-actor": "admin-alice@default-org" },
+    headers: { "x-admin-actor": "admin-alice" },
   });
   assert.equal(response.status, 200);
   const data = (await response.json()) as any;
@@ -174,7 +174,7 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   assert.equal(JSON.stringify(data).includes("private-user-secret"), false);
   assert.equal(JSON.stringify(data).includes("bob@example.com"), false);
   const denied = await fetch(s.base + "/v1/admin/keychain?principal=alice%40example.com", {
-    headers: { "x-admin-actor": "nobody@default-org" },
+    headers: { "x-admin-actor": "nobody" },
   });
   assert.equal(denied.status, 403);
 });

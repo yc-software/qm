@@ -4,9 +4,10 @@ import type { Cron } from "../../../triggers/types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
+import { tenantRootScope } from "../../../tenants/context.ts";
 
 export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {
   const read = s.cacheRead;
@@ -525,7 +526,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
     deps,
     rows.map((r) => r.scopeId),
   );
-  const scope = orgScope(deps);
+  const scope = tenantRootScope();
   const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
   const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
   const crons: SpendExportCron[] = [...(await cronInfoLookup(app, exported)).values()]
@@ -551,7 +552,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
 
 export async function spend(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenantRootScope();
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "spend.read", resource: "spend", scopeLabel: scope });

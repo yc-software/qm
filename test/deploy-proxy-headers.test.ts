@@ -427,7 +427,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const path = "/v1/admin/deployments/d1/proxy/hello?x=1";
-    const actor = "admin-alice@default-org";
+    const actor = "admin-alice";
     const ts = Math.floor(Date.now() / 1000);
     const res = await fetch(`${base}${path}`, {
       headers: {

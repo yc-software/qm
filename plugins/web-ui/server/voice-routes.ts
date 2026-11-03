@@ -61,7 +61,7 @@ export async function handleVoiceRoute(
   res: ServerResponse,
   path: string,
   identity: { user: string; impersonator: string | null; portalVerified: boolean },
-  config: { org: string; publicUrl: string },
+  config: { publicUrl: string },
 ): Promise<void> {
   const { user } = identity;
   const enabled = voiceEnabled(user) && !identity.impersonator;
@@ -107,7 +107,6 @@ export async function handleVoiceRoute(
   try {
     const caller = (timeoutMs: number) => ({
       user,
-      org: config.org,
       apiKey: openaiKey()!,
       signal: AbortSignal.any([controller.signal, finished.signal, AbortSignal.timeout(timeoutMs)]),
     });

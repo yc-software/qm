@@ -30,7 +30,7 @@ export async function composioSlackConnection(ctx: ApiCtx) {
     const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
     if (
       account.id !== record.accountId ||
-      !composioUserIds(access.principal).includes(String(account.user_id)) ||
+      !(await composioUserIds(ctx.deps, access.principal)).includes(String(account.user_id)) ||
       (account.toolkit as { slug?: string } | undefined)?.slug !== "slack" ||
       account.status !== "ACTIVE" ||
       account.is_disabled === true

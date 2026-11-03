@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export type AdminRole = "org_admin";
 
@@ -29,27 +30,30 @@ export interface AdminGrantStore {
 }
 
 export interface AdminGrantStoreOptions {
-  seed?: AdminGrant[];
+  seed?: () => AdminGrant[];
 }
 
 export function createAdminGrantStore(
   persist: AdminGrantPersistence,
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
-  const seeds = opts.seed ?? [];
-  let seededP: Promise<void> | null = null;
+  const seeded = new Map<string, Promise<void>>();
   function ensureSeeded(): Promise<void> {
-    if (!seededP) {
-      seededP = (async () => {
+    const tenant = currentTenant();
+    let pending = seeded.get(tenant);
+    if (!pending) {
+      pending = (async () => {
+        const seeds = opts.seed?.() ?? [];
         if (!seeds.length) return;
         if ((await persist.all()).length > 0) return;
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
       })().catch((e) => {
-        seededP = null;
+        seeded.delete(tenant);
         throw e;
       });
+      seeded.set(tenant, pending);
     }
-    return seededP;
+    return pending;
   }
   return {
     async list() {

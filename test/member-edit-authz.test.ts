@@ -19,7 +19,6 @@ import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./s
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
-const ORG = "default-org";
 const OWNER = "owner";
 const PRIV_MEMBER = "priv-member";
 const GROUP_MEMBER = "group-member";
@@ -42,7 +41,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const webhooks = createWebhookStore(testMap(), testMap());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const config = overrides.config ?? testConfigStore(ORG);
+  const config = overrides.config ?? testConfigStore();
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
@@ -249,8 +248,8 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
   const souls = testMap<PersistedSoul>();
   const lock = testAdvisoryLock();
-  const leftConfig = testConfigStore(ORG, { souls });
-  const rightConfig = testConfigStore(ORG, { souls });
+  const leftConfig = testConfigStore({ souls });
+  const rightConfig = testConfigStore({ souls });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
@@ -264,7 +263,7 @@ test("SOUL: shared-lock writers refresh fleet state before assigning the next ve
 test("SOUL: a durable write failure rejects and restores the live cache", async () => {
   const control = { fail: false };
   const souls = failingPutMap<PersistedSoul>(control);
-  const config = testConfigStore(ORG, { souls });
+  const config = testConfigStore({ souls });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   control.fail = true;
@@ -278,7 +277,7 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
-  const config = testConfigStore(ORG, { souls: failingPutMap<PersistedSoul>(control) });
+  const config = testConfigStore({ souls: failingPutMap<PersistedSoul>(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -332,7 +331,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
     history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
   await backing.put(privScope, prior);
-  const config = testConfigStore(ORG, { souls: putThenFailReadsMap(backing) });
+  const config = testConfigStore({ souls: putThenFailReadsMap(backing) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {

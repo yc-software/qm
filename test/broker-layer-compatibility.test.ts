@@ -267,7 +267,7 @@ const BROKERED_ACME = {
 };
 
 test("a layer installed after boot reaches the app that booted without one", () => {
-  const built = buildApp(testConfig({ orgId: "acme" }));
+  const built = buildApp(testConfig());
   assert.equal(
     built.brokeredTools.length,
     0,

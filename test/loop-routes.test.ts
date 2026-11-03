@@ -38,7 +38,7 @@ function services(): LoopServiceDeps {
     outputs: createLoopOutputStore(testMap()),
     grants: createShipGrantStore(testMap()),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-    config: testConfigStore("org"),
+    config: testConfigStore(),
   };
 }
 

@@ -178,23 +178,20 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+  const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
   const path = base + "/v1/admin/model-registry/" + spec.id;
   const put = (body: object, actor = headers["x-admin-actor"]) =>
     fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
   const runtime = async () =>
     (
-      await fetch(
-        base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-        { headers },
-      )
+      await fetch(base + "/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice", { headers })
     ).json() as Promise<{
       effective: { modelId: string };
       modelCatalog: Record<string, unknown>;
       unavailableReason: string;
     }>;
   try {
-    assert.equal((await put({ ...spec, verify: true }, "bob@default-org")).status, 403);
+    assert.equal((await put({ ...spec, verify: true }, "bob")).status, 403);
     assert.equal((await put(spec)).status, 400);
     assert.equal(upstream.requests.length, 0);
     upstream.behavior.status = 403;
@@ -238,7 +235,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     const beforeEdit = upstream.requests.length;
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
-    await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
+    await built.config.setRuntimeSelection("personal:admin-alice", {
       modelId: spec.id,
     });
     await built.modelCredentials.set("openai", "rotated-test-key", "admin-alice");

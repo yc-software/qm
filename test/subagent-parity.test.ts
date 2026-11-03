@@ -134,7 +134,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   };
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const config = testConfigStore("org");
+  const config = testConfigStore();
   await config.setInteractiveFastMode(true);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const orchestrator = createOrchestrator({
@@ -145,7 +145,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { authorizesCapabilityScope: async () => true },
     ),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService("org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     runs,
     workspace,
