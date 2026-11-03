@@ -46,7 +46,12 @@ const PERMANENT_POST_ERRORS = new Set([
   "message_not_found",
 ]);
 
-const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot", "cant_update_message", "edit_window_closed"]);
+const TERMINAL_POST_ERRORS = new Set([
+  "cannot_dm_bot",
+  "cant_update_message",
+  "edit_window_closed",
+  "edit_target_not_found",
+]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
@@ -296,17 +301,24 @@ export function createDeliveryPoller(deps: {
                   ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
                 ];
                 const unfurlLinks = d.destination.unfurlLinks;
-                await client.chat.update({
-                  channel,
-                  ts: d.destination.edit.messageTs,
-                  text,
-                  blocks: [
-                    ...slackSectionBlocks(text),
-                    ...(footer.length ? [{ type: "context", elements: footer }] : []),
-                  ],
-                  ...botIdentityArgs(),
-                  ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
-                });
+                await client.chat
+                  .update({
+                    channel,
+                    ts: d.destination.edit.messageTs,
+                    text,
+                    blocks: [
+                      ...slackSectionBlocks(text),
+                      ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                    ],
+                    ...botIdentityArgs(),
+                    ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
+                  })
+                  .catch((err: unknown) => {
+                    if (slackErrorCode(err) !== "message_not_found") throw err;
+                    throw Object.assign(new Error(`edit target not found: ${(err as Error).message}`, { cause: err }), {
+                      data: { error: "edit_target_not_found" },
+                    });
+                  });
                 return undefined;
               }
               let editRef = d.destination.editRef;

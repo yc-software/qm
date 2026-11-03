@@ -112,7 +112,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, {
       error: "bad_request",
       message: edit
-        ? "an edit needs text — the complete new message"
+        ? "an edit needs top-level text — the complete new message (edit carries only the ts)"
         : "text (the exact message to send), react ({ ts, emoji }), or delete ({ ts }) required",
     });
   }

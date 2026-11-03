@@ -448,3 +448,15 @@ test("an edit Slack refuses fails the delivery instead of posting the text as a 
   assert.deepEqual(posts, []);
   assert.deepEqual(failures, [["D1", "cant_update_message"]]);
 });
+
+test("an edit of a message that no longer exists fails the delivery instead of retrying", async () => {
+  const { posts, failures } = await deliver(
+    { target: "C1", edit: { messageTs: "99.100" } },
+    undefined,
+    undefined,
+    "corrected numbers",
+    { updateError: "message_not_found" },
+  );
+  assert.deepEqual(posts, []);
+  assert.deepEqual(failures, [["D1", "edit_target_not_found"]]);
+});
