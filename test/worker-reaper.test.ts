@@ -20,6 +20,7 @@ import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sessions = createPostgresSessionStore(testDatabaseUrl());
 
@@ -43,7 +44,7 @@ const turn: OrchestratorInput = {
 
 test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 }))).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
@@ -54,23 +55,23 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
   assert.equal(swept.parked, 0);
-  assert.equal((await runs.get(r.id))?.status, "pending", "expired run is back on the queue");
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "pending", "expired run is back on the queue");
 });
 
 test("a run parks once the ERROR budget (error_attempts) is exhausted", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 }))).run;
 
   let claimed = await runs.claim("w1", 10_000);
-  let failed = await runs.fail(r.id, claimed!.leaseToken!, "boom", { retry: true });
+  let failed = await inTestTenant(() => runs.fail(r.id, claimed!.leaseToken!, "boom", { retry: true }));
   assert.equal(failed.requeued, true, "first error requeues");
-  assert.equal((await runs.get(r.id))?.status, "pending");
-  assert.equal((await runs.get(r.id))?.errorAttempts, 1);
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.errorAttempts, 1);
 
   claimed = await runs.claim("w2", 10_000);
-  failed = await runs.fail(r.id, claimed!.leaseToken!, "boom again", { retry: true });
+  failed = await inTestTenant(() => runs.fail(r.id, claimed!.leaseToken!, "boom again", { retry: true }));
   assert.equal(failed.requeued, false, "second error parks");
-  const parked = await runs.get(r.id);
+  const parked = await inTestTenant(() => runs.get(r.id));
   assert.equal(parked?.status, "failed");
   assert.equal(parked?.errorAttempts, 2);
   assert.equal(parked?.attempts, 2, "claim count tracked both claims");
@@ -79,7 +80,7 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 }))).run;
   const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
     ...singleProcessDeps(),
     intervalMs: 60_000,
@@ -91,16 +92,16 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
     const swept = await reaper.sweep();
     assert.equal(swept.requeued, 1, `reap ${i} requeues`);
     assert.equal(swept.parked, 0, `reap ${i} does not park`);
-    const after = await runs.get(r.id);
+    const after = await inTestTenant(() => runs.get(r.id));
     assert.equal(after?.status, "pending", "reaped run is always back on the queue");
     assert.equal(after?.errorAttempts, 0, "reaps never spend the error budget");
   }
-  assert.equal((await runs.get(r.id))?.attempts, 5);
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.attempts, 5);
 });
 
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 }))).run;
   const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
     ...singleProcessDeps(),
     intervalMs: 60_000,
@@ -111,15 +112,15 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
     await sleep(20);
     const swept = await reaper.sweep();
     assert.deepEqual(swept, { requeued: 1, parked: 0 }, `claim ${i} under the cap requeues`);
-    assert.equal((await runs.get(r.id))?.errorAttempts, 0, "a reap never spends the error budget");
+    assert.equal((await inTestTenant(() => runs.get(r.id)))?.errorAttempts, 0, "a reap never spends the error budget");
   }
 
   await runs.claim("dead-worker", 10);
-  assert.equal((await runs.get(r.id))?.attempts, 3, "third claim reaches the cap");
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.attempts, 3, "third claim reaches the cap");
   await sleep(20);
   const swept = await reaper.sweep();
   assert.deepEqual(swept, { requeued: 0, parked: 1 }, "at the claim cap the poison pill is parked");
-  const parked = await runs.get(r.id);
+  const parked = await inTestTenant(() => runs.get(r.id));
   assert.equal(parked?.status, "failed", "parked run is terminal failed (loud)");
   assert.equal(parked?.errorAttempts, 0, "the claim-cap park did not need the error budget");
   assert.match(parked?.result?.reason ?? "", /suspected crash loop/);
@@ -127,17 +128,17 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
 
 test("a concrete error parks with its own message even when over the claim cap", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 2 });
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 }))).run;
 
   let claimed = await runs.claim("w1", 10_000);
-  let failed = await runs.fail(r.id, claimed!.leaseToken!, "first boom", { retry: true });
+  let failed = await inTestTenant(() => runs.fail(r.id, claimed!.leaseToken!, "first boom", { retry: true }));
   assert.equal(failed.requeued, true);
 
   claimed = await runs.claim("w2", 10_000);
   assert.equal(claimed?.attempts, 2, "second claim reaches the cap");
-  failed = await runs.fail(r.id, claimed!.leaseToken!, "real boom", { retry: true });
+  failed = await inTestTenant(() => runs.fail(r.id, claimed!.leaseToken!, "real boom", { retry: true }));
   assert.equal(failed.requeued, false, "over the claim cap, the error parks instead of requeuing");
-  const parked = await runs.get(r.id);
+  const parked = await inTestTenant(() => runs.get(r.id));
   assert.equal(parked?.status, "failed");
   assert.match(parked?.result?.reason ?? "", /real boom/, "the concrete error message is preserved");
   assert.doesNotMatch(parked?.result?.reason ?? "", /crash loop/, "not masked by the crash-loop text");
@@ -145,7 +146,7 @@ test("a concrete error parks with its own message even when over the claim cap",
 
 test("only the leader instance's interval sweep reaps expired leases", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 }))).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
@@ -162,11 +163,19 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
   reaper.start();
   try {
     await sleep(40);
-    assert.equal((await runs.get(r.id))?.status, "running", "a non-leader's interval does not reap");
+    assert.equal(
+      (await inTestTenant(() => runs.get(r.id)))?.status,
+      "running",
+      "a non-leader's interval does not reap",
+    );
 
     leader = true;
-    await settle(async () => (await runs.get(r.id))?.status === "pending");
-    assert.equal((await runs.get(r.id))?.status, "pending", "the leader's interval reaps the expired run");
+    await settle(async () => (await inTestTenant(() => runs.get(r.id)))?.status === "pending");
+    assert.equal(
+      (await inTestTenant(() => runs.get(r.id)))?.status,
+      "pending",
+      "the leader's interval reaps the expired run",
+    );
   } finally {
     reaper.stop();
   }
@@ -174,7 +183,7 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
 
 test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling)", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 }))).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
   const denyAll: LeaderLease = {
@@ -188,32 +197,32 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
   });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1, "direct sweep() runs regardless of leadership");
-  assert.equal((await runs.get(r.id))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "pending");
 });
 
 test("reaping a lease-expired run releases its stranded session lease", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(session.id);
+  const session = await inTestTenant(() => sessions.getOrCreateByThread("t1", "dm", "personal:U1"));
+  const { lease: held } = await inTestTenant(() => sessions.acquireLease(session.id));
   assert.ok(held, "the (now-dead) worker holds the session lease");
-  assert.equal((await sessions.acquireLease(session.id)).lease, null, "session lease is held");
+  assert.equal((await inTestTenant(() => sessions.acquireLease(session.id))).lease, null, "session lease is held");
 
-  const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
   const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
-  assert.equal((await runs.get(r.id))?.status, "pending", "expired run is requeued");
-  const { lease: reacquired } = await sessions.acquireLease(session.id);
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "pending", "expired run is requeued");
+  const { lease: reacquired } = await inTestTenant(() => sessions.acquireLease(session.id));
   assert.ok(reacquired, "session lease was released on reap, so the retry can re-acquire");
 });
 
 test("reapExpired fences the dead attempt, releases its session lease, and only then requeues", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const claimed = await runs.claim("dead-worker", 10);
   await sleep(30);
 
@@ -230,31 +239,39 @@ test("reapExpired fences the dead attempt, releases its session lease, and only 
   assert.equal(statusAtRelease, "running", "the lease is released BEFORE the retry becomes claimable");
   assert.equal(zombieBeatAtRelease, false, "the dead attempt is fenced first, so a zombie cannot revive the run");
   assert.equal(swept.requeued, 1);
-  assert.equal((await runs.get(r.id))?.status, "pending", "the retry is claimable only after the release hook ran");
+  assert.equal(
+    (await inTestTenant(() => runs.get(r.id)))?.status,
+    "pending",
+    "the retry is claimable only after the release hook ran",
+  );
 });
 
 test("a heartbeat landing between SELECT and retire leaves the run AND its session lease untouched", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(session.id);
+  const session = await inTestTenant(() => sessions.getOrCreateByThread("t1", "dm", "personal:U1"));
+  const { lease: held } = await inTestTenant(() => sessions.acquireLease(session.id));
   assert.ok(held, "the live worker holds the session lease");
 
-  const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const r = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const claimed = await runs.claim("live-worker", 10);
   assert.ok(claimed?.leaseToken);
   await sleep(30);
 
-  assert.equal(await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000), true, "live worker renews its lease");
+  assert.equal(
+    await inTestTenant(() => runs.heartbeat(r.id, claimed!.leaseToken!, 10_000)),
+    true,
+    "live worker renews its lease",
+  );
 
   const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
 
   assert.equal(swept.requeued, 0, "the renewed run is not requeued");
   assert.equal(swept.parked, 0, "the renewed run is not parked");
-  assert.equal((await runs.get(r.id))?.status, "running", "the run is untouched");
+  assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "running", "the run is untouched");
   assert.equal(
-    (await sessions.acquireLease(session.id)).lease,
+    (await inTestTenant(() => sessions.acquireLease(session.id))).lease,
     null,
     "the session lease is untouched — the live worker still holds it",
   );
@@ -263,8 +280,8 @@ test("a heartbeat landing between SELECT and retire leaves the run AND its sessi
 test("shutdown cancels before handback and holds both leases until the turn unwinds", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
+  const session = await inTestTenant(() => sessions.getOrCreateByThread("t1", "dm", "personal:U1"));
+  const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 }))).run;
   let started!: () => void;
   const ready = new Promise<void>((resolve) => {
     started = resolve;
@@ -306,30 +323,34 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
   assert.equal(signal.aborted, true, "shutdown reaches the existing cancellation signal immediately");
   assert.equal(shutdownSignal?.aborted, true, "the turn can tell this cancellation apart from a user Stop");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
-  assert.equal((await runs.get(enq.id))?.status, "running");
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.status, "running");
   assert.equal(await runs.claim("replacement", 5_000), null);
-  assert.equal((await sessions.acquireLease(session.id)).lease, null);
+  assert.equal((await inTestTenant(() => sessions.acquireLease(session.id))).lease, null);
   const second = worker.releaseInFlight();
   unwind();
   await Promise.all([handback, second]);
-  assert.equal((await runs.get(enq.id))?.status, "pending");
-  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.errorAttempts, 0);
   const replacement = await runs.claim("replacement", 5_000);
   assert.ok(replacement);
-  const freshLease = (await sessions.acquireLease(session.id)).lease;
+  const freshLease = (await inTestTenant(() => sessions.acquireLease(session.id))).lease;
   assert.ok(freshLease);
   await worker.releaseInFlight();
-  assert.equal((await sessions.acquireLease(session.id)).lease, null, "late shutdown cannot steal a new lease");
-  assert.equal(await runs.complete(enq.id, leaseToken, { status: "silent" }), false);
-  assert.deepEqual(await runs.fail(enq.id, leaseToken, "late error"), { requeued: false });
-  assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
+  assert.equal(
+    (await inTestTenant(() => sessions.acquireLease(session.id))).lease,
+    null,
+    "late shutdown cannot steal a new lease",
+  );
+  assert.equal(await inTestTenant(() => runs.complete(enq.id, leaseToken, { status: "silent" })), false);
+  assert.deepEqual(await inTestTenant(() => runs.fail(enq.id, leaseToken, "late error")), { requeued: false });
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.errorAttempts, 0);
 });
 
 test("an uncooperative turn is handed back after the settle grace, and resumes once after the old process exits", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const session = await inTestTenant(() => sessions.getOrCreateByThread("t1", "dm", "personal:U1"));
+  const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const started = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
   const attempts: OrchestratorInput[] = [];
@@ -361,7 +382,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
     sleep(SHUTDOWN_RELEASE_MS).then(() => assert.fail("hand-back waited on the stuck turn")),
   ]);
   assert.ok(Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS - 50, "the turn gets the settle window first");
-  const handedBack = (await runs.get(enq.id))!;
+  const handedBack = (await inTestTenant(() => runs.get(enq.id)))!;
   assert.equal(handedBack.status, "pending");
   assert.equal(handedBack.leaseToken, null);
   assert.equal(handedBack.errorAttempts, 0);
@@ -371,11 +392,11 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
 
   gate.resolve();
   await assert.rejects(lateWrite.promise, /valid session lease/);
-  assert.equal(await runs.complete(enq.id, staleToken, { status: "ok", sessionId: "t1" }), false);
+  assert.equal(await inTestTenant(() => runs.complete(enq.id, staleToken, { status: "ok", sessionId: "t1" })), false);
 
   const fresh = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
   fresh.start();
-  const done = await runs.waitFor(enq.id, 20_000);
+  const done = await inTestTenant(() => runs.waitFor(enq.id, 20_000));
   await fresh.stop();
   assert.equal(done.status, "done");
   assert.deepEqual(done.result, { status: "ok", reply: "resumed" });
@@ -391,7 +412,9 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
     "the resume waited for the old process exit",
   );
   assert.equal(
-    (await sessions.getEntries(session.id)).some((entry) => (entry.payload as { kind?: string }).kind === "checkpoint"),
+    (await inTestTenant(() => sessions.getEntries(session.id))).some(
+      (entry) => (entry.payload as { kind?: string }).kind === "checkpoint",
+    ),
     false,
   );
 });
@@ -421,21 +444,21 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
       return { status: "ok" as const, reply: "finished" };
     },
   } as unknown as Orchestrator;
-  const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
+  const enq = (await inTestTenant(() => store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 }))).run;
   const old = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "old" });
   old.start();
   await blocked.promise;
   await old.stop(1);
   await old.releaseInFlight();
   assert.deepEqual(events, ["step1", "abort", "release"]);
-  const handedBack = (await runs.get(enq.id))!;
+  const handedBack = (await inTestTenant(() => runs.get(enq.id)))!;
   assert.equal(handedBack.status, "pending");
   assert.equal(handedBack.errorAttempts, 0);
   assert.equal(handedBack.leaseToken, null);
 
   const fresh = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
   fresh.start();
-  const done = await runs.waitFor(enq.id, 2_000);
+  const done = await inTestTenant(() => runs.waitFor(enq.id, 2_000));
   await fresh.stop();
   assert.equal(done.status, "done");
   assert.equal(done.attempts, 2);
@@ -448,17 +471,20 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "agent-resume-")), workers: 1, shutdownDrainMs: 30 }),
   );
   const threadRef = "agent-shutdown-resume";
-  const queued = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef },
-    text: "!work-until-shutdown",
-    async: true,
-  });
-  const entriesNow = async () => {
-    const session = await built.sessions.getByThread(threadRef);
-    return session ? built.sessions.getEntries(session.id) : [];
-  };
+  const queued = await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      text: "!work-until-shutdown",
+      async: true,
+    }),
+  );
+  const entriesNow = () =>
+    inTestTenant(async () => {
+      const session = await built.sessions.getByThread(threadRef);
+      return session ? built.sessions.getEntries(session.id) : [];
+    });
   built.runtime.start();
   try {
     const deadline = Date.now() + 5_000;
@@ -468,7 +494,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     }
     await built.runtime.stopBackground();
     await built.runtime.releaseInFlightRuns();
-    const handedBack = (await built.runs.get(queued.runId!))!;
+    const handedBack = (await inTestTenant(() => built.runs.get(queued.runId!)))!;
     assert.equal(handedBack.status, "pending");
     assert.equal(handedBack.attempts, 1);
     assert.equal(handedBack.leaseToken, null);
@@ -479,7 +505,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
       "the shutdown-cancelled attempt must not close the turn",
     );
     built.runtime.start();
-    const done = await built.runs.waitFor(queued.runId!, 5_000);
+    const done = await inTestTenant(() => built.runs.waitFor(queued.runId!, 5_000));
     assert.equal(done.status, "done");
     assert.equal(done.attempts, 2);
     assert.equal(done.result?.reply, "finished after resume");
@@ -503,7 +529,7 @@ test("a thrown claim neither kills the worker loop nor blocks the drain handback
       return store.runs.claim(workerId, ttl);
     },
   };
-  const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const enq = (await inTestTenant(() => store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
 
   const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
@@ -513,7 +539,7 @@ test("a thrown claim neither kills the worker loop nor blocks the drain handback
   const stopping = worker.stop(5_000);
   unblock();
   await stopping;
-  assert.equal((await store.runs.get(enq.id))?.status, "done", "the drain still settled the turn");
+  assert.equal((await inTestTenant(() => store.runs.get(enq.id)))?.status, "done", "the drain still settled the turn");
 });
 
 function gatedOrchestrator(
@@ -546,7 +572,7 @@ function gatedOrchestrator(
 
 test("stop() lets an in-flight turn finish inside the drain budget — the run completes instead of being handed back", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
 
   const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
@@ -557,9 +583,9 @@ test("stop() lets an in-flight turn finish inside the drain budget — the run c
   unblock();
   await stopping;
 
-  assert.equal((await runs.get(enq.id))?.status, "done", "the turn finished inside the budget");
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.status, "done", "the turn finished inside the budget");
   await worker.releaseInFlight();
-  assert.equal((await runs.get(enq.id))?.status, "done", "nothing left to hand back");
+  assert.equal((await inTestTenant(() => runs.get(enq.id)))?.status, "done", "nothing left to hand back");
 });
 
 test("runtime.stop() drains the in-flight run even with the queue non-empty", async () => {
@@ -570,32 +596,36 @@ test("runtime.stop() drains the in-flight run even with the queue non-empty", as
     reaperIntervalMs: 60_000,
   });
   const built = buildApp(config);
-  const a = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t1" },
-    text: "first",
-    async: true,
-  });
-  const b = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "t2" },
-    text: "second",
-    async: true,
-  });
+  const a = await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t1" },
+      text: "first",
+      async: true,
+    }),
+  );
+  const b = await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "t2" },
+      text: "second",
+      async: true,
+    }),
+  );
   assert.equal(a.status, "queued");
   assert.equal(b.status, "queued");
 
   built.runtime.start();
-  await built.runs.waitFor(a.runId!, 5_000);
+  await inTestTenant(() => built.runs.waitFor(a.runId!, 5_000));
   await built.runtime.stop();
   await reopened(config.databaseUrl, async (runs) => {
     for (const id of [a.runId!, b.runId!]) {
-      const status = (await runs.get(id))?.status;
+      const status = (await inTestTenant(() => runs.get(id)))?.status;
       assert.notEqual(status, "running", `run ${id} not abandoned mid-flight (status=${status})`);
     }
-    assert.equal((await runs.get(a.runId!))?.status, "done", "the drained run finished");
+    assert.equal((await inTestTenant(() => runs.get(a.runId!)))?.status, "done", "the drained run finished");
   });
 });
 
@@ -610,17 +640,19 @@ test("a worker pool drains a queued run end-to-end", async () => {
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t1" },
+        text: "hello",
+        async: true,
+      }),
+    );
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
 
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
     assert.match(finished.result?.reply ?? "", /You said: hello/);
   } finally {
@@ -640,17 +672,19 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t1" },
+        text: "hello",
+        async: true,
+      }),
+    );
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
     await sleep(50);
-    assert.equal((await built.runs.get(ack.runId!))?.status, "pending");
+    assert.equal((await inTestTenant(() => built.runs.get(ack.runId!)))?.status, "pending");
   } finally {
     await built.runtime.stop();
   }
@@ -658,29 +692,29 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
 
 test("timed-out stop cannot resurrect a worker while its previous turn drains", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const first = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
   const worker = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
   worker.start();
   await started;
   await worker.stop(5);
-  const second = (await runs.enqueue({ sessionId: "t2", request: turn, maxAttempts: 3 })).run;
+  const second = (await inTestTenant(() => runs.enqueue({ sessionId: "t2", request: turn, maxAttempts: 3 }))).run;
   worker.start();
   await sleep(30);
-  assert.equal((await runs.get(second.id))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(second.id)))?.status, "pending");
   unblock();
   await worker.drained();
-  assert.equal((await runs.get(first.id))?.status, "done");
-  assert.equal((await runs.get(second.id))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(first.id)))?.status, "done");
+  assert.equal((await inTestTenant(() => runs.get(second.id)))?.status, "pending");
   worker.start();
   await sleep(30);
   await worker.stop();
-  assert.equal((await runs.get(second.id))?.status, "done");
+  assert.equal((await inTestTenant(() => runs.get(second.id)))?.status, "done");
 });
 
 test("stopClaims relinquishes new work while keeping an active turn and its heartbeats alive", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const first = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
   let beats = 0;
   const heartbeat = runs.heartbeat.bind(runs);
@@ -699,15 +733,15 @@ test("stopClaims relinquishes new work while keeping an active turn and its hear
   await sleep(30);
   assert.equal(drained, false);
   assert.ok(beats > 0);
-  assert.equal((await runs.get(first.id))?.status, "running");
+  assert.equal((await inTestTenant(() => runs.get(first.id)))?.status, "running");
   unblock();
   await draining;
-  assert.equal((await runs.get(first.id))?.status, "done");
+  assert.equal((await inTestTenant(() => runs.get(first.id)))?.status, "done");
 });
 
 test("stopClaims waits for an outstanding claim to be handed back before acknowledging", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const pending = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
+  const pending = (await inTestTenant(() => runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 }))).run;
   const claim = runs.claim.bind(runs);
   const gate = Promise.withResolvers<void>();
   const claiming = Promise.withResolvers<void>();
@@ -736,7 +770,7 @@ test("stopClaims waits for an outstanding claim to be handed back before acknowl
   await stopping;
   await worker.drained();
   assert.equal(turns, 0);
-  assert.equal((await runs.get(pending.id))?.status, "pending");
+  assert.equal((await inTestTenant(() => runs.get(pending.id)))?.status, "pending");
 });
 
 test("runtime pauses without closing stores and restores worker capacity after a busy rollback", async () => {
@@ -756,21 +790,23 @@ test("runtime pauses without closing stores and restores worker capacity after a
     return complete(...args);
   };
   const enqueue = (threadRef: string) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async: true,
-    });
+    inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text: "hello",
+        async: true,
+      }),
+    );
   try {
     const a = await enqueue("pause-first");
     built.runtime.start();
     await completing.promise;
     await built.runtime.stopBackground();
-    assert.equal((await built.runs.get(a.runId!))?.status, "running");
+    assert.equal((await inTestTenant(() => built.runs.get(a.runId!)))?.status, "running");
     const b = await enqueue("pause-second");
-    assert.equal((await built.runs.get(b.runId!))?.status, "pending");
+    assert.equal((await inTestTenant(() => built.runs.get(b.runId!)))?.status, "pending");
     let drained = false;
     void built.runtime.backgroundDrained().then(() => {
       drained = true;
@@ -779,14 +815,14 @@ test("runtime pauses without closing stores and restores worker capacity after a
     assert.equal(drained, false);
     built.runtime.startBackground();
     release.resolve();
-    const result = await built.runs.waitFor(b.runId!, 5_000);
+    const result = await inTestTenant(() => built.runs.waitFor(b.runId!, 5_000));
     assert.equal(result.status, "done");
     assert.equal(result.attempts, 1);
     await built.runtime.stopBackground();
     await built.runtime.backgroundDrained();
     built.runtime.startBackground();
     const c = await enqueue("pause-third");
-    assert.equal((await built.runs.waitFor(c.runId!, 5_000)).status, "done");
+    assert.equal((await inTestTenant(() => built.runs.waitFor(c.runId!, 5_000))).status, "done");
   } finally {
     release.resolve();
     await built.runtime.stop();
@@ -819,13 +855,15 @@ test("inline turns remain admitted through pause and queued intake survives roll
     return complete(...args);
   };
   const turn = (threadRef: string, async = false) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text: "hello",
-      async,
-    });
+    inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text: "hello",
+        async,
+      }),
+    );
   const running = turn("inline-before-pause");
   try {
     await completing.promise;
@@ -840,13 +878,13 @@ test("inline turns remain admitted through pause and queued intake survives roll
     assert.equal((await turn("inline-after-pause")).status, "refused");
     const queued = await turn("queued-after-pause", true);
     assert.equal(queued.status, "queued");
-    assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
+    assert.equal((await inTestTenant(() => built.runs.get(queued.runId!)))?.status, "pending");
     release.resolve();
     assert.equal((await running).status, "ok");
     await draining;
     admitted = true;
     built.runtime.startBackground();
-    assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
+    assert.equal((await inTestTenant(() => built.runs.waitFor(queued.runId!, 5000))).status, "done");
     assert.equal((await turn("inline-after-resume")).status, "ok");
   } finally {
     release.resolve();
@@ -870,13 +908,15 @@ test("final shutdown waits for an already-started completion instead of releasin
     await release.promise;
     return complete(...args);
   };
-  const queued = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "bounded-worker" },
-    text: "hello",
-    async: true,
-  });
+  const queued = await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "bounded-worker" },
+      text: "hello",
+      async: true,
+    }),
+  );
   built.runtime.start();
   try {
     await completing.promise;
@@ -891,10 +931,13 @@ test("final shutdown waits for an already-started completion instead of releasin
     await sleep(80);
     assert.equal(stopped, false);
     assert.equal(drained, false);
-    assert.equal((await built.runs.get(queued.runId!))?.status, "running");
+    assert.equal((await inTestTenant(() => built.runs.get(queued.runId!)))?.status, "running");
     release.resolve();
     await Promise.all([stopping, ownershipDrain]);
-    assert.equal(await reopened(config.databaseUrl, async (runs) => (await runs.get(queued.runId!))?.status), "done");
+    assert.equal(
+      await reopened(config.databaseUrl, async (runs) => (await inTestTenant(() => runs.get(queued.runId!)))?.status),
+      "done",
+    );
   } finally {
     release.resolve();
     await built.runtime.backgroundDrained();
@@ -911,9 +954,9 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
   try {
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
     for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
-      await built.runs.enqueue({ sessionId: "t1", request });
+      await inTestTenant(() => built.runs.enqueue({ sessionId: "t1", request }));
       const run = (await built.runs.claim("worker", 10_000))!;
-      await built.runs.complete(run.id, run.leaseToken!, result);
+      await inTestTenant(() => built.runs.complete(run.id, run.leaseToken!, result));
     }
     assert.deepEqual(events, ["response_completed", "response_failed"]);
   } finally {
@@ -931,20 +974,22 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
       for (const status of ["ok", "failed"] as const) {
-        const admitted = await built.app.turn({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
-          text: "test message",
-          liveActor: true,
-          async: true,
-          [flag]: true,
-        });
+        const admitted = await inTestTenant(() =>
+          built.app.turn({
+            surface: "web",
+            actor: { externalId: "U1" },
+            conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
+            text: "test message",
+            liveActor: true,
+            async: true,
+            [flag]: true,
+          }),
+        );
         assert.ok(admitted.runId);
         const run = (await built.runs.claimById(admitted.runId, "worker", 10_000))!;
         assert.equal(run.request[flag], true);
         assert.equal(replayableRequest(run.request)[flag], true);
-        await built.runs.complete(run.id, run.leaseToken!, { status });
+        await inTestTenant(() => built.runs.complete(run.id, run.leaseToken!, { status }));
       }
     }
     assert.deepEqual(events, []);
@@ -972,15 +1017,17 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     }
     return append(lease, entry);
   };
-  const inline = built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "inline-shutdown" },
-    text: "hello",
-  });
+  const inline = inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "inline-shutdown" },
+      text: "hello",
+    }),
+  );
   try {
     await blocked.promise;
-    const running = (await built.runs.list()).find((run) => run.status === "running")!;
+    const running = (await inTestTenant(() => built.runs.list())).find((run) => run.status === "running")!;
     assert.ok(running);
     let stopped = false;
     const stopping = built.runtime.stop().then(() => {
@@ -988,7 +1035,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     });
     await sleep(300);
     assert.equal(stopped, false, "stop waits for the inline step to unwind");
-    assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
+    assert.equal((await inTestTenant(() => built.runs.get(running.id)))?.leaseToken, running.leaseToken);
     assert.equal(await built.runs.claim("replacement", 5_000), null);
     gate.resolve();
     const result = await inline;
@@ -996,7 +1043,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     assert.equal(result.status, "queued");
     assert.equal(result.runId, running.id);
     await reopened(config.databaseUrl, async (runs) => {
-      const handedBack = (await runs.get(running.id))!;
+      const handedBack = (await inTestTenant(() => runs.get(running.id)))!;
       assert.equal(handedBack.status, "pending");
       assert.equal(handedBack.leaseToken, null);
       assert.equal(handedBack.errorAttempts, 0);
@@ -1011,7 +1058,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
 
 test("worker survives sustained claim failures and processes work after recovery", async (t) => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const queued = (await runs.enqueue({ sessionId: "claim-recovery", request: turn })).run;
+  const queued = (await inTestTenant(() => runs.enqueue({ sessionId: "claim-recovery", request: turn }))).run;
   const claim = runs.claim.bind(runs);
   let attempts = 0;
   t.mock.method(runs, "claim", async (...args: Parameters<typeof claim>) => {
@@ -1030,7 +1077,7 @@ test("worker survives sustained claim failures and processes work after recovery
   });
   worker.start();
   try {
-    const result = await runs.waitFor(queued.id, 5_000);
+    const result = await inTestTenant(() => runs.waitFor(queued.id, 5_000));
     assert.equal(result?.status, "done");
     assert.ok(attempts > 25);
     assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persistent claim failure")));
