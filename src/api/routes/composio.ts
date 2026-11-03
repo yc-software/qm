@@ -46,7 +46,8 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   ) {
     sendJson(ctx.res, 403, {
       error: "inactive_run",
-      message: "Connected app access requires this run's current capability.",
+      message:
+        "Connected app access requires this run's current capability: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses connected-app access; make these calls from a foreground command in a live turn (a cron fire is one).",
     });
     return false;
   }

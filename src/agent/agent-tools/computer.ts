@@ -364,7 +364,7 @@ export function computerTools(kit: ToolKit) {
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
       `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} Connected-app (Composio) calls stop working when the launching turn ends, so keep them in foreground execute. It cannot deliver files; attach them from a live turn.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: Type.Object({
       action: Type.Union([
@@ -622,10 +622,19 @@ export function validateSandboxTool(
   return {
     ...tool,
     parameters: schema,
-    async execute(callId, params, signal, onUpdate, ctx) {
-      const action = isObj(params) ? String(params.action) : "";
+    async execute(callId, rawParams, signal, onUpdate, ctx) {
+      const action = isObj(rawParams) ? String(rawParams.action) : "";
       const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
+      const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
+      // Some models fill every advertised field with a placeholder. A null or "" on a field this
+      // operation doesn't use carries no intent, so drop it rather than reject the call.
+      const params =
+        allowed && isObj(rawParams)
+          ? Object.fromEntries(
+              Object.entries(rawParams).filter(([key, value]) => allowed.has(key) || (value !== null && value !== "")),
+            )
+          : rawParams;
       let required: string[];
       if (tool.name === "execute") required = ["command", "purpose"];
       else if (tool.name === "sandbox") {
@@ -643,13 +652,24 @@ export function validateSandboxTool(
           params[key] === undefined ||
           (typeof params[key] === "string" && key !== "data" && !params[key].trim()),
       );
-      if (
-        !Check(schema, params) ||
-        missing ||
-        (operations &&
-          (!fields || Object.keys(params).some((key) => !["action", "purpose", ...fields].includes(key)))) ||
-        (tool.name === "sandbox" && params.sandbox_id === null && action !== "set_default")
-      ) {
+      const keys = isObj(params) ? Object.keys(params) : [];
+      const unknown = keys.filter((key) => !Object.hasOwn(properties, key));
+      const unused = allowed ? keys.filter((key) => Object.hasOwn(properties, key) && !allowed.has(key)) : [];
+      const nullSandbox =
+        tool.name === "sandbox" && isObj(params) && params.sandbox_id === null && action !== "set_default";
+      const named = (list: string[]) => list.map((key) => `\`${key}\``).join(", ");
+      const problem = (() => {
+        if (operations && !fields)
+          return `unknown action \`${action}\` (use one of ${Object.keys(operations).join(", ")})`;
+        if (missing) return `requires \`${missing}\``;
+        if (unknown.length) return `${tool.name} has no ${named(unknown)} field`;
+        if (unused.length) return `${action} doesn't take ${named(unused)}; omit them and retry`;
+        if (nullSandbox)
+          return "`sandbox_id: null` only clears the default with set_default; omit it or pass a sandbox ID";
+        if (!Check(schema, params)) return "a field has the wrong type or value; check the tool schema";
+        return undefined;
+      })();
+      if (problem) {
         await recordCall(callId, {
           tool: tool.name,
           ...(isObj(params) ? { purpose: params.purpose, action: params.action } : {}),
@@ -657,9 +677,7 @@ export function validateSandboxTool(
         return recordResult(
           callId,
           { tool: tool.name, invalid: true },
-          text(
-            `[error] invalid ${tool.name} arguments: ${missing ? `requires \`${missing}\`` : "use only the advertised fields and types for this operation"}.`,
-          ),
+          text(`[error] invalid ${tool.name} arguments: ${problem}.`),
           true,
         );
       }
