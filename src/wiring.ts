@@ -53,7 +53,7 @@ import {
   sessionTreeRoot,
   sessionTreeRunCount,
   sessionTreeWorking,
-  stoppableAncestors,
+  stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
@@ -1517,9 +1517,9 @@ export function buildApp(
     );
   };
   const workingAncestors = async (session: Session) => {
-    const candidates = await stoppableAncestors(sessions, session);
-    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
-    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
+    const root = await stoppableRoot(sessions, session);
+    const awaiting = await blockingApprovalSessions(root ? [root.id] : []);
+    const ancestors = root && !awaiting.has(root.id) ? [root] : [];
     return Promise.all(
       ancestors.map(async (ancestor) => ({
         session: ancestor,
@@ -2378,7 +2378,7 @@ export function buildApp(
       const settle = async (target: Session): Promise<boolean> => {
         if (await runs.activeForThread(target.threadRef)) return false;
         const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        if (!waiting && !target.parentSessionId && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({
           threadRef: target.threadRef,
@@ -2390,7 +2390,8 @@ export function buildApp(
         return true;
       };
       if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+      const root = await stoppableRoot(sessions, session);
+      if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
