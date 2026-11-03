@@ -7,6 +7,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sessions = createPostgresSessionStore(testDatabaseUrl());
 
@@ -35,7 +36,7 @@ test("retry delays grow with bounded jitter and stay capped", (t) => {
 test("workers delay all failed-turn retries and respect terminal budgets", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const run = (await runs.enqueue({ sessionId: "retry-test", request })).run;
+  const run = (await inTestTenant(() => runs.enqueue({ sessionId: "retry-test", request }))).run;
   const error = new Error("dependency unavailable");
   const orchestrator = {
     handleTurn: async () => {
@@ -47,15 +48,16 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
     assert.ok(claimed);
     await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs: 60_000 }, claimed), error);
     if (i < 2) {
-      assert.equal((await runs.get(run.id))?.status, "pending");
+      assert.equal((await inTestTenant(() => runs.get(run.id)))?.status, "pending");
       assert.equal(await runs.claim("other-worker", 60_000), null);
       t.mock.timers.tick(60_000);
     }
   }
-  assert.equal((await runs.get(run.id))?.status, "failed");
-  assert.equal((await runs.get(run.id))?.errorAttempts, 3);
+  const failed = await inTestTenant(() => runs.get(run.id));
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.errorAttempts, 3);
   for (const error of [new Error("ordinary"), new NonRetryableTurnError("permanent")]) {
-    const { run } = await runs.enqueue({ sessionId: "other", request });
+    const { run } = await inTestTenant(() => runs.enqueue({ sessionId: "other", request }));
     const lease = await runs.claim("worker", 60_000);
     assert.ok(lease);
     const orchestrator = {
@@ -64,12 +66,15 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
       },
     } as unknown as Orchestrator;
     await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs: 60_000 }, lease), error);
-    if (error instanceof NonRetryableTurnError) assert.equal((await runs.get(run.id))?.status, "failed");
+    if (error instanceof NonRetryableTurnError)
+      assert.equal((await inTestTenant(() => runs.get(run.id)))?.status, "failed");
     else {
       assert.equal(await runs.claimById(run.id, "other", 60_000), null);
       t.mock.timers.tick(60_000);
       assert.ok(await runs.claimById(run.id, "other", 60_000));
-      await runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false });
+      await inTestTenant(async () =>
+        runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false }),
+      );
     }
   }
 });
