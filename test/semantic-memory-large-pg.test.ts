@@ -5,6 +5,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { tenantBoundUrl, tenantTest as test } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
+import { ownerUrlOf } from "./support/test-database.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -33,7 +34,10 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
     FROM memory_facts WHERE scope_id = $1 AND created_at <= 4490`,
     [scope, model, JSON.stringify(vector)],
   );
-  await client.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
+  const owner = new pg.Client({ connectionString: ownerUrlOf(url!) });
+  await owner.connect();
+  await owner.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
+  await owner.end();
   const facts = await base.facts!(scope);
   const start = performance.now();
   const matches = await index.search({ scope, model, vector, ids: facts.map((fact) => fact.id) });

@@ -50,7 +50,6 @@ import {
   storedItem,
   msOf,
   AGENT_REPLY_ITEM,
-  SEARCHABLE_ITEM,
   searchTypeExpr,
   isUserItem,
   USER_KINDS,
@@ -1063,16 +1062,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         `SELECT i.session_id, i.seq, ${searchTypeExpr("i")} AS type,
                 CASE WHEN i.kind IN ${USER_KINDS} AND jsonb_typeof(i.body -> 'name') = 'string'
                      THEN i.body ->> 'name' END AS author,
-                i.text, ${msOf("i.created_at")} AS created_at,
-                s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM items i
-           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
-          WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
-            AND ${SEARCHABLE_ITEM("i")}
-            AND ${withinParticipantWindow("i", "p")}
-          ORDER BY i.created_at DESC, i.session_id, i.seq DESC
-          LIMIT $3`,
+                i.text, ${msOf("i.created_at")} AS created_at, hit.scope_id, hit.title, hit.channel_name, hit.surface, hit.archived
+           FROM (SELECT m.session_id, m.seq, m.created_at, s.scope_id, COALESCE(p.title, s.title) AS title,
+                        s.channel_name, s.surface, p.archived
+                   FROM qm_search_message_items(to_tsquery('simple', $2)) m
+                   JOIN participants p ON p.session_id = m.session_id AND p.principal_id = $1
+                   JOIN sessions s ON s.id = m.session_id AND ${OWN_CHAT("s")}
+                  WHERE ${withinParticipantWindow("m", "p")}
+                  ORDER BY m.created_at DESC, m.session_id, m.seq DESC
+                  LIMIT $3) hit
+           JOIN items i ON i.tenant_id = ${TENANT} AND i.session_id = hit.session_id AND i.seq = hit.seq
+          ORDER BY hit.created_at DESC, hit.session_id, hit.seq DESC`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );

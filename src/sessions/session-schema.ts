@@ -1,5 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { SEARCHABLE_ITEM } from "./items.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -369,6 +370,19 @@ const TENANT_ROW_SECURITY: PgMigrationDefinition = {
   ]),
 };
 
+const TRUSTED_MESSAGE_SEARCH: PgMigrationDefinition = {
+  id: "sessions/store/0052-trusted-message-search",
+  statements: [
+    `DO $trusted_message_search$
+BEGIN
+  EXECUTE format($create$CREATE OR REPLACE FUNCTION qm_search_message_items(query tsquery) RETURNS TABLE(session_id TEXT, seq BIGINT, created_at TIMESTAMPTZ)
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
+      SELECT i.session_id, i.seq, i.created_at FROM items i WHERE i.tenant_id = qm_bound_tenant() AND i.search @@ query AND ${SEARCHABLE_ITEM("i")}
+    $body$$create$, current_schema());
+END $trusted_message_search$`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -377,4 +391,5 @@ export const SESSION_MIGRATIONS = [
   TENANT_BACKFILL,
   SESSION_TABLES,
   TENANT_ROW_SECURITY,
+  TRUSTED_MESSAGE_SEARCH,
 ];

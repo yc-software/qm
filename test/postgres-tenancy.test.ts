@@ -7,7 +7,10 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { scopeId } from "../src/types.ts";
 import { ownerUrlOf, testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testTenants } from "./support/test-tenants.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -162,3 +165,41 @@ test("upgrading copies the existing tenant into tenants", { skip }, async () => 
     await pool.end();
   }
 });
+
+test(
+  "message search under the app login sees only the bound tenant's items and refuses an unbound call",
+  { skip },
+  async () => {
+    const appUrl = testMigratedDatabaseUrl();
+    const store = createPostgresSessionStore(appUrl);
+    const pool = createPgPool(appUrl);
+    const sessions = new Map<string, string>();
+    try {
+      for (const tenant of testTenants())
+        await withTenant(tenant, async () => {
+          const session = await store.getOrCreateByThread("search-shared", "dm", scopeId("personal", "USHARED"));
+          await store.addParticipant(session.id, "USHARED", undefined, { includeHistory: true });
+          await store.append({ sessionId: session.id }, { kind: "UserMessage", text: `quartz ledger for ${tenant}` });
+          sessions.set(tenant, session.id);
+        });
+      const search = "SELECT session_id FROM qm_search_message_items(to_tsquery('simple', 'quartz'))";
+      for (const tenant of testTenants()) {
+        const hits = await withTenant(tenant, () => store.searchEntries("USHARED", "quartz"));
+        assert.deepEqual(
+          hits.map((hit) => [hit.sessionId, hit.text]),
+          [[sessions.get(tenant), `quartz ledger for ${tenant}`]],
+        );
+        assert.deepEqual(
+          (await withTenant(tenant, () => pool.q(search))).map((row) => row.session_id),
+          [sessions.get(tenant)],
+        );
+      }
+      await assert.rejects(
+        withoutTenant(() => pool.q(search)),
+        /No tenant is bound/,
+      );
+    } finally {
+      await pool.close();
+    }
+  },
+);
