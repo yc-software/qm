@@ -46,7 +46,7 @@ async function fixture(run: () => Promise<void> = async () => {}) {
         ...testTenantHeaders(),
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `${method}\n${path}\n${testTenants()[0]}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, `${testTenants()[0]}\n${method}\n${path}\n${raw}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },

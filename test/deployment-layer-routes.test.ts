@@ -45,7 +45,7 @@ function signed(method: string, body: string, ts = Math.floor(Date.now() / 1000)
     "content-type": "application/json",
     ...testTenantHeaders(),
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${testTenants()[0]}\n${body}`),
+    "x-signature": signRequest(SECRET, ts, `${testTenants()[0]}\n${method}\n${PATH}\n${body}`),
   };
 }
 

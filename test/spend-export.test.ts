@@ -13,6 +13,7 @@ import {
 import { withTenant } from "../src/tenants/context.ts";
 import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -20,13 +21,14 @@ import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
 const capabilitySecret = "capability-only-secret".repeat(3);
-const TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
+const [TENANT] = testTenants();
 const exportClaims = { actorId: "admin-alice", scopeId: "org:default-org", aud: SPEND_EXPORT_AUD };
 const mintFor = (claims: Parameters<typeof mintCapabilityToken>[0]) =>
   withTenant(TENANT, () => mintCapabilityToken(claims, capabilitySecret));
@@ -90,6 +92,38 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
       (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.export"),
       [],
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("spend export: an offline-minted token needs aud, actorId, scopeId and exp, and the tenant it exports, failing closed without one", async () => {
+  const s = fixture();
+  const handoff = {
+    orgId: "default-org",
+    actorId: "admin-alice",
+    scopeId: "org:default-org",
+    aud: SPEND_EXPORT_AUD,
+    exp: Date.now() + DAY,
+  };
+  const exportWith = async (claims: Record<string, unknown>) => {
+    const res = await s.get(`/v1/spend/export?${window}`, {
+      authorization: `Bearer ${await mintSignedPayload(claims, capabilitySecret)}`,
+    });
+    return { status: res.status, rows: res.status === 200 ? ((await res.json()) as { rows: unknown[] }).rows : null };
+  };
+  try {
+    await inTestTenant(() =>
+      bill(s.sessions!, "dm:carol:t1", "dm", scopeId("personal", "carol"), { costUsd: 1 }, "claude-opus-5"),
+    );
+    assert.equal((await exportWith(handoff)).status, 401);
+    const tenanted = await exportWith({ ...handoff, tenant: TENANT });
+    assert.equal(tenanted.status, 200);
+    assert.equal(tenanted.rows!.length, 1);
+    for (const claim of ["aud", "actorId", "scopeId", "exp"] as const) {
+      const { [claim]: _dropped, ...without } = handoff;
+      assert.notEqual((await exportWith({ ...without, tenant: TENANT })).status, 200, `without ${claim}`);
+    }
   } finally {
     await s.close();
   }
@@ -279,7 +313,7 @@ test("spend export: an org admin mints a token scoped to their tenant that autho
       headers: { authorization: `Bearer ${token}` },
     });
     assert.equal(exported.status, 200);
-    const actions = (await built.auditLog.events()).map((e) => e.action);
+    const actions = (await inTestTenant(() => built.auditLog.events())).map((e) => e.action);
     assert.ok(actions.includes("spend.export_token.create"));
     assert.ok(actions.includes("spend.export"));
   } finally {

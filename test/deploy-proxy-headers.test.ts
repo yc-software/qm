@@ -450,7 +450,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
         ...testTenantHeaders(),
         "x-admin-actor": actor,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${testTenants()[0]}\n${actor}`),
+        "x-signature": signRequest(SECRET, ts, `${testTenants()[0]}\nGET\n${path}\n${actor}`),
       },
     });
     assert.equal(res.status, 200);

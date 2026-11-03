@@ -69,7 +69,7 @@ async function claim(
   if (sign) {
     Object.assign(headers, testTenantHeaders());
     headers["x-timestamp"] = String(ts);
-    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${raw}`);
+    headers["x-signature"] = signRequest(SECRET, ts, `${testTenants()[0]}\nPOST\n${path}\n${raw}`);
   }
   const res = await fetch(`${base}${path}`, { method: "POST", headers, body: raw });
   return { status: res.status, json: (await res.json()) as { claimed?: unknown; error?: unknown } };
@@ -168,7 +168,7 @@ test("broker sessions cross the production identity gate, but revocation require
           ? {
               ...testTenantHeaders(),
               "x-timestamp": String(ts),
-              "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${body}`),
+              "x-signature": signRequest(SECRET, ts, `${testTenants()[0]}\nPOST\n${path}\n${body}`),
             }
           : {}),
         ...(actor

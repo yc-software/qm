@@ -14,14 +14,15 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
+const replayDedupe = createPostgresReplayDedupe(testDatabaseUrl());
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-sse-")) }));
 built.runtime.start();
 const core = createServer(built.app, {
-  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  replayDedupe,
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
 });
@@ -48,7 +49,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     headers: {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, t: testTenants()[0], exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };

@@ -256,7 +256,7 @@ describe("a deployment without the Slack surface (the directory store is never p
         "content-type": "application/json",
         ...testTenantHeaders(),
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n/v1/directory\n${testTenants()[0]}\n${body}`),
+        "x-signature": signRequest(SECRET, ts, `${testTenants()[0]}\nPOST\n/v1/directory\n${body}`),
       },
       body,
     });

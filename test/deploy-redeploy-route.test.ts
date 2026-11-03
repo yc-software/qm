@@ -26,7 +26,7 @@ describe("deployment redeploy route", () => {
         ...testTenantHeaders(),
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${raw}`),
+        "x-signature": signRequest(SECRET, ts, `${testTenants()[0]}\nPOST\n${path}\n${raw}`),
       },
       body: raw,
     });
