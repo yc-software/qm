@@ -31,8 +31,7 @@ export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((f
 const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
   !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
 
-const keyOf = ({ scope, id, ref, provider, hash }: Shown) =>
-  JSON.stringify([scope, id ?? null, ref ?? null, provider ?? null, hash]);
+const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
 
 const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider ?? null]);
 
