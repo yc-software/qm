@@ -44,7 +44,7 @@ struct NativeAdminFlags: View {
           if enabled.isEmpty { Text("No enabled scopes").foregroundStyle(.secondary) }
           ForEach(enabled, id: \.self) { target in
             HStack {
-              Text(scopes.first { $0.id == target }?.label ?? target)
+              Text(label(target))
               Spacer()
               Button("Remove", role: .destructive) {
                 change = .init(feature: flag.featureName, scope: target, on: false)
@@ -84,10 +84,18 @@ struct NativeAdminFlags: View {
           ) { Task { await save(change) } }
         }
       } message: {
-        Text(
-          "\(change?.feature ?? "Feature") · \(change?.scope ?? "")\(change?.scope == scope ? "\nThis affects the entire organization." : "")"
-        )
+        if let change {
+          Text(
+            "\(title(change.feature)) · \(label(change.scope))\(change.scope == scope ? "\nThis affects the entire organization." : "")"
+          )
+        }
       }
+  }
+  private func title(_ featureName: String) -> String {
+    flags.first { $0.featureName == featureName }?.title ?? featureName
+  }
+  private func label(_ scopeId: String) -> String {
+    scopes.first { $0.id == scopeId }?.label ?? scopeId
   }
   private var selected: NativeFeatureFlag? { flags.first { $0.featureName == feature } }
   private func show(_ rows: [NativeFeatureFlag]) {

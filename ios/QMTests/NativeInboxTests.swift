@@ -122,6 +122,10 @@ final class NativeInboxTests: XCTestCase {
       NativeSentEmail.plain(
         "<style>hide</style><p>Hello<br>world &amp; &#x1F44B;</p><script>secret()</script><img src='https://tracker.example'>"
       ), "Hello\nworld & 👋")
+    XCTAssertEqual(
+      NativeSentEmail.plain(
+        "<!-- <p>hidden</p> --><a title=\"a>b\">1 &lt; 2</a> &bogus; <SCRIPT>if (a<b) {}</SCRIPT>&#39;ok&#39;"
+      ), "1 < 2 &bogus; 'ok'")
   }
   func testLegacyNetworkPolicyAndVersionedSoulPayload() throws {
     let config = try JSONDecoder().decode(

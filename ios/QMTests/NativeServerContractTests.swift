@@ -47,5 +47,9 @@ final class NativeServerContractTests: XCTestCase {
     XCTAssertLessThanOrEqual(long.chatText.utf16.count, NativeSentEmail.chatLimit)
     XCTAssertGreaterThan(long.chatText.utf16.count, NativeSentEmail.chatLimit - 2)
     XCTAssertTrue(long.chatSource.hasPrefix(long.chatText))
+    let straddling = try email(String(repeating: "a", count: NativeSentEmail.chatLimit - 1) + "😀b")
+    XCTAssertTrue(straddling.chatTrimmed)
+    XCTAssertEqual(
+      straddling.chatText, String(repeating: "a", count: NativeSentEmail.chatLimit - 1))
   }
 }
