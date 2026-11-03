@@ -36,16 +36,29 @@ async function actor(ctx: ApiCtx) {
   return authorizeAdmin(ctx, scope);
 }
 
-export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+export async function rejectUnusableApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+  let response: Response;
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
+    response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
       headers: VALIDATION_REQUESTS[provider].headers(apiKey),
       signal: AbortSignal.timeout(5_000),
     });
-    return response.ok;
-  } catch {
-    return false;
+  } catch (error) {
+    sendJson(ctx.res, 502, {
+      error: "provider_unreachable",
+      message: `could not reach ${provider} to check this API key: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return true;
   }
+  if (response.ok) return false;
+  if (response.status === 401 || response.status === 403)
+    sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
+  else
+    sendJson(ctx.res, 502, {
+      error: "provider_unreachable",
+      message: `${provider} could not check this API key: HTTP ${response.status}`,
+    });
+  return true;
 }
 
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
@@ -87,9 +100,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   const current = async () => (await ctx.deps.modelCredentials!.statuses()).find((item) => item.provider === provider);
   if (isObj(ctx.body) && ctx.body.ifUnset === true && (await current())?.configured)
     return sendJson(ctx.res, 200, { ok: true, status: await current(), unchanged: true });
-  if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
-    return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
-  }
+  if (await rejectUnusableApiKey(ctx, provider, apiKey.trim())) return;
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
   audit(ctx.deps, {
     principalId: authorized.id,

@@ -58,9 +58,7 @@ export interface FeatureFlagBacking {
 const FLAG_CACHE_MS = 2_000;
 
 export function postgresFeatureFlags(databaseUrl: string, now: () => number = Date.now): FeatureFlagBacking {
-  const db = createPgPool(databaseUrl);
-  db.registerMigration(TENANCY_BASE);
-  db.registerMigration(FEATURE_FLAGS_MIGRATION);
+  const db = createPgPool(databaseUrl, [TENANCY_BASE, FEATURE_FLAGS_MIGRATION]);
   const cached = new Map<string, { at: number; rows: Promise<FeatureFlagRecord[]> }>();
   const load = async (): Promise<FeatureFlagRecord[]> =>
     (
