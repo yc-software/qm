@@ -80,7 +80,7 @@ export function createWebhookDelivery(deliveries: DeliveryStore, send: Send) {
       unsubscribe?.();
       unsubscribe = undefined;
       await sweeper.stop();
-      while (inFlight.size) await Promise.allSettled([...inFlight]);
+      while (inFlight.size) await Promise.allSettled(inFlight);
     },
   };
 }
