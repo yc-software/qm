@@ -213,6 +213,7 @@ export interface Destination {
   unfurlLinks?: boolean;
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
