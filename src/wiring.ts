@@ -394,6 +394,7 @@ import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { createPartnerChatDeliveries } from "./surfaces/partner-chat/outbound.ts";
+import { createPartnerChatLiveReply } from "./surfaces/partner-chat/live-reply.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2455,6 +2456,7 @@ export function buildApp(
         app,
         surfaceCache,
         isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
+        followReply: createPartnerChatLiveReply({ app, runs, deliveries }).follow,
       })
     : null;
   const partnerChatOutbound = config.partnerChat
@@ -2463,6 +2465,8 @@ export function buildApp(
         secret: config.partnerChat.secret,
         deliveries,
         app,
+        runs,
+        surfaceCache,
       })
     : null;
   if (partnerChatOutbound)

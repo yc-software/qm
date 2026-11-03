@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hmacHex } from "../../webhooks/verifiers.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
+import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
 
 const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
@@ -74,4 +75,20 @@ export function partnerChatTs(createdAt: string, messageId: string): string {
 export function partnerChatMessageId(ref: string): string {
   const dot = ref.indexOf(".");
   return dot < 0 ? ref : ref.slice(dot + 1).replace(/^0+(?=.)/, "");
+}
+
+const OWN_MESSAGE_SCAN = 50;
+
+export async function findOwnMessage(
+  cache: Pick<SurfaceCache, "readMessages">,
+  container: string,
+  messageId: string,
+): Promise<CachedMessage | undefined> {
+  const mine = await cache.readMessages(container, {
+    surface: "partner-chat",
+    self: true,
+    limit: OWN_MESSAGE_SCAN,
+    noFallback: true,
+  });
+  return mine.find((m) => partnerChatMessageId(m.ts) === messageId);
 }

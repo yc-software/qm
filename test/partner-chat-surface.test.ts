@@ -8,6 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 import { createPartnerChatDeliveries } from "../src/surfaces/partner-chat/outbound.ts";
 import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
@@ -16,6 +17,9 @@ import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { loadConfig } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
+import { createPartnerChatLiveReply } from "../src/surfaces/partner-chat/live-reply.ts";
+import type { RunStreamEvent } from "../src/runs/run-stream-events.ts";
+import type { Run } from "../src/runs/run-store.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
@@ -146,6 +150,7 @@ test("an @-mention starts a turn whose reply lands in the chat once, even when t
     assert.equal(post!.path, "/qm_surface/messages");
     assert.equal(post!.signature, signPartnerChat(SECRET, post!.timestamp, post!.raw));
     assert.equal(post!.body.chat_id, "88");
+    assert.equal(post!.body.thread_id, "1002");
     assert.equal(post!.body.body, "on it");
     assert.match(String(post!.body.client_message_id), /^post:/);
     const session = await built.sessions.getByThread(CONTAINER);
@@ -175,12 +180,58 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
 test("a reply in a thread the agent already posted in is addressed without a mention", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
-    await deliver(event({ bot: true, body: "earlier answer", eventId: "ev-self", messageId: "1010", thread: "1009" }));
-    await deliver(event({ body: "!post following up", eventId: "ev-thread", messageId: "1011", thread: "1009" }));
+    await deliver(event({ body: "!post first answer", mentions: true, eventId: "ev-m", messageId: "1008" }));
+    const own = () =>
+      built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true, noFallback: true });
+    await settle(async () => (await own()).length === 1);
+    await deliver(event({ body: "!post following up", eventId: "ev-thread", messageId: "1011", thread: "1008" }));
+    await settle(async () => partnerChat.received.length === 2);
+    assert.deepEqual(
+      partnerChat.received.map((r) => [r.body.thread_id, r.body.body]),
+      [
+        ["1008", "first answer"],
+        ["1008", "following up"],
+      ],
+    );
+    await settle(async () => (await own()).length === 2);
+    assert.deepEqual((await own()).map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text]).sort(), [
+      ["42", "1008", "first answer"],
+      ["43", "1008", "following up"],
+    ]);
+    await deliver(event({ body: "!post under your post", eventId: "ev-root", messageId: "1012", thread: "42" }));
+    await settle(async () => partnerChat.received.length === 3);
+    assert.deepEqual(
+      [partnerChat.received[2]!.body.thread_id, partnerChat.received[2]!.body.body],
+      ["42", "under your post"],
+    );
+    await deliver(event({ body: "!post nobody asked", eventId: "ev-other", messageId: "1013", thread: "1001" }));
+    await new Promise((r) => setTimeout(r, 1_000));
+    assert.equal(partnerChat.received.length, 3);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a post into another message's thread keeps the chat id", async () => {
+  const { partnerChat, deliver } = await partnerChatApp();
+  try {
+    await deliver(
+      event({
+        body: "!postthread 1793649600.00000000000000001001 over there",
+        mentions: true,
+        eventId: "ev-pt",
+        messageId: "1014",
+      }),
+    );
     await settle(async () => partnerChat.received.length > 0);
-    assert.equal(partnerChat.received[0]!.body.thread_id, "1009");
-    assert.equal(partnerChat.received[0]!.body.body, "following up");
-    assert.ok(await built.sessions.getByThread(`${CONTAINER}:1009`));
+    assert.deepEqual(
+      [
+        partnerChat.received[0]!.body.chat_id,
+        partnerChat.received[0]!.body.thread_id,
+        partnerChat.received[0]!.body.body,
+      ],
+      ["88", "1001", "over there"],
+    );
   } finally {
     await partnerChat.close();
   }
@@ -235,11 +286,26 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
   const partnerChat = await fakePartnerChat();
   const deliveries = createDeliveryStore();
   const editRefs: Array<[string, unknown]> = [];
+  const mirrored: IngestEvent[] = [];
   const outbound = createPartnerChatDeliveries({
     url: `${partnerChat.url}/`,
     secret: SECRET,
     deliveries,
-    app: { setRunDeliveryState: async (runId, state) => (editRefs.push([runId, state]), true) },
+    app: {
+      setRunDeliveryState: async (runId, state) => (editRefs.push([runId, state]), true),
+      ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
+    },
+    runs: { get: async () => null },
+    surfaceCache: {
+      readMessages: async () =>
+        mirrored.map((m) => ({
+          container: m.container,
+          ts: m.ts,
+          text: m.text ?? "",
+          createdAt: m.createdAt ?? 0,
+          ...(m.sub ? { sub: m.sub } : {}),
+        })),
+    },
   });
   try {
     const surface = createPartnerChatSurface({ deliveries });
@@ -284,6 +350,15 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
         ["/qm_surface/messages/1021/update", { body: "edited by ref" }],
       ],
     );
+    assert.deepEqual(editRefs.at(-1), ["run-1", { editRef: "" }]);
+    assert.deepEqual(
+      mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self, Boolean(m.editedAt)]),
+      [
+        ["42", "1009", "scheduled hello", true, false],
+        ["43", null, "Looking into it", true, false],
+        ["43", null, "Here is the full answer", true, true],
+      ],
+    );
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
     await partnerChat.close();
@@ -301,7 +376,9 @@ test("partner-chat rejections fail the delivery while server errors leave it for
       url: partnerChat.url,
       secret: SECRET,
       deliveries,
-      app: { setRunDeliveryState: async () => true },
+      app: { setRunDeliveryState: async () => true, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+      runs: { get: async () => null },
+      surfaceCache: { readMessages: async () => [] },
     });
     try {
       const d = await deliveries.enqueue({
@@ -389,4 +466,85 @@ test("partner-chat config requires the url and secret together and validates pro
     }).partnerChat,
     { url: "https://chat.example", secret: "s", label: "Acme Chat", promptHints: { linkSyntax: "plain urls" } },
   );
+});
+
+test("a direct reply streams into one placeholder that is edited in place until the run settles", async () => {
+  const deliveries = createDeliveryStore();
+  let listener: ((e: RunStreamEvent) => void) | undefined;
+  let unsubscribed = false;
+  let run = { status: "running", deliveryState: null } as unknown as Run;
+  const live = createPartnerChatLiveReply({
+    app: {
+      subscribeRun: (_id, l) => {
+        listener = l;
+        return () => (unsubscribed = true);
+      },
+    },
+    runs: { get: async () => run },
+    deliveries,
+    intervalMs: 20,
+  });
+  const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
+  live.follow("run-9", destination);
+  const sent = async () =>
+    (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.editRef, d.text]);
+  listener!({ runId: "run-9", kind: "delta", offset: 0, text: "Checking the ", startOffset: 0 });
+  listener!({ runId: "run-9", kind: "delta", offset: 13, text: "launch list", startOffset: 0 });
+  await settle(async () => (await sent()).length === 1);
+  assert.deepEqual(await sent(), [["ack:run-9", undefined, "Checking the launch list"]]);
+  listener!({ runId: "run-9", kind: "delta", offset: 24, text: " now.", startOffset: 0 });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await sent()).length, 1);
+  run = { ...run, deliveryState: { editRef: "77" } };
+  await settle(async () => (await sent()).length === 2);
+  assert.deepEqual((await sent())[1], ["stream:run-9:1", "77", "Checking the launch list now."]);
+  run = { ...run, status: "done" };
+  listener!({ runId: "run-9", kind: "delta", offset: 29, text: " Done.", startOffset: 0 });
+  await settle(async () => unsubscribed);
+  assert.equal((await sent()).length, 2);
+});
+
+test("a streamed edit is dropped once the run's final reply or a deliberate post has taken the placeholder", async () => {
+  const partnerChat = await fakePartnerChat();
+  const deliveries = createDeliveryStore();
+  let editRef = "77";
+  const outbound = createPartnerChatDeliveries({
+    url: partnerChat.url,
+    secret: SECRET,
+    deliveries,
+    app: { setRunDeliveryState: async () => true, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    runs: { get: async () => ({ deliveryState: { editRef } }) as unknown as Run },
+    surfaceCache: { readMessages: async () => [] },
+  });
+  try {
+    const edit = (key: string) =>
+      deliveries.enqueue({
+        destination: { type: "partner-chat", target: CONTAINER, editRef: "77" },
+        text: key,
+        idempotencyKey: key,
+      });
+    await edit("stream:run-9:1");
+    await outbound.drain();
+    editRef = "";
+    await edit("stream:run-9:2");
+    await outbound.drain();
+    editRef = "77";
+    await deliveries.enqueue({
+      destination: { type: "partner-chat", target: CONTAINER },
+      text: "x",
+      idempotencyKey: "run:run-9",
+    });
+    await edit("stream:run-9:3");
+    await outbound.drain();
+    assert.deepEqual(
+      partnerChat.received.map((r) => [r.path, r.body.body]),
+      [
+        ["/qm_surface/messages/77/update", "stream:run-9:1"],
+        ["/qm_surface/messages", "x"],
+      ],
+    );
+    assert.equal((await deliveries.pending("partner-chat")).length, 0);
+  } finally {
+    await partnerChat.close();
+  }
 });

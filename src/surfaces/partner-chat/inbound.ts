@@ -1,10 +1,12 @@
 import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
+import type { Destination } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../../slack/conversation.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
+  findOwnMessage,
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatEvent,
@@ -23,6 +25,7 @@ export function createPartnerChatInbound(deps: {
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
+  followReply?: (runId: string, destination: Destination) => void;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -36,7 +39,7 @@ export function createPartnerChatInbound(deps: {
       limit: 1,
       noFallback: true,
     });
-    return mine.length > 0;
+    return mine.length > 0 || (await findOwnMessage(cache, container, thread)) !== undefined;
   }
 
   async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
@@ -111,13 +114,20 @@ export function createPartnerChatInbound(deps: {
       chat: chat.id,
       ...(thread ? { thread } : {}),
     });
-    await deps.app.turn({
+    const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
+    const replyTarget = partnerChatRef({
+      account: event.account,
+      kind: chat.kind,
+      chat: chat.id,
+      ...(replyThread ? { thread: replyThread } : {}),
+    });
+    const queued = await deps.app.turn({
       surface: SURFACE,
       actor: author,
       surfaceOrigin: {
         author: { surface: SURFACE, account: event.account, id: message.user.id },
         workspace: event.account,
-        ...(thread ? { replyThread: thread } : {}),
+        ...(replyThread ? { replyThread } : {}),
         audience: "internal",
       },
       conversation: {
@@ -127,13 +137,19 @@ export function createPartnerChatInbound(deps: {
         ...(chat.name ? { channelName: chat.name } : {}),
         audience: humans,
       },
-      deliveryTarget: threadRef,
+      deliveryTarget: replyTarget,
       text: message.body,
       liveActor: true,
       triggerTs: ts,
       async: true,
       redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });
+    if (queued.runId && !queued.steered)
+      deps.followReply?.(queued.runId, {
+        type: SURFACE,
+        target: replyTarget,
+        account: { id: event.account, workspace: event.account },
+      });
     return { status: 200, body: { ok: true } };
   }
 
