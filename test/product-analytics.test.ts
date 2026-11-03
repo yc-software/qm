@@ -4,7 +4,6 @@ import type { Run } from "../src/runs/run-store.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;
@@ -126,34 +125,32 @@ test("terminal listener reports only exhausted failures and accepted completions
     void analytics.responseFinished(run);
   });
   const request = (await humanRun()).request;
-  const { run } = await inTestTenant(() => runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 }));
+  const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
   let claimed = (await runs.claim("worker", 10_000))!;
-  await inTestTenant(() => runs.fail(run.id, claimed.leaseToken!, "private first error"));
+  await runs.fail(run.id, claimed.leaseToken!, "private first error");
   assert.deepEqual(events, []);
   claimed = (await runs.claim("worker", 10_000))!;
-  assert.equal(await inTestTenant(() => runs.complete(run.id, "stale-lease", { status: "ok" })), false);
+  assert.equal(await runs.complete(run.id, "stale-lease", { status: "ok" }), false);
   assert.deepEqual(events, []);
-  await inTestTenant(() => runs.fail(run.id, claimed.leaseToken!, "private final error"));
+  await runs.fail(run.id, claimed.leaseToken!, "private final error");
   assert.deepEqual(events, ["response_failed"]);
-  await inTestTenant(() => runs.enqueue({ sessionId: "thread", request }));
+  await runs.enqueue({ sessionId: "thread", request });
   claimed = (await runs.claim("worker", 10_000))!;
-  await inTestTenant(() => runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" }));
+  await runs.complete(claimed.id, claimed.leaseToken!, { status: "ok" });
   assert.deepEqual(events, ["response_failed", "response_completed"]);
 });
 
 async function humanRun(): Promise<Run> {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const { run } = await inTestTenant(() =>
-    runs.enqueue({
-      sessionId: "thread",
-      request: {
-        actor: { id: "person", type: "internal" },
-        conversation: { kind: "dm", threadRef: "thread", audience: [] },
-        origin: { kind: "human" },
-        surface: "web",
-        text: "private prompt",
-      },
-    }),
-  );
+  const { run } = await runs.enqueue({
+    sessionId: "thread",
+    request: {
+      actor: { id: "person", type: "internal" },
+      conversation: { kind: "dm", threadRef: "thread", audience: [] },
+      origin: { kind: "human" },
+      surface: "web",
+      text: "private prompt",
+    },
+  });
   return { ...run, status: "done", result: { status: "ok" }, finishedAt: Date.now() };
 }
