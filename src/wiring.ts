@@ -391,7 +391,7 @@ import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { createPartnerChatDeliveries } from "./surfaces/partner-chat/outbound.ts";
-import { createPartnerChatNotices } from "./surfaces/partner-chat/notices.ts";
+import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2181,7 +2181,13 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(
+    runs,
+    deliveries,
+    recoveryAdminUrlFor,
+    sessions,
+    config.partnerChat ? partnerChatRunNotice : undefined,
+  );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2454,8 +2460,7 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries, runs }) : null;
-  if (partnerChatNotices) runs.onTerminal((run) => partnerChatNotices.runEnded(run));
+  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
   const partnerChatInbound =
     partnerChatNotices && config.partnerChat
       ? createPartnerChatInbound({
@@ -2500,12 +2505,7 @@ export function buildApp(
     { label: "session-returns", immediate: true },
   );
   const runResultSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock("run-result-sweep", async () => {
-        const recovered = await runResultRecovery.sweep();
-        await partnerChatNotices?.sweep();
-        return recovered;
-      }),
+    () => advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep()),
     60_000,
     { label: "run-results" },
   );

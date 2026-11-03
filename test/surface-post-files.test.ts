@@ -416,7 +416,7 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
   assert.deepEqual(web.queued, []);
 });
 
-test("a text-only surface refuses reactions, deletes and file posts instead of queueing them", async () => {
+test("a text-only surface refuses reactions, deletes, file posts and attachments instead of queueing them", async () => {
   const deliveries = createDeliveryStore();
   const tools = createSurfaceToolDeps({
     deps: {
@@ -435,5 +435,6 @@ test("a text-only surface refuses reactions, deletes and file posts instead of q
   assert.equal((await tools.react({ ts: "1793649600.00000000000000001002", emoji: "eyes" })).ok, false);
   assert.equal((await tools.delete({ ref: "1793649600.00000000000000001002" })).ok, false);
   assert.equal((await tools.post("see attached", undefined, ["a.txt"])).ok, false);
+  assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
   assert.deepEqual(await deliveries.pending("partner-chat"), []);
 });

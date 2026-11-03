@@ -18,6 +18,7 @@ export interface AttachToolsContext {
   blobTransfer: BlobTransferStore;
   fileRegistration: ArtifactRegistration;
   openStored?: OpenStoredFile;
+  textOnly?: boolean;
 }
 
 export interface StagedAttachments {
@@ -34,6 +35,8 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
   const staged = new Map<string, StagedEntry>();
   let calls = 0;
   const attach = async (files: readonly OutboundFile[], sandboxId?: string): Promise<AttachResult> => {
+    if (ctx.textOnly)
+      return { ok: false, message: "This conversation takes text messages only; nothing was attached." };
     const parsed = parseOutboundFiles(files);
     if (!parsed.ok) return { ok: false, message: parsed.message };
     const keyed = new Map(

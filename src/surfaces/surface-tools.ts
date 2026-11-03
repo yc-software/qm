@@ -293,8 +293,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type === "principal" || textOnly(d.destination))
+      if (d.destination.type === "principal")
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
+      if (textOnly(d.destination)) return { ok: false, message: "Reactions aren't supported in this conversation." };
       return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "", seq);
     },
     edit: async (input: SurfaceEditInput) => {

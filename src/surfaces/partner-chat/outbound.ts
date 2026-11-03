@@ -3,6 +3,7 @@ import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { Delivery } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
+  partnerChatContainer,
   partnerChatMessageId,
   partnerChatRef,
   partnerChatTs,
@@ -114,15 +115,18 @@ export function createPartnerChatDeliveries(deps: {
   let again = false;
   async function drainOnce(): Promise<void> {
     const claimedAt = now();
+    const held = new Set<string>();
     for (const d of await deps.deliveries.claimPending("partner-chat", CLAIM_MS)) {
       if (now() - claimedAt > CLAIM_MS - REQUEST_TIMEOUT_MS) return;
+      const chat = partnerChatContainer(d.destination.target);
+      if (held.has(chat)) continue;
       try {
         await deliver(d);
         await deps.deliveries.ack(d.id, now());
       } catch (e) {
         console.error(`[partner-chat] delivery ${d.id} failed: ${errMessage(e)}`);
-        if (!permanent(e)) return;
-        await deps.deliveries.fail(d.id, errMessage(e), now());
+        if (permanent(e)) await deps.deliveries.fail(d.id, errMessage(e), now());
+        else held.add(chat);
       }
     }
   }

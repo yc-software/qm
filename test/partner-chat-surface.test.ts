@@ -18,7 +18,8 @@ import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { loadConfig } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
-import { createPartnerChatNotices } from "../src/surfaces/partner-chat/notices.ts";
+import { createPartnerChatNotices, partnerChatRunNotice } from "../src/surfaces/partner-chat/notices.ts";
+import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import type { Run } from "../src/runs/run-store.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
@@ -476,7 +477,7 @@ test("partner-chat config requires the url and secret together and validates pro
 
 test("a direct run that ends refused or waiting on an approval, or a message answered without a run, gets one notice in its reply thread", async () => {
   const deliveries = createDeliveryStore();
-  const notices = createPartnerChatNotices({ deliveries, runs: { terminalFinished: async () => [] } });
+  const notices = createPartnerChatNotices({ deliveries });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
   const id = (n: number) => `00000000-0000-4000-8000-00000000001${n}`;
   const run = (n: number, opts: { kind?: string; result?: Record<string, unknown> }) =>
@@ -496,14 +497,18 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
       },
       ...(opts.result ? { result: opts.result } : {}),
     }) as unknown as Run;
-  notices.runEnded(run(1, {}));
-  notices.runEnded(run(2, { kind: "ambient", result: { status: "refused", reason: "spent" } }));
-  notices.runEnded(run(4, { result: { status: "ok", reply: "done" } }));
-  notices.runEnded(
+  const ran = [
+    run(1, {}),
+    run(2, { kind: "ambient", result: { status: "refused", reason: "spent" } }),
+    run(4, { result: { status: "ok", reply: "done" } }),
     run(5, { result: { status: "refused", reason: "project membership changed; retry from the current project" } }),
-  );
-  notices.runEnded(run(6, { result: { status: "pending_approval" } }));
-  notices.runEnded(run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }));
+    run(6, { result: { status: "pending_approval" } }),
+    run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }),
+  ];
+  for (const r of ran) {
+    const d = runResultDelivery(r, undefined, partnerChatRunNotice);
+    if (d) await deliveries.enqueue(d);
+  }
   notices.unanswered(
     {
       status: "pending_approval",
@@ -520,15 +525,15 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
     [
       [
-        `notice:${id(5)}`,
+        `run:${id(5)}`,
         destination.target,
         "⚠️ I couldn't finish that turn: project membership changed; retry from the current project",
       ],
-      [`notice:${id(6)}`, destination.target, "This conversation is waiting on a pending approval."],
-      [`notice:${id(7)}`, destination.target, "Waiting on approval to run it."],
+      [`run:${id(6)}`, destination.target, "This conversation is waiting on a pending approval."],
+      [`run:${id(7)}`, destination.target, "Waiting on approval to run it."],
       ["notice:m7", destination.target, "This conversation is waiting for someone else to resolve a pending approval."],
       ["notice:m8", destination.target, "⚠️ I couldn't finish that turn: empty message"],
-    ],
+    ].sort(),
   );
 });
 
@@ -759,23 +764,75 @@ test("partner-chat signatures and bearer tokens follow the agent-app scheme", ()
   assert.equal(partnerChatToken(SECRET, "7001"), `7001.${hmac("agent-app-token:7001")}`);
 });
 
-test("a notice lost between a run ending and its enqueue is recovered by the sweep, once", async () => {
+test("a run-end notice lost before its enqueue is recovered by the run-result sweep, once", async () => {
   const deliveries = createDeliveryStore();
   const ended = {
     id: "00000000-0000-4000-8000-000000000031",
+    sessionId: "s",
     status: "done",
     finishedAt: Date.now() - 120_000,
-    request: { surface: "partner-chat", deliveryTarget: `${CONTAINER}:1002`, origin: { kind: "human" } },
+    request: {
+      surface: "partner-chat",
+      deliveryTarget: `${CONTAINER}:1002`,
+      origin: { kind: "human" },
+      addressed: true,
+      surfaceTools: true,
+      actor: { externalId: "ada@example.com" },
+      conversation: { kind: "group", threadRef: `${CONTAINER}:1002`, channelRef: CONTAINER, audience: [] },
+      text: "hi",
+    },
     result: { status: "pending_approval", reason: "Waiting on approval to run it." },
   } as unknown as Run;
-  const notices = createPartnerChatNotices({
+  const recovery = wireRunResultDeliveries(
+    {
+      onTerminal: () => () => {},
+      terminalFinished: async (cursor: { id: string }) => (cursor.id === "" ? [ended] : []),
+      inFlightForThread: async () => [],
+    } as unknown as Parameters<typeof wireRunResultDeliveries>[0],
     deliveries,
-    runs: { terminalFinished: async (cursor) => (cursor.id === "" ? [ended] : []) },
-  });
-  await notices.sweep();
-  await notices.sweep();
+    undefined,
+    undefined,
+    partnerChatRunNotice,
+  );
+  assert.equal(await recovery.sweep(), 1);
+  assert.equal(await recovery.sweep(), 0);
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]),
-    [[`notice:${ended.id}`, `${CONTAINER}:1002`, "Waiting on approval to run it."]],
+    [[`run:${ended.id}`, `${CONTAINER}:1002`, "Waiting on approval to run it."]],
+  );
+});
+
+test("a retryable failure holds back later posts in that chat only", async () => {
+  const deliveries = createDeliveryStore();
+  const sent: string[] = [];
+  const outbound = createPartnerChatDeliveries({
+    url: "https://chat.example",
+    secret: SECRET,
+    deliveries,
+    app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    serialize: (fn) => fn(),
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
+      sent.push(body.body);
+      return body.chat_id === "88"
+        ? new Response(JSON.stringify({ error: "busy" }), { status: 503 })
+        : new Response(JSON.stringify({ message_id: String(50 + sent.length) }), { status: 200 });
+    },
+  });
+  for (const [chat, text] of [
+    ["88", "first in 88"],
+    ["88", "second in 88"],
+    ["99", "only in 99"],
+  ] as const)
+    await deliveries.enqueue({
+      destination: { type: "partner-chat", target: `partner-chat:7001:group:${chat}` },
+      text,
+      idempotencyKey: text,
+    });
+  await outbound.drain();
+  assert.deepEqual(sent, ["first in 88", "only in 99"]);
+  assert.deepEqual(
+    (await deliveries.pending("partner-chat")).map((d) => d.text),
+    ["first in 88", "second in 88"],
   );
 });

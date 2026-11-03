@@ -32,7 +32,9 @@ export function replyEditNote(retracted: readonly string[] | undefined): string 
   return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
 }
 
-export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
+export type RunNotice = (run: Run) => string | undefined;
+
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: RunNotice): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
@@ -70,6 +72,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
+  const noticeText = notice?.(run);
+  if (noticeText) return { destination, text: noticeText, provenance, idempotencyKey };
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&
@@ -141,6 +145,7 @@ export function wireRunResultDeliveries(
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
+  notice?: RunNotice,
 ): RunResultRecovery {
   const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
@@ -148,7 +153,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const delivery = runResultDelivery(run, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor, notice);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;

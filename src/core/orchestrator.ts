@@ -2496,6 +2496,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           openStored: openStoredOutbound,
           blobTransfer,
           fileRegistration,
+          ...(surface?.capabilities.textOnly ? { textOnly: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(

@@ -8,6 +8,7 @@ const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const id = z.string().regex(ID);
+const messageId = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
   id,
   email: z.string().optional(),
@@ -19,9 +20,9 @@ const eventSchema = z.object({
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
-  thread_id: id.nullish(),
+  thread_id: messageId.nullish(),
   message: z.object({
-    id: z.string().regex(/^\d{1,20}$/),
+    id: messageId,
     user,
     body: z.string(),
     mentions_agent: z.boolean().default(false),
