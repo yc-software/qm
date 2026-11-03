@@ -122,13 +122,13 @@ describe("tenant settings", { skip }, () => {
     });
     assert.equal((await tenancy.updateSettings(b, { slackBridgeToken: "" })).ok, false);
     assert.equal((await tenancy.updateSettings(b, { unknownSetting: "x" })).ok, false);
-    assert.deepEqual(await tenancy.updateSettings(b, { storagePrefix: "tenants/b/" }), {
+    assert.deepEqual(await tenancy.updateSettings(b, { env: { S3_PREFIX: "tenants/b/" } }), {
       ok: true,
-      keys: ["storagePrefix"],
+      keys: ["env"],
     });
     assert.equal(await withTenant(a, () => tenantSetting("slackBridgeToken")), "bridge-a");
     assert.equal(await withTenant(b, () => tenantSetting("slackBridgeToken")), undefined);
-    assert.equal(await withTenant(b, () => tenantSetting("storagePrefix")), "tenants/b/");
+    assert.deepEqual(await withTenant(b, () => tenantSetting("env")), { S3_PREFIX: "tenants/b/" });
     assert.equal(await tenantSetting("slackBridgeToken"), undefined);
     assert.deepEqual(await tenancy.updateSettings(a, { modelGatewayKey: null }), {
       ok: true,
