@@ -57,7 +57,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn, isSessionTurn, resolveTurnOrigin, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -129,6 +129,15 @@ import {
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { approvalView, grantModesWithin } from "./orchestrator/approvals.ts";
+import {
+  intakeOf,
+  midTurnPrompt,
+  senderLine,
+  speakerName,
+  wordsToScreen,
+  type IncomingMessage,
+  type Speaker,
+} from "./orchestrator/intake.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
@@ -145,8 +154,6 @@ import {
   INBOX_DIR,
   TURN_FILES_DIR,
   inboundIssuesNote,
-  inboundIssueList,
-  inboundManifest,
   isVisionAttachment,
   materializeInbound,
   safeAttachmentName,
@@ -795,11 +802,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionSender.scopeId === scopeId &&
           (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
         );
+        const screenedWords = wordsToScreen(
+          input.text,
+          { id: actor.id, origin: input.origin, fromSession: sessionTurn },
+          actor.id,
+        );
         const screenPayload = screenInbound
           ? securityScreenPayload({
               ...input,
               ...turnOriginRequestFields(input.origin),
-              ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
+              ...(screenedWords !== undefined ? { triggered: true, securityScreenData: screenedWords } : {}),
               overheard: [],
               externalPromptData,
               verifiedSwarm: Boolean(input.swarm && swarmBinding),
@@ -2641,21 +2653,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const inbound = await receiveInbound(input.attachments, fileRegistration, turnInboxDir, input.text);
-        const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged, actor.displayName);
-        const inboundIssues = inboundIssueList({
-          tooMany: inbound.tooMany,
-          unavailable: inbound.unavailable,
-          blocked: inbound.blocked,
-          surfaceNotes: [
-            ...(input.inboundNotes ?? []),
-            ...(strictReadOnly
-              ? (input.attachments ?? []).map(
-                  (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in Strict posture`,
-                )
-              : []),
-          ],
-        });
+        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
+          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
+            strictReadOnly,
+            enforceScreen,
+          });
+        const {
+          received: inbound,
+          manifest,
+          issues: inboundIssues,
+          unscreened: inboundUnscreened,
+        } = await takeIn(
+          {
+            text: input.text,
+            ...(input.attachments ? { attachments: input.attachments } : {}),
+            ...(actor.displayName ? { sharer: actor.displayName } : {}),
+            ...(input.inboundNotes ? { notes: input.inboundNotes } : {}),
+          },
+          fileRegistration,
+          turnInboxDir,
+        );
 
         const importedOverheard: OverheardEntryPayload[] = [];
         if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
@@ -2790,14 +2807,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
-        const sender =
-          !automatedTurn && !sessionTurn && conversation.kind !== "dm" && input.text.trim()
-            ? senderNote(actor.displayName ?? nameOf(actor.id) ?? actor.id)
-            : "";
+        const speakerLine = (speaker: Speaker) =>
+          senderLine({ conversationKind: conversation.kind, ownerId: actor.id }, speaker, nameOf);
+        const sender = input.text.trim()
+          ? speakerLine({
+              id: actor.id,
+              ...(actor.displayName ? { name: actor.displayName } : {}),
+              origin: input.origin,
+              fromSession: sessionTurn,
+            })
+          : "";
         const unscreenedNote =
-          inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentInputs.unscreened
-            ? unscreenedNotice("inbound content")
-            : "";
+          inputUnscreened || inboundUnscreened || documentInputs.unscreened ? unscreenedNotice("inbound content") : "";
         const screenSwarmMessage = async (text: string): Promise<string | null> => {
           const screen = await orchestrator.screenSecuritySteer({
             payload: text,
@@ -3121,7 +3142,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               Object.assign(body, swarmEntryProvenance);
               delete body.speakerId;
               if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
-              if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+              const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
+              if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
+                body.name = actor.displayName.trim();
               if (
                 input.displayText?.trim() &&
                 (entry.text ?? "") === pgTextSafe(input.text) &&
@@ -3195,7 +3218,47 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
             prepareSteer: async (text, request) => {
-              const author = request ? deps.identity.resolve(request.actor).id : actor.id;
+              const steerer = request ? deps.identity.resolve(request.actor) : actor;
+              const author = steerer.id;
+              const speaker: Speaker = request
+                ? {
+                    id: author,
+                    ...(request.actor.displayName ? { name: request.actor.displayName } : {}),
+                    origin: resolveTurnOrigin(request),
+                    fromSession: isSessionTurn(request),
+                  }
+                : {
+                    id: author,
+                    ...(actor.displayName ? { name: actor.displayName } : {}),
+                    origin: { kind: "direct" },
+                    fromSession: false,
+                  };
+              const by = {
+                author,
+                ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
+              };
+              let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
+              const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
+                .filter(Boolean)
+                .join("\n\n");
+              if (screened) {
+                const screen = await orchestrator
+                  .screenSecuritySteer({ payload: screened, actor: steerer, conversation, sessionId: session.id })
+                  .catch((error: unknown) => {
+                    reportFailure("orchestrator: mid-turn message screen", error);
+                    return undefined;
+                  });
+                if (!screen || screen === "block")
+                  return {
+                    text: screen
+                      ? "A mid-turn message was withheld by the security screen."
+                      : "A mid-turn message was withheld because the security screen could not check it.",
+                    author,
+                    authorName: speakerName(speaker, nameOf),
+                    withheld: true,
+                  };
+                if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
+              }
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&
@@ -3216,39 +3279,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   );
                   allowed = cleanVerdict(verdict);
                 }
-                text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
+                said = `${said}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
               }
-              if (!request?.attachments?.length) return { text, author };
-              const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-              const received = await receiveInbound(request.attachments, { ...fileRegistration, seed }, inboxDir, text);
-              const steeredDocuments = await ingestDocuments(received.metas, text, initialDocuments);
-              documentInputs.documents.push(...steeredDocuments.documents);
-              const issues = inboundIssueList({
-                ...received,
-                surfaceNotes: strictReadOnly
-                  ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-                  : [],
-              });
-              return {
-                text: [
+              if (!request?.attachments?.length && !request?.inboundNotes?.length) return { text: said, ...by };
+              const intake = await takeIn(
+                {
                   text,
-                  inboundManifest(received.metas, inboxDir, received.unstaged, request.actor.displayName),
-                  ...steeredDocuments.notices,
-                  inboundIssuesNote(issues),
-                  enforceScreen &&
-                  (steeredDocuments.unscreened ||
-                    received.unscreened.length ||
-                    received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
-                    ? unscreenedNotice("inbound content")
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-                attachments: received.metas,
-                images: received.images,
+                  ...(request.attachments ? { attachments: request.attachments } : {}),
+                  ...(request.actor.displayName ? { sharer: request.actor.displayName } : {}),
+                  ...(request.inboundNotes ? { notes: request.inboundNotes } : {}),
+                },
+                { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
+                `${turnInboxDir}/${randomUUID()}`,
+              );
+              const steeredDocuments = await ingestDocuments(intake.received.metas, text, initialDocuments);
+              documentInputs.documents.push(...steeredDocuments.documents);
+              return {
+                text: midTurnPrompt(said, intake, steeredDocuments),
+                attachments: intake.received.metas,
+                images: intake.received.images,
                 documents: steeredDocuments.documents,
-                author,
+                ...by,
               };
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),

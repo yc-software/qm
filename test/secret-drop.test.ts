@@ -284,8 +284,8 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     });
     await built.signals.send(run.id, {
       kind: "steer",
-      text: "U_SPEAKER: I can provide my linear key",
-      request: { actor: { externalId: "U_SPEAKER" } } as any,
+      text: "I can provide my linear key",
+      request: { actor: { externalId: "U_SPEAKER" }, origin: { kind: "human" } } as any,
     });
     const cap = await capFor("U_A", scopeId("channel", "C1"), { threadRef: THREAD });
 

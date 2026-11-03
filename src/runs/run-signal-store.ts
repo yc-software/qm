@@ -104,35 +104,46 @@ export function startSignalPoll(
   let redrain = false;
   let accepting = true;
   let inFlight: Promise<void> = Promise.resolve();
+  let stopDelivered = false;
+  let stopCheck: Promise<void> = Promise.resolve();
+  const deliverStop = (known?: Awaited<ReturnType<RunSignalStore["pending"]>>): Promise<void> => {
+    const check = async (): Promise<void> => {
+      if (stopDelivered) return;
+      const stop = (known ?? (await signals.pending(runId))).find(({ signal }) => signal.kind === "abort");
+      if (stop?.signal.kind !== "abort") return;
+      await handlers.onAbort(stop.signal.reason);
+      stopDelivered = true;
+    };
+    return (stopCheck = stopCheck.then(check, check));
+  };
   const drain = (forced = false): void => {
     if (!accepting && !forced) return;
     if (draining) {
       redrain = true;
+      void deliverStop().catch((e: unknown) => opts?.onError?.(e));
       return;
     }
     draining = true;
+    stopDelivered = false;
     inFlight = (async () => {
-      let abortDelivered = false;
-      for (const { id, signal: s } of await signals.pending(runId)) {
-        if (s.kind === "client_result") continue;
+      const pending = await signals.pending(runId);
+      await deliverStop(pending).catch((e: unknown) => opts?.onError?.(e));
+      let tookOne = false;
+      for (const { id, signal: s } of pending) {
+        if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         try {
-          if (s.kind === "abort") {
-            if (!abortDelivered) {
-              await handlers.onAbort(s.reason);
-              abortDelivered = true;
+          if (tookOne) await deliverStop();
+          tookOne = true;
+          if (s.text || s.request?.attachments?.length) {
+            const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
+              signals.acknowledge(runId, id),
+            );
+            if (delivered === false) {
+              declined.add(id);
+              continue;
             }
-          } else if (!declined.has(id)) {
-            if (s.text || s.request?.attachments?.length) {
-              const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
-                signals.acknowledge(runId, id),
-              );
-              if (delivered === false) {
-                declined.add(id);
-                continue;
-              }
-            }
-            await signals.acknowledge(runId, id);
           }
+          await signals.acknowledge(runId, id);
         } catch (e) {
           opts?.onError?.(e);
         }
