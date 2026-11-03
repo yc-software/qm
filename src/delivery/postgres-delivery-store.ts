@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { rowTenant } from "../tenants/claim.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -29,7 +29,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query } = createPgPool(connectionString, [
+  const db = createPgPool(connectionString, [
     ...TENANCY,
     {
       id: "delivery/store/0001",
@@ -94,6 +94,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       },
     ]),
   ]);
+  const { q, query } = db;
 
   const enqueueListeners = new Set<() => void>();
 
@@ -157,6 +158,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async pending(type) {
       const rows = await q(
+        `SELECT * FROM deliveries
+          WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+          ORDER BY created_at`,
+        [type],
+      );
+      return rows.map(rowToDelivery);
+    },
+    async pendingAcrossTenants(type) {
+      const { rows } = await claimAcrossTenants(
+        db,
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
           ORDER BY created_at`,

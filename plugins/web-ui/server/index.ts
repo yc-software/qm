@@ -3,6 +3,7 @@ import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { swallow } from "../../chassis/src/errors.ts";
+import { withTenant, withoutTenant } from "../../chassis/src/tenant.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -515,8 +516,13 @@ const WEB_DELIVERY_GIVEUP_MS = 60_000;
 let deliveriesPollInFlight = false;
 let deliveriesPollFailing = false;
 
+function inTenant<T>(tenantId: string | undefined, fn: () => T): T {
+  return tenantId === undefined ? withoutTenant(fn) : withTenant(tenantId, fn);
+}
+
 interface PendingWebDelivery {
   id: string;
+  tenantId?: string;
   createdAt: number;
   destination?: { target?: string };
 }
@@ -544,8 +550,8 @@ function noteDeliveriesPoll(failure: unknown): void {
 }
 
 async function pollWebDeliveries(): Promise<unknown> {
-  const r = await coreFetch("GET", "/v1/deliveries?type=web");
-  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
+  const r = await withoutTenant(() => coreFetch("GET", "/v1/deliveries/across-tenants?type=web"));
+  if (r.status !== 200) return new Error(`GET /v1/deliveries/across-tenants http ${r.status}: ${r.text.slice(0, 200)}`);
   const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
   const now = Date.now();
   let failure: unknown;
@@ -558,7 +564,7 @@ async function pollWebDeliveries(): Promise<unknown> {
       continue;
     }
     try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
+      const ack = await inTenant(d.tenantId, () => coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`));
       if (ack.status !== 200)
         failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
     } catch (e) {

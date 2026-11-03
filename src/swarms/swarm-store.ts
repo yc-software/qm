@@ -224,13 +224,11 @@ export function createSwarmStore(
       return decode(updated);
     },
     async pending(afterId) {
-      return (
-        await backing.select({
-          where: { field: "pending", anyOfFold: ["true"] },
-          limit: SWARM_LIMITS.sweepBatch,
-          afterId,
-        })
-      ).map(decode);
+      return (await backing.acrossTenants())
+        .filter(({ id, value }) => value.pending && (afterId === undefined || id > afterId))
+        .sort((left, right) => (left.id < right.id ? -1 : Number(left.id > right.id)))
+        .slice(0, SWARM_LIMITS.sweepBatch)
+        .map(({ tenantId, value }) => ({ ...decode(value), tenantId }));
     },
   };
 }

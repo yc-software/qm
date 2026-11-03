@@ -28,6 +28,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { uuidSchema } from "../util/ids.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 export interface DeployFile {
   path: string;
@@ -303,6 +304,31 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       await markVersionRunning(cur.id, v.version, endpoint);
       await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
     });
+
+  async function maintainOne(id: string): Promise<boolean> {
+    const cur = await deps.deployStore.get(id);
+    if (!cur || cur.status !== "running") return false;
+    if (await deps.provider.rotationDue?.(cur)) {
+      await rotateDeployment(cur.id);
+      return true;
+    }
+    return Boolean(cur.alwaysOn && (await liveEndpoint(cur)));
+  }
+
+  async function reapIdle(id: string, ttlMs: number, now: number): Promise<boolean> {
+    const d = await deps.deployStore.get(id);
+    if (!d || d.status !== "running" || d.alwaysOn) return false;
+    const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
+    if (now - last < ttlMs) return false;
+    return withDeployLock(id, async () => {
+      const cur = await deps.deployStore.get(id);
+      if (!cur || cur.status !== "running" || cur.alwaysOn) return false;
+      await deps.provider.destroy(cur);
+      await deps.deployStore.setStatus(id, "stopped");
+      await deps.deployStore.setEndpoint(id, null);
+      return true;
+    });
+  }
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
   const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
@@ -636,17 +662,10 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
         let maintained = 0;
-        for (const d of await deps.deployStore.list()) {
+        for (const d of await deps.deployStore.acrossTenants()) {
           if (d.status !== "running") continue;
           try {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running") continue;
-            if (await deps.provider.rotationDue?.(cur)) {
-              await rotateDeployment(cur.id);
-              maintained++;
-            } else if (cur.alwaysOn && (await liveEndpoint(cur))) {
-              maintained++;
-            }
+            if (await inTenantOf(d.tenantId, () => maintainOne(d.id))) maintained++;
           } catch (e) {
             console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
           }
@@ -728,19 +747,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const result = await leaderLease.hold("deployments:reaper", async () => {
         if (deps.provider.profile.managedScaleToZero) return 0;
         let stopped = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
-          if (d.alwaysOn) continue;
-          const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
-          if (now - last < ttlMs) continue;
-          await withDeployLock(d.id, async () => {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running" || cur.alwaysOn) return;
-            await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
-            stopped++;
-          });
+        for (const d of await deps.deployStore.acrossTenants()) {
+          if (d.status !== "running" || d.alwaysOn) continue;
+          if (await inTenantOf(d.tenantId, () => reapIdle(d.id, ttlMs, now))) stopped++;
         }
         return stopped;
       });

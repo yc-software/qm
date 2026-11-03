@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -329,7 +330,11 @@ export async function startSlackPlugin(
       });
     return statusSync;
   };
-  const statusSweep = createSweeper(reconcileStatus, 60_000, { label: "slack session status", immediate: true });
+  const inInstallTenant = <T>(fn: () => T): T => inTenantOf(cfg.tenantId, fn);
+  const statusSweep = createSweeper(() => inInstallTenant(reconcileStatus), 60_000, {
+    label: "slack session status",
+    immediate: true,
+  });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
@@ -501,7 +506,7 @@ export async function startSlackPlugin(
         for (const [name, url] of Object.entries(res.emoji ?? {})) {
           if (typeof url === "string" && !url.startsWith("alias:")) emoji[name] = url;
         }
-        return core.publishEmojiCatalog(emoji);
+        return inInstallTenant(() => core.publishEmojiCatalog(emoji));
       })
       .catch(swallowAs("slack: emoji catalog publish", undefined));
   };
@@ -521,8 +526,7 @@ export async function startSlackPlugin(
       return;
     }
     deliveriesPollInFlight = true;
-    void deliveries
-      .pollDeliveries(app.client)
+    void inInstallTenant(() => deliveries.pollDeliveries(app.client))
       .then((ranAsLeader) => {
         if (!ranAsLeader && !stopped && !followerRetry) {
           followerRetry = setTimeout(() => {

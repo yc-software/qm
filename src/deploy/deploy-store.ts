@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { Claimed } from "../tenants/claim.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { swallow } from "../util/errors.ts";
 import {
@@ -105,6 +106,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
+  acrossTenants(): Promise<Array<Claimed<Deployment>>>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -374,6 +376,9 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     async list() {
       const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
       return ds.map((d) => withAccess(d, accessAt.get(d.id)));
+    },
+    async acrossTenants() {
+      return (await backingMap.acrossTenants()).map(({ tenantId, value }) => ({ ...value, tenantId }));
     },
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);
