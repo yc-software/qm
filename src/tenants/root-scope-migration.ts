@@ -27,7 +27,6 @@ export const TENANT_ROOT_SCOPE: PgMigrationDefinition = {
        pattern text;
        replacement text;
        rel record;
-       tenant_count bigint;
      BEGIN
        IF to_regclass('deployment_identity') IS NULL THEN RETURN; END IF;
        SELECT json->>'orgId' INTO old_org FROM deployment_identity WHERE id = 'singleton';
@@ -36,10 +35,7 @@ export const TENANT_ROOT_SCOPE: PgMigrationDefinition = {
          DELETE FROM durable_map_versions WHERE tbl = 'deployment_identity';
        END IF;
        IF old_org IS NULL THEN RETURN; END IF;
-       SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-       IF tenant_count <> 1 THEN
-         RAISE EXCEPTION 'Org % needs one tenant to move onto, but this database has % tenants', old_org, tenant_count;
-       END IF;
+       SELECT id INTO STRICT tenant FROM qm_tenant;
        UPDATE tenants SET composio_namespace = old_org WHERE id = tenant;
        needle := 'org:' || old_org;
        replacement := 'org:' || tenant::text;

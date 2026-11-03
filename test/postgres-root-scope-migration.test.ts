@@ -80,7 +80,7 @@ test(
       await applyPgMigrations(raw, migrations);
       await applyPgMigrations(raw, migrations);
 
-      const tenant = String((await raw.query("SELECT id::text AS id FROM tenants")).rows[0].id);
+      const tenant = String((await raw.query("SELECT id::text AS id FROM qm_tenant")).rows[0].id);
       const root = `org:${tenant}`;
       const newBroker = hashId([root, "openai", "broker"]);
       assert.equal((await raw.query("SELECT to_regclass('deployment_identity') AS t")).rows[0].t, null);
@@ -162,17 +162,29 @@ async function upgradeFromOrg(
   }
 }
 
-test("pg upgrade refuses to pick one of several tenants for the org", { skip }, async () => {
-  await upgradeFromOrg(
-    async (raw) => {
-      await raw.query(`INSERT INTO tenants(id) VALUES ($1)`, [randomUUID()]);
-    },
-    async (raw, upgrade) => {
-      await assert.rejects(upgrade, /Org acme needs one tenant to move onto, but this database has 2 tenants/);
-      assert.equal((await raw.query("SELECT id FROM soul_configs")).rows[0].id, "org:acme");
-    },
-  );
-});
+test(
+  "pg upgrade moves the org onto the install's own tenant when the database already holds others",
+  { skip },
+  async () => {
+    const extra = [randomUUID(), randomUUID()];
+    await upgradeFromOrg(
+      async (raw) => {
+        for (const id of extra) await raw.query(`INSERT INTO tenants(id) VALUES ($1)`, [id]);
+      },
+      async (raw, upgrade) => {
+        await upgrade;
+        const tenant = String((await raw.query("SELECT id::text AS id FROM qm_tenant")).rows[0].id);
+        assert.ok(!extra.includes(tenant));
+        assert.deepEqual((await raw.query("SELECT id FROM soul_configs")).rows, [{ id: `org:${tenant}` }]);
+        assert.deepEqual(
+          (await raw.query("SELECT id::text AS id, composio_namespace FROM tenants ORDER BY composio_namespace, id"))
+            .rows,
+          [{ id: tenant, composio_namespace: "acme" }, ...extra.sort().map((id) => ({ id, composio_namespace: null }))],
+        );
+      },
+    );
+  },
+);
 
 test("pg fresh install leaves the instance tenant without a Composio namespace", { skip }, async () => {
   const schema = `root_scope_${randomUUID().replaceAll("-", "")}`;
