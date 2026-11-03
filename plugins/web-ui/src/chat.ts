@@ -10,7 +10,6 @@ import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
-import { ADMIN_BASE } from "./shell";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -35,6 +34,7 @@ import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
   Activity,
+  ArrowDown,
   Ban,
   BookOpen,
   Search,
@@ -45,6 +45,7 @@ import {
   ChevronRight,
   ChevronUp,
   Clock3,
+  Cog,
   Copy,
   FileImage,
   FileText,
@@ -379,7 +380,7 @@ export function createChatSurface(
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     const member = project?.members.find((m) => m.principalId === speakerId);
-    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    if (member?.avatarUrl) return member;
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
@@ -1454,7 +1455,6 @@ export function createChatSurface(
             .onMoreIdeas=${showWelcomeIdeas}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
-            .adminBase=${ADMIN_BASE}
           ></qm-onboarding-welcome>
         </div>
       </article>
@@ -1784,6 +1784,9 @@ export function createChatSurface(
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions}
+              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+                ${icon(ArrowDown, 16)}
+              </button>
             </div>
           </div>
           ${sideChats.view()}
@@ -2376,7 +2379,6 @@ export function createChatSurface(
               html`<qm-onboarding-welcome
                 .me=${appState.me}
                 .base=${withBase("")}
-                .adminBase=${ADMIN_BASE}
                 .widget=${part.type === "setup" ? "apps" : part.type}
                 .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
                 .onConnected=${continueAfterConnection}
@@ -2617,7 +2619,7 @@ export function createChatSurface(
     const mins = Math.round((expiresAt - Date.now()) / 60_000);
     if (mins <= 0) return "expiring";
     if (mins < 60) return `${mins}m left`;
-    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
   }
 
   function backgroundActivityStrip(): TemplateResult | typeof nothing {
@@ -2637,7 +2639,9 @@ export function createChatSurface(
           aria-expanded=${String(bgPanel.open)}
           @click=${toggleBackgroundPanel}
         >
-          ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+          ${icon((live ?? row)?.jobs ? Cog : Activity, 13)}<span class="bg-activity-label"
+            >${label ?? "Background activity"}</span
+          >
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${bgPanel.open ? backgroundPanelBody() : nothing}
@@ -3094,6 +3098,7 @@ export function createChatSurface(
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: string[] = [];
       const timeline = segment.filter((item) => {
@@ -3155,7 +3160,7 @@ export function createChatSurface(
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1) return renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -3175,12 +3180,16 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
               </div>
             </details>`
           : nothing;
       if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      const said = tail.trim()
+        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+            ${markdown(tail, animating, streamedAnswer(baseline, work))}
+          </div>`
+        : nothing;
+      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     })}`;
   }
 
@@ -3269,14 +3278,14 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "text") return interimReply(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function messageRow(activity: ToolActivity): TemplateResult {
+  function interimReply(activity: ToolActivity): TemplateResult {
     const text = (activity.payload as { text?: string } | null)?.text ?? "";
-    return html`<div class="work-message">${markdown(text)}</div>`;
+    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {

@@ -131,6 +131,7 @@ export const sessionsState = {
   webOnly: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
+  expandedProjectScopes: new Set<string>(),
 };
 
 let selection: SessionSelection = emptySelection();
@@ -229,6 +230,7 @@ export function resetSessionsState(): void {
   sessionsState.openingKey = null;
   clearTranscriptCache();
   sessionsState.collapsedProjectScopes.clear();
+  sessionsState.expandedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
@@ -451,9 +453,13 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
+  let glyphSize = 14;
   if (item.groupKind === "personal") glyph = null;
   else if (item.groupKind === "channel") glyph = Hash;
-  else if (item.groupKind === "group") glyph = Users;
+  else if (item.groupKind === "group") {
+    glyph = Users;
+    glyphSize = 12;
+  }
   let fallbackName = "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
@@ -475,7 +481,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, 14)}</span>` : nothing}
+                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
@@ -507,18 +513,51 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
             </div>`
       }
       <div class="recent-project-children" id=${childrenId} ?hidden=${collapsed}>
-        ${
-          collapsed
-            ? nothing
-            : repeat(
-                item.sessions.filter((session) => shownThreads.has(session.threadRef)),
-                (session) => session.threadRef,
-                (session) => sessionRow(session, true),
-              )
-        }
+        ${collapsed ? nothing : projectChildren(item, shownThreads)}
       </div>
     </section>
   `;
+}
+
+const PROJECT_PREVIEW_ROWS = 5;
+
+function projectChildren(
+  item: Extract<RecentItem, { kind: "project" }>,
+  shownThreads: ReadonlySet<string>,
+): TemplateResult {
+  const children = item.sessions.filter((session) => shownThreads.has(session.threadRef));
+  const capped = item.groupKind !== "personal" && children.length > PROJECT_PREVIEW_ROWS;
+  const expanded = sessionsState.expandedProjectScopes.has(item.scopeId);
+  const rows =
+    capped && !expanded ? children.filter((session, i) => i < PROJECT_PREVIEW_ROWS || keepVisible(session)) : children;
+  return html`${repeat(
+    rows,
+    (session) => session.threadRef,
+    (session) => sessionRow(session, true),
+  )}${
+    capped
+      ? html`<button
+          class="archived-toggle recent-project-more"
+          type="button"
+          aria-expanded=${expanded ? "true" : "false"}
+          @click=${() => toggleProjectExpanded(item.scopeId)}
+        >
+          ${expanded ? "Show less" : "Show more"}
+        </button>`
+      : nothing
+  }`;
+}
+
+function keepVisible(s: CoreSession): boolean {
+  return (
+    isActiveRow(s) || selection.ids.has(s.id) || sessionsState.openMenuId === s.id || sessionsState.renamingId === s.id
+  );
+}
+
+function toggleProjectExpanded(scopeId: string): void {
+  if (sessionsState.expandedProjectScopes.has(scopeId)) sessionsState.expandedProjectScopes.delete(scopeId);
+  else sessionsState.expandedProjectScopes.add(scopeId);
+  renderList();
 }
 
 function toggleRecentProject(scopeId: string): void {
@@ -1142,6 +1181,12 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 
 let draggingChildId: string | null = null;
 
+function liftForDragSnapshot(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  target.classList.add("drag-snapshot");
+  requestAnimationFrame(() => target.classList.remove("drag-snapshot"));
+}
+
 export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
@@ -1149,6 +1194,7 @@ export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  liftForDragSnapshot(e.currentTarget);
   draggingChildId = s.parentSessionId ? s.id : null;
   appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
   if (!draggingChildId) beginSessionDrag(s);

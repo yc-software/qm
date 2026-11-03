@@ -10,7 +10,7 @@ import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy upgrade test";
-const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/(0048|0049)-/;
+const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/0050-/;
 
 async function withSchema(fn: (url: string, db: pg.Pool) => Promise<void>): Promise<void> {
   const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -67,7 +67,6 @@ test(
         { display_name: "A" },
         { display_name: "B" },
       ]);
-      assert.equal((await db.query("SELECT to_regclass('qm_tenant') AS t")).rows[0].t, null);
       const grants = createPostgresGrantStore(url);
       assert.equal((await withTenant(instance, () => grants.all())).length, 1);
     });

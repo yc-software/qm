@@ -53,17 +53,13 @@ BEGIN
     'REVOKE INSERT, UPDATE, DELETE ON tenants, qm_schema_migrations FROM qm_app',
     'GRANT SELECT ON tenants, qm_schema_migrations TO qm_app, qm_reader'
   ] LOOP
-    BEGIN
-      EXECUTE grant_sql;
-    EXCEPTION WHEN insufficient_privilege THEN
-      RAISE WARNING 'Skipped tenant grant the host refused: %', grant_sql;
-    END;
+    EXECUTE grant_sql;
   END LOOP;
 END $tenant_grants$`,
   ],
 };
 
-export function tenantTableStatements(table: string): string[] {
+function tenantPolicies(table: string): string[] {
   return [
     `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
     `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
@@ -141,7 +137,7 @@ function typedTableStatements({ table, primaryKey, unique = [], replacesOrgId }:
       indexOn(table, index, true),
     ]),
     ...(replacesOrgId ?? []).map((index) => indexOn(table, index)),
-    ...tenantTableStatements(table),
+    ...tenantPolicies(table),
   ];
 }
 

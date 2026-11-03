@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -12,13 +11,21 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { recreateTenantSchema, seedTestTenants } from "./support/tenant-seed.ts";
+import { seedTestTenants } from "./support/tenant-seed.ts";
 import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
 
-before(() => URL && recreateTenantSchema(URL));
+before(async () => {
+  if (!URL) return;
+  const pg = (await import("pg")).default;
+  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
+  await p.query("DROP SCHEMA public CASCADE");
+  await p.query("CREATE SCHEMA public");
+  await p.end();
+  await seedTestTenants(URL);
+});
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string): OrchestratorInput => ({
@@ -68,7 +75,7 @@ test("pg participant presence checks seek into the visible history window", { sk
   try {
     await raw.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at)
-       SELECT qm_bound_tenant(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
+       SELECT qm_tenant_id(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
          FROM generate_series(0, 3999) n`,
       [session.id],
     );
@@ -339,7 +346,7 @@ test(
         return at;
       },
     });
-    const raw = new pg.Pool({ connectionString: url.toString() });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(url.toString()) });
     const scope = scopeId("personal", "spend-order");
     const session = await store.getOrCreateByThread("spend-order", "dm", scope);
     const bill = async (offset: number) => {
@@ -587,78 +594,6 @@ test("pg session store: a bare failed acquire means the session is gone, not a l
   const reacquired = await s.acquireLease(session.id, "turn");
   assert.ok(reacquired.lease, "a released lease is immediately reacquirable");
   await s.releaseLease(reacquired.lease!);
-});
-
-test("pg session store: replay windows count usable payloads, not metadata-only screens", { skip }, async () => {
-  let now = Date.now();
-  const store = createPostgresSessionStore(URL!, { now: () => now });
-  const scope = scopeId("personal", "screen-window");
-  const session = await store.getOrCreateByThread("screen-window", "dm", scope);
-  const record = (promptEnvelope: unknown, step = SECURITY_SCREEN_STEP) =>
-    store.recordLlmRequest(session.id, {
-      turnSeq: step === SECURITY_SCREEN_STEP ? null : 1,
-      step,
-      model: "screen-test",
-      scopeLabel: scope,
-      promptEnvelope,
-      usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, costUsd: 0.01 },
-    });
-  const envelope = (content: unknown) => ({ messages: [{ role: "user", content }] });
-
-  const unusable = [
-    undefined,
-    null,
-    { system: "Claude configuration only" },
-    { threadStart: { model: "Codex" } },
-    { system: "OpenCode configuration without messages" },
-    { messages: [] },
-    { messages: { role: "user", content: "not an array" } },
-    { messages: [null] },
-    { messages: [{ role: "assistant", content: "not a user payload" }] },
-    { messages: [...envelope("one").messages, ...envelope("two").messages] },
-    envelope(42),
-    envelope(null),
-    envelope(["not string content"]),
-    envelope(""),
-    envelope(" \t\r\n\u00a0\u2003\ufeff "),
-  ];
-  for (const payload of unusable) await record(payload);
-  for (let i = 0; i < 205; i++) await record({ system: "metadata only" });
-  assert.deepEqual(await store.listScreenSamples(2), []);
-  now -= 2;
-  const oldest = await record(envelope("  older usable payload  "));
-  now++;
-  const newest = await record(envelope("newer usable payload"));
-  now += 2;
-  await record(envelope("ordinary turn, not a screening"), 0);
-  const before = await store.listLlmRequests(session.id);
-
-  assert.deepEqual(
-    (await store.listScreenSamples(2)).map((sample) => sample.id),
-    [newest.id, oldest.id],
-  );
-  assert.deepEqual(
-    (await store.listScreenSamples(1)).map((sample) => sample.id),
-    [newest.id],
-  );
-  assert.deepEqual(
-    (await store.listScreenSamples(1000)).map((sample) => sample.payload),
-    ["newer usable payload", "older usable payload"],
-  );
-  assert.deepEqual(await store.listScreenSamples(0), []);
-  assert.deepEqual(await store.listScreenSamples(-1), []);
-  assert.equal((await store.listScreenSamples(1.9)).length, 1);
-  assert.deepEqual(await store.listLlmRequests(session.id), before);
-  assert.equal(before.length, unusable.length + 208);
-
-  const tied = [await record(envelope("tied A")), await record(envelope("tied B"))];
-  assert.deepEqual(
-    (await store.listScreenSamples(2)).map((sample) => sample.id),
-    tied
-      .map((row) => row.id)
-      .sort()
-      .reverse(),
-  );
 });
 
 test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibility window", { skip }, async () => {
@@ -1634,7 +1569,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1699,7 +1634,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const { lease: lease2 } = await s2.acquireLease(a.id);
@@ -1710,7 +1645,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_bound_tenant(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_bound_tenant(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);
@@ -2440,6 +2375,39 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.deepEqual(await s.searchEntries("UNONE", "memo"), [], "a non-participant sees nothing");
   assert.deepEqual(await s.searchEntries("USRCH", "  !!  "), [], "an unusable query is empty, not an error");
   assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
+});
+
+test("pg search: own chats and side chats only, no subagents or automations", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "UOWN");
+  const write = async (threadRef: string, text: string, surface?: string): Promise<string> => {
+    const sess = await s.getOrCreateByThread(threadRef, "dm", scope, undefined, surface);
+    await s.addParticipant(sess.id, "UOWN", undefined, { includeHistory: true });
+    const { lease } = await s.acquireLease(sess.id);
+    await s.append(lease!, { type: "user", payload: { text }, scopeLabel: scope });
+    await s.releaseLease(lease!);
+    await s.updateTitle(sess.id, "Ownchat harbor");
+    return sess.id;
+  };
+  const chat = await write("own-chat", "ownchat harbor plans");
+  const child = await write("own-child", "ownchat harbor from a subagent");
+  await s.setParentSession(child, chat);
+  await write("own-cron", "ownchat harbor from a cron", "cron");
+  const side = await write("own-side", "ownchat harbor in a side chat");
+  await s.updateForkProvenance(side, {
+    forkedFrom: { sessionId: chat },
+    forkBoundarySeq: 1,
+    sideChat: { entrySeq: 1, quote: "plans", occurrence: 0, expanded: false },
+  });
+
+  assert.deepEqual(
+    (await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId).sort(),
+    [chat, side].sort(),
+  );
+  assert.deepEqual(
+    (await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id).sort(),
+    [chat, side].sort(),
+  );
 });
 
 test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {

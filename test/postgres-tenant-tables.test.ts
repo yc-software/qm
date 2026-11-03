@@ -9,7 +9,15 @@ import { testTenants } from "./support/test-tenants.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
-const UNTENANTED = ["durable_map_versions", "qm_schema_migrations", "source_auth_replay", "tenants"];
+const UNTENANTED = [
+  "durable_map_versions",
+  "qm_schema_migrations",
+  "qm_settings",
+  "qm_tenant",
+  "source_auth_replay",
+  "tenants",
+];
+const BOUND_BY_ITEMS_TENANT = ["blobs", "items"];
 const TABLES = ["sessions", "runs", "deliveries", "acl_grants", "audit_log", "memory_facts"];
 
 function asRole(databaseUrl: string, role: "qm_app" | "qm_reader"): string {
@@ -83,7 +91,9 @@ test("every typed table carries a tenant with row security enabled but not force
       WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
       GROUP BY c.oid, c.relname`,
   );
-  const typed = rows.filter((row) => !UNTENANTED.includes(row.table) && row.columns.join() !== "id,json");
+  const typed = rows.filter(
+    (row) => ![...UNTENANTED, ...BOUND_BY_ITEMS_TENANT].includes(row.table) && row.columns.join() !== "id,json",
+  );
   assert.ok(typed.length > 40);
   assert.deepEqual(
     typed.filter(

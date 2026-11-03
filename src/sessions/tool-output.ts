@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 
+const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
 const CHARS_PER_TOKEN = 4;
 const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
 
@@ -27,6 +28,12 @@ export interface ToolOutputStore {
   inlineTokens(): Promise<number>;
   save(text: string): Promise<string>;
   read(sessionId: string, key: ParkedOutputKey): Promise<{ text: string } | { expired: true } | null>;
+}
+
+export function inlineTokensFrom(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_INLINE_TOKENS;
+  const n = typeof value === "string" ? Number(value) : value;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_INLINE_TOKENS;
 }
 
 const md5Hex = (text: string): string => createHash("md5").update(text, "utf8").digest("hex");
@@ -82,19 +89,25 @@ export function createPostgresToolOutputStore(opts: {
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
-  const tenantStores = new Map<string, DurableByteStore>();
-  const tenantBytes = (): { id: string; bytes: DurableByteStore } => {
-    const id = currentTenant();
-    let bytes = tenantStores.get(id);
-    if (!bytes) tenantStores.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
-    return { id, bytes };
-  };
+  let setting: { value: number; at: number } | null = null;
+  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
+  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
+    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
+      const id = rows[0]?.id as string;
+      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
+    })).catch((err: unknown) => {
+      tenant = null;
+      throw err;
+    });
   return {
     async inlineTokens() {
-      return DEFAULT_INLINE_TOKENS;
+      if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
+      const rows = await opts.pool.q("SELECT value FROM qm_settings WHERE key = $1", [TOOL_OUTPUT_SETTING]);
+      setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
+      return setting.value;
     },
     async save(text) {
-      const { id, bytes } = tenantBytes();
+      const { id, bytes } = await tenantBytes();
       const put = await bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
@@ -117,7 +130,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],
@@ -127,7 +140,7 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const { bytes, id } = tenantBytes();
+      const { bytes, id } = await tenantBytes();
       const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
       const text = await readText(bytes, key);
       if (text === null)

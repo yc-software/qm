@@ -568,10 +568,9 @@ async function withPgSession(
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   const { seedTestTenants } = await import("./support/tenant-seed.ts");
-  const { tenantBoundUrl } = await import("./support/test-tenants.ts");
   await seedTestTenants(url.toString());
   const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: tenantBoundUrl(url.toString()) });
+  const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
@@ -580,6 +579,7 @@ async function withPgSession(
     );
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
+    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },

@@ -48,7 +48,6 @@ test("deployed API smoke proves the production portal-identity boundary", async 
 test("deployed staging smoke reaches every Fly service and the public portal", () => {
   assert.deepEqual(deployedHealthUrls("qm-core", "https://qm-portal.fly.dev"), [
     "http://127.0.0.1:8080/healthz",
-    "http://qm-admin.internal:8080/healthz",
     "http://qm-web-ui.flycast/healthz",
     "http://qm-portal.internal:8080/healthz",
     "https://qm-portal.fly.dev/healthz",

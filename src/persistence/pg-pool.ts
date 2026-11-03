@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ClientConfig, Pool, PoolClient } from "pg";
+import type { ClientConfig, Pool, PoolClient, PoolConfig, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
@@ -53,7 +53,14 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true }));
+  const options: PoolConfig & { pipeline: boolean } = {
+    ...connection,
+    max,
+    connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
+    pipeline: kind === "query",
+  };
+  const pool = guardedPool(new pg.Pool(options));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -121,31 +128,39 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
-async function bindTenant(client: Pick<PoolClient, "query">, tenant = boundTenant()): Promise<void> {
-  if (tenant !== undefined) await client.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
+type PgSetting = readonly [name: string, value: string];
+
+function tenantSettings(tenant = boundTenant()): PgSetting[] {
+  return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 
-async function withQueryTransaction<T>(
+function querySettings(timeoutMs: number | undefined): PgSetting[] {
+  if (timeoutMs === undefined) return tenantSettings();
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
+  return [...tenantSettings(), ["statement_timeout", String(Math.round(timeoutMs))]];
+}
+
+function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
+  const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
+  return { text: `SELECT ${assignments.join(", ")}`, values: settings.flat() };
+}
+
+async function pipelinedTransaction(
   client: PoolClient,
-  tenant: string | undefined,
-  timeoutMs: number | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (timeoutMs === undefined && tenant === undefined) return run();
-  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
-    throw new Error("Query timeout must be a positive finite number");
-  }
-  await client.query("BEGIN");
-  try {
-    await bindTenant(client, tenant);
-    if (timeoutMs !== undefined) await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
-    const result = await run();
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query transaction", undefined));
-    throw error;
-  }
+  settings: readonly PgSetting[],
+  text: string,
+  values: unknown[],
+): Promise<QueryResult> {
+  if (!settings.length) return client.query({ text, values });
+  const [, , result] = await Promise.all([
+    client.query("BEGIN"),
+    client.query(settingsQuery(settings)),
+    client.query({ text, values }),
+    client.query("COMMIT"),
+  ]);
+  const status = (client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus();
+  if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
+  return result;
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -162,8 +177,8 @@ export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) 
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    await client.query("BEGIN");
-    await bindTenant(client);
+    const settings = tenantSettings();
+    await Promise.all([client.query("BEGIN"), settings.length ? client.query(settingsQuery(settings)) : undefined]);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -466,9 +481,9 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
-    const tenant = boundTenant();
+    const settings = querySettings(timeoutMs);
     const p = await pool();
-    if (!signal && timeoutMs === undefined && tenant === undefined) {
+    if (!signal && !settings.length) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
@@ -486,14 +501,8 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      return await withAbort(
-        () =>
-          withQueryTransaction(client, tenant, timeoutMs, async () => {
-            const res = await client.query({ text, values: params });
-            return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
-          }),
-        signal,
-      );
+      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params), signal);
+      return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;

@@ -1,12 +1,12 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY_BASE, tenantTableStatements, tenantTables } from "../tenants/migrations.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
 
 const PREVIOUS_SCHEMA = "sessions/store/0046-spend-days-cron-rebuild";
 
-export const SESSION_SCHEMA: PgMigrationDefinition = {
+const SESSION_SCHEMA: PgMigrationDefinition = {
   id: "sessions/store/0047-base-schema",
   expectedChecksum: "09cc3da1e893709927f3a18d593d543289d9d92dc416c56f426e3a5d69957099",
   statements: [
@@ -290,18 +290,17 @@ END $base_schema$`,
   ],
 };
 
-const SESSION_TENANCY: PgMigrationDefinition = {
-  id: "sessions/store/0048-tenant-rls",
+const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0048-message-search-index",
   statements: [
-    `INSERT INTO tenants(id, slug, name)
-     SELECT id, id::text, id::text FROM qm_tenant
-      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
-     ON CONFLICT (id) DO NOTHING`,
-    ...tenantTableStatements("blobs"),
-    ...tenantTableStatements("items"),
-    `DROP FUNCTION qm_tenant_id()`,
-    `DROP TABLE qm_tenant`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_message_search ON items USING gin (tenant_id, search)
+      WHERE kind IN ('UserMessage','SteeringMessage','AgentMessage') AND variant IS DISTINCT FROM 'files_delivered' AND text IS NOT NULL`,
   ],
+};
+
+const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
+  id: "sessions/store/0049-drop-items-search",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
 };
 
 const SPEND_TRIGGERS = [
@@ -332,7 +331,7 @@ const SPEND_TRIGGERS = [
 ];
 
 const SESSION_TABLES = tenantTables(
-  "sessions/store/0049-tenant-sessions",
+  "sessions/store/0050-tenant-sessions",
   [
     { table: "sessions", unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }] },
     { table: "participants", primaryKey: "session_id, principal_id" },
@@ -348,8 +347,14 @@ const SESSION_TABLES = tenantTables(
     { table: "llm_prompt_envelopes", primaryKey: "hash" },
   ],
   {
-    after: [...SPEND_TRIGGERS, `DROP TABLE qm_settings`],
+    after: SPEND_TRIGGERS,
   },
 );
 
-export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA, SESSION_TENANCY, SESSION_TABLES];
+export const SESSION_MIGRATIONS = [
+  TENANCY_BASE,
+  SESSION_SCHEMA,
+  MESSAGE_SEARCH_INDEX,
+  DROP_ITEMS_SEARCH,
+  SESSION_TABLES,
+];
