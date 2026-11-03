@@ -139,7 +139,6 @@ export function installFakeMicrovm(): FakeMicrovm {
       body.fs.delete("/tmp/agent-home.tar");
       return ok;
     }
-    if (cmd.includes("tar -xf '.ro-layers.tar'")) return ok;
     if (cmd.startsWith("mkdir -p") || cmd.startsWith("rm -f") || cmd.startsWith("rm -rf")) {
       if (cmd.startsWith("rm -f ")) for (const [, path] of cmd.matchAll(/'([^']+)'/g)) body.fs.delete(path!);
       return ok;

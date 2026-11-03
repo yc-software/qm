@@ -24,6 +24,8 @@ import {
   isNarration,
   isUserMessage,
   messageTs,
+  proddedReason,
+  retractedReason,
   stepMessage,
   type Item,
   type RunActivityEntry,
@@ -537,6 +539,7 @@ export type AssistantWork = AssistantMessage & {
   sendBlocked?: "pending_approval";
   sendFailed?: "attachments";
   droppedAttachmentIds?: string[];
+  continuing?: string;
 };
 
 export interface RunPoll {
@@ -984,7 +987,7 @@ export function hasLiveRun(slot: RunSlot): boolean {
   return slot.runId !== null;
 }
 
-export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
+export type SignalOutcome = { ok: true } | { ok: false; reason: string; why?: string; replayed?: boolean };
 
 export interface SteerContext {
   threadRef: string | null;
@@ -1026,10 +1029,11 @@ export async function signalLiveRun(
     // text as a fresh turn when it can; surface that outcome instead of failing so the
     // caller can attach to the replay run or resend, rather than dropping the message.
     if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
-      const body = (err.body ?? {}) as { reason?: string; replayed?: boolean };
+      const body = (err.body ?? {}) as { reason?: string; why?: string; replayed?: boolean };
       return {
         ok: false,
         reason: body.reason ?? (err.status === 404 ? "not_found" : "terminal"),
+        ...(body.why ? { why: body.why } : {}),
         ...(body.replayed ? { replayed: true } : {}),
       };
     }
@@ -1075,16 +1079,27 @@ export async function queueTurn(
   getTurnOptions?: () => TurnOptions,
   idempotencyKey?: string,
   attachments: CoreAttachment[] = [],
-): Promise<QueuedRun> {
-  const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
-    method: "POST",
-    body: JSON.stringify(
-      turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
-    ),
-  });
+  midTurn: "steer" | "queue" = "queue",
+): Promise<QueuedRun & { steered?: boolean; steerTs?: string }> {
+  const submit = await api<{ status?: string; runId?: string; reason?: string; steered?: boolean; steerTs?: string }>(
+    "/api/turn",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn,
+      }),
+    },
+  );
   if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
-  if (!submit.runId) throw new Error("Could not queue the message.");
-  return { runId: submit.runId, text, ...(attachments.length ? { hasAttachments: true } : {}) };
+  if (!submit.runId && !submit.steered) throw new Error("Could not queue the message.");
+  return {
+    runId: submit.runId ?? "",
+    text,
+    ...(attachments.length ? { hasAttachments: true } : {}),
+    ...(submit.steered ? { steered: true } : {}),
+    ...(submit.steerTs ? { steerTs: submit.steerTs } : {}),
+  };
 }
 
 export async function editQueuedRun(runId: string, text: string, expectedText: string): Promise<void> {
@@ -1333,6 +1348,7 @@ async function drive(
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn: "queue",
         ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
@@ -1935,7 +1951,14 @@ interface GoalCancelledNote {
   timestamp?: number;
 }
 
-export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
+interface TranscriptNotice {
+  role: "system-note";
+  note: "notice";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote | TranscriptNotice;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -2091,7 +2114,12 @@ function deliveredSilence(item: Item): boolean {
 }
 
 function isFinishedReplyItem(item: Item): boolean {
-  return isNarration(item) && stepMessage(item)?.stopReason === "stop" && Boolean(item.text?.trim());
+  return (
+    isNarration(item) &&
+    !retractedReason(item) &&
+    stepMessage(item)?.stopReason === "stop" &&
+    Boolean(item.text?.trim())
+  );
 }
 
 function isWorkHistoryItem(item: Item): boolean {
@@ -2153,7 +2181,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       }
     }
     entrySeqs = [...entrySeqs, ...pending.map((item) => item.seq)];
-    const lastText = pending.findLastIndex(isNarration);
+    const lastText = pending.findLastIndex((item) => isNarration(item) && !retractedReason(item));
     if (lastText >= 0) {
       const segment = (pending[lastText]!.text ?? "").trim();
       if (text) {
@@ -2204,6 +2232,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     if (isFinishedReplyItem(e)) {
       spillHeldPosts();
       flushWork(text, e.createdAt, true, undefined, false, [e.seq]);
+      const prodded = proddedReason(e);
+      const flushed = out.at(-1) as AssistantWork | undefined;
+      if (prodded && flushed?.role === "assistant") flushed.continuing = prodded;
       posted = false;
       continue;
     }
@@ -2292,6 +2323,15 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         else original.edited = true;
       }
       out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
+    } else if (e.kind === "Error" && e.text && e.errorCode === "steer_withheld") {
+      spillHeldPosts();
+      flushWork("", e.createdAt);
+      out.push({
+        role: "system-note",
+        note: "notice",
+        content: e.text,
+        timestamp: e.createdAt,
+      } as unknown as AgentMessage);
     } else if (e.kind === "Error" && e.text) {
       spillHeldPosts();
       flushWork("", e.createdAt);

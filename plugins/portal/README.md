@@ -122,8 +122,9 @@ disposable test deployment: the test redeems real links for its configured admin
   upstream request is built **from scratch** — an _allowlist_ of safe headers
   (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
   headers and cookies are **never** forwarded, so a browser can't smuggle a forged
-  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream, and there's no CL/TE desync surface
-  (`node:http` frames the piped body itself).
+  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream. Body framing is the one exception: the
+  relay copies the client's `content-length` (or sends chunked encoding), which Node's parser has already
+  validated, so the upstream framing matches the bytes piped and there's no CL/TE desync surface.
 - **Routing decides once.** The router rejects pathologically-encoded targets (`%2f`, `%5c`,
   `%2e%2e`, `\`, `//`, NUL → 400) and selects the upstream by exact segment. Every path that is
   not a deployment, auth or core passthrough goes to web-ui as the signed-in user, so no path

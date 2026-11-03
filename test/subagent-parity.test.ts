@@ -4,14 +4,12 @@ import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { turnToolOptions } from "../src/agent/turn-support.ts";
@@ -136,7 +134,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
@@ -148,7 +145,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,
@@ -194,7 +190,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     const parent = (await sessions.getByThread(threadRef))!;
     const [child] = await sessions.childrenOf(parent.id);
     assert.ok(child, "the parent opened a subagent");
-    await execute((await runs.latestForThread(child.threadRef))!);
+    await execute((await runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!);
     return { parent: turns.get(threadRef)!, child: turns.get(child.threadRef)! };
   };
   return { parentTurn };

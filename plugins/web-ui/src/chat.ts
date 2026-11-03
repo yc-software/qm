@@ -59,6 +59,7 @@ import {
   Pin,
   Radar,
   RefreshCw,
+  RotateCcw,
   Target,
   Rocket,
   ScrollText,
@@ -132,6 +133,7 @@ import {
   toolBody,
   toolCallArguments,
   messageWorkTimeline,
+  retractedReplies,
   workTimelineSegments,
   streamedAnswer,
   currentTextPhase,
@@ -143,7 +145,7 @@ import {
   type ToolPayload,
   type ToolRowModel,
 } from "./timeline";
-import { activityItems, type Item } from "./items";
+import { activityItems, retractedReason, type Item } from "./items";
 import "./slack-setup";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
@@ -169,7 +171,7 @@ import {
   workingWave,
 } from "./ui";
 import { icon } from "./icons";
-import { createLiveStepLine, currentStep, preStepWork } from "./live-step";
+import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
@@ -2103,6 +2105,7 @@ export function createChatSurface(
           <div class="system-note">${body}</div>
         </article>
       `;
+      if (note.note === "notice") return row(html`${note.content}`);
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
@@ -2363,6 +2366,10 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
+    const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
+    const finishedWork = isStreaming || !answered ? undefined : (message as AssistantWork).work;
+    if (finishedWork)
+      for (const draft of retractedReplies(finishedWork)) parts.push(retractedRow(draft.reason, draft.text));
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
         const work = (message as AssistantWork).work;
@@ -2414,6 +2421,9 @@ export function createChatSurface(
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
+    const continuing = isStreaming ? undefined : (message as AssistantWork).continuing;
+    if (continuing)
+      parts.push(html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`);
     return parts;
   }
 
@@ -3137,7 +3147,8 @@ export function createChatSurface(
       const live = active && last && !work.stale && !work.pendingApprovals?.length;
       const oneStep = live && !stopping;
       const step = oneStep
-        ? currentStep(timeline, work, (tool, payload) => TOOL_META[toolCategory(tool, payload)] ?? UNKNOWN_TOOL)
+        ? (currentStep(timeline, work, (tool, payload) => TOOL_META[toolCategory(tool, payload)] ?? UNKNOWN_TOOL) ??
+          checkedReplyStep(segments[index - 1]?.[0]))
         : null;
       let label = last ? workLabel(work) : "Worked";
       if (step) label = step.label;
@@ -3303,9 +3314,22 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return interimReply(item.item);
+    if (item.kind === "text") {
+      const reason = retractedReason(item.item);
+      return reason ? retractedRow(reason, item.item.text ?? "") : interimReply(item.item);
+    }
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
+  }
+
+  function retractedRow(reason: string, text: string): TemplateResult {
+    return html`<details class="thinking-row retracted-reply">
+      <summary class="thinking-summary">
+        <span class="tool-icon">${icon(RotateCcw, 15)}</span><span class="thinking-title">Retracted: ${reason}</span>
+        <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
+      <div class="thinking-body" dir="auto">${markdown(text)}</div>
+    </details>`;
   }
 
   function interimReply(item: Item): TemplateResult {

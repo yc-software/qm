@@ -101,3 +101,20 @@ test("a successfully queued send still resolves with its run", async () => {
   const queued = await queueTurn("web:u:t", "hello", fakeAgent(), undefined, "key-1");
   assert.deepEqual(queued, { runId: "r-9", text: "hello" });
 });
+
+test("a send under the Steer preference asks core to steer and reports the steer it joined", async () => {
+  let sent: Record<string, unknown> = {};
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return {
+      ok: true,
+      status: 202,
+      text: async () => JSON.stringify({ status: "queued", runId: "live-1", steered: true, steerTs: "1.abc" }),
+    } as unknown as Response;
+  }) as typeof fetch;
+  await queueTurn("web:u:t", "keep it short", fakeAgent(), undefined, "key-2");
+  assert.equal(sent.midTurn, "queue");
+  const steered = await queueTurn("web:u:t", "keep it short", fakeAgent(), undefined, "key-2", [], "steer");
+  assert.equal(sent.midTurn, "steer");
+  assert.deepEqual(steered, { runId: "live-1", text: "keep it short", steered: true, steerTs: "1.abc" });
+});

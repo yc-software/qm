@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
+import { findTrailingPartialTurn, reconcile, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
@@ -278,7 +278,7 @@ for (const shutdown of [false, true]) {
         assert.deepEqual(stoppedEntries, [], "shutdown must not close the turn with a stop marker");
         assert.equal(entries[2]!.body.interrupted, true);
         assert.ok(partial, "the resumed attempt finds the open turn");
-        assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
+        assert.deepEqual(reconcile(entries, partial), { settleItems: [], resumed: true });
         assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
       } else {
         assert.equal(stoppedEntries.length, 1);

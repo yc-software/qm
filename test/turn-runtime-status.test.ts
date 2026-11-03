@@ -43,7 +43,7 @@ test("a run reports the runtime its turn runs on while working and after it fini
       });
       const queued = await built.app.turn({
         surface: "web",
-        liveActor: true,
+        origin: { kind: "human" },
         actor: { externalId: "U1" },
         conversation: { kind: "dm", threadRef: `runtime-${model ?? "default"}` },
         text: "hello",
@@ -75,7 +75,7 @@ test("a runtime the agent switches to mid-turn is reported as its switch", async
     handoffTo = "claude-haiku-5-5";
     const queued = await built.app.turn({
       surface: "web",
-      liveActor: true,
+      origin: { kind: "human" },
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "runtime-switch" },
       text: "switch me to haiku",

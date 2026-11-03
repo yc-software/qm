@@ -43,10 +43,17 @@ export const CONTEXT_SUMMARY_HEADER =
 
 const isNarration = (item: Item): boolean => item.kind === "AgentMessage" && item.variant === "narration";
 
+function stepId(item: Item): string | null {
+  const id = stepMessage(item)?.id;
+  return typeof id === "string" ? id : null;
+}
+
 function modelReplayable(items: Item[]): Item[] {
+  const retractedSteps = new Set(items.flatMap((e) => (e.body.retracted && stepId(e) ? [stepId(e)] : [])));
   return items.filter(
     (e) =>
       ((e.kind !== "Reasoning" && !isNarration(e)) || stepMessage(e) !== null) &&
+      !retractedSteps.has(stepId(e)) &&
       e.body.slackReplyReceipt !== true &&
       e.kind !== "Error",
   );

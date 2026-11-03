@@ -37,9 +37,9 @@ test("the title and its sidebar refresh land before the turn's computer is ready
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const computerReady = Promise.withResolvers<void>();
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = async (layers, opts) => {
+  built.sandbox.provision = async (owner, opts) => {
     await computerReady.promise;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const refreshed = new Promise<string | undefined>((resolve) => {
     const off = built.sessionStateBus.subscribe((event) => {

@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -55,9 +53,11 @@ function buildScenario(interruptAfterToolResult = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
+  const histories: Item[][] = [];
   const sandbox = fakeSandbox();
   const agent: Agent = {
     async runTurn(turn) {
+      histories.push([...turn.history]);
       turns.push(turn.input);
       continued.push(turn.continueTurn);
       environments.push(turn.environment);
@@ -79,14 +79,12 @@ function buildScenario(interruptAfterToolResult = false) {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
@@ -117,7 +115,7 @@ function buildScenario(interruptAfterToolResult = false) {
       (item) => USER_ITEM_KINDS.includes(item.kind) && (item.text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, environments, histories, sandbox, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -291,4 +289,36 @@ test("a retry does not resume another run's interrupted turn that asked the same
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, undefined]);
   assert.equal((await asks()).length, 2);
+});
+
+test("a turn that overtakes a paused one shares its history, and the paused turn resumes after it with a note", async () => {
+  const { orchestrator, runs, turns, continued, histories, input } = buildScenario(true);
+  const shape = (items: Item[]) => items.map((e) => `${e.kind}:${e.callId ?? e.text}`);
+  const paused = (await runs.enqueue({ sessionId: conversation.threadRef, request: input("nightly report") })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 1 })),
+    /interrupted/,
+  );
+
+  const person = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  assert.equal((await orchestrator.handleTurn(input(ASK, { runId: person.id, attempt: 1 }))).status, "ok");
+  assert.deepEqual(
+    shape(histories[1]!),
+    ["UserMessage:nightly report", "ToolCall:c1", "ToolResult:c1"],
+    "the person's turn sees the paused turn's work so far",
+  );
+
+  assert.equal((await orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 2 }))).status, "ok");
+  assert.deepEqual(continued, [undefined, undefined, undefined], "the paused turn is prompted, not silently continued");
+  assert.match(
+    turns[2]!,
+    /^\[system\] This turn paused while another turn ran in this conversation\..*Original task: nightly report$/,
+  );
+  assert.deepEqual(shape(histories[2]!), [
+    "UserMessage:nightly report",
+    "ToolCall:c1",
+    "ToolResult:c1",
+    `UserMessage:${ASK}`,
+    "AgentMessage:it runs on this conversation's computer",
+  ]);
 });

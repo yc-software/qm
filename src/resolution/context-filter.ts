@@ -1,5 +1,9 @@
 import type { Principal, ScopeId } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { scopeId } from "../types.ts";
+
+export function entitledScopes(p: Principal, sessionScopeId: ScopeId, orgScopeId: ScopeId): ScopeId[] {
+  return [orgScopeId, sessionScopeId, scopeId("personal", p.id), ...(p.teamIds ?? []).map((t) => scopeId("team", t))];
+}
 
 export function principalEntitledToScope(
   p: Principal,
@@ -7,11 +11,5 @@ export function principalEntitledToScope(
   sessionScopeId: ScopeId,
   orgScopeId: ScopeId,
 ): boolean {
-  if (label === orgScopeId) return true;
-
-  if (label === sessionScopeId) return true;
-  const { kind, ref } = parseScopeId(label);
-  if (kind === "personal") return p.id === ref;
-  if (kind === "team") return (p.teamIds ?? []).includes(ref);
-  return false;
+  return entitledScopes(p, sessionScopeId, orgScopeId).includes(label);
 }

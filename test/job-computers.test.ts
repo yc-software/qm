@@ -26,7 +26,7 @@ function fixture() {
   }));
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const sandbox = {
-    async provision(_layers: unknown, opts?: { sandboxId?: string }) {
+    async provision(_owner: unknown, opts?: { sandboxId?: string }) {
       return { id: opts!.sandboxId!, rootDir: "/workspace", resourceId: opts!.sandboxId! };
     },
     async teardown() {},
@@ -42,9 +42,9 @@ function fixture() {
   let now = Date.now();
   const provisions: string[] = [];
   const origProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = async (layers, opts) => {
+  sandbox.provision = async (owner, opts) => {
     provisions.push(opts!.sandboxId!);
-    return origProvision(layers, opts);
+    return origProvision(owner, opts);
   };
   const failDestroy = new Set<string>();
   const destroyAttempts: string[] = [];

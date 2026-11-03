@@ -156,9 +156,9 @@ test("gateway deployment provisions a browser token without exposing the company
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const result = await built.app.turn({
     surface: "test",
@@ -197,9 +197,9 @@ test("gateway browsing never selects a direct provider when callback signing or 
     await selectDefaultSandbox(built, "U1", "personal:U1");
     let captured: ProvisionOptions | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
-    built.sandbox.provision = (layers, opts) => {
+    built.sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     await built.app.turn({
       surface: "test",
@@ -257,9 +257,9 @@ test("company browsing without a gateway uses current deployment credentials and
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   await built.app.turn({
     surface: "test",

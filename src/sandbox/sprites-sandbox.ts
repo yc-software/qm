@@ -3,7 +3,6 @@ import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -136,7 +135,7 @@ interface RawExec {
   stderr: Buffer;
 }
 
-export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): Sandbox {
+export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
@@ -428,7 +427,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   };
 
   const base = createExecSandboxBase({
-    workspace,
     label: "sprites",
     prefix,
     homeDir: HOME_DIR,

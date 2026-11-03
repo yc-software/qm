@@ -108,11 +108,11 @@ test("setting a script runs it once first and keeps it only when that run exits 
   const ctx = createToolContext({
     sandbox: {} as unknown as Sandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }),
-    layers: [{ scopeId: HOME, mountPath: "", mode: "rw" }],
+    writableScopeId: HOME,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: OWNER,
@@ -156,10 +156,10 @@ test("setting a script runs it once first and keeps it only when that run exits 
   };
   assert.equal(
     await refusal("./typo.sh"),
-    "script not set: its trial run exited 127; a cron script must exit 0 (handled) or 1 (wake the agent). Output:\n./typo.sh: not found",
+    "script not set: its trial run failed (exit 127); a cron script must exit 0 (handled) or 1 (wake the agent). Output:\n./typo.sh: not found",
   );
-  assert.match(await refusal("./slow.sh"), /trial run timed out;.*\nstill going$/s);
-  assert.match(await refusal("./denied.sh"), /trial run failed: unknown credential handle: gh;/);
+  assert.match(await refusal("./slow.sh"), /trial run failed \(timed out\);.*\nstill going$/s);
+  assert.match(await refusal("./denied.sh"), /trial run failed \(could not run: unknown credential handle: gh\);/);
 
   const patched = await tools.cronPatch(quiet.cron.id, { script: { command: "./typo.sh" } });
   assert.ok(!("unavailable" in patched) && !patched.ok);

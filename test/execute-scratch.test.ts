@@ -10,7 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { NewItem } from "../src/sessions/items.ts";
@@ -20,7 +20,6 @@ const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace",
 
 function routingCtx(extra: Partial<ToolContextDeps> = {}) {
   const calls = { provision: 0, scratch: 0, ranOn: [] as string[] };
-  const layers: WorkspaceLayer[] = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }];
   const sandbox = {
     async run(handle: SandboxHandle) {
       calls.ranOn.push(handle.id);
@@ -37,11 +36,11 @@ function routingCtx(extra: Partial<ToolContextDeps> = {}) {
       calls.scratch++;
       return scratchHandle;
     },
-    layers,
+    writableScopeId: scopeId("personal", "U1"),
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -460,10 +459,8 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
     memoryScopeId: scopeId("channel", "C1"),
     connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
     resolution: {
-      layers: [
-        { scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" },
-        { scopeId: scopeId("org", "global"), mode: "ro", mountPath: "global" },
-      ],
+      writableScopeId: scopeId("channel", "C1"),
+      readOnlyScopeIds: [scopeId("org", "global")],
     },
   } as unknown as TurnSandboxContext);
   return { boxes, events, errors };
@@ -492,11 +489,8 @@ test("scratch provisioning is singleflight within a turn and isolated across tur
   assert.equal(a, b);
   assert.notEqual(a.id, c.id);
   assert.equal(provisions.length, 2);
-  for (const [layers, opts] of provisions) {
-    assert.deepEqual(
-      layers.map((layer) => layer.mountPath),
-      ["global"],
-    );
+  for (const [owner, opts] of provisions) {
+    assert.equal(owner, scopeId("channel", "C1"));
     assert.deepEqual(opts?.env, { AGENT_API_TOKEN: "scope-capability" });
   }
   await first.boxes.reclaimBox();

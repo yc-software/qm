@@ -108,7 +108,7 @@ async function runOnce(
   script: CronScript,
   execute: Execute,
   signal?: AbortSignal,
-): Promise<{ result?: ExecResult; exit: string; error?: string }> {
+): Promise<{ result?: ExecResult; exit: string }> {
   try {
     const result = await execute(script.command, {
       ...(script.credentials?.length ? { credentials: script.credentials } : {}),
@@ -118,8 +118,7 @@ async function runOnce(
     return { result, exit: result.timedOut ? "timed out" : `exit ${result.code}` };
   } catch (e) {
     if (signal?.aborted) throw e;
-    const error = errMessage(e);
-    return { exit: `could not run: ${error}`, error };
+    return { exit: `could not run: ${errMessage(e)}` };
   }
 }
 
@@ -144,9 +143,8 @@ export async function trialCronScript(
   execute: Execute,
   toolOutput?: Pick<ToolOutputStore, "inlineTokens">,
 ): Promise<string | undefined> {
-  const { result, error } = await runOnce(script, execute);
+  const { result, exit } = await runOnce(script, execute);
   if (result && !result.timedOut && (result.code === 0 || result.code === 1)) return undefined;
   const output = outputOf(result);
-  const outcome = !result ? `failed: ${error}` : result.timedOut ? "timed out" : `exited ${result.code}`;
-  return `script not set: its trial run ${outcome}; a cron script must exit 0 (handled) or 1 (wake the agent)${output ? `. Output:\n${await fit(output, toolOutput)}` : ""}`;
+  return `script not set: its trial run failed (${exit}); a cron script must exit 0 (handled) or 1 (wake the agent)${output ? `. Output:\n${await fit(output, toolOutput)}` : ""}`;
 }
