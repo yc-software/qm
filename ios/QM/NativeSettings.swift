@@ -28,26 +28,23 @@ final class ModelAccountsModel {
   var status: ModelAccountStatus?
   var busy = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
   init(client: APIClient) { self.client = client }
   func load() async {
     guard !busy else { return }
-    let current = UUID()
-    revision = current
-    do {
-      let result: ModelAccountStatus = try await client.fetch("api/user-model-auth/status")
-      try Task.checkCancellation()
-      guard revision == current else { return }
+    await loader.run {
+      try await client.fetch("api/user-model-auth/status") as ModelAccountStatus
+    } apply: { result in
       status = result
       error = nil
-    } catch {
-      if !Task.isCancelled && revision == current { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func choose(_ account: String) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       var body = ["account": account == "company" ? "company" : "personal"]
@@ -61,7 +58,7 @@ final class ModelAccountsModel {
   func disconnect(_ provider: String) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(

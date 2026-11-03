@@ -63,10 +63,10 @@ final class ProjectsModel {
   let user: String
   var contexts: [WorkspaceContext] = []
   var conversations: [Conversation] = []
-  var loading = false
   var busy = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
 
   init(client: APIClient, user: String = "") {
     self.client = client
@@ -75,22 +75,17 @@ final class ProjectsModel {
 
   func load() async {
     guard !busy else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if revision == current { loading = false } }
-    do {
+    await loader.run {
       let result: WorkspaceContexts = try await client.fetch("api/contexts")
       let sessions: ConversationList = try await client.fetch("api/sessions")
-      try Task.checkCancellation()
-      guard revision == current else { return }
+      return (result, sessions)
+    } apply: { result, sessions in
       contexts = result.contexts
       conversations = DraftStore.merging(
         sessions.sessions, account: client.baseURL.absoluteString + user)
       error = nil
-    } catch {
-      guard revision == current, !Task.isCancelled else { return }
-      self.error = error.localizedDescription
+    } failed: {
+      error = $0.localizedDescription
     }
   }
 
@@ -99,8 +94,7 @@ final class ProjectsModel {
   {
     guard !busy else { return nil }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let result: ProjectResult = try await client.fetch(path, body: body, method: method)

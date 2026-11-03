@@ -305,7 +305,7 @@ struct NativeLinkedConversations: View {
   @State private var busy = false
   @State private var error: String?
   @State private var confirming = false
-  @State private var revision = UUID()
+  @State private var loader = LoadGuard()
   private var current: Conversation {
     sessions.first { $0.id == model.conversation.id } ?? model.conversation
   }
@@ -368,27 +368,22 @@ struct NativeLinkedConversations: View {
   }
   private func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let currentRevision = UUID()
-    revision = currentRevision
-    do {
-      let result: ConversationList = try await model.client.fetch("api/sessions")
-      try Task.checkCancellation()
-      guard revision == currentRevision else { return }
+    await loader.run {
+      try await model.client.fetch("api/sessions") as ConversationList
+    } apply: { result in
       sessions = result.sessions
       if let updated = sessions.first(where: { $0.id == model.conversation.id }) {
         model.conversation = updated
       }
       error = nil
-    } catch {
-      if !Task.isCancelled && revision == currentRevision {
-        self.error = error.localizedDescription
-      }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   private func change() async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await model.client.fetch(

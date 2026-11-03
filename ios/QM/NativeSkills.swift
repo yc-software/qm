@@ -43,10 +43,11 @@ final class SkillsModel {
   let user: String
   var skills: [NativeSkill] = []
   var contexts: [WorkspaceContext] = []
-  var loading = false
   var busy = false
   var error: String?
-  private(set) var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
+  var revision: UUID { loader.revision }
   init(client: APIClient, user: String) {
     self.client = client
     self.user = user
@@ -60,30 +61,25 @@ final class SkillsModel {
   }
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if revision == current { loading = false } }
-    do {
+    await loader.run {
       let result: NativeSkillList = try await client.fetch(
         "api/skills", query: [.init(name: "includeShadowed", value: "1")])
       let scopes: WorkspaceContexts = try await client.fetch("api/contexts")
-      try Task.checkCancellation()
-      guard current == revision else { return }
+      return (result, scopes)
+    } apply: { result, scopes in
       skills = result.skills.sorted {
         $0.name.localizedStandardCompare($1.name) == .orderedAscending
       }
       contexts = scopes.contexts
       error = nil
-    } catch {
-      if current == revision && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func mutate(path: String, method: String, body: [String: Any] = [:]) async -> Bool {
     guard !busy else { return false }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(path, body: body, method: method)
@@ -167,7 +163,7 @@ struct NativeSkillDetail: View {
   @Bindable var model: SkillsModel
   let original: NativeSkill
   @State private var detail: NativeSkill?
-  @State private var revision = UUID()
+  @State private var loader = LoadGuard()
   @State private var editing = false
   @State private var archive = false
   @State private var error: String?
@@ -261,19 +257,15 @@ struct NativeSkillDetail: View {
   }
   private func load() async {
     guard let id = original.resourceID else { return }
-    let request = UUID()
-    revision = request
     let mutation = model.revision
-    do {
-      let result: NativeSkillResult = try await model.client.fetch("api/skills/\(id.apiComponent)")
-      try Task.checkCancellation()
-      guard revision == request && model.revision == mutation else { return }
+    await loader.run {
+      try await model.client.fetch("api/skills/\(id.apiComponent)") as NativeSkillResult
+    } apply: { result in
+      guard model.revision == mutation else { return }
       detail = result.skill
       error = nil
-    } catch {
-      if !Task.isCancelled && revision == request && model.revision == mutation {
-        self.error = error.localizedDescription
-      }
+    } failed: {
+      if model.revision == mutation { error = $0.localizedDescription }
     }
   }
 }
@@ -461,10 +453,9 @@ struct NativeSkillSuggestions: View {
   let client: APIClient
   @Binding var draft: String
   @State private var skills: [NativeSkill]?
-  @State private var loading = false
+  @State private var loader = LoadGuard()
   @State private var failed = false
   @State private var retry = 0
-  @State private var requestID = UUID()
 
   private var query: String? { NativeSkillCompletion.query(in: draft) }
   private var matches: [NativeSkill] {
@@ -482,7 +473,7 @@ struct NativeSkillSuggestions: View {
   var body: some View {
     VStack(spacing: 0) {
       if query != nil {
-        if loading {
+        if loader.loading {
           ProgressView("Loading skills…").font(.footnote)
         } else if failed {
           HStack {
@@ -523,22 +514,17 @@ struct NativeSkillSuggestions: View {
   }
 
   private func load() async {
-    let current = UUID()
-    requestID = current
     guard query != nil, skills == nil else {
-      loading = false
+      loader.cancel()
       return
     }
-    loading = true
     failed = false
-    defer { if requestID == current { loading = false } }
-    do {
-      let result: NativeSkillList = try await client.fetch("api/skills")
-      try Task.checkCancellation()
-      guard requestID == current else { return }
+    await loader.run {
+      try await client.fetch("api/skills") as NativeSkillList
+    } apply: { result in
       skills = result.skills.filter { $0.status != "archived" && $0.shadowed != true }
-    } catch {
-      if !Task.isCancelled, requestID == current { failed = true }
+    } failed: { _ in
+      failed = true
     }
   }
 }

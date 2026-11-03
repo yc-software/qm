@@ -25,10 +25,10 @@ final class AdminSessionsModel {
   let scope: String
   var sessions: [NativeAdminSession] = []
   var nextCursor: String?
-  var busy = false
   var total = 0
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var busy: Bool { loader.loading }
   private var cursors: Set<String> = []
   init(client: APIClient, scope: String) {
     self.client = client
@@ -36,23 +36,16 @@ final class AdminSessionsModel {
   }
   func load(category: String, more: Bool = false) async {
     if more && (busy || nextCursor == nil) { return }
-    if !more {
-      revision = UUID()
-      cursors = []
-    }
-    let current = revision
+    if !more { cursors = [] }
     let cursor = more ? nextCursor : nil
-    busy = true
-    defer { if current == revision { busy = false } }
-    do {
-      var query = [
-        URLQueryItem(name: "scope", value: scope), .init(name: "category", value: category),
-        .init(name: "limit", value: "50"),
-      ]
-      if let cursor { query.append(.init(name: "cursor", value: cursor)) }
-      let page: NativeAdminSessionPage = try await client.fetch("admin/api/sessions", query: query)
-      try Task.checkCancellation()
-      guard current == revision else { return }
+    var query = [
+      URLQueryItem(name: "scope", value: scope), .init(name: "category", value: category),
+      .init(name: "limit", value: "50"),
+    ]
+    if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+    await loader.run(restart: !more) {
+      try await client.fetch("admin/api/sessions", query: query) as NativeAdminSessionPage
+    } apply: { page in
       if !more { sessions = [] }
       var ids = Set(sessions.map(\.id))
       sessions.append(contentsOf: page.sessions.filter { ids.insert($0.id).inserted })
@@ -64,8 +57,8 @@ final class AdminSessionsModel {
         throw QMError.message("The conversation list did not advance. Refresh to try again.")
       }
       error = nil
-    } catch {
-      if !Task.isCancelled && current == revision { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
 }

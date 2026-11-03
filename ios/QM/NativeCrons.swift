@@ -78,26 +78,21 @@ final class CronsModel {
   var owned: [NativeCron] = []
   var shared: [NativeCron] = []
   var busy = false
-  var loading = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   init(client: APIClient) { self.client = client }
 
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if current == revision { loading = false } }
-    do {
-      let result: NativeCronList = try await client.fetch("api/crons")
-      try Task.checkCancellation()
-      guard current == revision else { return }
+    await loader.run {
+      try await client.fetch("api/crons") as NativeCronList
+    } apply: { result in
       owned = result.crons
       shared = result.visible ?? []
       error = nil
-    } catch {
-      if current == revision && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
 
@@ -106,8 +101,7 @@ final class CronsModel {
   ) async -> Bool {
     guard !busy else { return false }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(

@@ -101,31 +101,24 @@ final class InboxModel {
   var selected: [NativeInboxLoop] = []
   var available: [NativeInboxLoop] = []
   var nextCursor: String?
-  var loading = false
   var busy = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   private var cursors: Set<String> = []
   init(client: APIClient) { self.client = client }
   func load(view: String, loop: String, reset: Bool = true, afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
     if !reset && (loading || nextCursor == nil) { return }
-    if reset {
-      revision = UUID()
-      cursors = []
-    }
-    let current = revision
+    if reset { cursors = [] }
     let cursor = reset ? nil : nextCursor
-    loading = true
-    defer { if current == revision { loading = false } }
-    do {
-      var query: [URLQueryItem] = []
-      if view != "open" { query.append(.init(name: "view", value: view)) }
-      if loop != "all" { query.append(.init(name: "loopId", value: loop)) }
-      if let cursor { query.append(.init(name: "cursor", value: cursor)) }
-      let result: NativeInboxFeed = try await client.fetch("api/inbox", query: query)
-      try Task.checkCancellation()
-      guard current == revision else { return }
+    var query: [URLQueryItem] = []
+    if view != "open" { query.append(.init(name: "view", value: view)) }
+    if loop != "all" { query.append(.init(name: "loopId", value: loop)) }
+    if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+    await loader.run(restart: reset) {
+      try await client.fetch("api/inbox", query: query) as NativeInboxFeed
+    } apply: { result in
       selected = result.selected
       available = result.available
       if reset { items = [] }
@@ -138,15 +131,14 @@ final class InboxModel {
       }
       nextCursor = result.nextCursor
       error = nil
-    } catch {
-      if current == revision && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func select(_ loop: NativeInboxLoop) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       var ids = selected.map(\.id)
@@ -292,7 +284,7 @@ final class InboxDetailModel {
   var subject = ""
   var followup = ""
   var proposalAt: Double?
-  private var revision = UUID()
+  private let loader = LoadGuard()
   let drafts: DraftStore
   private var restored = false
   var draft: NativeInboxDraft {
@@ -330,12 +322,10 @@ final class InboxDetailModel {
   }
   func load() async {
     guard !busy, !dirty else { return }
-    let current = UUID()
-    revision = current
-    do {
-      let result: NativeInboxDetail = try await client.fetch(path)
-      try Task.checkCancellation()
-      guard current == revision, !dirty else { return }
+    await loader.run {
+      try await client.fetch(path) as NativeInboxDetail
+    } apply: { result in
+      guard !dirty else { return }
       accept(result)
       if !restored {
         let record = drafts.read()
@@ -350,8 +340,8 @@ final class InboxDetailModel {
         restored = true
       }
       error = nil
-    } catch {
-      if !Task.isCancelled && current == revision { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func accept(_ result: NativeInboxDetail) {
@@ -375,7 +365,7 @@ final class InboxDetailModel {
   func action(_ kind: String, message: String? = nil) async -> Bool {
     guard loaded, !busy else { return false }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       var body: [String: Any] = ["kind": kind]
@@ -407,7 +397,7 @@ final class InboxDetailModel {
   func decide(_ output: NativeLoopOutput, decision: String, note: String) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(

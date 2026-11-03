@@ -78,9 +78,9 @@ final class LoopDetailModel {
   var detail: NativeLoopDetail?
   var ingestion: NativeIngestion?
   var busy = false
-  var loading = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   init(client: APIClient, id: String) {
     self.client = client
     self.id = id
@@ -88,20 +88,16 @@ final class LoopDetailModel {
   var path: String { "api/loops/\(id.apiComponent)" }
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if revision == current { loading = false } }
-    do {
+    await loader.run {
       let result: NativeLoopDetail = try await client.fetch(path)
       let sources: NativeIngestion = try await client.fetch(path + "/ingestion")
-      try Task.checkCancellation()
-      guard current == revision else { return }
+      return (result, sources)
+    } apply: { result, sources in
       detail = result
       ingestion = sources
       error = nil
-    } catch {
-      if current == revision && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func mutate(_ suffix: String = "", method: String = "POST", body: [String: Any] = [:]) async
@@ -109,8 +105,7 @@ final class LoopDetailModel {
   {
     guard !busy else { return false }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(path + suffix, body: body, method: method)

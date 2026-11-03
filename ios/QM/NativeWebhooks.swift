@@ -39,32 +39,26 @@ struct NativeWebhookEvents: Decodable { let events: [NativeWebhookEvent] }
 final class WebhooksModel {
   let client: APIClient
   var webhooks: [NativeWebhook] = []
-  var loading = false
   var busy = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   init(client: APIClient) { self.client = client }
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if revision == current { loading = false } }
-    do {
-      let result: NativeWebhookList = try await client.fetch("api/webhooks")
-      try Task.checkCancellation()
-      guard revision == current else { return }
+    await loader.run {
+      try await client.fetch("api/webhooks") as NativeWebhookList
+    } apply: { result in
       webhooks = result.webhooks
       error = nil
-    } catch {
-      if revision == current && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func setEnabled(_ webhook: NativeWebhook) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
@@ -78,8 +72,7 @@ final class WebhooksModel {
   {
     guard !busy else { return nil }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       var verification = ["scheme": scheme]

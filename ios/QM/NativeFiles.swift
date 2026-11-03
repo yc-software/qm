@@ -56,11 +56,14 @@ final class WorkspaceFilesModel {
   let scope: String?
   var files: [WorkspaceFile] = []
   var nextCursor: String?
-  var loading = false
   var uploading = false
   var filtering = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool {
+    get { loader.loading }
+    set { loader.loading = newValue }
+  }
   private var visited: Set<String> = []
 
   init(client: APIClient, scope: String?) {
@@ -71,21 +74,14 @@ final class WorkspaceFilesModel {
   func load(reset: Bool = false) async {
     if loading && !reset { return }
     if !reset && nextCursor == nil { return }
-    if reset {
-      revision = UUID()
-      visited = []
-    }
-    let current = revision
+    if reset { visited = [] }
     let cursor = reset ? nil : nextCursor
-    loading = true
-    defer { if current == revision { loading = false } }
-    do {
-      var query = [URLQueryItem(name: "limit", value: "60")]
-      if let scope { query.append(.init(name: "scope", value: scope)) }
-      if let cursor { query.append(.init(name: "cursor", value: cursor)) }
-      let result: WorkspaceFilePage = try await client.fetch("api/files", query: query)
-      try Task.checkCancellation()
-      guard current == revision else { return }
+    var query = [URLQueryItem(name: "limit", value: "60")]
+    if let scope { query.append(.init(name: "scope", value: scope)) }
+    if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+    let loaded = await loader.run(restart: reset) {
+      try await client.fetch("api/files", query: query) as WorkspaceFilePage
+    } apply: { result in
       if reset { files = [] }
       var ids = Set(files.map(\.id))
       files.append(contentsOf: result.files.filter { ids.insert($0.id).inserted })
@@ -96,12 +92,10 @@ final class WorkspaceFilesModel {
       }
       nextCursor = result.nextCursor
       error = nil
-      loading = false
-      if filtering && reset { await loadAll() }
-    } catch {
-      guard current == revision, !Task.isCancelled else { return }
-      self.error = error.localizedDescription
+    } failed: {
+      error = $0.localizedDescription
     }
+    if loaded && filtering && reset { await loadAll() }
   }
 
   func loadAll() async {

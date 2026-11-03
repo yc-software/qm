@@ -61,29 +61,25 @@ final class KeychainModel {
   var overview: NativeKeychainOverview?
   var error: String?
   var busy = false
-  var loading = false
-  private var revision = UUID()
+  private let loader = LoadGuard()
+  var loading: Bool { loader.loading }
   private let authorization = ConnectionAuthorization()
   private var authorizationRevision = UUID()
   init(client: APIClient) { self.client = client }
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    loading = true
-    defer { if revision == current { loading = false } }
-    do {
+    await loader.run {
       let connectors: NativeConnectors = try await client.fetch("api/connectors")
       let keys: NativeKeychainOverview = try await client.fetch("api/keychain/overview")
-      try Task.checkCancellation()
-      guard revision == current else { return }
+      return (connectors, keys)
+    } apply: { connectors, keys in
       providers = connectors.providers.filter {
         $0.value.available == true || $0.value.connected == true || $0.value.needsReconnect == true
       }
       overview = keys
       error = nil
-    } catch {
-      if revision == current && !Task.isCancelled { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   func connect(_ provider: String) async {
@@ -91,8 +87,7 @@ final class KeychainModel {
     let attempt = UUID()
     authorizationRevision = attempt
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       struct Start: Decodable { let authorizeUrl: String }
@@ -124,8 +119,7 @@ final class KeychainModel {
   func mutate(_ path: String, body: [String: Any] = [:], method: String = "POST") async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
-    loading = false
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(path, body: body, method: method)

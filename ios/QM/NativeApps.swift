@@ -102,7 +102,7 @@ struct NativeAppDetail: View {
   let user: String
   let original: NativeDeployment
   @State private var current: NativeDeployment?
-  @State private var revision = UUID()
+  @State private var loader = LoadGuard()
   @State private var error: String?
   @State private var busy = false
   @State private var name = ""
@@ -203,23 +203,20 @@ struct NativeAppDetail: View {
   }
   private func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let request = UUID()
-    revision = request
-    do {
-      let result: NativeDeploymentResult = try await client.fetch(
-        "api/deployments/\(original.id.apiComponent)")
-      try Task.checkCancellation()
-      guard revision == request else { return }
+    await loader.run {
+      try await client.fetch("api/deployments/\(original.id.apiComponent)")
+        as NativeDeploymentResult
+    } apply: { result in
       current = result.deployment
       error = nil
-    } catch {
-      if !Task.isCancelled && revision == request { self.error = error.localizedDescription }
+    } failed: {
+      error = $0.localizedDescription
     }
   }
   private func mutate(_ action: String, body: [String: Any] = [:]) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(

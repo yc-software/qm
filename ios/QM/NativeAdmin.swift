@@ -294,24 +294,23 @@ final class AdminPeopleModel {
   var people: NativeAdminUsers?
   var busy = false
   var error: String?
-  private var revision = UUID()
+  private let loader = LoadGuard()
   init(client: APIClient) { self.client = client }
   func load(afterMutation: Bool = false) async {
     guard !busy || afterMutation else { return }
-    let current = UUID()
-    revision = current
-    do {
-      let result: NativeAdminUsers = try await client.fetch("admin/api/users")
-      try Task.checkCancellation()
-      guard current == revision else { return }
+    await loader.run {
+      try await client.fetch("admin/api/users") as NativeAdminUsers
+    } apply: { result in
       people = result
       error = nil
-    } catch { if current == revision { self.error = error.localizedDescription } }
+    } failed: {
+      error = $0.localizedDescription
+    }
   }
   func grant(_ user: NativeAdminUsers.User) async {
     guard let people, !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       if user.admin.isAdmin {
@@ -335,7 +334,7 @@ final class AdminPeopleModel {
   func revoke(_ member: NativeAdminUsers.External) async {
     guard !busy else { return }
     busy = true
-    revision = UUID()
+    loader.cancel()
     defer { busy = false }
     do {
       let _: MutationReceipt = try await client.fetch(
