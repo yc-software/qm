@@ -1,4 +1,4 @@
-import { withTenant } from "../../../tenants/context.ts";
+import { serveManagedSlack } from "../../../surfaces/slack-managed.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
@@ -171,19 +171,8 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
   }
 }
 
-function slackTeamOf(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const input = value as { teamId?: unknown; body?: { team_id?: unknown; team?: { id?: unknown } } };
-  const team = input.teamId ?? input.body?.team_id ?? input.body?.team?.id;
-  return typeof team === "string" && team ? team : null;
-}
-
 export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   const managed = ctx.deps.managedSlack;
   if (!managed) return sendJson(ctx.res, 404, { error: "not_configured" });
-  if (!managed.authenticated(ctx.req)) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const team = slackTeamOf(ctx.body);
-  const tenant = team ? await managed.teamTenant(team) : null;
-  if (!tenant) return sendJson(ctx.res, 404, { error: "unknown_workspace" });
-  await withTenant(tenant, () => managed.handle(ctx.req, ctx.res, ctx.body));
+  await serveManagedSlack(managed, ctx.req, ctx.res, ctx.body);
 }

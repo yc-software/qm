@@ -4,7 +4,7 @@ import test from "node:test";
 import type { ReceiverEvent } from "@slack/bolt";
 import type { SlackAccountRuntime } from "../src/slack/index.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
-import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { createManagedSlack, serveManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { skipWithoutPg, withSlackDb, type SlackDb } from "./support/slack-db.ts";
 
@@ -65,7 +65,7 @@ async function fixture(t: test.TestContext, db: Db, opts: { appId?: string } = {
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += String(chunk);
-    await bridge.handle(req, res, JSON.parse(raw));
+    await serveManagedSlack(bridge, req, res, JSON.parse(raw));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
