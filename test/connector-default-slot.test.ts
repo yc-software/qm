@@ -1,17 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
 function makeKeychain() {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap<KeychainCredential>(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: KEY,
   });
 }

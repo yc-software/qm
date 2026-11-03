@@ -10,6 +10,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -114,12 +115,13 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     entered.resolve();
     return release.promise;
   });
-  const asks = testMap<KeychainAsk>();
-  await asks.put(f.ask.id, f.ask);
+  const rows = testKeychainRows();
+  const asks = rows.asks;
+  await asks.put(f.ask);
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
+    creds: rows.creds,
+    grants: rows.grants,
     asks,
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });

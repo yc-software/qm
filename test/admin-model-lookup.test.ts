@@ -41,7 +41,7 @@ afterEach(() => {
 });
 const credentials = () =>
   createModelCredentialStore({
-    backing: testMap(),
+    backing: testModelTables().credentials,
     keyMaterial: "test-key",
     fallback: { openai: "test-openai-key", anthropic: "test-anthropic-key" },
   });
@@ -215,7 +215,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
-import { testMap } from "./support/test-database.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

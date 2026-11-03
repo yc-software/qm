@@ -9,14 +9,11 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "../src/connectors/browser-session-store.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testLinkTables } from "./support/typed-stores.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";
@@ -39,7 +36,7 @@ describe("POST /v1/emoji", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     sessions = createBrowserSessionStore({
-      sessions: testMap<StoredBrowserSession>(),
+      sessions: testLinkTables().browserSessions,
       key: deriveConnectorKey(Buffer.alloc(32, 1)),
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));

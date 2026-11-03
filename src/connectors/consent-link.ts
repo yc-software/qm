@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { OneTimeRows } from "./link-tables.ts";
 import type { AccountType } from "./oauth.ts";
 
 export interface ConsentLinkRecord {
@@ -23,7 +23,7 @@ export interface ConsentLinkStore {
 const CONSENT_LINK_TTL_MS = 24 * 60 * 60_000;
 
 export function createConsentLinkStore(
-  backing: DurableMap<ConsentLinkRecord>,
+  backing: OneTimeRows<ConsentLinkRecord>,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): ConsentLinkStore {
   const ttl = opts.ttlMs ?? CONSENT_LINK_TTL_MS;
@@ -31,7 +31,7 @@ export function createConsentLinkStore(
   return {
     async mint(rec, now) {
       const linkId = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
-      await backing.put(linkId, { ...rec, createdAt: now ?? clock() });
+      await backing.insert(linkId, { ...rec, createdAt: now ?? clock() });
       return { linkId };
     },
     async peek(linkId, now) {

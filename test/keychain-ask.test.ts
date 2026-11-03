@@ -40,6 +40,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -47,9 +48,7 @@ const SECRET = "keychain-ask-route-secret".repeat(3);
 function kcAt(now: () => number): Keychain {
   return createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: KEY,
     now,
   });

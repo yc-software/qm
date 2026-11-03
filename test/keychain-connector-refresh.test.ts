@@ -1,19 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainCredential, type OAuthRefresh } from "../src/credentials/keychain.ts";
-import type { DurableMap } from "../src/persistence/durable-map.ts";
+import type { KeychainCredentialRows, KeychainRows } from "../src/credentials/keychain-rows.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 
 const KEY = deriveConnectorKey("keychain-refresh-test-key");
 const HOST = "gmail.googleapis.com";
 
-function keychain(creds: DurableMap<KeychainCredential>, lock: AdvisoryLock, refreshConnector: OAuthRefresh) {
+function keychain(rows: KeychainRows, lock: AdvisoryLock, refreshConnector: OAuthRefresh) {
   return createKeychain({
-    creds,
-    grants: testMap(),
-    asks: testMap(),
+    ...rows,
     key: KEY,
     lock,
     refreshConnector,
@@ -36,13 +35,13 @@ function rotatingProvider() {
   return { state, refresh };
 }
 
-const storedRefreshToken = async (creds: DurableMap<KeychainCredential>) => {
-  const rec = (await creds.all())[0]!;
+const storedRefreshToken = async (rows: KeychainRows) => {
+  const rec: KeychainCredential = (await rows.creds.all())[0]!;
   return decryptSecret(rec.refresh!.refreshTokenEnc!, KEY);
 };
 
 test("processes sharing a store refresh a rotating token once and keep the live refresh token", async () => {
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows();
   const lock = testAdvisoryLock();
   const provider = rotatingProvider();
   const a = keychain(creds, lock, provider.refresh);
@@ -56,7 +55,7 @@ test("processes sharing a store refresh a rotating token once and keep the live 
 });
 
 test("a reconnect that lands during a refresh is not overwritten by the refreshed token", async () => {
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows();
   const lock = testAdvisoryLock();
   const refresh: OAuthRefresh = async () => {
     await k.setConnectorToken(HOST, "U1", { accessToken: "reconnected", refreshToken: "rt-new" });
@@ -69,7 +68,7 @@ test("a reconnect that lands during a refresh is not overwritten by the refreshe
 });
 
 test("recording a refresh failure never overwrites a rotation that landed concurrently", async () => {
-  const inner = testMap<KeychainCredential>();
+  const inner = testKeychainRows();
   const lock = testAdvisoryLock();
   let rotateBeforeWrite = false;
   const rotate = async () => {
@@ -81,11 +80,11 @@ test("recording a refresh failure never overwrites a rotation that landed concur
       expiresAt: Date.now() + 3_600_000,
     });
   };
-  const creds: DurableMap<KeychainCredential> = {
-    ...inner,
-    merge: async (id, patch) => (await rotate(), inner.merge(id, patch)),
-    update: async (id, fn) => (await rotate(), inner.update!(id, fn)),
+  const wrapped: KeychainCredentialRows = {
+    ...inner.creds,
+    update: async (id, fn) => (await rotate(), inner.creds.update(id, fn)),
   };
+  const creds = { ...inner, creds: wrapped };
   const failing: OAuthRefresh = async () => {
     rotateBeforeWrite = true;
     throw new Error("provider unavailable");
@@ -100,7 +99,7 @@ test("recording a refresh failure never overwrites a rotation that landed concur
 });
 
 test("a failed refresh inside the margin falls back to the still-valid access token", async () => {
-  const creds = testMap<KeychainCredential>();
+  const creds = testKeychainRows();
   const k = keychain(creds, testAdvisoryLock(), async () => {
     throw new Error("provider unavailable");
   });
@@ -124,7 +123,7 @@ test("a refresh that cannot take its lock still serves the unexpired token", asy
       throw new Error("timeout acquiring advisory lock");
     },
   };
-  const k = keychain(testMap<KeychainCredential>(), lock, async () => ({ accessToken: "unused" }));
+  const k = keychain(testKeychainRows(), lock, async () => ({ accessToken: "unused" }));
   await k.setConnectorToken(HOST, "U1", {
     accessToken: "still-valid",
     refreshToken: "rt",

@@ -25,8 +25,9 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testKeychainRows } from "./support/typed-stores.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -49,9 +50,7 @@ async function start(withConfig = true) {
   );
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
+    ...testKeychainRows(),
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {
