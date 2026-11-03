@@ -45,7 +45,6 @@ const server = createServer(built.app, {
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
-await built.deploymentLayerReady();
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
