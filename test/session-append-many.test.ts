@@ -39,7 +39,7 @@ for (const backend of ["memory", "postgres"] as const) {
         );
         assert.deepEqual((await store.getItems(session.id)).slice(1), batch);
         assert.deepEqual(await store.appendMany(writer, []), []);
-        const pool = backend === "postgres" ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : null;
+        const pool = backend === "postgres" ? new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL }) : null;
         try {
           if (pool) {
             const { rows } = await pool.query("SELECT messages, turns FROM sessions WHERE id = $1", [session.id]);
