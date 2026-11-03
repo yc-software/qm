@@ -1,3 +1,4 @@
+import { withRowTenant } from "../tenant-ingress.ts";
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
 import { orgId as configOrgId } from "../../config.ts";
@@ -131,7 +132,15 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-async function oauthCallback(ctx: BaseCtx): Promise<void> {
+function oauthCallback(ctx: BaseCtx): Promise<void> {
+  const state = ctx.url.searchParams.get("state");
+  if (!ctx.deps.oauthFlows || !state) return finishOAuthCallback(ctx);
+  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "oauth_flows", id: state }, () =>
+    finishOAuthCallback(ctx),
+  );
+}
+
+async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
   const { res, deps, secret, url } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
@@ -513,7 +522,12 @@ async function catalog(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
+  {
+    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
+    auth: "public",
+    tenant: "row",
+    handle: oauthCallback,
+  },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {

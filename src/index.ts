@@ -19,6 +19,8 @@ useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await built.tenancy.refreshSettings();
+built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
