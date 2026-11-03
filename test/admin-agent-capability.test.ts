@@ -1013,7 +1013,7 @@ test("native admin tools use the authenticated handler, including its live autho
       { controlTools: true },
     ).find((t) => t.name === "admin")!;
     await inTestTenant(() => s.built.memory.capture(target, ["draft fixture"], Date.UTC(2026, 0, 2)));
-    const [seeded] = (await s.built.memory.facts!(target))!;
+    const [seeded] = (await inTestTenant(() => s.built.memory.facts!(target)))!;
     const written = await tool.execute(
       "native-write",
       {

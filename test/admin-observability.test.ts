@@ -1400,7 +1400,7 @@ test("admin governance: spend limits round-trip per scope, validate, and clear",
   const put = (scope: string, body: unknown, headers: Record<string, string> = ALICE) =>
     fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/spend-limit`, {
       method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...headers, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
   try {
@@ -1415,9 +1415,9 @@ test("admin governance: spend limits round-trip per scope, validate, and clear",
       monthlyUsd: 300,
     });
     assert.equal((await put("channel:C1", { monthlyUsd: 40 })).status, 200, "any scope can carry its own cap");
-    assert.deepEqual(await built.config.getSpendLimitDurable("channel:C1"), { monthlyUsd: 40 });
+    assert.deepEqual(await inTestTenant(() => built.config.getSpendLimitDurable("channel:C1")), { monthlyUsd: 40 });
     assert.equal((await put("channel:C1", { inherit: true })).status, 200);
-    assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
+    assert.equal(await inTestTenant(() => built.config.getSpendLimitDurable("channel:C1")), null, "inherit clears it");
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
