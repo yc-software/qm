@@ -35,10 +35,12 @@ const definition = {
   name: "Small embeddings",
   provider: "openai",
 };
-afterEach(() => {
-  setModelOverlays([]);
-  setGatewayModels([]);
-});
+afterEach(() =>
+  inTestTenant(() => {
+    setModelOverlays([]);
+    setGatewayModels([]);
+  }),
+);
 
 test("verified embedding definitions survive registry reload but never become chat models", () =>
   inTestTenant(async () => {
@@ -86,75 +88,77 @@ test("verified embedding definitions survive registry reload but never become ch
     assert.equal(resolveEmbeddingModel("embed-small"), undefined);
   }));
 
-test("key-scoped gateway embeddings need no chat capabilities and use gateway credentials only", async () => {
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const catalog = createGatewayCatalog(
-    {
-      url: "https://gateway.example/v1",
-      apiKey: "gateway-key",
-      apiKeyHeader: "x-gateway-key",
-      models: { "gpt-5.5": "embed" },
-      actorKey: "test-actor-key",
-    },
-    async (url, init) => {
-      calls.push({ url: String(url), init });
-      return Response.json({
-        data: String(url).endsWith("/models")
-          ? [{ id: "embed" }]
-          : [
-              { model_group: "embed", mode: "embedding" },
-              { model_group: "inaccessible", mode: "embedding" },
-            ],
-      });
-    },
-  );
-  await catalog.refresh();
-  assert.deepEqual(
-    embeddingModelCatalog().map((m) => m.id),
-    ["gateway/embed"],
-  );
-  assert.equal(resolveModel("gateway/embed"), undefined);
-  assert.equal(catalog.transport.models["gpt-5.5"], undefined);
-  assert.deepEqual(gatewayModelsJson(), {});
-  const embedder = withModelRequestContext({ actorId: "U1" }, () =>
-    createMemoryEmbedder(
-      resolveEmbeddingModel("gateway/embed")!,
-      "must-not-leak",
-      catalog.transport,
+test("key-scoped gateway embeddings need no chat capabilities and use gateway credentials only", () =>
+  inTestTenant(async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const catalog = createGatewayCatalog(
+      {
+        url: "https://gateway.example/v1",
+        apiKey: "gateway-key",
+        apiKeyHeader: "x-gateway-key",
+        models: { "gpt-5.5": "embed" },
+        actorKey: "test-actor-key",
+      },
       async (url, init) => {
         calls.push({ url: String(url), init });
-        return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
+        return Response.json({
+          data: String(url).endsWith("/models")
+            ? [{ id: "embed" }]
+            : [
+                { model_group: "embed", mode: "embedding" },
+                { model_group: "inaccessible", mode: "embedding" },
+              ],
+        });
       },
-    ),
-  );
-  assert.deepEqual(
-    await withModelRequestContext({ actorId: "U2" }, () => embedder.embed(["query"], AbortSignal.timeout(1000))),
-    [[0.6, 0.8]],
-  );
-  const request = calls.at(-1)!;
-  assert.equal(request.url, "https://gateway.example/v1/embeddings");
-  assert.deepEqual(request.init?.headers, {
-    "content-type": "application/json",
-    "x-gateway-key": "gateway-key",
-    "x-qm-actor": gatewayActorId("U2", "test-actor-key"),
-    "x-qm-purpose": "embedding",
-  });
-  assert.equal(JSON.parse(String(request.init?.body)).model, "embed");
-  setGatewayModels([]);
-  assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
-});
+    );
+    await catalog.refresh();
+    assert.deepEqual(
+      embeddingModelCatalog().map((m) => m.id),
+      ["gateway/embed"],
+    );
+    assert.equal(resolveModel("gateway/embed"), undefined);
+    assert.equal(catalog.transport.models["gpt-5.5"], undefined);
+    assert.deepEqual(gatewayModelsJson(), {});
+    const embedder = withModelRequestContext({ actorId: "U1" }, () =>
+      createMemoryEmbedder(
+        resolveEmbeddingModel("gateway/embed")!,
+        "must-not-leak",
+        catalog.transport,
+        async (url, init) => {
+          calls.push({ url: String(url), init });
+          return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
+        },
+      ),
+    );
+    assert.deepEqual(
+      await withModelRequestContext({ actorId: "U2" }, () => embedder.embed(["query"], AbortSignal.timeout(1000))),
+      [[0.6, 0.8]],
+    );
+    const request = calls.at(-1)!;
+    assert.equal(request.url, "https://gateway.example/v1/embeddings");
+    assert.deepEqual(request.init?.headers, {
+      "content-type": "application/json",
+      "x-gateway-key": "gateway-key",
+      "x-qm-actor": gatewayActorId("U2", "test-actor-key"),
+      "x-qm-purpose": "embedding",
+    });
+    assert.equal(JSON.parse(String(request.init?.body)).model, "embed");
+    setGatewayModels([]);
+    assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
+  }));
 
-test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const first = testConfigStore("test", { baseModels });
-  await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
-  await first.setRuntimeSelection("org:test", null);
-  const restarted = testConfigStore("test", { baseModels });
-  assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
-  await restarted.setEmbeddingModel(null);
-  assert.equal(await first.getEmbeddingModelDurable(), null);
-});
+test("org embedding selection is durable and survives chat runtime replacement and clearing", () =>
+  inTestTenant(async () => {
+    const baseModels = testMap<PersistedBaseModel>();
+    const first = testConfigStore("test", { baseModels });
+    await first.setEmbeddingModel("gateway/embed");
+    await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
+    await first.setRuntimeSelection("org:test", null);
+    const restarted = testConfigStore("test", { baseModels });
+    assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
+    await restarted.setEmbeddingModel(null);
+    assert.equal(await first.getEmbeddingModelDurable(), null);
+  }));
 
 test("HTTP embedding selection accepts only known embedding models and survives a new recall", (t) =>
   inTestTenant(async () => {

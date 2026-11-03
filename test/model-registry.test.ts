@@ -14,17 +14,19 @@ import {
 } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("registry model identifiers are unique", () => {
   const ids = MODEL_REGISTRY.map((model) => model.id);
   assert.equal(new Set(ids).size, ids.length);
 });
 
-test("every registry model resolves via pi-ai (nothing offered that turns can't serve)", () => {
-  for (const m of MODEL_REGISTRY) {
-    assert.ok(resolveModel(m.id), `registry model ${m.id} must resolve`);
-  }
-});
+test("every registry model resolves via pi-ai (nothing offered that turns can't serve)", () =>
+  inTestTenant(() => {
+    for (const m of MODEL_REGISTRY) {
+      assert.ok(resolveModel(m.id), `registry model ${m.id} must resolve`);
+    }
+  }));
 
 test("picker ⊆ gate: every selectable base model is web-ui-enabled", () => {
   const webui = new Set(DEFAULT_WEBUI_MODEL_IDS);
@@ -36,167 +38,179 @@ test("picker ⊆ gate: every selectable base model is web-ui-enabled", () => {
   }
 });
 
-test("every web-ui-enabled model passes the web-turn model gate (no 403 for an offered model)", () => {
-  for (const id of DEFAULT_WEBUI_MODEL_IDS) {
-    assert.equal(
-      validateWebTurnModelOptions({ model: id }, null),
-      null,
-      `${id} must not be refused by validateWebTurnModelOptions`,
+test("every web-ui-enabled model passes the web-turn model gate (no 403 for an offered model)", () =>
+  inTestTenant(() => {
+    for (const id of DEFAULT_WEBUI_MODEL_IDS) {
+      assert.equal(
+        validateWebTurnModelOptions({ model: id }, null),
+        null,
+        `${id} must not be refused by validateWebTurnModelOptions`,
+      );
+    }
+  }));
+
+test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", () =>
+  inTestTenant(() => {
+    assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-5.6-sol"));
+    assert.equal(validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null), null);
+  }));
+
+test("gpt-6-astra is offered with its published context, output ceiling, and rates", () =>
+  inTestTenant(() => {
+    const model = resolveModel("gpt-6-astra");
+    assert.ok(model, "gpt-6-astra must resolve");
+    assert.equal(model.provider, "openai");
+    assert.equal(model.contextWindow, 1_050_000);
+    assert.equal(model.maxTokens, 128_000);
+    assert.deepEqual(
+      {
+        input: model.cost.input,
+        output: model.cost.output,
+        cacheRead: model.cost.cacheRead,
+        cacheWrite: model.cost.cacheWrite,
+      },
+      { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
     );
-  }
-});
+    assert.deepEqual((model.cost as { tiers?: unknown }).tiers, [
+      { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
+    ]);
+    assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
+    assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
+  }));
 
-test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", () => {
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-5.6-sol"));
-  assert.equal(validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null), null);
-});
+test("Opus 5.5 inherits adaptive thinking without off, with its own rates and limits", () =>
+  inTestTenant(() => {
+    const model = resolveModel("claude-opus-5-5");
+    assert.ok(model);
+    assert.equal(model.provider, "anthropic");
+    assert.equal(model.api, "anthropic-messages");
+    assert.equal(model.reasoning, true);
+    assert.deepEqual(model.input, ["text", "image"]);
+    assert.equal(model.contextWindow, 1_000_000);
+    assert.equal(model.maxTokens, 128_000);
+    assert.deepEqual(model.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
+    assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
+    assert.deepEqual(model.compat, {
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+      supportsStrictTools: true,
+    });
+    assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.off, undefined);
+    assert.equal(resolveModel("claude-opus-5")?.thinkingLevelMap?.off, undefined);
+    model.thinkingLevelMap!.xhigh = "high";
+    assert.equal(resolveModel("claude-opus-5-5")?.thinkingLevelMap?.xhigh, "xhigh");
+    assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
+  }));
 
-test("gpt-6-astra is offered with its published context, output ceiling, and rates", () => {
-  const model = resolveModel("gpt-6-astra");
-  assert.ok(model, "gpt-6-astra must resolve");
-  assert.equal(model.provider, "openai");
-  assert.equal(model.contextWindow, 1_050_000);
-  assert.equal(model.maxTokens, 128_000);
-  assert.deepEqual(
-    {
-      input: model.cost.input,
-      output: model.cost.output,
-      cacheRead: model.cost.cacheRead,
-      cacheWrite: model.cost.cacheWrite,
-    },
-    { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-  );
-  assert.deepEqual((model.cost as { tiers?: unknown }).tiers, [
-    { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
-  ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
-  assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
-});
+test("Opus 5.5 is selectable with compatible credentials, without changing defaults", () =>
+  inTestTenant(() => {
+    const id = "claude-opus-5-5";
+    assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
+    assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+    assert.ok(FAST_MODE_MODEL_IDS.includes(id));
+    assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
+    assert.equal(modelSupported(id), true);
+    assert.equal(defaultModel(), "claude-opus-5");
+    assert.match(
+      validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
+      /provider isn't configured/,
+    );
+    assert.equal(
+      validateWebTurnModelOptions({ model: id }, null, { anthropic: true, openai: false, openrouter: false }),
+      null,
+    );
+  }));
 
-test("Opus 5.5 inherits adaptive thinking without off, with its own rates and limits", () => {
-  const model = resolveModel("claude-opus-5-5");
-  assert.ok(model);
-  assert.equal(model.provider, "anthropic");
-  assert.equal(model.api, "anthropic-messages");
-  assert.equal(model.reasoning, true);
-  assert.deepEqual(model.input, ["text", "image"]);
-  assert.equal(model.contextWindow, 1_000_000);
-  assert.equal(model.maxTokens, 128_000);
-  assert.deepEqual(model.cost, { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, tiers: undefined });
-  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
-  assert.deepEqual(model.compat, {
-    forceAdaptiveThinking: true,
-    supportsTemperature: false,
-    supportsStrictTools: true,
-  });
-  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.off, undefined);
-  assert.equal(resolveModel("claude-opus-5")?.thinkingLevelMap?.off, undefined);
-  model.thinkingLevelMap!.xhigh = "high";
-  assert.equal(resolveModel("claude-opus-5-5")?.thinkingLevelMap?.xhigh, "xhigh");
-  assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
-});
+test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, and leaves defaults alone", () =>
+  inTestTenant(() => {
+    const id = "claude-sonnet-5-5";
+    const model = resolveModel(id);
+    assert.ok(model);
+    assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
+    assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
+    assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
+    assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
+    assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+    assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
+    assert.equal(modelSupported(id), true);
+    assert.equal(defaultModel(), "claude-opus-5");
+  }));
 
-test("Opus 5.5 is selectable with compatible credentials, without changing defaults", () => {
-  const id = "claude-opus-5-5";
-  assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
-  assert.ok(FAST_MODE_MODEL_IDS.includes(id));
-  assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
-  assert.equal(modelSupported(id), true);
-  assert.equal(defaultModel(), "claude-opus-5");
-  assert.match(
-    validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
-    /provider isn't configured/,
-  );
-  assert.equal(
-    validateWebTurnModelOptions({ model: id }, null, { anthropic: true, openai: false, openrouter: false }),
-    null,
-  );
-});
+test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", () =>
+  inTestTenant(() => {
+    const id = "claude-haiku-5-5";
+    const model = resolveModel(id);
+    assert.ok(model);
+    assert.equal(String(model.provider), "anthropic");
+    assert.equal(model.api, "anthropic-messages");
+    assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
+    assert.equal((model.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
+    assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
+    assert.equal(safeModelMetadata(id)?.label, "Haiku 5.5");
+    assert.deepEqual(safeModelMetadata(id)?.effortLevels, [
+      "auto",
+      "default",
+      "adaptive",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+    ]);
+    assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+    assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
+    assert.equal(modelSupported(id), true);
+    assert.equal(defaultModel(), "claude-opus-5");
+  }));
 
-test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, and leaves defaults alone", () => {
-  const id = "claude-sonnet-5-5";
-  const model = resolveModel(id);
-  assert.ok(model);
-  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max", off: null });
-  assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
-  assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
-  assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
-  assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  assert.equal(modelSupported(id), true);
-  assert.equal(defaultModel(), "claude-opus-5");
-});
+test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () =>
+  inTestTenant(() => {
+    assert.deepEqual(
+      [...FAST_MODE_MODEL_IDS].sort(),
+      MODEL_REGISTRY.filter((m) => m.fastMode)
+        .map((m) => m.id)
+        .sort(),
+    );
+    for (const id of FAST_MODE_MODEL_IDS) assert.equal(modelSupportsFastMode(id), true);
+  }));
 
-test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", () => {
-  const id = "claude-haiku-5-5";
-  const model = resolveModel(id);
-  assert.ok(model);
-  assert.equal(String(model.provider), "anthropic");
-  assert.equal(model.api, "anthropic-messages");
-  assert.deepEqual(model.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
-  assert.equal((model.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
-  assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
-  assert.equal(safeModelMetadata(id)?.label, "Haiku 5.5");
-  assert.deepEqual(safeModelMetadata(id)?.effortLevels, [
-    "auto",
-    "default",
-    "adaptive",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-    "ultracode",
-  ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
-  assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  assert.equal(modelSupported(id), true);
-  assert.equal(defaultModel(), "claude-opus-5");
-});
+test("exposure is provider-key-aware: a model whose provider is unconfigured is not serviceable", () =>
+  inTestTenant(() => {
+    const noOpenai = { anthropic: true, openai: false, openrouter: false };
+    assert.equal(modelServiceable("gpt-5.6-sol", noOpenai), false);
+    assert.equal(modelServiceable("claude-opus-4-8", noOpenai), true);
+    assert.deepEqual(serviceableModelIds(["claude-opus-4-8", "gpt-5.6-sol"], noOpenai), ["claude-opus-4-8"]);
+  }));
 
-test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () => {
-  assert.deepEqual(
-    [...FAST_MODE_MODEL_IDS].sort(),
-    MODEL_REGISTRY.filter((m) => m.fastMode)
-      .map((m) => m.id)
-      .sort(),
-  );
-  for (const id of FAST_MODE_MODEL_IDS) assert.equal(modelSupportsFastMode(id), true);
-});
+test("a company ChatGPT subscription serves OpenAI models that have a subscription alias", () =>
+  inTestTenant(() => {
+    const subscription = { anthropic: false, openai: false, openrouter: false, codexOAuth: true };
+    const apiKey = { anthropic: false, openai: true, openrouter: false };
+    assert.equal(modelServiceable("gpt-5.6-sol", subscription), true);
+    assert.equal(modelServiceable("codex/gpt-5.6-sol", subscription), true);
+    assert.equal(modelServiceable("gpt-6-astra-ultrafast", subscription), false);
+    assert.equal(modelServiceable("claude-opus-4-8", subscription), false);
+    assert.equal(modelServiceable("gpt-6-astra-ultrafast", apiKey), true);
+    assert.equal(modelServiceable("codex/gpt-5.6-sol", apiKey), false);
+    assert.equal(modelServiceable("codex/gpt-5.6-sol", { ...apiKey, modelIds: new Set(["codex/gpt-5.6-sol"]) }), true);
+  }));
 
-test("exposure is provider-key-aware: a model whose provider is unconfigured is not serviceable", () => {
-  const noOpenai = { anthropic: true, openai: false, openrouter: false };
-  assert.equal(modelServiceable("gpt-5.6-sol", noOpenai), false);
-  assert.equal(modelServiceable("claude-opus-4-8", noOpenai), true);
-  assert.deepEqual(serviceableModelIds(["claude-opus-4-8", "gpt-5.6-sol"], noOpenai), ["claude-opus-4-8"]);
-});
+test("web-turn gate refuses a keyless model cleanly, accepts it once the provider is configured", () =>
+  inTestTenant(() => {
+    const noOpenai = { anthropic: true, openai: false, openrouter: false };
+    const refused = validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, noOpenai);
+    assert.match(refused ?? "", /provider isn't configured/);
+    assert.equal(
+      validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, { anthropic: true, openai: true, openrouter: false }),
+      null,
+    );
+  }));
 
-test("a company ChatGPT subscription serves OpenAI models that have a subscription alias", () => {
-  const subscription = { anthropic: false, openai: false, openrouter: false, codexOAuth: true };
-  const apiKey = { anthropic: false, openai: true, openrouter: false };
-  assert.equal(modelServiceable("gpt-5.6-sol", subscription), true);
-  assert.equal(modelServiceable("codex/gpt-5.6-sol", subscription), true);
-  assert.equal(modelServiceable("gpt-6-astra-ultrafast", subscription), false);
-  assert.equal(modelServiceable("claude-opus-4-8", subscription), false);
-  assert.equal(modelServiceable("gpt-6-astra-ultrafast", apiKey), true);
-  assert.equal(modelServiceable("codex/gpt-5.6-sol", apiKey), false);
-  assert.equal(modelServiceable("codex/gpt-5.6-sol", { ...apiKey, modelIds: new Set(["codex/gpt-5.6-sol"]) }), true);
-});
-
-test("web-turn gate refuses a keyless model cleanly, accepts it once the provider is configured", () => {
-  const noOpenai = { anthropic: true, openai: false, openrouter: false };
-  const refused = validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, noOpenai);
-  assert.match(refused ?? "", /provider isn't configured/);
-  assert.equal(
-    validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, { anthropic: true, openai: true, openrouter: false }),
-    null,
-  );
-});
-
-test("fast-mode support is registry-driven", () => {
-  assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
-  assert.equal(modelSupportsFastMode("gpt-5.6-sol"), true);
-  assert.equal(modelSupportsFastMode(undefined), false);
-  assert.equal(modelSupportsFastMode("nonexistent-model"), false);
-});
+test("fast-mode support is registry-driven", () =>
+  inTestTenant(() => {
+    assert.equal(modelSupportsFastMode("claude-opus-4-8"), true);
+    assert.equal(modelSupportsFastMode("gpt-5.6-sol"), true);
+    assert.equal(modelSupportsFastMode(undefined), false);
+    assert.equal(modelSupportsFastMode("nonexistent-model"), false);
+  }));

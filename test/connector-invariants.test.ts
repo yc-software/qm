@@ -21,145 +21,150 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
-test("C3 — no catalog host appears in serviceHosts / egressServiceHosts (least privilege)", () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-")) }));
-  return Promise.all(CATALOG_HOSTS.map((h) => built.connectorTokens.connectorAccessToken(h, "nobody"))).then(
-    (tokens) => {
-      assert.ok(
-        tokens.every((t) => t === null),
-        "a catalog host must have no shared/service token by default",
+test("C3 — no catalog host appears in serviceHosts / egressServiceHosts (least privilege)", () =>
+  inTestTenant(() => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-")) }));
+    return Promise.all(CATALOG_HOSTS.map((h) => built.connectorTokens.connectorAccessToken(h, "nobody"))).then(
+      (tokens) => {
+        assert.ok(
+          tokens.every((t) => t === null),
+          "a catalog host must have no shared/service token by default",
+        );
+      },
+    );
+  }));
+
+test("C3 — a catalog host wrongly listed as a service host is detectable via the real token-store contract", () =>
+  inTestTenant(async () => {
+    const offending = CATALOG_HOSTS[0]!;
+
+    const envName = envKey(offending);
+    const prior = process.env[envName];
+    process.env[envName] = "shared-service-token";
+    try {
+      const ok = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-ok-")) }));
+      assert.equal(
+        await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
+        null,
+        "default wiring must hand out NO shared token for an unconnected catalog host",
       );
-    },
-  );
-});
 
-test("C3 — a catalog host wrongly listed as a service host is detectable via the real token-store contract", async () => {
-  const offending = CATALOG_HOSTS[0]!;
-
-  const envName = envKey(offending);
-  const prior = process.env[envName];
-  process.env[envName] = "shared-service-token";
-  try {
-    const ok = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-ok-")) }));
-    assert.equal(
-      await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
-      null,
-      "default wiring must hand out NO shared token for an unconnected catalog host",
-    );
-
-    const bad = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "c3-bad-")),
-        egressServiceHosts: [offending],
-      }),
-    );
-    assert.equal(
-      await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
-      "shared-service-token",
-      "listing a catalog host in egressServiceHosts leaks a shared token (the C3 violation a CI guard must catch)",
-    );
-    assert.notEqual(
-      await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
-      await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
-      "a catalog host placed in serviceHosts is detectable: it changes the store's per-host token decision",
-    );
-  } finally {
-    if (prior === undefined) delete process.env[envName];
-    else process.env[envName] = prior;
-  }
-});
+      const bad = buildApp(
+        testConfig({
+          dataDir: mkdtempSync(join(tmpdir(), "c3-bad-")),
+          egressServiceHosts: [offending],
+        }),
+      );
+      assert.equal(
+        await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
+        "shared-service-token",
+        "listing a catalog host in egressServiceHosts leaks a shared token (the C3 violation a CI guard must catch)",
+      );
+      assert.notEqual(
+        await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
+        await bad.connectorTokens.connectorAccessToken(offending, "nobody"),
+        "a catalog host placed in serviceHosts is detectable: it changes the store's per-host token decision",
+      );
+    } finally {
+      if (prior === undefined) delete process.env[envName];
+      else process.env[envName] = prior;
+    }
+  }));
 
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
-  let exchanged = false;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
-    signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
-    oauthFetch: async () => {
-      exchanged = true;
-      return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
-    },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        orgId: "other",
+test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", () =>
+  inTestTenant(async () => {
+    let exchanged = false;
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
+    const server = createServer(built.app, {
+      signingSecret: SECRET,
+      replayDedupe: built.replayDedupe,
+      connectorTokens: built.connectorTokens,
+      oauthEnv,
+      oauthFetch: async () => {
+        exchanged = true;
+        return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
       },
-      { secret: SECRET },
-    );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
-    assert.equal(res.status, 400);
-    assert.match(await res.text(), /different org/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
-    assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
+    });
+    server.listen(0);
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    try {
+      const state = await sealOAuthState(
+        {
+          provider: "google",
+          principalId: "U1",
+          redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+          orgId: "other",
+        },
+        { secret: SECRET },
+      );
+      const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+      assert.equal(res.status, 400);
+      assert.match(await res.text(), /different org/);
+      assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
+      assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }));
 
-test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
-    signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
-    oauthFetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
-      { secret: SECRET },
-    );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
-    assert.equal(res.status, 400);
-    assert.match(await res.text(), /empty access token/);
-    assert.equal(
-      await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"),
-      null,
-      "no dead credential persisted",
-    );
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
+test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
+    const server = createServer(built.app, {
+      signingSecret: SECRET,
+      replayDedupe: built.replayDedupe,
+      connectorTokens: built.connectorTokens,
+      oauthEnv,
+      oauthFetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    });
+    server.listen(0);
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    try {
+      const state = await sealOAuthState(
+        { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+        { secret: SECRET },
+      );
+      const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+      assert.equal(res.status, 400);
+      assert.match(await res.text(), /empty access token/);
+      assert.equal(
+        await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"),
+        null,
+        "no dead credential persisted",
+      );
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }));
 
-test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
-  await built.connectorTokens.setConnectorToken(
-    "gmail.googleapis.com",
-    "U1",
-    { accessToken: "u1-personal", accountType: "personal" },
-    "personal",
-  );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const st = (await (await fetch(`${base}/v1/connectors/oauth/status?principalId=U1`)).json()) as {
-      providers: Record<string, { connected: boolean }>;
-    };
-    assert.equal(
-      st.providers.google!.connected,
-      true,
-      "status must reflect the personal token the orchestrator would inject in a DM",
+test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
+    await built.connectorTokens.setConnectorToken(
+      "gmail.googleapis.com",
+      "U1",
+      { accessToken: "u1-personal", accountType: "personal" },
+      "personal",
     );
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
+    const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+    server.listen(0);
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    try {
+      const st = (await (await fetch(`${base}/v1/connectors/oauth/status?principalId=U1`)).json()) as {
+        providers: Record<string, { connected: boolean }>;
+      };
+      assert.equal(
+        st.providers.google!.connected,
+        true,
+        "status must reflect the personal token the orchestrator would inject in a DM",
+      );
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }));
 
 function turn(kind: "dm" | "channel", text: string): TurnRequest {
   const actor = { externalId: "U1" };

@@ -8,6 +8,7 @@ import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function listen(
   t: TestContext,
@@ -101,31 +102,32 @@ test("address-guarded fetch gives up on an endpoint that never answers", async (
   await assert.rejects(impatient(`http://127.0.0.1:${silent.port}/`), /timed out/);
 });
 
-test("MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default", async (t) => {
-  const target = await listen(t, (_req, res) => res.writeHead(500).end());
-  const base = `http://127.0.0.1:${target.port}`;
-  await assert.rejects(createMcpClient({ url: `${base}/mcp`, auth: { mode: "none" } }).listTools(), (e: unknown) =>
-    /private network address/.test(errMessage(e)),
-  );
-  const discovered = await discoverOAuth(new URL(`${base}/mcp`));
-  assert.match(discovered.errors.join("; "), /127\.0\.0\.1 is a private network address/);
-  t.after(() => setPublicOAuthClients([]));
-  setPublicOAuthClients([
-    {
-      name: "internal-crm",
-      host: "crm.example.com",
-      authUrl: "https://crm.example.com/authorize",
-      tokenUrl: `${base}/token`,
-      scopes: [],
-      clientId: "public-client",
-      label: "CRM",
-    },
-  ]);
-  await assert.rejects(
-    exchangeCode("internal-crm", "code", "https://qm.example/cb", {
-      client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
-    }),
-    PrivateNetworkAddressError,
-  );
-  assert.equal(target.hits(), 0);
-});
+test("MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default", (t) =>
+  inTestTenant(async () => {
+    const target = await listen(t, (_req, res) => res.writeHead(500).end());
+    const base = `http://127.0.0.1:${target.port}`;
+    await assert.rejects(createMcpClient({ url: `${base}/mcp`, auth: { mode: "none" } }).listTools(), (e: unknown) =>
+      /private network address/.test(errMessage(e)),
+    );
+    const discovered = await discoverOAuth(new URL(`${base}/mcp`));
+    assert.match(discovered.errors.join("; "), /127\.0\.0\.1 is a private network address/);
+    t.after(() => setPublicOAuthClients([]));
+    setPublicOAuthClients([
+      {
+        name: "internal-crm",
+        host: "crm.example.com",
+        authUrl: "https://crm.example.com/authorize",
+        tokenUrl: `${base}/token`,
+        scopes: [],
+        clientId: "public-client",
+        label: "CRM",
+      },
+    ]);
+    await assert.rejects(
+      exchangeCode("internal-crm", "code", "https://qm.example/cb", {
+        client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
+      }),
+      PrivateNetworkAddressError,
+    );
+    assert.equal(target.hits(), 0);
+  }));

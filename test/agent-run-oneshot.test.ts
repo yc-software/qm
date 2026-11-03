@@ -29,6 +29,7 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -175,19 +176,21 @@ test("agentConfigOptions leaves controlTools off unless a self-API (signing secr
   );
 });
 
-test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
-  const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
-  assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
-});
+test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () =>
+  inTestTenant(() => {
+    const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
+    assert.equal(opts.defaultModelId, "gpt-6.1-sol");
+    assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
+  }));
 
-test("Pi title generation returns no title without an auxiliary-model credential", async () => {
-  const agent = createAgent({
-    defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({}),
-  });
-  assert.equal(await agent.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
-});
+test("Pi title generation returns no title without an auxiliary-model credential", () =>
+  inTestTenant(async () => {
+    const agent = createAgent({
+      defaultModelId: "gpt-5.6-sol",
+      resolveProviderKeys: async () => ({}),
+    });
+    assert.equal(await agent.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
+  }));
 
 test("Pi title generation surfaces provider failures to its caller", async (t) => {
   const server = createServer((_request, response) => {
@@ -220,129 +223,135 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"));
 });
 
-test("Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text", async (t) => {
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_title",
-            type: "message",
-            role: "assistant",
-            model: "title-model",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
+test("Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text", (t) =>
+  inTestTenant(async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_title",
+              type: "message",
+              role: "assistant",
+              model: "title-model",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sorry, I can't summarize that" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ]) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
-    titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
-  });
-
-  await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
-    name: "TitleRejected",
-    rule: "reply_opener",
-    message: 'reply_opener: "Sorry, I can\'t summarize that"',
-  });
-});
-
-test("Pi title generation accepts the prompted NONE sentinel without reporting a failure", async (t) => {
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_title",
-            type: "message",
-            role: "assistant",
-            model: "title-model",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "Sorry, I can't summarize that" },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " NONE\n" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ]) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
     });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
-    titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
-  });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    t.after(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const agent = createAgent({
+      defaultModelId: "claude-opus-4-8",
+      titleModelId: "claude-haiku-4-5",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    });
 
-  assert.equal(await agent.generateTitle!("User:\nHello"), undefined);
-});
+    await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
+      name: "TitleRejected",
+      rule: "reply_opener",
+      message: 'reply_opener: "Sorry, I can\'t summarize that"',
+    });
+  }));
+
+test("Pi title generation accepts the prompted NONE sentinel without reporting a failure", (t) =>
+  inTestTenant(async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_title",
+              type: "message",
+              role: "assistant",
+              model: "title-model",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: " NONE\n" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    t.after(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const agent = createAgent({
+      defaultModelId: "claude-opus-4-8",
+      titleModelId: "claude-haiku-4-5",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    });
+
+    assert.equal(await agent.generateTitle!("User:\nHello"), undefined);
+  }));
 
 type DetectAttempt = { reply: string; stopReason: string } | "overloaded";
 
@@ -432,25 +441,26 @@ async function detectAgainst(
 test(
   "Pi turn detection records each model call it was billed for, refused or retried, for the session's ledger",
   { timeout: 20_000 },
-  async (t) => {
-    const card = getRequiredModel("claude-haiku-4-5").cost;
-    const yes = { reply: "YES — they asked the assistant", stopReason: "end_turn" };
-    for (const [attempts, expected, outputs] of [
-      [[{ reply: "", stopReason: "refusal" }], "refusal", [8]],
-      [["overloaded", yes], "respond", [0, 8]],
-    ] as const) {
-      const { outcome, rows } = await detectAgainst(t, attempts);
-      assert.equal(outcome, expected);
-      assert.equal(rows.length, outputs.length);
-      for (const [step, output] of outputs.entries()) {
-        const { usage, ...row } = rows[step]!;
-        assert.deepEqual(row, { turnSeq: null, step, model: "claude-haiku-4-5", truncated: false });
-        const { costUsd, ...tokens } = usage!;
-        assert.deepEqual(tokens, { input: 1200, output, cacheRead: 0, cacheWrite: 0, totalTokens: 1200 + output });
-        assert.ok(Math.abs(costUsd - (1200 * card.input + output * card.output) / 1_000_000) < 1e-12);
+  (t) =>
+    inTestTenant(async () => {
+      const card = getRequiredModel("claude-haiku-4-5").cost;
+      const yes = { reply: "YES — they asked the assistant", stopReason: "end_turn" };
+      for (const [attempts, expected, outputs] of [
+        [[{ reply: "", stopReason: "refusal" }], "refusal", [8]],
+        [["overloaded", yes], "respond", [0, 8]],
+      ] as const) {
+        const { outcome, rows } = await detectAgainst(t, attempts);
+        assert.equal(outcome, expected);
+        assert.equal(rows.length, outputs.length);
+        for (const [step, output] of outputs.entries()) {
+          const { usage, ...row } = rows[step]!;
+          assert.deepEqual(row, { turnSeq: null, step, model: "claude-haiku-4-5", truncated: false });
+          const { costUsd, ...tokens } = usage!;
+          assert.deepEqual(tokens, { input: 1200, output, cacheRead: 0, cacheWrite: 0, totalTokens: 1200 + output });
+          assert.ok(Math.abs(costUsd - (1200 * card.input + output * card.output) / 1_000_000) < 1e-12);
+        }
       }
-    }
-  },
+    }),
 );
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
@@ -472,192 +482,194 @@ test("oneShot removes its temp dirs even when the session call throws", async ()
   assert.equal(after, before, "oneShot must leave no agent dirs behind");
 });
 
-test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
-  let apiKey: string | undefined;
-  let requestBody = "";
-  const server = createServer((request, response) => {
-    apiKey = request.headers["x-api-key"] as string | undefined;
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      requestBody += String(chunk);
-    });
-    request.on("end", () => {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const events = [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_test",
-            type: "message",
-            role: "assistant",
-            model: "claude-haiku-4-5",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "working" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ];
-      for (const event of events) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
-
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
-  assert(baseModel);
-  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
-
-  assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello"), "working");
-  assert.equal(apiKey, "test-key");
-  assert.match(requestBody, /system/);
-  assert.match(requestBody, /hello/);
-});
-
-test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
-  let lastBody = "";
-  let stopReason = "end_turn";
-  const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += String(chunk);
-    });
-    request.on("end", () => {
-      lastBody = body;
-      const requestModel = (JSON.parse(body) as { model?: string }).model;
-      requests.push({
-        ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
-        ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
-        ...(requestModel ? { model: requestModel } : {}),
-        ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
+test("oneShot completes an authenticated Pi 0.82 turn", (t) =>
+  inTestTenant(async () => {
+    let apiKey: string | undefined;
+    let requestBody = "";
+    const server = createServer((request, response) => {
+      apiKey = request.headers["x-api-key"] as string | undefined;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        requestBody += String(chunk);
       });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_gateway",
-            type: "message",
-            role: "assistant",
-            model: requestModel,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const events = [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_test",
+              type: "message",
+              role: "assistant",
+              model: "claude-haiku-4-5",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "gateway" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ]) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "working" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ];
+        for (const event of events) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
     });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(async () => {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
     });
-  });
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const modelGateway = {
-    url: `http://127.0.0.1:${address.port}`,
-    apiKey: "gateway-secret",
-    apiKeyHeader: "api-key",
-    models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
-  };
-  const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
-  assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
-  const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
-  await assert.rejects(
-    oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
-    /No API key found|Provider is not configured/,
-  );
+    t.after(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
 
-  assert.equal(
-    await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
-    "gateway",
-  );
-  assert.deepEqual(requests, [
-    { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
-    { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
-  ]);
-  const routed = modelGatewayRequest(modelGateway, model);
-  assert.equal(routed?.model.id, "claude-haiku-4-5");
-  assert.equal(routed?.target, "router/haiku");
-  assert.deepEqual(transportFromModel(model), {
-    modelId: "claude-haiku-4-5",
-    headers: { "x-model-marker": "preserved" },
-  });
-  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
-  const compact = agent.compactHistory!;
-  const input: Parameters<typeof compact>[0] = {
-    session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
-    history: [
-      {
-        sessionId: "summary-session",
-        seq: 136,
-        parentSeq: null,
-        type: "user",
-        payload: { text: "what? local recovery what?" },
-        scopeLabel: "personal:test",
-        createdAt: 0,
-      },
-    ],
-    recordModelCall: () => {},
-  };
-  assert.equal(await compact(input), "gateway");
-  assert.deepEqual(requests.at(-1), {
-    gatewayKey: "gateway-secret",
-    providerKey: "gateway-secret",
-    model: "router/haiku",
-  });
-  const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
-  const prompt = body.messages
-    .flatMap((message) => message.content)
-    .map((block) => block.text ?? "")
-    .join("\n");
-  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
-  assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
-  stopReason = "max_tokens";
-  await assert.rejects(compact(input), /did not complete \(length\)/);
-});
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+    assert(baseModel);
+    const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+
+    assert.equal(await oneShot("pi-positive-test", model, "test-key", "system", "hello"), "working");
+    assert.equal(apiKey, "test-key");
+    assert.match(requestBody, /system/);
+    assert.match(requestBody, /hello/);
+  }));
+
+test("oneShot routes configured models through the model gateway without mutating transport metadata", (t) =>
+  inTestTenant(async () => {
+    let lastBody = "";
+    let stopReason = "end_turn";
+    const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.on("end", () => {
+        lastBody = body;
+        const requestModel = (JSON.parse(body) as { model?: string }).model;
+        requests.push({
+          ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
+          ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
+          ...(requestModel ? { model: requestModel } : {}),
+          ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
+        });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_gateway",
+              type: "message",
+              role: "assistant",
+              model: requestModel,
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "gateway" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: stopReason, stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    t.after(async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const modelGateway = {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-secret",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
+    };
+    const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
+    assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
+    const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
+    await assert.rejects(
+      oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
+      /No API key found|Provider is not configured/,
+    );
+
+    assert.equal(
+      await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
+      "gateway",
+    );
+    assert.deepEqual(requests, [
+      { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
+      { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
+    ]);
+    const routed = modelGatewayRequest(modelGateway, model);
+    assert.equal(routed?.model.id, "claude-haiku-4-5");
+    assert.equal(routed?.target, "router/haiku");
+    assert.deepEqual(transportFromModel(model), {
+      modelId: "claude-haiku-4-5",
+      headers: { "x-model-marker": "preserved" },
+    });
+    const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+    const compact = agent.compactHistory!;
+    const input: Parameters<typeof compact>[0] = {
+      session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+      history: [
+        {
+          sessionId: "summary-session",
+          seq: 136,
+          parentSeq: null,
+          type: "user",
+          payload: { text: "what? local recovery what?" },
+          scopeLabel: "personal:test",
+          createdAt: 0,
+        },
+      ],
+      recordModelCall: () => {},
+    };
+    assert.equal(await compact(input), "gateway");
+    assert.deepEqual(requests.at(-1), {
+      gatewayKey: "gateway-secret",
+      providerKey: "gateway-secret",
+      model: "router/haiku",
+    });
+    const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
+    const prompt = body.messages
+      .flatMap((message) => message.content)
+      .map((block) => block.text ?? "")
+      .join("\n");
+    assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
+    assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
+    stopReason = "max_tokens";
+    await assert.rejects(compact(input), /did not complete \(length\)/);
+  }));
 
 test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {
   const session = {
@@ -962,12 +974,13 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
   assert.match(prompt, /NEWEST message:\nyes, send it/);
 });
 
-test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {
-  assert.equal(resolveConfiguredModelId("claude-opus-4-8"), "claude-opus-4-8");
-  assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
-  assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai"), DEFAULT_AGENT_MODEL_ID);
-  assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
-});
+test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () =>
+  inTestTenant(() => {
+    assert.equal(resolveConfiguredModelId("claude-opus-4-8"), "claude-opus-4-8");
+    assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
+    assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai"), DEFAULT_AGENT_MODEL_ID);
+    assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
+  }));
 
 test("Pi provider errors are classified once into a typed code from structured fields", () => {
   const classify = (fields: FailedFields) => piTurnError(failedSession(fields), new Error("x")) as ProviderTurnError;
@@ -1020,87 +1033,92 @@ test("refusalFallbackNote names both models, carries the provider's refusal, and
   assert.match(note, /telling the user/);
 });
 
-test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
-  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
-  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
-  assert.equal(
-    refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
-    "claude-sonnet-5",
-  );
-  for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
-    assert.notEqual(refusalFallbackModelId(id), id);
-    assert.equal(resolveModel(id)?.provider, "anthropic");
-  }
-});
+test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () =>
+  inTestTenant(() => {
+    assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
+    assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
+    assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
+    assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
+    assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
+    assert.equal(
+      refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
+      "claude-sonnet-5",
+    );
+    for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
+      assert.notEqual(refusalFallbackModelId(id), id);
+      assert.equal(resolveModel(id)?.provider, "anthropic");
+    }
+  }));
 
-test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {
-  assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
-  assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
-  assert.doesNotThrow(() =>
-    getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
-  );
-});
+test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () =>
+  inTestTenant(() => {
+    assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+    assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+    assert.doesNotThrow(() =>
+      getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
+    );
+  }));
 
-test("Pi judge uses supported reasoning effort when configured with Astra", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-  let request: { model?: string; reasoning?: { effort?: string } } | undefined;
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const encoded = new Headers(init?.headers).get("content-encoding") === "zstd";
-    const text = encoded ? zstdDecompressSync(init?.body as Uint8Array).toString() : String(init?.body);
-    request = JSON.parse(text);
-    return new Response(JSON.stringify({ error: { message: "offline judge test" } }), { status: 400 });
-  }) as typeof fetch;
-  const agent = createAgent({
-    judgeModelId: "gpt-6-astra",
-    resolveProviderKeys: async () => ({ openai: "sk-offline-test-key" }),
-  });
-  await assert.rejects(agent.judge!("Judge the answer.", "answer"), /offline judge test/);
-  assert.ok(request);
-  assert.equal(request.model, "gpt-6-astra");
-  assert.equal(request.reasoning?.effort, "low");
-});
+test("Pi judge uses supported reasoning effort when configured with Astra", (t) =>
+  inTestTenant(async () => {
+    const originalFetch = globalThis.fetch;
+    t.after(() => {
+      globalThis.fetch = originalFetch;
+    });
+    let request: { model?: string; reasoning?: { effort?: string } } | undefined;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const encoded = new Headers(init?.headers).get("content-encoding") === "zstd";
+      const text = encoded ? zstdDecompressSync(init?.body as Uint8Array).toString() : String(init?.body);
+      request = JSON.parse(text);
+      return new Response(JSON.stringify({ error: { message: "offline judge test" } }), { status: 400 });
+    }) as typeof fetch;
+    const agent = createAgent({
+      judgeModelId: "gpt-6-astra",
+      resolveProviderKeys: async () => ({ openai: "sk-offline-test-key" }),
+    });
+    await assert.rejects(agent.judge!("Judge the answer.", "answer"), /offline judge test/);
+    assert.ok(request);
+    assert.equal(request.model, "gpt-6-astra");
+    assert.equal(request.reasoning?.effort, "low");
+  }));
 
-test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
-  let requests = 0;
-  const server = createServer((request) => {
-    requests += 1;
-    request.resume();
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  );
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
-  assert(baseModel);
-  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
-  const controller = new AbortController();
-  const signal = controller.signal;
-  const subscribe = signal.addEventListener.bind(signal);
-  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
-    subscribe(...args);
-    controller.abort();
-  }) as AbortSignal["addEventListener"];
+test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, (t) =>
+  inTestTenant(async () => {
+    let requests = 0;
+    const server = createServer((request) => {
+      requests += 1;
+      request.resume();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    t.after(
+      () =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections();
+          server.close(() => resolve());
+        }),
+    );
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+    assert(baseModel);
+    const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const subscribe = signal.addEventListener.bind(signal);
+    signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+      subscribe(...args);
+      controller.abort();
+    }) as AbortSignal["addEventListener"];
 
-  const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
-    (text) => ({ text }),
-    (error: unknown) => ({ error }),
-  );
+    const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
+      (text) => ({ text }),
+      (error: unknown) => ({ error }),
+    );
 
-  assert.deepEqual(outcome, { text: undefined });
-  assert.equal(requests, 0);
-});
+    assert.deepEqual(outcome, { text: undefined });
+    assert.equal(requests, 0);
+  }),
+);

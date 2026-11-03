@@ -362,6 +362,7 @@ import {
   auxiliaryModelForProvider,
   defaultModel,
   resolveModel,
+  resolveBuiltinModel,
   modelSupported,
 } from "./model/pi-models.ts";
 import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
@@ -588,7 +589,7 @@ export function buildApp(
   const modelTables = createPostgresModelTables(databaseUrl);
   const linkTables = createPostgresLinkTables(databaseUrl);
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveBuiltinModel(id));
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }

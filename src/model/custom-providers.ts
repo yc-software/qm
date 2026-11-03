@@ -1,4 +1,5 @@
 import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "openai-responses", "anthropic"] as const;
 export type CustomProviderProtocol = (typeof CUSTOM_PROVIDER_PROTOCOLS)[number];
@@ -107,13 +108,15 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
   };
 }
 
-let registry = new Map<string, CustomRuntimeModel>();
-let providers: CustomProviderSpec[] = [];
-let version = 0;
+const custom = perTenant(() => ({
+  registry: new Map<string, CustomRuntimeModel>(),
+  providers: new Array<CustomProviderSpec>(),
+  version: 0,
+}));
 
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
-  const snapshot = JSON.stringify(specs);
-  if (snapshot === JSON.stringify(providers)) return;
+  const state = custom();
+  if (JSON.stringify(specs) === JSON.stringify(state.providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {
@@ -121,13 +124,13 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
       next.set(model.id, model);
     }
   }
-  registry = next;
-  providers = specs.map((s) => ({ ...s, models: [...s.models] }));
-  version += 1;
+  state.registry = next;
+  state.providers = specs.map((s) => ({ ...s, models: [...s.models] }));
+  state.version += 1;
 }
 
 export function customProvidersVersion(): number {
-  return version;
+  return custom().version;
 }
 
 export function hasCustomModelPrefix(id: string): boolean {
@@ -135,18 +138,19 @@ export function hasCustomModelPrefix(id: string): boolean {
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registry.get(id);
+  return custom().registry.get(id);
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registry.has(id);
+  return custom().registry.has(id);
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return [...custom().registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
 }
 
 export function customModelsJson(): { providers: Record<string, unknown> } | undefined {
+  const { registry, providers } = custom();
   if (providers.length === 0) return undefined;
   return {
     providers: Object.fromEntries(

@@ -9,7 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { storedItem } from "../src/sessions/items.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { testTenantHeaders, inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -20,35 +20,36 @@ const ADMIN = {
 };
 const MODEL_ID = "overlay-future-model";
 
-test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
-  assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
-  const config = testConfig();
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-    modelVerificationProbe: async () => {},
-  });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  server.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  try {
-    const response = await fetch(`${base}/v1/runtime-config`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({
-        principalId: "admin-alice@default-org",
-        scopeId: "personal:admin-alice@default-org",
-        modelId: MODEL_ID,
-      }),
+test("unknown builtin-provider model fails resolution and a live runtime selection request", () =>
+  inTestTenant(async () => {
+    assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
+    const config = testConfig();
+    const built = buildApp(config, {
+      modelCredentialFetch: async () => Response.json({ data: [] }),
+      modelVerificationProbe: async () => {},
     });
-    const body = await response.json();
-    assert.equal(response.status, 400, JSON.stringify(body));
-    assert.match(JSON.stringify(body), /model|supported/);
-    console.log(`Baseline: unknown model resolution throws; live runtime selection HTTP ${response.status}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
+    const server = createInsecureTestServer(built.app, serverDeps(config, built));
+    server.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const response = await fetch(`${base}/v1/runtime-config`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({
+          principalId: "admin-alice@default-org",
+          scopeId: "personal:admin-alice@default-org",
+          modelId: MODEL_ID,
+        }),
+      });
+      const body = await response.json();
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.match(JSON.stringify(body), /model|supported/);
+      console.log(`Baseline: unknown model resolution throws; live runtime selection HTTP ${response.status}`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }));
 
 import { afterEach } from "node:test";
 import {
@@ -66,7 +67,7 @@ import {
   fastModeModelIds,
   defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
-import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { customModelCatalog, resolveCustomModel, setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
@@ -90,44 +91,47 @@ const spec = {
   },
 };
 
-afterEach(() => {
-  setModelOverlays([]);
-  setCustomProviders([]);
-});
+afterEach(() =>
+  inTestTenant(() => {
+    setModelOverlays([]);
+    setCustomProviders([]);
+  }),
+);
 
-test("strict overlay validation rejects malformed fields, prices, bounds, reserved ids and incompatible templates", () => {
-  for (const invalid of [
-    null,
-    [],
-    { ...spec, provider: "openrouter" },
-    { ...spec, provider: "anthropic" },
-    { ...spec, template: MODEL_ID },
-    { ...spec, name: 3 },
-    { ...spec, id: "codex/gpt-new" },
-    { ...spec, id: "vendor/new" },
-    { ...spec, id: "gpt-5.5" },
-    { ...spec, id: "gpt-6-astra" },
-    { ...spec, baseUrl: "https://example.invalid" },
-    { ...spec, headers: {} },
-    { ...spec, apiKey: "invalid" },
-    { ...spec, base: "true" },
-    { ...spec, fastMode: "true" },
-    { ...spec, fastMode: true },
-    { ...spec, maxTokens: 400_000 },
-    { ...spec, contextWindow: 1.2 },
-    { ...spec, cost: { ...spec.cost, input: Infinity } },
-    { ...spec, cost: { ...spec.cost, output: -1 } },
-    { ...spec, cost: { input: 1, output: 2 } },
-    { ...spec, cost: { ...spec.cost, tiers: [{ ...spec.cost.tiers[0], inputTokensAbove: 400_000 }] } },
-  ]) {
-    assert.throws(() => validateModelOverlay(invalid));
-  }
-  const parsed = validateModelOverlay(spec);
-  assert.ok("base" in parsed);
-  assert.equal(parsed.base, true);
-  assert.equal(parsed.webui, true);
-  assert.equal(parsed.auxiliary, false);
-});
+test("strict overlay validation rejects malformed fields, prices, bounds, reserved ids and incompatible templates", () =>
+  inTestTenant(() => {
+    for (const invalid of [
+      null,
+      [],
+      { ...spec, provider: "openrouter" },
+      { ...spec, provider: "anthropic" },
+      { ...spec, template: MODEL_ID },
+      { ...spec, name: 3 },
+      { ...spec, id: "codex/gpt-new" },
+      { ...spec, id: "vendor/new" },
+      { ...spec, id: "gpt-5.5" },
+      { ...spec, id: "gpt-6-astra" },
+      { ...spec, baseUrl: "https://example.invalid" },
+      { ...spec, headers: {} },
+      { ...spec, apiKey: "invalid" },
+      { ...spec, base: "true" },
+      { ...spec, fastMode: "true" },
+      { ...spec, fastMode: true },
+      { ...spec, maxTokens: 400_000 },
+      { ...spec, contextWindow: 1.2 },
+      { ...spec, cost: { ...spec.cost, input: Infinity } },
+      { ...spec, cost: { ...spec.cost, output: -1 } },
+      { ...spec, cost: { input: 1, output: 2 } },
+      { ...spec, cost: { ...spec.cost, tiers: [{ ...spec.cost.tiers[0], inputTokensAbove: 400_000 }] } },
+    ]) {
+      assert.throws(() => validateModelOverlay(invalid));
+    }
+    const parsed = validateModelOverlay(spec);
+    assert.ok("base" in parsed);
+    assert.equal(parsed.base, true);
+    assert.equal(parsed.webui, true);
+    assert.equal(parsed.auxiliary, false);
+  }));
 
 test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", () =>
   inTestTenant(async () => {
@@ -167,253 +171,261 @@ test("store reload and independent readers observe edits and soft deletion witho
     assert.equal(row.updatedBy, "admin");
   }));
 
-test("template capabilities are inherited and overlay API models cannot silently use subscription routing", () => {
-  setModelOverlays([validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8" })]);
-  assert.equal(modelSupportsFastMode(MODEL_ID), false);
-  assert.equal(wantsFastMode(true, MODEL_ID), false);
-  assert.equal(safeModelMetadata(MODEL_ID)?.fastMode, false);
-  assert.ok(!fastModeModelIds().includes(MODEL_ID));
-  setModelOverlays([
-    validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true }),
-  ]);
-  assert.equal(modelSupportsFastMode(MODEL_ID), true);
-  assert.equal(wantsFastMode(true, MODEL_ID), true);
-  assert.equal(safeModelMetadata(MODEL_ID)?.fastMode, true);
-  assert.ok(fastModeModelIds().includes(MODEL_ID));
-  assert.deepEqual(getRequiredModel(MODEL_ID).input, getRequiredModel("claude-opus-4-8").input);
-  assert.equal(getRequiredModel(MODEL_ID).reasoning, getRequiredModel("claude-opus-4-8").reasoning);
-  assert.equal(
-    resolveIndividualAuthRouting({ provider: "anthropic", kind: "oauth", oauth: {}, updatedAt: 1 }, null, MODEL_ID),
-    null,
-  );
-});
+test("template capabilities are inherited and overlay API models cannot silently use subscription routing", () =>
+  inTestTenant(() => {
+    setModelOverlays([validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8" })]);
+    assert.equal(modelSupportsFastMode(MODEL_ID), false);
+    assert.equal(wantsFastMode(true, MODEL_ID), false);
+    assert.equal(safeModelMetadata(MODEL_ID)?.fastMode, false);
+    assert.ok(!fastModeModelIds().includes(MODEL_ID));
+    setModelOverlays([
+      validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true }),
+    ]);
+    assert.equal(modelSupportsFastMode(MODEL_ID), true);
+    assert.equal(wantsFastMode(true, MODEL_ID), true);
+    assert.equal(safeModelMetadata(MODEL_ID)?.fastMode, true);
+    assert.ok(fastModeModelIds().includes(MODEL_ID));
+    assert.deepEqual(getRequiredModel(MODEL_ID).input, getRequiredModel("claude-opus-4-8").input);
+    assert.equal(getRequiredModel(MODEL_ID).reasoning, getRequiredModel("claude-opus-4-8").reasoning);
+    assert.equal(
+      resolveIndividualAuthRouting({ provider: "anthropic", kind: "oauth", oauth: {}, updatedAt: 1 }, null, MODEL_ID),
+      null,
+    );
+  }));
 
-test("OpenRouter failure rebuilds local choices", async () => {
-  let fail = false;
-  const fetcher: typeof fetch = async () => {
-    if (fail) throw new Error("offline");
-    return Response.json({ data: [] });
-  };
-  await selectableModelCatalog(fetcher);
-  setModelOverlays([validateModelOverlay(spec)]);
-  fail = true;
-  assert.ok((await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
-  setModelOverlays([], [MODEL_ID]);
-  assert.ok(!(await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
-});
+test("OpenRouter failure rebuilds local choices", () =>
+  inTestTenant(async () => {
+    let fail = false;
+    const fetcher: typeof fetch = async () => {
+      if (fail) throw new Error("offline");
+      return Response.json({ data: [] });
+    };
+    await selectableModelCatalog(fetcher);
+    setModelOverlays([validateModelOverlay(spec)]);
+    fail = true;
+    assert.ok((await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
+    setModelOverlays([], [MODEL_ID]);
+    assert.ok(!(await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
+  }));
 
-test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ openaiApiKey: "local-test-key" });
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-    modelVerificationProbe: async () => {},
-  });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
-    fetch(`${base}${path}`, {
-      method,
-      headers,
-      ...(body === undefined
-        ? {}
-        : {
-            body: JSON.stringify(
-              method === "PUT" && path.includes("model-registry") ? { ...(body as object), verify: true } : body,
-            ),
-          }),
+test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", () =>
+  inTestTenant(async () => {
+    const config = testConfig({ openaiApiKey: "local-test-key" });
+    const built = buildApp(config, {
+      modelCredentialFetch: async () => Response.json({ data: [] }),
+      modelVerificationProbe: async () => {},
     });
-  const path = `/v1/admin/model-registry/${MODEL_ID}`;
-  const runtime = {
-    principalId: "admin-alice@default-org",
-    scopeId: "personal:admin-alice@default-org",
-    modelId: MODEL_ID,
-  };
-  try {
-    for (const method of ["PUT", "DELETE"])
+    const server = createInsecureTestServer(built.app, serverDeps(config, built));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
+      fetch(`${base}${path}`, {
+        method,
+        headers,
+        ...(body === undefined
+          ? {}
+          : {
+              body: JSON.stringify(
+                method === "PUT" && path.includes("model-registry") ? { ...(body as object), verify: true } : body,
+              ),
+            }),
+      });
+    const path = `/v1/admin/model-registry/${MODEL_ID}`;
+    const runtime = {
+      principalId: "admin-alice@default-org",
+      scopeId: "personal:admin-alice@default-org",
+      modelId: MODEL_ID,
+    };
+    try {
+      for (const method of ["PUT", "DELETE"])
+        assert.equal(
+          (
+            await api(path, method, method === "PUT" ? spec : undefined, {
+              ...ADMIN,
+              "x-admin-actor": "bob@default-org",
+            })
+          ).status,
+          403,
+        );
       assert.equal(
-        (await api(path, method, method === "PUT" ? spec : undefined, { ...ADMIN, "x-admin-actor": "bob@default-org" }))
+        (await api("/v1/admin/model-registry", "GET", undefined, { ...ADMIN, "x-admin-actor": "bob@default-org" }))
           .status,
         403,
       );
-    assert.equal(
-      (await api("/v1/admin/model-registry", "GET", undefined, { ...ADMIN, "x-admin-actor": "bob@default-org" }))
-        .status,
-      403,
-    );
-    assert.equal((await api(path, "PUT", { ...spec, contextWindow: "400000" })).status, 400);
-    assert.equal((await api(path, "PUT", spec)).status, 200);
-    const response = await api("/v1/runtime-config", "PUT", runtime);
-    assert.equal(response.status, 200);
-    const body = (await response.json()) as {
-      modelCatalog: Record<string, ReturnType<typeof safeModelMetadata>>;
-      models: string[];
-    };
-    assert.equal(body.modelCatalog[MODEL_ID]?.contextWindow, 400_000);
-    assert.deepEqual(body.modelCatalog[MODEL_ID]?.cost, spec.cost);
-    assert.ok(body.models.includes(MODEL_ID));
-    const wire = JSON.stringify(body.modelCatalog);
-    assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
-    const turn = await inTestTenant(() =>
-      built.app.turn({
-        surface: "web",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef: "overlay-live-test" },
-        text: "hello",
-        model: MODEL_ID,
-        async: true,
-      }),
-    );
-    assert.equal(turn.status, "queued");
-    assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
-    assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await inTestTenant(() => built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID }));
-    assert.equal((await api(path, "DELETE")).status, 200);
-    const afterDelete = await api(
-      "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-    );
-    const unavailable = (await afterDelete.json()) as {
-      effective: { modelId: string };
-      scopeOverride: { modelId: string };
-      unavailableReason: string;
-      models: string[];
-    };
-    assert.equal(unavailable.effective.modelId, MODEL_ID);
-    assert.equal(unavailable.scopeOverride.modelId, MODEL_ID);
-    assert.match(unavailable.unavailableReason, /deleted/);
-    assert.ok(unavailable.models.includes("gpt-5.6-sol"));
-    assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
-    const deletedTurn = await inTestTenant(() =>
-      built.app.turn({
-        surface: "web",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
-        text: "hello",
-        model: MODEL_ID,
-        async: true,
-      }),
-    );
-    assert.equal(deletedTurn.status, "refused");
-    assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
-    const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });
-    assert.equal(recovered.status, 200);
-    assert.equal(((await recovered.json()) as { effective: { modelId: string } }).effective.modelId, "gpt-5.6-sol");
-    for (const model of [undefined, "gpt-5.6-sol"]) {
-      const recoveredTurn = await inTestTenant(() =>
+      assert.equal((await api(path, "PUT", { ...spec, contextWindow: "400000" })).status, 400);
+      assert.equal((await api(path, "PUT", spec)).status, 200);
+      const response = await api("/v1/runtime-config", "PUT", runtime);
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as {
+        modelCatalog: Record<string, ReturnType<typeof safeModelMetadata>>;
+        models: string[];
+      };
+      assert.equal(body.modelCatalog[MODEL_ID]?.contextWindow, 400_000);
+      assert.deepEqual(body.modelCatalog[MODEL_ID]?.cost, spec.cost);
+      assert.ok(body.models.includes(MODEL_ID));
+      const wire = JSON.stringify(body.modelCatalog);
+      assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
+      const turn = await inTestTenant(() =>
         built.app.turn({
           surface: "web",
-          actor: { externalId: runtime.principalId },
-          conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
-          text: "Continue with the replacement I selected",
-          ...(model ? { model } : {}),
+          actor: { externalId: "alice" },
+          conversation: { kind: "dm", threadRef: "overlay-live-test" },
+          text: "hello",
+          model: MODEL_ID,
           async: true,
         }),
       );
-      assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
+      assert.equal(turn.status, "queued");
+      assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
+      assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
+      await inTestTenant(() => built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID }));
+      assert.equal((await api(path, "DELETE")).status, 200);
+      const afterDelete = await api(
+        "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
+      );
+      const unavailable = (await afterDelete.json()) as {
+        effective: { modelId: string };
+        scopeOverride: { modelId: string };
+        unavailableReason: string;
+        models: string[];
+      };
+      assert.equal(unavailable.effective.modelId, MODEL_ID);
+      assert.equal(unavailable.scopeOverride.modelId, MODEL_ID);
+      assert.match(unavailable.unavailableReason, /deleted/);
+      assert.ok(unavailable.models.includes("gpt-5.6-sol"));
+      assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
+      const deletedTurn = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: "alice" },
+          conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
+          text: "hello",
+          model: MODEL_ID,
+          async: true,
+        }),
+      );
+      assert.equal(deletedTurn.status, "refused");
+      assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
+      const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });
+      assert.equal(recovered.status, 200);
+      assert.equal(((await recovered.json()) as { effective: { modelId: string } }).effective.modelId, "gpt-5.6-sol");
+      for (const model of [undefined, "gpt-5.6-sol"]) {
+        const recoveredTurn = await inTestTenant(() =>
+          built.app.turn({
+            surface: "web",
+            actor: { externalId: runtime.principalId },
+            conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
+            text: "Continue with the replacement I selected",
+            ...(model ? { model } : {}),
+            async: true,
+          }),
+        );
+        assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
+      }
+      const events = await inTestTenant(() => built.auditLog.events());
+      assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
+      assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    const events = await inTestTenant(() => built.auditLog.events());
-    assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
-    assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
+  }));
 
 import { createServer } from "node:http";
 import { oneShot, createAgent } from "../src/agent/agent-run.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
-test("Pi serves an overlay via the inherited provider endpoint and metadata drives request limits and pricing", async () => {
-  let received: { model?: string; max_tokens?: number } | undefined;
-  let authorized = false;
-  const upstream = createServer((req, res) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-    });
-    req.on("end", () => {
-      received = JSON.parse(raw);
-      authorized = req.headers["x-api-key"] === "local-test-key";
-      assert.equal(req.url, "/v1/messages");
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      const event = (type: string, data: object) =>
-        res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
-      event("message_start", {
-        message: {
-          id: "msg_overlay",
-          type: "message",
-          role: "assistant",
-          content: [],
-          model: MODEL_ID,
-          stop_reason: null,
-          usage: { input_tokens: 5, output_tokens: 0 },
-        },
+test("Pi serves an overlay via the inherited provider endpoint and metadata drives request limits and pricing", () =>
+  inTestTenant(async () => {
+    let received: { model?: string; max_tokens?: number } | undefined;
+    let authorized = false;
+    const upstream = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += chunk;
       });
-      event("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
-      event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "Overlay works" } });
-      event("content_block_stop", { index: 0 });
-      event("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } });
-      event("message_stop", {});
-      res.end();
+      req.on("end", () => {
+        received = JSON.parse(raw);
+        authorized = req.headers["x-api-key"] === "local-test-key";
+        assert.equal(req.url, "/v1/messages");
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        const event = (type: string, data: object) =>
+          res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+        event("message_start", {
+          message: {
+            id: "msg_overlay",
+            type: "message",
+            role: "assistant",
+            content: [],
+            model: MODEL_ID,
+            stop_reason: null,
+            usage: { input_tokens: 5, output_tokens: 0 },
+          },
+        });
+        event("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+        event("content_block_delta", { index: 0, delta: { type: "text_delta", text: "Overlay works" } });
+        event("content_block_stop", { index: 0 });
+        event("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } });
+        event("message_stop", {});
+        res.end();
+      });
     });
-  });
-  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
-  try {
-    setModelOverlays([
-      validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 10_000 }),
-    ]);
-    const model = getRequiredModel(MODEL_ID);
-    assert.equal(
-      await oneShot("overlay-local", model, { anthropic: "local-test-key" }, "Be brief", "Hello"),
-      "Overlay works",
-    );
-    assert.equal(received?.model, MODEL_ID);
-    assert.equal(received?.max_tokens, 10_000);
-    assert.equal(authorized, true);
-    const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
-    const turn = {
-      session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
-      input: "Hello",
-      systemPrompt: "Be brief",
-      history: [],
-      runtime: { modelId: MODEL_ID },
-      recordModelCall: () => {},
-      tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
-      scopeLabel: "personal:alice" as const,
-      orgScopeId: "org:default-org" as const,
-      emit: async (item: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) =>
-        storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
-    };
-    await agent.runTurn(turn);
-    assert.equal(received?.model, MODEL_ID);
-    assert.equal(received?.max_tokens, 10_000);
-    setModelOverlays([
-      validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 16_000 }),
-    ]);
-    await agent.runTurn(turn);
-    assert.equal(received?.max_tokens, 16_000);
-    setModelOverlays([], [MODEL_ID]);
-    await assert.rejects(agent.runTurn(turn), /Unsupported model/);
-    const usage = {
-      input: 210_000,
-      output: 100,
-      cacheRead: 200,
-      cacheWrite: 100,
-      totalTokens: 210_400,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-    calculateCost(model, usage);
-    assert.equal(usage.cost.input, 2.94);
-    assert.equal(usage.cost.output, 0.0042);
-    assert.ok(Math.abs(usage.cost.cacheRead - 0.00012) < 1e-12);
-    assert.equal(usage.cost.cacheWrite, 0.0016);
-  } finally {
-    setProviderBaseUrls({});
-    await new Promise<void>((resolve) => upstream.close(() => resolve()));
-  }
-});
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
+    try {
+      setModelOverlays([
+        validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 10_000 }),
+      ]);
+      const model = getRequiredModel(MODEL_ID);
+      assert.equal(
+        await oneShot("overlay-local", model, { anthropic: "local-test-key" }, "Be brief", "Hello"),
+        "Overlay works",
+      );
+      assert.equal(received?.model, MODEL_ID);
+      assert.equal(received?.max_tokens, 10_000);
+      assert.equal(authorized, true);
+      const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
+      const turn = {
+        session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
+        input: "Hello",
+        systemPrompt: "Be brief",
+        history: [],
+        runtime: { modelId: MODEL_ID },
+        recordModelCall: () => {},
+        tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
+        scopeLabel: "personal:alice" as const,
+        orgScopeId: "org:default-org" as const,
+        emit: async (item: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) =>
+          storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
+      };
+      await agent.runTurn(turn);
+      assert.equal(received?.model, MODEL_ID);
+      assert.equal(received?.max_tokens, 10_000);
+      setModelOverlays([
+        validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 16_000 }),
+      ]);
+      await agent.runTurn(turn);
+      assert.equal(received?.max_tokens, 16_000);
+      setModelOverlays([], [MODEL_ID]);
+      await assert.rejects(agent.runTurn(turn), /Unsupported model/);
+      const usage = {
+        input: 210_000,
+        output: 100,
+        cacheRead: 200,
+        cacheWrite: 100,
+        totalTokens: 210_400,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      calculateCost(model, usage);
+      assert.equal(usage.cost.input, 2.94);
+      assert.equal(usage.cost.output, 0.0042);
+      assert.ok(Math.abs(usage.cost.cacheRead - 0.00012) < 1e-12);
+      assert.equal(usage.cost.cacheWrite, 0.0016);
+    } finally {
+      setProviderBaseUrls({});
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  }));
 
 test("hydration isolates promoted builtins, incompatible providers, missing templates and malformed rows", () =>
   inTestTenant(async () => {
@@ -491,41 +503,76 @@ test("model refresh is limited to dependent routes and admin repair survives sta
     }
   }));
 
-test("overlay resolution preserves canonical personal endpoints and upstream builtin metadata", () => {
-  setModelOverlays([validateModelOverlay(spec)]);
-  const canonical = getRequiredModel(MODEL_ID, false).baseUrl;
-  setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
-  try {
-    assert.equal(getRequiredModel(MODEL_ID).baseUrl, "http://127.0.0.1:19999/v1");
-    assert.equal(getRequiredModel(MODEL_ID, false).baseUrl, canonical);
-    assert.equal(safeModelMetadata("claude-fable-5-1")?.label, "Fable 5.1");
-    assert.equal(safeModelMetadata("gpt-5.6-sol")?.cost.input, 4);
-    assert.equal(safeModelMetadata("gpt-5.6-sol")?.fastMode, true);
-  } finally {
-    setProviderBaseUrls({});
-  }
-});
+test("overlay resolution preserves canonical personal endpoints and upstream builtin metadata", () =>
+  inTestTenant(() => {
+    setModelOverlays([validateModelOverlay(spec)]);
+    const canonical = getRequiredModel(MODEL_ID, false).baseUrl;
+    setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
+    try {
+      assert.equal(getRequiredModel(MODEL_ID).baseUrl, "http://127.0.0.1:19999/v1");
+      assert.equal(getRequiredModel(MODEL_ID, false).baseUrl, canonical);
+      assert.equal(safeModelMetadata("claude-fable-5-1")?.label, "Fable 5.1");
+      assert.equal(safeModelMetadata("gpt-5.6-sol")?.cost.input, 4);
+      assert.equal(safeModelMetadata("gpt-5.6-sol")?.fastMode, true);
+    } finally {
+      setProviderBaseUrls({});
+    }
+  }));
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
 import { testModelTables } from "./support/credential-stores.ts";
 
-test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
-  const config = testConfigStore("default-org");
-  const org = "org:default-org" as const;
-  const scope = "personal:alice" as const;
-  const fallback = { modelId: "gpt-5.6-sol" };
-  const overlay = validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true });
-  setModelOverlays([overlay]);
-  const requested = { modelId: MODEL_ID, effortLevel: "max", fastMode: true };
-  assert.deepEqual(await resolveRuntimeChoice(config, org, scope, fallback, requested), requested);
-  setModelOverlays([{ ...overlay, fastMode: false }]);
-  assert.equal((await resolveRuntimeChoice(config, org, scope, fallback, requested)).fastMode, false);
-  const native = await resolveRuntimeChoice(config, org, scope, fallback, {
-    modelId: "claude-opus-4-8",
-    effortLevel: "max",
-    fastMode: true,
-  });
-  assert.equal(native.fastMode, true);
-  assert.equal(native.effortLevel, "max");
-});
+test("runtime normalization preserves native capabilities and reflects overlay capability edits", () =>
+  inTestTenant(async () => {
+    const config = testConfigStore("default-org");
+    const org = "org:default-org" as const;
+    const scope = "personal:alice" as const;
+    const fallback = { modelId: "gpt-5.6-sol" };
+    const overlay = validateModelOverlay({
+      ...spec,
+      provider: "anthropic",
+      template: "claude-opus-4-8",
+      fastMode: true,
+    });
+    setModelOverlays([overlay]);
+    const requested = { modelId: MODEL_ID, effortLevel: "max", fastMode: true };
+    assert.deepEqual(await resolveRuntimeChoice(config, org, scope, fallback, requested), requested);
+    setModelOverlays([{ ...overlay, fastMode: false }]);
+    assert.equal((await resolveRuntimeChoice(config, org, scope, fallback, requested)).fastMode, false);
+    const native = await resolveRuntimeChoice(config, org, scope, fallback, {
+      modelId: "claude-opus-4-8",
+      effortLevel: "max",
+      fastMode: true,
+    });
+    assert.equal(native.fastMode, true);
+    assert.equal(native.effortLevel, "max");
+  }));
+
+test("one tenant's custom providers and registered models never appear for another tenant", () =>
+  inTestTenant(() => {
+    const [tenantA, tenantB] = testTenants();
+    const provider = {
+      id: "tenant-a-gateway",
+      name: "Tenant A Gateway",
+      protocol: "openai" as const,
+      baseUrl: "https://llm.tenant-a.internal/v1",
+      models: [{ id: "a-large" }],
+    };
+    inTestTenant(() => {
+      setCustomProviders([provider]);
+      setModelOverlays([validateModelOverlay(spec)]);
+      assert.ok(resolveCustomModel("custom/tenant-a-gateway/a-large"));
+      assert.equal(resolveModel(MODEL_ID)?.contextWindow, 400_000);
+    }, tenantA);
+    inTestTenant(() => {
+      assert.equal(resolveCustomModel("custom/tenant-a-gateway/a-large"), undefined);
+      assert.deepEqual(customModelCatalog(), []);
+      assert.equal(resolveModel(MODEL_ID), undefined);
+      assert.equal(modelSupported(MODEL_ID), false);
+    }, tenantB);
+    inTestTenant(() => {
+      setCustomProviders([]);
+      setModelOverlays([]);
+    }, tenantA);
+  }));

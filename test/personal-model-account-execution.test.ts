@@ -31,34 +31,35 @@ mock.module("../src/agent/agent-run.ts", {
 const { buildApp } = await import("../src/wiring.ts");
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {
-    turns.length = 0;
-    const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
-    const submitted = await inTestTenant(() =>
-      built.app.turn({
-        surface: "slack",
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
-        text: "hello",
-        liveActor: true,
-        async: true,
-      }),
-    );
-    await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
-    built.runtime.start();
-    try {
-      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-      assert.equal(finished.status, "done", JSON.stringify(finished.result));
-      assert.equal(turns.length, 1);
-      assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
-      assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
-    } finally {
-      await built.runtime.stop();
-    }
-  });
+  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, () =>
+    inTestTenant(async () => {
+      turns.length = 0;
+      const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
+      const submitted = await inTestTenant(() =>
+        built.app.turn({
+          surface: "slack",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+        }),
+      );
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
+      built.runtime.start();
+      try {
+        const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+        assert.equal(finished.status, "done", JSON.stringify(finished.result));
+        assert.equal(turns.length, 1);
+        assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+        assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
+      } finally {
+        await built.runtime.stop();
+      }
+    }));
 }
 
 test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", async () => {
@@ -227,46 +228,47 @@ test("web subscription selections use the namespaced model and personal OAuth on
   }
 });
 
-test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async () => {
-  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
-  const companyToken = `e30.${claims.toString("base64url")}.sig`;
-  turns.length = 0;
-  const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
-  await inTestTenant(() =>
-    saveCompanyChatGPTLogin(built.keychain, {
-      auth_mode: "chatgpt",
-      tokens: { access_token: companyToken, refresh_token: "r" },
-    }),
-  );
-  assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
-  assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
-  assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
-  assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
-  await inTestTenant(() =>
-    built.userModelCredentials.setOAuth("U1", "openai", {
-      accessToken: "personal-oauth",
-      expiresAt: Date.now() + 3_600_000,
-    }),
-  );
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "legacy-bare-pin" },
-      text: "hello",
-      liveActor: true,
-      async: true,
-    }),
-  );
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  built.runtime.start();
-  try {
-    const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-    assert.equal(finished.status, "done", JSON.stringify(finished.result));
-    assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
-    assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
-  } finally {
-    await built.runtime.stop();
-  }
-});
+test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", () =>
+  inTestTenant(async () => {
+    const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
+    const companyToken = `e30.${claims.toString("base64url")}.sig`;
+    turns.length = 0;
+    const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
+    await inTestTenant(() =>
+      saveCompanyChatGPTLogin(built.keychain, {
+        auth_mode: "chatgpt",
+        tokens: { access_token: companyToken, refresh_token: "r" },
+      }),
+    );
+    assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
+    assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
+    assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
+    assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
+    await inTestTenant(() =>
+      built.userModelCredentials.setOAuth("U1", "openai", {
+        accessToken: "personal-oauth",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const submitted = await inTestTenant(() =>
+      built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "legacy-bare-pin" },
+        text: "hello",
+        liveActor: true,
+        async: true,
+      }),
+    );
+    assert.ok(submitted.runId, JSON.stringify(submitted));
+    built.runtime.start();
+    try {
+      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+      assert.equal(finished.status, "done", JSON.stringify(finished.result));
+      assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
+      assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
+    } finally {
+      await built.runtime.stop();
+    }
+  }));

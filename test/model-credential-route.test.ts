@@ -241,121 +241,122 @@ test("OpenRouter validation uses an authenticated endpoint", async () => {
   }
 });
 
-test("OpenRouter catalog exposes runtime-supported tool models as selectable base models", async () => {
-  let requested = "";
-  let catalogRequests = 0;
-  const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async (input) => {
-    requested = String(input);
-    catalogRequests++;
-    return Response.json({
-      data: [
-        {
-          id: "anthropic/claude-sonnet-4.5",
-          name: "Anthropic: Claude Sonnet 4.5",
-          supported_parameters: ["tools"],
-        },
-        {
-          id: "stealth/ox-alpha",
-          name: "Ox Alpha",
-          context_length: 1_048_576,
-          pricing: { prompt: "0", completion: "0" },
-          top_provider: { max_completion_tokens: 131_072 },
-          architecture: { input_modalities: ["text", "image", "video"] },
-          supported_parameters: ["tools", "reasoning", "reasoning_effort"],
-        },
-        {
-          id: "future/incomplete-model",
-          name: "Incomplete Future Model",
-          context_length: 128_000,
-          pricing: { prompt: "0", completion: "0" },
-          architecture: { input_modalities: ["text"] },
-          supported_parameters: ["tools"],
-        },
-        {
-          id: "openai/gpt-4o",
-          name: "No Tools",
-          supported_parameters: ["temperature"],
-        },
-      ],
+test("OpenRouter catalog exposes runtime-supported tool models as selectable base models", () =>
+  inTestTenant(async () => {
+    let requested = "";
+    let catalogRequests = 0;
+    const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async (input) => {
+      requested = String(input);
+      catalogRequests++;
+      return Response.json({
+        data: [
+          {
+            id: "anthropic/claude-sonnet-4.5",
+            name: "Anthropic: Claude Sonnet 4.5",
+            supported_parameters: ["tools"],
+          },
+          {
+            id: "stealth/ox-alpha",
+            name: "Ox Alpha",
+            context_length: 1_048_576,
+            pricing: { prompt: "0", completion: "0" },
+            top_provider: { max_completion_tokens: 131_072 },
+            architecture: { input_modalities: ["text", "image", "video"] },
+            supported_parameters: ["tools", "reasoning", "reasoning_effort"],
+          },
+          {
+            id: "future/incomplete-model",
+            name: "Incomplete Future Model",
+            context_length: 128_000,
+            pricing: { prompt: "0", completion: "0" },
+            architecture: { input_modalities: ["text"] },
+            supported_parameters: ["tools"],
+          },
+          {
+            id: "openai/gpt-4o",
+            name: "No Tools",
+            supported_parameters: ["temperature"],
+          },
+        ],
+      });
     });
-  });
-  try {
-    const response = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
-    assert.equal(response.status, 200);
-    const models = (
-      (await response.json()) as {
-        models: Array<{ id: string; name: string; provider: string }>;
-      }
-    ).models.filter((model) => model.provider === "openrouter");
-    assert.deepEqual(models, [
-      { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
-      { id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5", provider: "openrouter" },
-      { id: "stealth/ox-alpha", name: "Ox Alpha", provider: "openrouter" },
-    ]);
-    const dynamic = getRequiredModel("stealth/ox-alpha");
-    assert.equal(dynamic.provider, "openrouter");
-    assert.equal(dynamic.contextWindow, 1_048_576);
-    assert.equal(dynamic.maxTokens, 131_072);
-    assert.deepEqual(dynamic.input, ["text", "image"]);
-    assert.deepEqual(dynamic.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    assert.equal(requested, "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular");
+    try {
+      const response = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
+      assert.equal(response.status, 200);
+      const models = (
+        (await response.json()) as {
+          models: Array<{ id: string; name: string; provider: string }>;
+        }
+      ).models.filter((model) => model.provider === "openrouter");
+      assert.deepEqual(models, [
+        { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
+        { id: "anthropic/claude-sonnet-4.5", name: "Anthropic: Claude Sonnet 4.5", provider: "openrouter" },
+        { id: "stealth/ox-alpha", name: "Ox Alpha", provider: "openrouter" },
+      ]);
+      const dynamic = getRequiredModel("stealth/ox-alpha");
+      assert.equal(dynamic.provider, "openrouter");
+      assert.equal(dynamic.contextWindow, 1_048_576);
+      assert.equal(dynamic.maxTokens, 131_072);
+      assert.deepEqual(dynamic.input, ["text", "image"]);
+      assert.deepEqual(dynamic.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      assert.equal(requested, "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular");
 
-    const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/base-model`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
-    });
-    assert.equal(selected.status, 200);
-    assert.equal(
-      inTestTenant(() => srv.built.config.getBaseModel("org:default-org")),
-      "stealth/ox-alpha",
-    );
+      const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/base-model`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
+      });
+      assert.equal(selected.status, 200);
+      assert.equal(
+        inTestTenant(() => srv.built.config.getBaseModel("org:default-org")),
+        "stealth/ox-alpha",
+      );
 
-    const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
-    assert.equal(governance.status, 200);
-    const governanceBody = (await governance.json()) as {
-      baseModelOptions: Array<{ id: string; name: string }>;
-      runtime: { modelId: string };
-    };
-    assert.ok(governanceBody.baseModelOptions.some((model) => model.id === "stealth/ox-alpha"));
-    assert.equal(governanceBody.runtime.modelId, "stealth/ox-alpha");
+      const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+      assert.equal(governance.status, 200);
+      const governanceBody = (await governance.json()) as {
+        baseModelOptions: Array<{ id: string; name: string }>;
+        runtime: { modelId: string };
+      };
+      assert.ok(governanceBody.baseModelOptions.some((model) => model.id === "stealth/ox-alpha"));
+      assert.equal(governanceBody.runtime.modelId, "stealth/ox-alpha");
 
-    const runtime = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
-      headers: testTenantHeaders(),
-    });
-    assert.equal(runtime.status, 200);
-    const runtimeBody = (await runtime.json()) as {
-      models: string[];
-      modelCatalog: Record<string, { name: string; provider: string }>;
-      effective: { modelId: string };
-    };
-    assert.ok(runtimeBody.models.includes("stealth/ox-alpha"));
-    assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.name, "Ox Alpha");
-    assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.provider, "openrouter");
-    assert.deepEqual(runtimeBody.effective, { modelId: "stealth/ox-alpha" });
+      const runtime = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+        headers: testTenantHeaders(),
+      });
+      assert.equal(runtime.status, 200);
+      const runtimeBody = (await runtime.json()) as {
+        models: string[];
+        modelCatalog: Record<string, { name: string; provider: string }>;
+        effective: { modelId: string };
+      };
+      assert.ok(runtimeBody.models.includes("stealth/ox-alpha"));
+      assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.name, "Ox Alpha");
+      assert.equal(runtimeBody.modelCatalog["stealth/ox-alpha"]?.provider, "openrouter");
+      assert.deepEqual(runtimeBody.effective, { modelId: "stealth/ox-alpha" });
 
-    const surface = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
-    assert.equal(surface.status, 200);
-    const surfaceBody = (await surface.json()) as { webuiModels: string[]; baseModel: string };
-    assert.ok(surfaceBody.webuiModels.includes("stealth/ox-alpha"));
-    assert.equal(surfaceBody.baseModel, "stealth/ox-alpha");
+      const surface = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
+      assert.equal(surface.status, 200);
+      const surfaceBody = (await surface.json()) as { webuiModels: string[]; baseModel: string };
+      assert.ok(surfaceBody.webuiModels.includes("stealth/ox-alpha"));
+      assert.equal(surfaceBody.baseModel, "stealth/ox-alpha");
 
-    const turn = await inTestTenant(() =>
-      srv.built.app.turn({
-        surface: "web",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef: "web:alice:openrouter-catalog" },
-        text: "hello",
-        model: "stealth/ox-alpha",
-        async: true,
-      }),
-    );
-    assert.equal(turn.status, "queued");
-    assert.equal(catalogRequests, 1);
-  } finally {
-    await srv.close();
-  }
-});
+      const turn = await inTestTenant(() =>
+        srv.built.app.turn({
+          surface: "web",
+          actor: { externalId: "alice" },
+          conversation: { kind: "dm", threadRef: "web:alice:openrouter-catalog" },
+          text: "hello",
+          model: "stealth/ox-alpha",
+          async: true,
+        }),
+      );
+      assert.equal(turn.status, "queued");
+      assert.equal(catalogRequests, 1);
+    } finally {
+      await srv.close();
+    }
+  }));
 
 test("web turns keep a persisted OpenRouter model enabled when the refreshed catalog omits it", async () => {
   const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async () =>
@@ -607,50 +608,52 @@ test("a stored scope runtime remains usable outside the legacy configured picker
   }
 });
 
-test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
-  const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
-  try {
-    await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" }));
-    await inTestTenant(() => srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]));
-    const rejected = await inTestTenant(() =>
-      srv.built.app.turn({
-        surface: "loop",
-        actor: { externalId: "alice" },
-        conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
-        text: "Make it shorter",
-        model: "claude-haiku-4-5",
-        triggered: true,
-        async: true,
-      }),
-    );
-    assert.equal(rejected.status, "refused");
-    assert.match(rejected.reason ?? "", /runtime is no longer available/);
-    assert.equal(
-      (await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("org:default-org")))?.modelId,
-      "claude-opus-4-8",
-    );
-    assert.equal(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("personal:alice")), null);
-  } finally {
-    await srv.close();
-  }
-});
+test("inbox runtime overrides use the web model allowlist without changing defaults", () =>
+  inTestTenant(async () => {
+    const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
+    try {
+      await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" }));
+      await inTestTenant(() => srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]));
+      const rejected = await inTestTenant(() =>
+        srv.built.app.turn({
+          surface: "loop",
+          actor: { externalId: "alice" },
+          conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
+          text: "Make it shorter",
+          model: "claude-haiku-4-5",
+          triggered: true,
+          async: true,
+        }),
+      );
+      assert.equal(rejected.status, "refused");
+      assert.match(rejected.reason ?? "", /runtime is no longer available/);
+      assert.equal(
+        (await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("org:default-org")))?.modelId,
+        "claude-opus-4-8",
+      );
+      assert.equal(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("personal:alice")), null);
+    } finally {
+      await srv.close();
+    }
+  }));
 
-test("company runtime reads exclude personal-only models without changing the regular picker", async () => {
-  const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
-  try {
-    await inTestTenant(() => srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai"));
-    await inTestTenant(() => srv.built.config.setPersonalModelAuth("alice", true, "openai"));
-    const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`;
-    const personal = (await (await fetch(url, { headers: testTenantHeaders() })).json()) as { models: string[] };
-    assert.ok(personal.models.includes("gpt-5.6-terra"));
-    const company = (await (await fetch(`${url}&account=company`, { headers: testTenantHeaders() })).json()) as {
-      models: string[];
-    };
-    assert.ok(!company.models.includes("gpt-5.6-terra"));
-    assert.deepEqual(await (await fetch(url, { headers: testTenantHeaders() })).json(), personal);
-    assert.equal((await fetch(`${url}&account=unknown`, { headers: testTenantHeaders() })).status, 400);
-    assert.equal(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("personal:alice")), null);
-  } finally {
-    await srv.close();
-  }
-});
+test("company runtime reads exclude personal-only models without changing the regular picker", () =>
+  inTestTenant(async () => {
+    const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
+    try {
+      await inTestTenant(() => srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai"));
+      await inTestTenant(() => srv.built.config.setPersonalModelAuth("alice", true, "openai"));
+      const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`;
+      const personal = (await (await fetch(url, { headers: testTenantHeaders() })).json()) as { models: string[] };
+      assert.ok(personal.models.includes("gpt-5.6-terra"));
+      const company = (await (await fetch(`${url}&account=company`, { headers: testTenantHeaders() })).json()) as {
+        models: string[];
+      };
+      assert.ok(!company.models.includes("gpt-5.6-terra"));
+      assert.deepEqual(await (await fetch(url, { headers: testTenantHeaders() })).json(), personal);
+      assert.equal((await fetch(`${url}&account=unknown`, { headers: testTenantHeaders() })).status, 400);
+      assert.equal(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("personal:alice")), null);
+    } finally {
+      await srv.close();
+    }
+  }));

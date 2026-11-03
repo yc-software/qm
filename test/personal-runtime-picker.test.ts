@@ -39,56 +39,58 @@ async function setup() {
   return { built, get, put, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("personal API-key picker works without company keys and saves model, effort and Fast", async () => {
-  const s = await setup();
-  try {
-    await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));
-    await inTestTenant(() => s.built.config.setPersonalModelAuth("U1", true, "openai"));
-    const before = await s.get();
-    assert.ok(before.models.includes("gpt-5.6-terra"));
-    assert.ok(before.models.every((id: string) => resolveModel(id)?.provider === "openai"));
-    assert.ok(before.models.includes(before.effective.modelId));
-    assert.equal(before.unavailableReason, undefined);
-    assert.doesNotMatch(JSON.stringify(before), /synthetic-openai/);
-    const choice = { modelId: "gpt-5.6-terra", effortLevel: "high", fastMode: true };
-    const saved = await s.put(choice);
-    assert.equal(saved.status, 200);
-    assert.deepEqual(((await saved.json()) as Snapshot).effective, choice);
-    assert.deepEqual((await s.get()).effective, choice);
-    assert.equal((await s.put({ ...choice, modelId: "claude-sonnet-5" })).status, 400);
-    await inTestTenant(() => s.built.userModelCredentials.delete("U1", "openai"));
-    assert.deepEqual((await s.get()).models, []);
-    assert.equal((await s.put(choice)).status, 400);
-  } finally {
-    await s.close();
-  }
-});
-
-for (const provider of ["anthropic", "openai"] as const) {
-  test(`personal ${provider} OAuth picker advertises only compatible runtimes`, async () => {
+test("personal API-key picker works without company keys and saves model, effort and Fast", () =>
+  inTestTenant(async () => {
     const s = await setup();
     try {
-      await inTestTenant(() =>
-        s.built.userModelCredentials.setOAuth("U1", provider, {
-          accessToken: "synthetic-access",
-          refreshToken: "synthetic-refresh",
-          expiresAt: Date.now() + 3_600_000,
-        }),
-      );
-      await inTestTenant(() => s.built.config.setPersonalModelAuth("U1", true, provider));
-      const config = await s.get();
-      if (provider === "anthropic") {
-        assert.ok(config.models.includes("claude-sonnet-5"));
-        assert.ok(config.models.every((id: string) => resolveModel(id)?.provider === "anthropic"));
-      } else {
-        assert.ok(config.models.includes("codex/gpt-5.6-sol"));
-        assert.ok(!config.models.includes("gpt-5.6-sol"));
-      }
-      assert.ok(config.models.includes(config.effective.modelId));
+      await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));
+      await inTestTenant(() => s.built.config.setPersonalModelAuth("U1", true, "openai"));
+      const before = await s.get();
+      assert.ok(before.models.includes("gpt-5.6-terra"));
+      assert.ok(before.models.every((id: string) => resolveModel(id)?.provider === "openai"));
+      assert.ok(before.models.includes(before.effective.modelId));
+      assert.equal(before.unavailableReason, undefined);
+      assert.doesNotMatch(JSON.stringify(before), /synthetic-openai/);
+      const choice = { modelId: "gpt-5.6-terra", effortLevel: "high", fastMode: true };
+      const saved = await s.put(choice);
+      assert.equal(saved.status, 200);
+      assert.deepEqual(((await saved.json()) as Snapshot).effective, choice);
+      assert.deepEqual((await s.get()).effective, choice);
+      assert.equal((await s.put({ ...choice, modelId: "claude-sonnet-5" })).status, 400);
+      await inTestTenant(() => s.built.userModelCredentials.delete("U1", "openai"));
+      assert.deepEqual((await s.get()).models, []);
+      assert.equal((await s.put(choice)).status, 400);
     } finally {
       await s.close();
     }
-  });
+  }));
+
+for (const provider of ["anthropic", "openai"] as const) {
+  test(`personal ${provider} OAuth picker advertises only compatible runtimes`, () =>
+    inTestTenant(async () => {
+      const s = await setup();
+      try {
+        await inTestTenant(() =>
+          s.built.userModelCredentials.setOAuth("U1", provider, {
+            accessToken: "synthetic-access",
+            refreshToken: "synthetic-refresh",
+            expiresAt: Date.now() + 3_600_000,
+          }),
+        );
+        await inTestTenant(() => s.built.config.setPersonalModelAuth("U1", true, provider));
+        const config = await s.get();
+        if (provider === "anthropic") {
+          assert.ok(config.models.includes("claude-sonnet-5"));
+          assert.ok(config.models.every((id: string) => resolveModel(id)?.provider === "anthropic"));
+        } else {
+          assert.ok(config.models.includes("codex/gpt-5.6-sol"));
+          assert.ok(!config.models.includes("gpt-5.6-sol"));
+        }
+        assert.ok(config.models.includes(config.effective.modelId));
+      } finally {
+        await s.close();
+      }
+    }));
 }
 
 test("personal picker keeps org restrictions and shared-scope caller isolation", async () => {

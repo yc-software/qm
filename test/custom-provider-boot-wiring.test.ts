@@ -11,7 +11,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -19,59 +19,60 @@ const ADMIN = {
   ...testTenantHeaders(),
 };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
-test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
-  const config = testConfig({
-    dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
-    modelId: "custom/acme-gateway/acme-large",
-  });
-  const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
-  const deps = serverDeps(config, built);
-  assert.equal(deps.customProviders, built.customProviders);
-  assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
-  assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
-
-  const server = createInsecureTestServer(built.app, deps);
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    assert.notEqual(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
-
-    const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
-    assert.equal(list.status, 200);
-
-    const put = await fetch(`${base}/v1/admin/custom-providers/acme-gateway`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({
-        name: "Acme Gateway",
-        protocol: "openai",
-        baseUrl: "https://llm.acme.internal/v1",
-        models: [{ id: "acme-large", name: "Acme Large" }],
-        apiKey: "sk-acme-secret",
-        validate: false,
-      }),
+test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", () =>
+  inTestTenant(async () => {
+    const config = testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
+      modelId: "custom/acme-gateway/acme-large",
     });
-    assert.equal(put.status, 200);
+    const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
+    const deps = serverDeps(config, built);
+    assert.equal(deps.customProviders, built.customProviders);
+    assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
+    assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
 
-    assert.equal(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
+    const server = createInsecureTestServer(built.app, deps);
+    server.listen(0);
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    try {
+      assert.notEqual(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
 
-    const runtime = await fetch(
-      `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
-      { headers: ADMIN },
-    );
-    assert.equal(runtime.status, 200);
-    const body = (await runtime.json()) as {
-      effective: { modelId: string };
-      models: string[];
-      modelCatalog: Record<string, { name: string; provider: string }>;
-    };
-    assert.equal(body.effective.modelId, "custom/acme-gateway/acme-large");
-    assert.ok(body.models.includes("custom/acme-gateway/acme-large"));
-    assert.equal(body.modelCatalog["custom/acme-gateway/acme-large"]?.provider, "acme-gateway");
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await built.runtime.stop();
-  }
-});
+      const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
+      assert.equal(list.status, 200);
+
+      const put = await fetch(`${base}/v1/admin/custom-providers/acme-gateway`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({
+          name: "Acme Gateway",
+          protocol: "openai",
+          baseUrl: "https://llm.acme.internal/v1",
+          models: [{ id: "acme-large", name: "Acme Large" }],
+          apiKey: "sk-acme-secret",
+          validate: false,
+        }),
+      });
+      assert.equal(put.status, 200);
+
+      assert.equal(defaultModel(deps.baseModelDefault), "custom/acme-gateway/acme-large");
+
+      const runtime = await fetch(
+        `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
+        { headers: ADMIN },
+      );
+      assert.equal(runtime.status, 200);
+      const body = (await runtime.json()) as {
+        effective: { modelId: string };
+        models: string[];
+        modelCatalog: Record<string, { name: string; provider: string }>;
+      };
+      assert.equal(body.effective.modelId, "custom/acme-gateway/acme-large");
+      assert.ok(body.models.includes("custom/acme-gateway/acme-large"));
+      assert.equal(body.modelCatalog["custom/acme-gateway/acme-large"]?.provider, "acme-gateway");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await built.runtime.stop();
+    }
+  }));

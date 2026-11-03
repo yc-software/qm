@@ -141,18 +141,20 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
     assert.equal(refreshCalls, 1);
   }));
 
-test("routing: anthropic api key -> a claude model", () => {
-  const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
-  assert.equal(r?.kind, "apikey");
-  assert.equal(r?.provider, "anthropic");
-  assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
-});
+test("routing: anthropic api key -> a claude model", () =>
+  inTestTenant(() => {
+    const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
+    assert.equal(r?.kind, "apikey");
+    assert.equal(r?.provider, "anthropic");
+    assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
+  }));
 
-test("routing: anthropic OAuth login -> a claude model", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
-  assert.equal(r?.kind, "oauth");
-  assert.equal(r?.model, "claude-opus-5");
-});
+test("routing: anthropic OAuth login -> a claude model", () =>
+  inTestTenant(() => {
+    const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
+    assert.equal(r?.kind, "oauth");
+    assert.equal(r?.model, "claude-opus-5");
+  }));
 
 test("routing: openai OAuth login -> the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
@@ -160,33 +162,37 @@ test("routing: openai OAuth login -> the Codex subscription provider", () => {
   assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
-test("routing: requested model provider wins when that provider is connected", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
-  assert.equal(r?.model, "codex/gpt-5.6-sol");
-});
+test("routing: requested model provider wins when that provider is connected", () =>
+  inTestTenant(() => {
+    const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
+    assert.equal(r?.model, "codex/gpt-5.6-sol");
+  }));
 
-test("routing: a requested openai model is namespaced to the subscription provider", () => {
-  const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
-  assert.equal(r?.model, "codex/gpt-5.6-terra");
-});
+test("routing: a requested openai model is namespaced to the subscription provider", () =>
+  inTestTenant(() => {
+    const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
+    assert.equal(r?.model, "codex/gpt-5.6-terra");
+  }));
 
-test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {
-  const m = resolveModel("codex/gpt-5.6-sol");
-  assert.ok(m, "codex/gpt-5.6-sol must resolve");
-  assert.equal(String(m?.provider), "openai-codex");
-  assert.equal(String((m as { api?: string })?.api), "openai-codex-responses");
-  assert.equal(m?.id, "codex/gpt-5.6-sol");
-  // The un-prefixed id keeps resolving to the metered openai provider.
-  assert.equal(String(resolveModel("gpt-5.6-sol")?.provider), "openai");
-});
+test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () =>
+  inTestTenant(() => {
+    const m = resolveModel("codex/gpt-5.6-sol");
+    assert.ok(m, "codex/gpt-5.6-sol must resolve");
+    assert.equal(String(m?.provider), "openai-codex");
+    assert.equal(String((m as { api?: string })?.api), "openai-codex-responses");
+    assert.equal(m?.id, "codex/gpt-5.6-sol");
+    // The un-prefixed id keeps resolving to the metered openai provider.
+    assert.equal(String(resolveModel("gpt-5.6-sol")?.provider), "openai");
+  }));
 
 test("routing: no credentials -> null (falls through to gate, no deployment key)", () => {
   assert.equal(resolveIndividualAuthRouting(null, null, undefined), null);
 });
 
-test("individual OAuth routing preserves exact supported runtime selections", () => {
-  assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra")?.model, "codex/gpt-6-astra");
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5")?.model, "codex/gpt-5.5");
-  assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5"), null);
-});
+test("individual OAuth routing preserves exact supported runtime selections", () =>
+  inTestTenant(() => {
+    assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
+    assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra")?.model, "codex/gpt-6-astra");
+    assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5")?.model, "codex/gpt-5.5");
+    assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5"), null);
+  }));

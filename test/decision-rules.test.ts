@@ -14,6 +14,7 @@ import {
 import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -354,44 +355,45 @@ test("most_confident hook points follow the likeliest enforced verdict and error
   assert.equal(failing.decisive?.action, "continue", "a failed classifier falls back to its onError option");
 });
 
-test("the decisions resource checks the model catalog and lets an admin's agent enforce", async () => {
-  const { ADMIN_RESOURCE_BY_ID } = await import("../src/api/routes/admin-resources.ts");
-  const { selectableBaseModels } = await import("../src/model/pi-models.ts");
-  const saved: DecisionRule[] = [];
-  const decisions = {
-    providers: async () => PROVIDERS,
-    rules: async () => saved,
-    saveProvider: async () => {},
-    removeProvider: async () => {},
-    saveRule: async (r: DecisionRule, by: { actorId: string }) =>
-      void saved.push({ ...r, id: `${r.id}:${by.actorId}` }),
-    removeRule: async () => {},
-  };
-  const modelId = selectableBaseModels()[0]!.id;
-  const rule = {
-    ...route(),
-    options: {
-      keep: { description: "ordinary", action: "keep" },
-      deep: { description: "hard", action: "use_runtime", runtime: { modelId } },
-    },
-  };
-  const apply = (body: unknown, capability: unknown = null) =>
-    ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
-      { body, capability, deps: { decisions } } as never,
-      { id: "admin@x.com" },
-      "org:default-org",
+test("the decisions resource checks the model catalog and lets an admin's agent enforce", () =>
+  inTestTenant(async () => {
+    const { ADMIN_RESOURCE_BY_ID } = await import("../src/api/routes/admin-resources.ts");
+    const { selectableBaseModels } = await import("../src/model/pi-models.ts");
+    const saved: DecisionRule[] = [];
+    const decisions = {
+      providers: async () => PROVIDERS,
+      rules: async () => saved,
+      saveProvider: async () => {},
+      removeProvider: async () => {},
+      saveRule: async (r: DecisionRule, by: { actorId: string }) =>
+        void saved.push({ ...r, id: `${r.id}:${by.actorId}` }),
+      removeRule: async () => {},
+    };
+    const modelId = selectableBaseModels()[0]!.id;
+    const rule = {
+      ...route(),
+      options: {
+        keep: { description: "ordinary", action: "keep" },
+        deep: { description: "hard", action: "use_runtime", runtime: { modelId } },
+      },
+    };
+    const apply = (body: unknown, capability: unknown = null) =>
+      ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
+        { body, capability, deps: { decisions } } as never,
+        { id: "admin@x.com" },
+        "org:default-org",
+      );
+    assert.match(err(await apply({ rule: route() })), /m-deep is not in this deployment's model catalog/);
+    assert.deepEqual(await apply({ rule }, { actorId: "admin@x.com" }), { ok: true });
+    assert.deepEqual(await apply({ rule: { ...rule, mode: "observe" } }), { ok: true });
+    assert.deepEqual(
+      saved.map((r) => [r.id, r.mode]),
+      [
+        ["router:admin@x.com", "enforce"],
+        ["router:admin@x.com", "observe"],
+      ],
     );
-  assert.match(err(await apply({ rule: route() })), /m-deep is not in this deployment's model catalog/);
-  assert.deepEqual(await apply({ rule }, { actorId: "admin@x.com" }), { ok: true });
-  assert.deepEqual(await apply({ rule: { ...rule, mode: "observe" } }), { ok: true });
-  assert.deepEqual(
-    saved.map((r) => [r.id, r.mode]),
-    [
-      ["router:admin@x.com", "enforce"],
-      ["router:admin@x.com", "observe"],
-    ],
-  );
-});
+  }));
 
 test("decision hooks load active rules for the hook, decide, and audit every verdict", async () => {
   const { createDecisionHooks } = await import("../src/decisions/hooks.ts");

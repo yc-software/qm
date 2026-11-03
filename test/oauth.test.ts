@@ -99,28 +99,30 @@ test("exchangeCode returns a token for the provider's hosts (default authorizati
   assert.deepEqual(token.grantedScopes, ["a", "b"]);
 });
 
-test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
-  const fetchImpl: FetchLike = async (_url, init) => {
-    assert.match(init.body, /grant_type=refresh_token/);
-    return { ok: true, status: 200, json: async () => ({ access_token: "at2", expires_in: 3600 }) };
-  };
-  const refresh = makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 2_000 });
-  const fresh = await refresh("gmail.googleapis.com", { accessToken: "old", refreshToken: "rt", expiresAt: 0 });
-  assert.equal(fresh.accessToken, "at2");
-  assert.equal(fresh.refreshToken, "rt");
-  assert.equal(fresh.expiresAt, 2_000 + 3600_000);
-});
+test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", () =>
+  inTestTenant(async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      assert.match(init.body, /grant_type=refresh_token/);
+      return { ok: true, status: 200, json: async () => ({ access_token: "at2", expires_in: 3600 }) };
+    };
+    const refresh = makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 2_000 });
+    const fresh = await refresh("gmail.googleapis.com", { accessToken: "old", refreshToken: "rt", expiresAt: 0 });
+    assert.equal(fresh.accessToken, "at2");
+    assert.equal(fresh.refreshToken, "rt");
+    assert.equal(fresh.expiresAt, 2_000 + 3600_000);
+  }));
 
-test("refresh dispatches by host (calendar host → google provider)", async () => {
-  let hit = "";
-  const fetchImpl: FetchLike = async (url) => {
-    hit = url;
-    return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
-  };
-  const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
-  await refresh("www.googleapis.com", { accessToken: "x", refreshToken: "rt" });
-  assert.equal(hit, PROVIDERS.google!.tokenUrl);
-});
+test("refresh dispatches by host (calendar host → google provider)", () =>
+  inTestTenant(async () => {
+    let hit = "";
+    const fetchImpl: FetchLike = async (url) => {
+      hit = url;
+      return { ok: true, status: 200, json: async () => ({ access_token: "at" }) };
+    };
+    const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
+    await refresh("www.googleapis.com", { accessToken: "x", refreshToken: "rt" });
+    assert.equal(hit, PROVIDERS.google!.tokenUrl);
+  }));
 
 test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
   const r = createSecretClientResolver(createEnvSecretSource({ ...env, GOOGLE_WORKSPACE_DOMAIN: "example.com" }));
@@ -176,40 +178,41 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
   assert.equal(personal.token.accessToken, "at");
 });
 
-test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
-  const good: FetchLike = async (url, init) => {
-    assert.equal(url, PROVIDERS.github!.tokenUrl);
-    assert.equal(init.headers.accept, "application/json");
-    assert.match(init.body, /grant_type=refresh_token/);
-    return {
+test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", () =>
+  inTestTenant(async () => {
+    const good: FetchLike = async (url, init) => {
+      assert.equal(url, PROVIDERS.github!.tokenUrl);
+      assert.equal(init.headers.accept, "application/json");
+      assert.match(init.body, /grant_type=refresh_token/);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "gh-at2", refresh_token: "gh-rt2", expires_in: 28800 }),
+      };
+    };
+    const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl: good, now: () => 1_000 })("api.github.com", {
+      accessToken: "old",
+      refreshToken: "gh-rt",
+      expiresAt: 0,
+    });
+    assert.equal(fresh.accessToken, "gh-at2");
+    assert.equal(fresh.refreshToken, "gh-rt2");
+    assert.equal(fresh.expiresAt, 1_000 + 28800_000);
+
+    const errBody: FetchLike = async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ access_token: "gh-at2", refresh_token: "gh-rt2", expires_in: 28800 }),
-    };
-  };
-  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl: good, now: () => 1_000 })("api.github.com", {
-    accessToken: "old",
-    refreshToken: "gh-rt",
-    expiresAt: 0,
-  });
-  assert.equal(fresh.accessToken, "gh-at2");
-  assert.equal(fresh.refreshToken, "gh-rt2");
-  assert.equal(fresh.expiresAt, 1_000 + 28800_000);
-
-  const errBody: FetchLike = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect" }),
-  });
-  await assert.rejects(
-    () =>
-      makeRefresh({ resolveClient: resolve, fetchImpl: errBody })("api.github.com", {
-        accessToken: "old",
-        refreshToken: "gh-rt",
-      }),
-    /refresh token passed is incorrect/,
-  );
-});
+      json: async () => ({ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect" }),
+    });
+    await assert.rejects(
+      () =>
+        makeRefresh({ resolveClient: resolve, fetchImpl: errBody })("api.github.com", {
+          accessToken: "old",
+          refreshToken: "gh-rt",
+        }),
+      /refresh token passed is incorrect/,
+    );
+  }));
 
 test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
   const errBody: FetchLike = async (url, init) => {
@@ -232,17 +235,18 @@ test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies"
   );
 });
 
-test("makeRefresh never returns an empty access token (parseable junk can't poison the keychain)", async () => {
-  const empty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ token_type: "bearer" }) });
-  await assert.rejects(
-    () =>
-      makeRefresh({ resolveClient: resolve, fetchImpl: empty })("gmail.googleapis.com", {
-        accessToken: "old",
-        refreshToken: "rt",
-      }),
-    /empty access token/,
-  );
-});
+test("makeRefresh never returns an empty access token (parseable junk can't poison the keychain)", () =>
+  inTestTenant(async () => {
+    const empty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ token_type: "bearer" }) });
+    await assert.rejects(
+      () =>
+        makeRefresh({ resolveClient: resolve, fetchImpl: empty })("gmail.googleapis.com", {
+          accessToken: "old",
+          refreshToken: "rt",
+        }),
+      /empty access token/,
+    );
+  }));
 
 test("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope", async () => {
   const url = new URL(
@@ -309,42 +313,44 @@ test("Slack/Notion reject a degenerate ok-but-no-token response (no empty token 
   );
 });
 
-test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async () => {
-  const fetchImpl: FetchLike = async (u, init) => {
-    assert.equal(u, PROVIDERS.notion!.tokenUrl);
-    assert.match(init.headers.authorization ?? "", /^Basic /);
-    assert.match(init.body, /"grant_type":"authorization_code"/);
-    return { ok: true, status: 200, json: async () => ({ access_token: "notion-tok" }) };
-  };
-  const { token } = await exchangeCode("notion", "c", "https://app/cb", {
-    client: await resolve("notion", {}),
-    fetchImpl,
-  });
-  assert.equal(token.accessToken, "notion-tok");
-  await assert.rejects(
-    () => makeRefresh({ resolveClient: resolve })("api.notion.com", { accessToken: "x", refreshToken: "rt" }),
-    /do not refresh/,
-  );
-});
-
-test("Linear refreshes via the standard refresh_token grant", async () => {
-  const fetchImpl: FetchLike = async (u, init) => {
-    assert.equal(u, PROVIDERS.linear!.tokenUrl);
-    assert.match(init.body, /grant_type=refresh_token/);
-    assert.match(init.body, /refresh_token=rt-old/);
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ access_token: "lin-new", refresh_token: "rt-new", expires_in: 86399 }),
+test("Notion exchanges via HTTP Basic + JSON body and does not refresh", () =>
+  inTestTenant(async () => {
+    const fetchImpl: FetchLike = async (u, init) => {
+      assert.equal(u, PROVIDERS.notion!.tokenUrl);
+      assert.match(init.headers.authorization ?? "", /^Basic /);
+      assert.match(init.body, /"grant_type":"authorization_code"/);
+      return { ok: true, status: 200, json: async () => ({ access_token: "notion-tok" }) };
     };
-  };
-  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl })("api.linear.app", {
-    accessToken: "lin-old",
-    refreshToken: "rt-old",
-  });
-  assert.equal(fresh.accessToken, "lin-new");
-  assert.equal(fresh.refreshToken, "rt-new");
-});
+    const { token } = await exchangeCode("notion", "c", "https://app/cb", {
+      client: await resolve("notion", {}),
+      fetchImpl,
+    });
+    assert.equal(token.accessToken, "notion-tok");
+    await assert.rejects(
+      () => makeRefresh({ resolveClient: resolve })("api.notion.com", { accessToken: "x", refreshToken: "rt" }),
+      /do not refresh/,
+    );
+  }));
+
+test("Linear refreshes via the standard refresh_token grant", () =>
+  inTestTenant(async () => {
+    const fetchImpl: FetchLike = async (u, init) => {
+      assert.equal(u, PROVIDERS.linear!.tokenUrl);
+      assert.match(init.body, /grant_type=refresh_token/);
+      assert.match(init.body, /refresh_token=rt-old/);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "lin-new", refresh_token: "rt-new", expires_in: 86399 }),
+      };
+    };
+    const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl })("api.linear.app", {
+      accessToken: "lin-old",
+      refreshToken: "rt-old",
+    });
+    assert.equal(fresh.accessToken, "lin-new");
+    assert.equal(fresh.refreshToken, "rt-new");
+  }));
 
 test("scopesFor: BYO client scopes override the provider default", async () => {
   const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
@@ -486,68 +492,73 @@ test("X exchange uses HTTP Basic client auth, sends the PKCE verifier, keeps sec
   assert.equal(token.expiresAt, 1_000 + 7200_000);
 });
 
-test("X refresh captures the ROTATED refresh token (single-use) — the connection survives past 2h", async () => {
-  const fetchImpl: FetchLike = async (_url, init) => {
-    assert.match(init.body, /grant_type=refresh_token/);
-    assert.match(init.body, /refresh_token=old-rt/);
-    assert.doesNotMatch(init.body, /client_secret/);
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ access_token: "xat2", refresh_token: "new-rt", expires_in: 7200 }),
+test("X refresh captures the ROTATED refresh token (single-use) — the connection survives past 2h", () =>
+  inTestTenant(async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      assert.match(init.body, /grant_type=refresh_token/);
+      assert.match(init.body, /refresh_token=old-rt/);
+      assert.doesNotMatch(init.body, /client_secret/);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "xat2", refresh_token: "new-rt", expires_in: 7200 }),
+      };
     };
-  };
-  const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 5_000 })("api.x.com", {
-    accessToken: "old",
-    refreshToken: "old-rt",
-    expiresAt: 0,
-  });
-  assert.equal(fresh.accessToken, "xat2");
-  assert.equal(fresh.refreshToken, "new-rt", "the rotated refresh token replaces the old one");
-  assert.equal(fresh.expiresAt, 5_000 + 7200_000);
-});
+    const fresh = await makeRefresh({ resolveClient: resolve, fetchImpl, now: () => 5_000 })("api.x.com", {
+      accessToken: "old",
+      refreshToken: "old-rt",
+      expiresAt: 0,
+    });
+    assert.equal(fresh.accessToken, "xat2");
+    assert.equal(fresh.refreshToken, "new-rt", "the rotated refresh token replaces the old one");
+    assert.equal(fresh.expiresAt, 5_000 + 7200_000);
+  }));
 
-test("token failures keep the provider's error detail", async () => {
-  const failing =
-    (status: number, json: () => Promise<unknown>): FetchLike =>
-    async () => ({ ok: false, status, json });
-  await assert.rejects(
-    exchangeCode("google", "code", "https://app/cb", {
-      client: await googleClient(),
-      fetchImpl: failing(400, async () => ({ error: "invalid_grant", error_description: "Code expired" })),
-      now: 1_000,
-    }),
-    /token exchange failed \(400\): invalid_grant: Code expired$/,
-  );
-  await assert.rejects(
-    makeRefresh({
-      resolveClient: resolve,
-      fetchImpl: failing(401, async () => ({ reason: "Invalid client_id or client_secret", error: "invalid_client" })),
-      now: () => 1_000,
-    })("api.x.com", { accessToken: "old", refreshToken: "rt", expiresAt: 0 }),
-    /x token refresh failed \(401\): invalid_client: Invalid client_id or client_secret$/,
-  );
-  await assert.rejects(
-    exchangeCode("google", "code", "https://app/cb", {
-      client: await googleClient(),
-      fetchImpl: failing(401, async () => ({
-        error: { code: "refresh_token_reused", message: "Refresh token already used" },
-      })),
-      now: 1_000,
-    }),
-    /token exchange failed \(401\): refresh_token_reused: Refresh token already used$/,
-  );
-  await assert.rejects(
-    exchangeCode("google", "code", "https://app/cb", {
-      client: await googleClient(),
-      fetchImpl: failing(502, async () => {
-        throw new SyntaxError("Unexpected token <");
+test("token failures keep the provider's error detail", () =>
+  inTestTenant(async () => {
+    const failing =
+      (status: number, json: () => Promise<unknown>): FetchLike =>
+      async () => ({ ok: false, status, json });
+    await assert.rejects(
+      exchangeCode("google", "code", "https://app/cb", {
+        client: await googleClient(),
+        fetchImpl: failing(400, async () => ({ error: "invalid_grant", error_description: "Code expired" })),
+        now: 1_000,
       }),
-      now: 1_000,
-    }),
-    /token exchange failed \(502\)$/,
-  );
-});
+      /token exchange failed \(400\): invalid_grant: Code expired$/,
+    );
+    await assert.rejects(
+      makeRefresh({
+        resolveClient: resolve,
+        fetchImpl: failing(401, async () => ({
+          reason: "Invalid client_id or client_secret",
+          error: "invalid_client",
+        })),
+        now: () => 1_000,
+      })("api.x.com", { accessToken: "old", refreshToken: "rt", expiresAt: 0 }),
+      /x token refresh failed \(401\): invalid_client: Invalid client_id or client_secret$/,
+    );
+    await assert.rejects(
+      exchangeCode("google", "code", "https://app/cb", {
+        client: await googleClient(),
+        fetchImpl: failing(401, async () => ({
+          error: { code: "refresh_token_reused", message: "Refresh token already used" },
+        })),
+        now: 1_000,
+      }),
+      /token exchange failed \(401\): refresh_token_reused: Refresh token already used$/,
+    );
+    await assert.rejects(
+      exchangeCode("google", "code", "https://app/cb", {
+        client: await googleClient(),
+        fetchImpl: failing(502, async () => {
+          throw new SyntaxError("Unexpected token <");
+        }),
+        now: 1_000,
+      }),
+      /token exchange failed \(502\)$/,
+    );
+  }));
 
 test("oauth flow store — a short opaque state resolves once, then expires", () =>
   inTestTenant(async () => {

@@ -13,7 +13,8 @@ import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts"
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { testKeychainRows, testLinkTables } from "./support/credential-stores.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { tenantReady } from "../src/tenants/context.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -162,7 +163,7 @@ test("tool service exposes namespaced tools and calls through", (t) =>
   inTestTenant(async () => {
     const mcp = await startMcpTestServer(t, { description: "CRM records" });
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     await store.put(server({ url: `${mcp.url}/mcp` }));
     await service.refresh();
     const defs = service.toolDefs();
@@ -183,7 +184,7 @@ test("destructive annotations mark MCP tools for approval unless the server over
       ],
     });
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     const approvals = async (partial: Partial<McpServer>) => {
       await store.put(server({ url: mcp.url, ...partial }));
       await service.refresh();
@@ -210,7 +211,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
       call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
     });
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
     await service.refresh();
     assert.deepEqual(
@@ -291,7 +292,7 @@ test("attested connectors send one canonical person and never call for an actor 
       tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
     });
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
     await service.refresh();
     for (const person of ["alice@example.com", "U_ALICE"])
@@ -313,7 +314,7 @@ test("disabled server's tools disappear and calls fail", (t) =>
   inTestTenant(async () => {
     const mcp = await startMcpTestServer(t);
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     await store.put(server({ url: mcp.url }));
     await service.refresh();
     assert.equal(service.toolDefs().length, 2);
@@ -323,12 +324,13 @@ test("disabled server's tools disappear and calls fail", (t) =>
     service.close();
   }));
 
-test("unknown tool call rejects", async () => {
-  const store = createMcpServerStore(testLinkTables().mcpServers);
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
-  await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
-  service.close();
-});
+test("unknown tool call rejects", () =>
+  inTestTenant(async () => {
+    const store = createMcpServerStore(testLinkTables().mcpServers);
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
+    await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
+    service.close();
+  }));
 
 function tokenStore() {
   return createKeychain({
@@ -468,38 +470,52 @@ test("per-user connectors select an explicit account slot without falling back t
     await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
   }));
 
-test("background MCP refresh contains registry failures at startup, on change, and on its timer", (t) =>
+test("MCP refresh contains registry failures on a tenant's first bind and on change", (t) =>
   inTestTenant(async () => {
-    t.mock.timers.enable({ apis: ["setInterval"] });
-    const backing = testLinkTables().mcpServers;
-    const store = createMcpServerStore(backing);
+    const store = createMcpServerStore(testLinkTables().mcpServers);
     const mcp = await startMcpTestServer(t);
     const list = t.mock.method(store, "list", async () => {
       throw new Error("registry unavailable");
     });
     const errors = t.mock.method(console, "error", () => {});
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 100 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     t.after(() => service.close());
-    const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
-    await tick();
+    await tenantReady();
+    await settle(async () => errors.mock.callCount() === 1);
     assert.equal(list.mock.callCount(), 1);
     await store.put(server({ url: mcp.url }));
-    await tick();
+    await settle(async () => errors.mock.callCount() === 2);
     assert.equal(list.mock.callCount(), 2);
-    t.mock.timers.tick(100);
-    await tick();
-    assert.equal(list.mock.callCount(), 3);
-    assert.equal(errors.mock.callCount(), 3);
     await assert.rejects(service.refresh(), /registry unavailable/);
     list.mock.restore();
-    t.mock.timers.tick(100);
-    await settle(async () => service.toolDefs().length > 0);
+    await service.refresh();
     assert.deepEqual(
       service.toolDefs().map((tool) => tool.name),
       ["crm_query", "crm_update"],
     );
     assert.equal(await service.call("crm_query", {}), "ran query");
   }));
+
+test("one tenant's MCP servers and tools never appear for another tenant", async (t) => {
+  const [tenantA, tenantB] = testTenants();
+  const store = createMcpServerStore(testLinkTables().mcpServers);
+  const mcp = await startMcpTestServer(t);
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
+  t.after(() => service.close());
+  await inTestTenant(async () => {
+    await store.put(server({ url: mcp.url }));
+    await service.refresh();
+    assert.deepEqual(
+      (await service.toolDefsFor()).map((tool) => tool.name),
+      ["crm_query", "crm_update"],
+    );
+  }, tenantA);
+  await inTestTenant(async () => {
+    assert.deepEqual(await service.toolDefsFor(), []);
+    assert.deepEqual(service.toolDefs(), []);
+    await assert.rejects(service.call("crm_query", {}), /unknown MCP tool/);
+  }, tenantB);
+});
 
 test("optional intent and locale parameters are left out of the schema the model sees, required ones are kept", (t) =>
   inTestTenant(async () => {

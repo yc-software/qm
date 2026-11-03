@@ -211,34 +211,35 @@ test("a wrong-recipient click is refused, leaves the link usable, and reports wh
   }
 });
 
-test("connecting from a channel never re-grants a previously private connector", async () => {
-  const fetchImpl: FetchLike = async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
-  });
-  const srv = await start(fetchImpl);
-  try {
-    const cap = await consentTok("U1", { scopeId: "channel:C9" });
-    const mintRes = await mint(srv.base, cap, { provider: "google" });
-    const { connectPath } = (await mintRes.json()) as { connectPath: string };
-    const decision = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U1")).json()) as {
-      status: string;
-      authorizeUrl: string;
-    };
-    assert.equal(decision.status, "authorize");
-    const state = new URL(decision.authorizeUrl).searchParams.get("state") ?? "";
-    const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(state)}`;
-    assert.equal((await fetch(`${srv.base}${cb}`, { redirect: "manual" })).status, 302);
-    assert.equal(
-      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
-      "at-google",
-    );
-    assert.equal((await srv.built.keychain!.materializeStanding("channel:C9")).length, 0);
-  } finally {
-    await srv.close();
-  }
-});
+test("connecting from a channel never re-grants a previously private connector", () =>
+  inTestTenant(async () => {
+    const fetchImpl: FetchLike = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "at-google", refresh_token: "rt", expires_in: 3600 }),
+    });
+    const srv = await start(fetchImpl);
+    try {
+      const cap = await consentTok("U1", { scopeId: "channel:C9" });
+      const mintRes = await mint(srv.base, cap, { provider: "google" });
+      const { connectPath } = (await mintRes.json()) as { connectPath: string };
+      const decision = (await (await redeem(srv.base, coreRedeemPath(connectPath), "U1")).json()) as {
+        status: string;
+        authorizeUrl: string;
+      };
+      assert.equal(decision.status, "authorize");
+      const state = new URL(decision.authorizeUrl).searchParams.get("state") ?? "";
+      const cb = `/v1/connectors/oauth/google/callback?code=code-1&state=${encodeURIComponent(state)}`;
+      assert.equal((await fetch(`${srv.base}${cb}`, { redirect: "manual" })).status, 302);
+      assert.equal(
+        await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
+        "at-google",
+      );
+      assert.equal((await srv.built.keychain!.materializeStanding("channel:C9")).length, 0);
+    } finally {
+      await srv.close();
+    }
+  }));
 
 test("mint refuses naming anyone but the actor, and points at the self-connect page", async () => {
   const srv = await start(async () => {

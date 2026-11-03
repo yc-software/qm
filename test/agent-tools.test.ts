@@ -3732,15 +3732,16 @@ test("a client tool passes the page's isError through to the model", () =>
     assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.isError, true);
   }));
 
-test("a client tool times out with an error the model can act on", async () => {
-  const { emitted, ref } = clientToolRef();
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
-  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
-  assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
-  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
-  assert.equal(toolResult.isError, true);
-  assert.equal(toolResult.timedOut, true);
-});
+test("a client tool times out with an error the model can act on", () =>
+  inTestTenant(async () => {
+    const { emitted, ref } = clientToolRef();
+    const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
+    const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+    assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
+    const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.equal(toolResult.isError, true);
+    assert.equal(toolResult.timedOut, true);
+  }));
 
 test("a client tool stops waiting when the turn is cancelled", async () => {
   const { emitted, cancel, ref } = clientToolRef();

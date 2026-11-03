@@ -10,12 +10,15 @@ import {
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { loadConfig } from "../src/config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const BASE_ENV = {} as NodeJS.ProcessEnv;
 
-afterEach(() => {
-  setProviderBaseUrls({});
-});
+afterEach(() =>
+  inTestTenant(() => {
+    setProviderBaseUrls({});
+  }),
+);
 
 test("parseProviderBaseUrl normalizes trailing slashes and whitespace", () => {
   assert.equal(parseProviderBaseUrl("X", " https://gw.example.com/v1// "), "https://gw.example.com/v1");
@@ -45,19 +48,21 @@ test("providerBaseUrl answers only for configured, known providers", () => {
   assert.equal(providerBaseUrl("weird"), undefined);
 });
 
-test("resolveModel routes a built-in model through the override", () => {
-  assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://api.anthropic.com");
-  setProviderBaseUrls({ anthropic: "https://gw.example.com" });
-  assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://gw.example.com");
-  assert.equal(resolveModel("gpt-5.6-sol")?.baseUrl, "https://api.openai.com/v1");
-});
+test("resolveModel routes a built-in model through the override", () =>
+  inTestTenant(() => {
+    assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://api.anthropic.com");
+    setProviderBaseUrls({ anthropic: "https://gw.example.com" });
+    assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://gw.example.com");
+    assert.equal(resolveModel("gpt-5.6-sol")?.baseUrl, "https://api.openai.com/v1");
+  }));
 
-test("a cloned model follows its template's override", () => {
-  setProviderBaseUrls({ anthropic: "https://gw.example.com" });
-  const clone = resolveModel("claude-opus-5");
-  assert.equal(clone?.baseUrl, "https://gw.example.com");
-  assert.equal(clone?.id, "claude-opus-5");
-});
+test("a cloned model follows its template's override", () =>
+  inTestTenant(() => {
+    setProviderBaseUrls({ anthropic: "https://gw.example.com" });
+    const clone = resolveModel("claude-opus-5");
+    assert.equal(clone?.baseUrl, "https://gw.example.com");
+    assert.equal(clone?.id, "claude-opus-5");
+  }));
 
 test("loadConfig parses provider base URLs", () => {
   const config = loadConfig({
@@ -133,21 +138,22 @@ test("the gateway key header cannot share a name with a request context header",
     );
 });
 
-test("gateway-mapped built-in models send session-affinity headers", () => {
-  const gateway = {
-    url: "http://gateway.internal/v1",
-    apiKey: "k",
-    apiKeyHeader: "x-gateway-key",
-    models: { "claude-opus-5-5": "router/claude-opus-5-5", "gpt-5.6-sol": "router/gpt-5.6-sol" },
-  };
-  for (const id of Object.keys(gateway.models)) {
-    const model = resolveModel(id)!;
-    const routed = modelGatewayRequest(gateway, model)!;
-    assert.equal(
-      (routed.model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
-      true,
-    );
-    assert.equal(routed.model.baseUrl, gateway.url);
-    assert.equal(routed.model.id, model.id);
-  }
-});
+test("gateway-mapped built-in models send session-affinity headers", () =>
+  inTestTenant(() => {
+    const gateway = {
+      url: "http://gateway.internal/v1",
+      apiKey: "k",
+      apiKeyHeader: "x-gateway-key",
+      models: { "claude-opus-5-5": "router/claude-opus-5-5", "gpt-5.6-sol": "router/gpt-5.6-sol" },
+    };
+    for (const id of Object.keys(gateway.models)) {
+      const model = resolveModel(id)!;
+      const routed = modelGatewayRequest(gateway, model)!;
+      assert.equal(
+        (routed.model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+        true,
+      );
+      assert.equal(routed.model.baseUrl, gateway.url);
+      assert.equal(routed.model.id, model.id);
+    }
+  }));

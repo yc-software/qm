@@ -218,39 +218,40 @@ test("a configured base model the cold catalog cannot resolve stays listed witho
   }
 });
 
-test("cached model catalogs refresh in the background and retain dynamic entries after expiry", async (t) => {
-  let requests = 0;
-  let release = Promise.withResolvers<Response>();
-  const fetcher: typeof fetch = () => {
-    requests++;
-    return release.promise;
-  };
-  assert.ok(cachedModelCatalog(fetcher).models.length > 0);
-  assert.ok(cachedModelCatalog(fetcher).models.length > 0);
-  assert.equal(requests, 1);
-  release.resolve(
-    Response.json({
-      data: [
-        {
-          id: "testing/settings-fast",
-          name: "Settings test",
-          context_length: 8192,
-          pricing: { prompt: "0", completion: "0" },
-          top_provider: { max_completion_tokens: 1024 },
-          architecture: { input_modalities: ["text"] },
-          supported_parameters: ["tools"],
-        },
-      ],
-    }),
-  );
-  await selectableModelCatalog(fetcher);
-  assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
-  const later = Date.now() + 6 * 60_000;
-  t.mock.method(Date, "now", () => later);
-  release = Promise.withResolvers<Response>();
-  assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
-  assert.equal(requests, 2);
-  release.reject(new Error("Catalog offline"));
-  await selectableModelCatalog(fetcher);
-  assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
-});
+test("cached model catalogs refresh in the background and retain dynamic entries after expiry", (t) =>
+  inTestTenant(async () => {
+    let requests = 0;
+    let release = Promise.withResolvers<Response>();
+    const fetcher: typeof fetch = () => {
+      requests++;
+      return release.promise;
+    };
+    assert.ok(cachedModelCatalog(fetcher).models.length > 0);
+    assert.ok(cachedModelCatalog(fetcher).models.length > 0);
+    assert.equal(requests, 1);
+    release.resolve(
+      Response.json({
+        data: [
+          {
+            id: "testing/settings-fast",
+            name: "Settings test",
+            context_length: 8192,
+            pricing: { prompt: "0", completion: "0" },
+            top_provider: { max_completion_tokens: 1024 },
+            architecture: { input_modalities: ["text"] },
+            supported_parameters: ["tools"],
+          },
+        ],
+      }),
+    );
+    await selectableModelCatalog(fetcher);
+    assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
+    const later = Date.now() + 6 * 60_000;
+    t.mock.method(Date, "now", () => later);
+    release = Promise.withResolvers<Response>();
+    assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
+    assert.equal(requests, 2);
+    release.reject(new Error("Catalog offline"));
+    await selectableModelCatalog(fetcher);
+    assert.ok(cachedModelCatalog(fetcher).models.some((m) => m.id === "testing/settings-fast"));
+  }));

@@ -275,7 +275,7 @@ test("MCP admin save stores the server's own description from the probe", (t) =>
     const dir = await mkdtemp(join(tmpdir(), "mcp-admin-about-"));
     const built = buildApp(testConfig({ dataDir: dir }));
     const store = createMcpServerStore(testLinkTables().mcpServers);
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
     const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
     const server = createInsecureTestServer(built.app, {
       admin: built.admin,

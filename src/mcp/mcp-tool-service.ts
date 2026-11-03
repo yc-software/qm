@@ -16,6 +16,7 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpL
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
+import { onFirstBind, perTenant, tenantReady, withTenant } from "../tenants/context.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -172,15 +173,17 @@ export function createMcpToolService(opts: {
   audit?: AuditLog;
   userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken" | "connectorTokenStatus">;
   now?: () => number;
-  refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
   fetch?: AddressFetch;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
-  const clients = new Map<string, { client: McpClient; server: McpServer }>();
-  let snapshot: McpToolDescriptor[] = [];
-  let perUserServers = new Map<string, McpServer>();
-  const catalogs = new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
+  const tenantTools = perTenant(() => ({
+    clients: new Map<string, { client: McpClient; server: McpServer }>(),
+    snapshot: new Array<McpToolDescriptor>(),
+    perUserServers: new Map<string, McpServer>(),
+    catalogs: new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
+    refreshedAt: 0,
+  }));
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -202,6 +205,7 @@ export function createMcpToolService(opts: {
   }
 
   function clientFor(server: McpServer): McpClient {
+    const { clients } = tenantTools();
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
     const client = createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch });
@@ -231,6 +235,7 @@ export function createMcpToolService(opts: {
     const client = await callerClient(server, principalId);
     const perPerson = server.attestActor || server.credentialScope === "per-user";
     const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
+    const { catalogs } = tenantTools();
     const cached = catalogs.get(key);
     if (cached) return cached;
     const listing = client
@@ -285,7 +290,9 @@ export function createMcpToolService(opts: {
   }
 
   async function refresh(): Promise<void> {
-    catalogs.clear();
+    const state = tenantTools();
+    state.refreshedAt = now();
+    state.catalogs.clear();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
@@ -339,8 +346,8 @@ export function createMcpToolService(opts: {
     }
     // De-duplicate on the namespaced name; first server wins deterministically.
     const seen = new Set<string>();
-    snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
-    perUserServers = nextPerUser;
+    state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    state.perUserServers = nextPerUser;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -352,8 +359,11 @@ export function createMcpToolService(opts: {
   }
 
   async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const current = snapshot;
-    const gated = perUserServers;
+    await tenantReady();
+    const state = tenantTools();
+    if (now() - state.refreshedAt > REFRESH_INTERVAL_MS) refreshInBackground();
+    const current = state.snapshot;
+    const gated = state.perUserServers;
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();
@@ -365,19 +375,18 @@ export function createMcpToolService(opts: {
     return current.filter((t) => !gated.has(t.serverId) || Boolean(t.signIn) !== ready.has(t.serverId));
   }
 
+  const refreshContained = () => refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   const refreshInBackground = (): void => {
-    if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
+    if (!closed) void refreshContained();
   };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
-  timer.unref?.();
-  refreshInBackground();
+  const unhook = onFirstBind((tenant) => withTenant(tenant, refreshContained));
 
   return {
-    toolDefs: () => snapshot,
+    toolDefs: () => tenantTools().snapshot,
     toolDefsFor,
     async needsApproval(name, args, principalId) {
-      const def = snapshot.find((t) => t.name === name);
+      const def = tenantTools().snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
       if (args.operation !== "invoke") return false;
@@ -391,7 +400,7 @@ export function createMcpToolService(opts: {
       }
     },
     async call(name, args, principalId, approval) {
-      const def = snapshot.find((t) => t.name === name);
+      const def = tenantTools().snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
@@ -427,7 +436,7 @@ export function createMcpToolService(opts: {
     },
     close() {
       closed = true;
-      clearInterval(timer);
+      unhook();
       unsubscribe();
     },
   };

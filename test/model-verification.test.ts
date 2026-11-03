@@ -34,7 +34,7 @@ import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-erro
 import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts";
 
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
-afterEach(() => setModelOverlays([]));
+afterEach(() => inTestTenant(() => setModelOverlays([])));
 
 test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", () =>
   inTestTenant(async () => {
@@ -139,28 +139,29 @@ test("a changed serving context during a probe is not certified", () =>
     assert.deepEqual(await store.statuses(), []);
   }));
 
-test("probe failures map from structured codes and error names, never provider text", () => {
-  const typed = (code: ProviderErrorCode, status?: number) =>
-    new ProviderTurnError("secret", { code, status, retryable: false, raw: "secret 401 429 timeout" });
-  for (const [error, code] of [
-    [typed("auth", 401), "access_denied"],
-    [typed("not_found", 404), "model_unavailable"],
-    [typed("rate_limit", 429), "quota_or_rate_limit"],
-    [typed("model_budget", 429), "quota_or_rate_limit"],
-    [typed("bad_request", 400), "unsupported_configuration"],
-    [typed("transient", 503), "provider_failure"],
-    [typed("unknown"), "provider_failure"],
-    [new DOMException("secret", "TimeoutError"), "timeout"],
-    [new DOMException("secret", "AbortError"), "timeout"],
-    [new GatewayModelUnavailableError("secret"), "model_unavailable"],
-    [new Error("401 timeout 429 secret"), "provider_failure"],
-  ] as const) {
-    const failure = verificationFailure(error);
-    assert.equal(failure.code, code);
-    assert.doesNotMatch(failure.message, /secret/);
-    assert.ok(failure instanceof ModelVerificationError);
-  }
-});
+test("probe failures map from structured codes and error names, never provider text", () =>
+  inTestTenant(() => {
+    const typed = (code: ProviderErrorCode, status?: number) =>
+      new ProviderTurnError("secret", { code, status, retryable: false, raw: "secret 401 429 timeout" });
+    for (const [error, code] of [
+      [typed("auth", 401), "access_denied"],
+      [typed("not_found", 404), "model_unavailable"],
+      [typed("rate_limit", 429), "quota_or_rate_limit"],
+      [typed("model_budget", 429), "quota_or_rate_limit"],
+      [typed("bad_request", 400), "unsupported_configuration"],
+      [typed("transient", 503), "provider_failure"],
+      [typed("unknown"), "provider_failure"],
+      [new DOMException("secret", "TimeoutError"), "timeout"],
+      [new DOMException("secret", "AbortError"), "timeout"],
+      [new GatewayModelUnavailableError("secret"), "model_unavailable"],
+      [new Error("401 timeout 429 secret"), "provider_failure"],
+    ] as const) {
+      const failure = verificationFailure(error);
+      assert.equal(failure.code, code);
+      assert.doesNotMatch(failure.message, /secret/);
+      assert.ok(failure instanceof ModelVerificationError);
+    }
+  }));
 
 import "./support/auto-fake-sprites.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
@@ -175,105 +176,106 @@ import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
-test("live API verifies exact serving credentials, blocks denied models, rechecks edits, and invalidates rotated keys", async () => {
-  const upstream = await verificationUpstream();
-  const config = testConfig({
-    openaiApiKey: "verification-test-key",
-    providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
-  });
-  const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const headers = {
-    "content-type": "application/json",
-    "x-admin-actor": "admin-alice@default-org",
-    ...testTenantHeaders(),
-  };
-  const path = base + "/v1/admin/model-registry/" + spec.id;
-  const put = (body: object, actor = headers["x-admin-actor"]) =>
-    fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
-  const runtime = async () =>
-    (
-      await fetch(
-        base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-        { headers },
-      )
-    ).json() as Promise<{
-      effective: { modelId: string };
-      modelCatalog: Record<string, unknown>;
-      unavailableReason: string;
-    }>;
-  try {
-    assert.equal((await put({ ...spec, verify: true }, "bob@default-org")).status, 403);
-    assert.equal((await put(spec)).status, 400);
-    assert.equal(upstream.requests.length, 0);
-    upstream.behavior.status = 403;
-    const denied = await put({ ...spec, verify: true });
-    assert.equal(denied.status, 422);
-    const deniedBody = (await denied.json()) as { error: string };
-    assert.equal(deniedBody.error, "access_denied");
-    assert.doesNotMatch(JSON.stringify(deniedBody), /private-provider-detail|verification-test-key/);
-    assert.equal((await runtime()).modelCatalog[spec.id], undefined);
-    for (const [status, code] of [
-      [401, "access_denied"],
-      [404, "model_unavailable"],
-      [400, "unsupported_configuration"],
-      [429, "quota_or_rate_limit"],
-      [503, "provider_failure"],
-    ] as const) {
-      upstream.behavior.status = status;
-      const rejected = await put({ ...spec, verify: true });
-      assert.equal(rejected.status, 422);
-      const result = (await rejected.json()) as { error: string };
-      assert.equal(result.error, code);
-      assert.doesNotMatch(JSON.stringify(result), /private-provider-detail/);
+test("live API verifies exact serving credentials, blocks denied models, rechecks edits, and invalidates rotated keys", () =>
+  inTestTenant(async () => {
+    const upstream = await verificationUpstream();
+    const config = testConfig({
+      openaiApiKey: "verification-test-key",
+      providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
+    });
+    const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
+    const server = createInsecureTestServer(built.app, serverDeps(config, built));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const headers = {
+      "content-type": "application/json",
+      "x-admin-actor": "admin-alice@default-org",
+      ...testTenantHeaders(),
+    };
+    const path = base + "/v1/admin/model-registry/" + spec.id;
+    const put = (body: object, actor = headers["x-admin-actor"]) =>
+      fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
+    const runtime = async () =>
+      (
+        await fetch(
+          base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
+          { headers },
+        )
+      ).json() as Promise<{
+        effective: { modelId: string };
+        modelCatalog: Record<string, unknown>;
+        unavailableReason: string;
+      }>;
+    try {
+      assert.equal((await put({ ...spec, verify: true }, "bob@default-org")).status, 403);
+      assert.equal((await put(spec)).status, 400);
+      assert.equal(upstream.requests.length, 0);
+      upstream.behavior.status = 403;
+      const denied = await put({ ...spec, verify: true });
+      assert.equal(denied.status, 422);
+      const deniedBody = (await denied.json()) as { error: string };
+      assert.equal(deniedBody.error, "access_denied");
+      assert.doesNotMatch(JSON.stringify(deniedBody), /private-provider-detail|verification-test-key/);
       assert.equal((await runtime()).modelCatalog[spec.id], undefined);
+      for (const [status, code] of [
+        [401, "access_denied"],
+        [404, "model_unavailable"],
+        [400, "unsupported_configuration"],
+        [429, "quota_or_rate_limit"],
+        [503, "provider_failure"],
+      ] as const) {
+        upstream.behavior.status = status;
+        const rejected = await put({ ...spec, verify: true });
+        assert.equal(rejected.status, 422);
+        const result = (await rejected.json()) as { error: string };
+        assert.equal(result.error, code);
+        assert.doesNotMatch(JSON.stringify(result), /private-provider-detail/);
+        assert.equal((await runtime()).modelCatalog[spec.id], undefined);
+      }
+      upstream.behavior.status = 200;
+      upstream.behavior.empty = true;
+      assert.equal((await put({ ...spec, verify: true })).status, 422);
+      upstream.behavior.empty = false;
+      const accepted = await put({ ...spec, verify: true });
+      assert.equal(accepted.status, 200);
+      const proof = (await accepted.json()) as { verifiedAt: number; verificationScope: string };
+      assert.ok(proof.verifiedAt);
+      assert.equal(proof.verificationScope, "organization");
+      const request = upstream.requests.at(-1)!;
+      assert.equal(request.path, "/v1/responses");
+      assert.equal(request.body.model, spec.id);
+      assert.equal(request.body.max_output_tokens, 128);
+      assert.ok(Array.isArray(request.body.tools));
+      assert.equal(request.authorization, "Bearer verification-test-key");
+      assert.ok((await runtime()).modelCatalog[spec.id]);
+      const beforeEdit = upstream.requests.length;
+      assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
+      assert.equal(upstream.requests.length, beforeEdit + 1);
+      await inTestTenant(() =>
+        built.config.setRuntimeSelection("personal:admin-alice@default-org", {
+          modelId: spec.id,
+        }),
+      );
+      await inTestTenant(() => built.modelCredentials.set("openai", "rotated-test-key", "admin-alice"));
+      const stale = await runtime();
+      assert.equal(stale.effective.modelId, spec.id);
+      assert.equal(stale.modelCatalog[spec.id], undefined);
+      assert.match(stale.unavailableReason, /credentials changed/);
+      assert.equal((await put({ ...spec, verify: true })).status, 200);
+      assert.equal(upstream.requests.at(-1)?.authorization, "Bearer rotated-test-key");
+      await inTestTenant(() => built.modelCredentials.delete("openai", "admin-alice"));
+      const calls = upstream.requests.length;
+      const missing = await put({ ...spec, verify: true });
+      assert.equal(missing.status, 422);
+      assert.equal(((await missing.json()) as { error: string }).error, "missing_credential");
+      assert.equal(upstream.requests.length, calls);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      await upstream.close();
+      setProviderBaseUrls({});
     }
-    upstream.behavior.status = 200;
-    upstream.behavior.empty = true;
-    assert.equal((await put({ ...spec, verify: true })).status, 422);
-    upstream.behavior.empty = false;
-    const accepted = await put({ ...spec, verify: true });
-    assert.equal(accepted.status, 200);
-    const proof = (await accepted.json()) as { verifiedAt: number; verificationScope: string };
-    assert.ok(proof.verifiedAt);
-    assert.equal(proof.verificationScope, "organization");
-    const request = upstream.requests.at(-1)!;
-    assert.equal(request.path, "/v1/responses");
-    assert.equal(request.body.model, spec.id);
-    assert.equal(request.body.max_output_tokens, 128);
-    assert.ok(Array.isArray(request.body.tools));
-    assert.equal(request.authorization, "Bearer verification-test-key");
-    assert.ok((await runtime()).modelCatalog[spec.id]);
-    const beforeEdit = upstream.requests.length;
-    assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
-    assert.equal(upstream.requests.length, beforeEdit + 1);
-    await inTestTenant(() =>
-      built.config.setRuntimeSelection("personal:admin-alice@default-org", {
-        modelId: spec.id,
-      }),
-    );
-    await inTestTenant(() => built.modelCredentials.set("openai", "rotated-test-key", "admin-alice"));
-    const stale = await runtime();
-    assert.equal(stale.effective.modelId, spec.id);
-    assert.equal(stale.modelCatalog[spec.id], undefined);
-    assert.match(stale.unavailableReason, /credentials changed/);
-    assert.equal((await put({ ...spec, verify: true })).status, 200);
-    assert.equal(upstream.requests.at(-1)?.authorization, "Bearer rotated-test-key");
-    await inTestTenant(() => built.modelCredentials.delete("openai", "admin-alice"));
-    const calls = upstream.requests.length;
-    const missing = await put({ ...spec, verify: true });
-    assert.equal(missing.status, 422);
-    assert.equal(((await missing.json()) as { error: string }).error, "missing_credential");
-    assert.equal(upstream.requests.length, calls);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
-    await upstream.close();
-    setProviderBaseUrls({});
-  }
-});
+  }));
 
 test("Anthropic verification exercises ordinary and fast requests, and gateway uses its serving target and credential", () =>
   inTestTenant(async () => {
@@ -324,18 +326,19 @@ test("Anthropic verification exercises ordinary and fast requests, and gateway u
     }
   }));
 
-test("the streaming probe aborts a nonresponsive provider and never accepts an incomplete response", async () => {
-  const upstream = await verificationUpstream();
-  upstream.behavior.hang = true;
-  setProviderBaseUrls({ openai: upstream.url + "/v1" });
-  try {
-    const model = modelFromOverlay(parseModelOverlay(spec))!;
-    await assert.rejects(probeModel(model, { openai: "test-key" }, AbortSignal.timeout(200)));
-  } finally {
-    await upstream.close();
-    setProviderBaseUrls({});
-  }
-});
+test("the streaming probe aborts a nonresponsive provider and never accepts an incomplete response", () =>
+  inTestTenant(async () => {
+    const upstream = await verificationUpstream();
+    upstream.behavior.hang = true;
+    setProviderBaseUrls({ openai: upstream.url + "/v1" });
+    try {
+      const model = modelFromOverlay(parseModelOverlay(spec))!;
+      await assert.rejects(probeModel(model, { openai: "test-key" }, AbortSignal.timeout(200)));
+    } finally {
+      await upstream.close();
+      setProviderBaseUrls({});
+    }
+  }));
 
 test("a failed recheck of the saved definition removes its prior certification", () =>
   inTestTenant(async () => {

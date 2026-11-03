@@ -8,6 +8,7 @@ import { tenantClaim } from "../tenants/context.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { publicFetch } from "../util/network.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -518,10 +519,13 @@ export interface PublicOAuthClient {
   label: string;
 }
 
-const publicClients = new Map<string, PublicOAuthClient>();
-const publicProviders = new Map<string, OAuthProviderConfig>();
+const publicOAuth = perTenant(() => ({
+  clients: new Map<string, PublicOAuthClient>(),
+  providers: new Map<string, OAuthProviderConfig>(),
+}));
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
+  const { clients: publicClients, providers: publicProviders } = publicOAuth();
   publicClients.clear();
   publicProviders.clear();
   for (const c of clients) {
@@ -547,16 +551,16 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
 }
 
 export function oauthProviderEntries(): Array<[string, OAuthProviderConfig]> {
-  return [...Object.entries(PROVIDERS), ...publicProviders.entries()];
+  return [...Object.entries(PROVIDERS), ...publicOAuth().providers.entries()];
 }
 
 export function oauthProvider(name: string): OAuthProviderConfig | undefined {
-  return PROVIDERS[name] ?? publicProviders.get(name);
+  return PROVIDERS[name] ?? publicOAuth().providers.get(name);
 }
 
 export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
   return async (provider, ctx) => {
-    const c = publicClients.get(provider);
+    const c = publicOAuth().clients.get(provider);
     return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
   };
 }
@@ -713,7 +717,7 @@ export async function exchangeCode(
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
+  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicOAuth().providers]) {
     if (config.hosts.includes(host)) return { name, config };
   }
   return null;
