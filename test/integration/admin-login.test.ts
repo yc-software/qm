@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { adminLoginUrl } from "../../cli/src/commands/admin-login.ts";
 import { deriveKey, openSession, seal } from "../../plugins/portal/src/session.ts";
+import { hostTenant } from "../../plugins/chassis/src/core-client.ts";
 
 const envPath = process.env.QM_ADMIN_LOGIN_ENV_FILE;
 const env = envPath ? (JSON.parse(readFileSync(envPath, "utf8")) as Record<string, string>) : null;
@@ -86,7 +87,7 @@ test(
         decodeURIComponent(cookie.slice("portal_session=".length)),
         deriveKey(secret, "portal.session.v1"),
         Date.now(),
-        env.CORE_ORG_ID,
+        (await hostTenant(env.CORE_API_URL!, env.CORE_SIGNING_SECRET, new URL(publicUrl).host))!,
       );
       assert.equal(claims?.sub, configuredAdmin);
       assert.ok(res.headers.getSetCookie().some((value) => value.startsWith("portal_impersonate=;")));

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const calls: { method: string; url: string; body: string; identity: boolean }[] = [];
 const core = createServer((req: IncomingMessage, res) => {
@@ -30,7 +31,10 @@ const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 const headers = {
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "swarm-route-test"),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 },
+    "swarm-route-test",
+  ),
   "content-type": "application/json",
 };
 

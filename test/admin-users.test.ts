@@ -11,6 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -63,7 +64,7 @@ test("computeUsers includes a grant-holder who has never participated", () => {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     files: built.files,
@@ -253,7 +254,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
       emailAuthPrincipals: ["new@example.com"],
     }),
   );
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     memory: built.memory,
