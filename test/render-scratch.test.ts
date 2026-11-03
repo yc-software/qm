@@ -326,7 +326,7 @@ test(
     } finally {
       await second.pool.q(`DROP TABLE IF EXISTS ${table}`);
       await second.pool.q("DELETE FROM durable_map_versions WHERE tbl=$1", [table]);
-      await second.pool.q("DELETE FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
+      await second.pool.q("DELETE FROM qm_schema_migrations WHERE id LIKE $1", [`durable-map/${table}/%`]);
       await Promise.all([first.pool.close(), second.pool.close()]);
     }
   },

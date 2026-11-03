@@ -136,6 +136,9 @@ export function createSwarmStore(
           [fence.sessionId, fence.scopeId, fence.threadRef],
         );
         if (!session.rowCount) throw new Error("capability session mismatch");
+        await client.query(
+          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tbl) DO UPDATE SET v=durable_map_versions.v+1",
+        );
         const current = await client.query<{ json: SwarmStorage }>("SELECT json FROM swarms WHERE id=$1 FOR UPDATE", [
           id,
         ]);

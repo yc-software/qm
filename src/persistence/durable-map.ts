@@ -29,6 +29,18 @@ export interface DurableMap<T> {
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
+const VERSION_FUNCTION = {
+  id: "durable-map/0-version-function",
+  statements: [
+    `CREATE OR REPLACE FUNCTION durable_map_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+    BEGIN
+      INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+      ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1;
+      RETURN NULL;
+    END
+    $fn$`,
+  ],
+};
 
 export function createPostgresMap<T>(
   pg: PgPool,
@@ -46,21 +58,15 @@ export function createPostgresMap<T>(
   const versionTrigger = {
     id: `durable-map/${table}/version-trigger`,
     statements: [
-      `CREATE OR REPLACE FUNCTION durable_map_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
-      BEGIN
-        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
-        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1;
-        RETURN NULL;
-      END
-      $fn$`,
       `SET LOCAL lock_timeout = '3s'`,
       `DROP TRIGGER IF EXISTS ${table}_bump_version ON ${table}`,
-      `CREATE TRIGGER ${table}_bump_version AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
+      `CREATE TRIGGER ${table}_bump_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
       FOR EACH STATEMENT EXECUTE FUNCTION durable_map_bump_version()`,
     ],
   };
   const migrations = [
     migration,
+    VERSION_FUNCTION,
     versionTrigger,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
@@ -113,9 +119,14 @@ export function createPostgresMap<T>(
     await ready();
     return pg.query(text, params);
   }
-  async function inTransaction<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
+     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+  async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
-    return withPgTransaction(await pg.pool(), fn);
+    return withPgTransaction(await pg.pool(), async (client) => {
+      await client.query(bumpSql);
+      return fn(client);
+    });
   }
   let cache: { v: string; entries: Array<[string, T]> } | null = null;
   async function snapshot(): Promise<Array<[string, T]>> {
@@ -217,7 +228,7 @@ export function createPostgresMap<T>(
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
     async update(id, fn) {
-      return inTransaction(async (client) => {
+      return withBump(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0]) return null;
         const next = fn(current.rows[0].json as T);
@@ -227,8 +238,7 @@ export function createPostgresMap<T>(
     },
     async mutateMany(updates) {
       if (!updates.length) return [];
-      return inTransaction(async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`durable-map:${table}`]);
+      return withBump(async (client) => {
         const rows = await client.query(
           `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
           [updates.map(({ id }) => id)],
@@ -249,7 +259,7 @@ export function createPostgresMap<T>(
       });
     },
     async deleteIf(id, predicate) {
-      return inTransaction(async (client) => {
+      return withBump(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0] || !predicate(current.rows[0].json as T)) return false;
         await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
