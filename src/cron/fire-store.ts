@@ -1,6 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { claimAcrossTenants, inTenantOf, rowTenant } from "../tenants/claim.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -167,7 +168,8 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       });
     },
     async sweepStranded(now, staleRunningMs, note) {
-      const result = await query(
+      const result = await claimAcrossTenants(
+        { pool },
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
           WHERE status = 'running' AND fired_at <= $3`,
@@ -176,11 +178,12 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       return result.rowCount;
     },
     async pruneEnded({ endedBefore, keepPerCron }) {
-      return withPgTransaction(await pool(), async (client) => {
-        const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
-        if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
-        const result = await client.query(
-          `DELETE FROM cron_fires cf
+      const pruneTenant = async (): Promise<number> =>
+        withPgTransaction(await pool(), async (client) => {
+          const legacy = await client.query("SELECT to_regclass('cron_fire_log') IS NOT NULL AS present");
+          if (legacy.rows[0]?.present) await client.query("LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE");
+          const result = await client.query(
+            `DELETE FROM cron_fires cf
             USING (SELECT cron_id, fire_key,
                           ROW_NUMBER() OVER (PARTITION BY cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
                      FROM cron_fires) ranked
@@ -188,18 +191,27 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
               AND ranked.rn > $1
               AND cf.ended_at IS NOT NULL AND cf.ended_at < $2
             RETURNING cf.cron_id, cf.fire_key`,
-          [keepPerCron, endedBefore],
-        );
-        if (result.rows.length && legacy.rows[0]?.present) {
-          await client.query(
-            `DELETE FROM cron_fire_log source
+            [keepPerCron, endedBefore],
+          );
+          if (result.rows.length && legacy.rows[0]?.present) {
+            await client.query(
+              `DELETE FROM cron_fire_log source
                USING unnest($1::text[], $2::text[]) removed(cron_id, fire_key)
                WHERE source.cron_id = removed.cron_id AND source.fire_key = removed.fire_key`,
-            [result.rows.map((row) => row.cron_id), result.rows.map((row) => row.fire_key)],
-          );
-        }
-        return result.rowCount ?? 0;
-      });
+              [result.rows.map((row) => row.cron_id), result.rows.map((row) => row.fire_key)],
+            );
+          }
+          return result.rowCount ?? 0;
+        });
+      const { rows } = await claimAcrossTenants(
+        { pool },
+        "SELECT DISTINCT ON (cron_id) * FROM cron_fires WHERE ended_at IS NOT NULL AND ended_at < $1",
+        [endedBefore],
+      );
+      let pruned = 0;
+      for (const tenant of new Set(rows.map((row) => rowTenant(row).tenantId)))
+        pruned += await inTenantOf(tenant, pruneTenant);
+      return pruned;
     },
     async backfill(cronId, entries) {
       for (let start = 0; start < entries.length; start += BACKFILL_CHUNK) {
