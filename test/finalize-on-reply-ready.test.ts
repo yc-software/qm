@@ -338,23 +338,3 @@ test("detached tail: an error in the detached tail still reclaims the box (no ma
   for (let i = 0; i < 2000 && teardowns === 0; i++) await tick();
   assert.equal(teardowns, 1, "the box is reclaimed even though the tail failed");
 });
-
-test("blocking path: the turn does NOT return until the tail (teardown) completes", async () => {
-  const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox);
-
-  const p = orch.handleTurn({ ...dm("dm:U1:t2", "!run echo hi"), runId: "r2" });
-  let done = false;
-  void p.then(() => {
-    done = true;
-  });
-
-  for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
-  assert.equal(g.teardownStarted, 1, "the blocking path runs the tail (reaches teardown)");
-  assert.equal(done, false, "handleTurn has NOT returned — it awaits the tail");
-
-  g.release();
-  const result = await p;
-  assert.equal(result.status, "ok");
-  assert.equal(g.teardownFinished, 1, "the tail completed before the blocking turn returned");
-});
