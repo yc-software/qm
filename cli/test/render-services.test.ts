@@ -101,6 +101,38 @@ test("Render uses Git builds for all services and rejects image overrides", (t) 
   assert.ok(renderConfigErrors(config, []).some((error) => /remove imageOverrides/.test(error.message)));
 });
 
+test("Render core starts sandboxes from the configured base image and refuses the unpublished placeholder", (t) => {
+  const image = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+  const { config } = deployment(t, (raw) => Object.assign(raw, { sandbox: { backend: "render", baseImage: image } }));
+  assert.equal(renderServiceEnv(config, "core", new Map(), connections).RENDER_SANDBOX_IMAGE, image);
+  assert.ok(!renderConfigErrors(config, []).some((error) => /sandbox.baseImage/.test(error.message)));
+  delete config.sandbox!.baseImage;
+  assert.match(renderServiceEnv(config, "core", new Map(), connections).RENDER_SANDBOX_IMAGE!, /^registry\.invalid\//);
+  assert.ok(
+    renderConfigErrors(config, []).some((error) =>
+      /pins no published sandbox base image; set sandbox.baseImage/.test(error.message),
+    ),
+  );
+  for (const baseImage of [
+    image.replace(/:c+@/, "@"),
+    image.replace(/:c+@/, ":@"),
+    image.replace(/d{64}$/, "D".repeat(64)),
+  ]) {
+    const { config: invalid } = deployment(t, (raw) =>
+      Object.assign(raw, { sandbox: { backend: "render", baseImage } }),
+    );
+    assert.ok(
+      renderConfigErrors(invalid, []).some((error) =>
+        /Render sandbox.baseImage must be <repository>:<tag>@sha256:<64 hex digits>/.test(error.message),
+      ),
+    );
+  }
+  const { config: stray } = deployment(t, (raw) =>
+    Object.assign(raw, { sandbox: { backend: "render", baseImage: image, env: { FOO: "bar" } } }),
+  );
+  assert.ok(renderConfigErrors(stray, []).some((error) => /Render sandboxes ignore sandbox.env/.test(error.message)));
+});
+
 test("Render init selects managed MinIO without generated infrastructure files or storage inputs", (t) => {
   const { config } = deployment(t);
   assert.deepEqual(config.render?.storage, { plan: "0.5c-512mb", diskSizeGB: 10 });
@@ -174,7 +206,6 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   const portal = renderServiceEnv(config, "portal", values, connections);
   assert.equal(portal.OIDC_ISSUER, `${config.publicUrl}/idp`);
   assert.equal(portal.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
-  assert.equal(portal.ADMIN_UPSTREAM, "http://web-ui:8080/admin");
   assert.equal(renderServiceEnv(config, "slack", values, connections).PUBLIC_API_URL, config.apiUrl);
 });
 
@@ -201,9 +232,9 @@ test("Render rejects prebuilt plugin images", (t) => {
   assert.ok(renderConfigErrors(config, plugins).some((error) => /Git source Dockerfiles/.test(error.message)));
 });
 
-test("removing hosted auth, admin, and Slack resets their managed settings", (t) => {
+test("removing hosted auth and Slack resets their managed settings", (t) => {
   const { config } = deployment(t);
-  config.services = config.services.filter((service) => !["auth", "admin", "slack"].includes(service));
+  config.services = config.services.filter((service) => !["auth", "slack"].includes(service));
   config.env.portal = { OIDC_ISSUER: "https://idp.example.test" };
   const core = renderServiceEnv(config, "core", new Map(), connections);
   for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET", "AUTH_ALLOWED_EMAIL_DOMAIN"])
@@ -211,7 +242,6 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   const portal = renderServiceEnv(config, "portal", new Map(), connections);
   assert.equal(portal.AUTH_EMBEDDED, "0");
   assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
-  assert.equal(portal.ADMIN_UPSTREAM, "");
   assert.equal(portal.OIDC_ISSUER, "https://idp.example.test");
   assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
 });

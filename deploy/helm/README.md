@@ -1,8 +1,8 @@
 # QM Helm chart
 
-This chart runs core, web-ui (including `/admin`), portal (including `/idp` auth),
-and the optional egress proxy. `services.auth` and `services.admin` configure
-embedded modules, not separate Deployments or Services.
+This chart runs core, web-ui (including the admin settings at `/settings`), portal
+(including `/idp` auth), and the optional egress proxy. `services.auth` configures
+an embedded module, not a separate Deployment or Service.
 
 ## Images
 

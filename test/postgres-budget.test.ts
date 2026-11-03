@@ -1,9 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres budget tests";

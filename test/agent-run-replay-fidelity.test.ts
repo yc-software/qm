@@ -13,9 +13,6 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { bindTestTenant, boundUrl, seedTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -573,9 +570,10 @@ async function withPgSession(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
-  await seedTenant(url.toString());
+  const { seedTestTenants } = await import("./support/tenant-seed.ts");
+  await seedTestTenants(url.toString());
   const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: boundUrl(url.toString()) });
+  const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
@@ -584,6 +582,7 @@ async function withPgSession(
     );
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
+    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },

@@ -9,9 +9,11 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { configuredModelFor } from "../src/model/tenant-models.ts";
 import type { BuiltApp } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { THIRD_TENANT } from "./support/tenant-settings.ts";
 import { testConfig } from "./support/test-config.ts";
+
+const [TEST_TENANT, OTHER_TENANT] = testTenants();
 
 const TENANT_B = OTHER_TENANT;
 const TENANT_C = THIRD_TENANT;

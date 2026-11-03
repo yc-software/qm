@@ -7,13 +7,15 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { orgScope } from "../src/config.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
+
+const [TEST_TENANT, OTHER_TENANT] = testTenants();
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/tenant-settings";
-const SLUG = `t-${TEST_TENANT.slice(-12)}`;
+const SLUG = "test-0";
 
 async function fixture(secret: string | undefined = controlSecret) {
   const config = testConfig({ signingSecret: sourceSecret });
@@ -117,7 +119,7 @@ test("the settings route writes to the tenant its slug names and refuses unknown
     const written = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5" } });
     assert.equal(written.status, 200);
     assert.equal(((await written.json()) as { tenant: string }).tenant, TEST_TENANT);
-    const other = await srv.put({ tenant: `t-${OTHER_TENANT.slice(-12)}`, env: { SANDBOX_BACKEND: "e2b" } });
+    const other = await srv.put({ tenant: "test-1", env: { SANDBOX_BACKEND: "e2b" } });
     assert.equal(((await other.json()) as { tenant: string }).tenant, OTHER_TENANT);
     await withTenant(OTHER_TENANT, async () =>
       assert.equal((await srv.built.tenantSettings.get()).values.SANDBOX_BACKEND, "e2b"),

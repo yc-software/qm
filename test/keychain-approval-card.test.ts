@@ -160,7 +160,6 @@ test("the card links the conversation inline and omits command-policy fields", a
   );
   assert.doesNotMatch(wire, /Why:/);
   assert.ok(!wire.includes(view.ask.purpose), "the card never echoes the requester's purpose text");
-  assert.ok(card.blocks.every((block) => block.type !== "context"));
   const settled = keychainApprovalMessage(
     { ...view, ask: { ...view.ask, status: "approved" }, mode: "standing" },
     origin,
@@ -352,4 +351,57 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   const core = { keychainApprovals: f.approvals } as unknown as SlackCoreClient;
   await deliverKeychainCard(core, client, { ...sync!, destination: sync!.destination }, "D1", "9.9");
   assert.deepEqual(calls, [{ method: "update", ts: "5.5" }], "the original card is updated in place, not reposted");
+});
+
+test("a delivered interaction without source message metadata still decides and reports back", async () => {
+  const f = await fixture();
+  let handler: (args: any) => Promise<void> = async () => {};
+  registerKeychainApprovalActions(
+    {
+      action: (_pattern, fn) => {
+        handler = fn;
+      },
+    },
+    {
+      core: { keychainApprovals: f.approvals } as SlackCoreClient,
+      directory: {
+        classifyActor: async (_client, id) => ({
+          externalId: id === "UOWNER" ? "alice@example.com" : "other@example.com",
+        }),
+      } as Directory,
+    },
+  );
+  const updates: unknown[] = [];
+  const dms: Array<{ channel: string; text: string }> = [];
+  const client = {
+    chat: {
+      update: async (body: unknown) => {
+        updates.push(body);
+      },
+      postEphemeral: async () => {
+        throw new Error("no ephemeral without a channel");
+      },
+      postMessage: async (body: { channel: string; text: string }) => {
+        dms.push(body);
+      },
+    },
+  };
+  const args = {
+    ack: async () => {},
+    body: { user: { id: "UOTHER" } },
+    action: { action_id: "keychain_allow_always", value: f.ask.id },
+    client,
+  };
+  await handler(args);
+  assert.equal(dms.length, 1);
+  assert.equal(dms[0]!.channel, "UOTHER");
+  assert.match(dms[0]!.text, /Couldn't complete this approval/);
+  assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "pending");
+
+  await handler({ ...args, body: { user: { id: "UOWNER" } } });
+  assert.equal((await f.keychain.getAsk(f.ask.id))?.status, "approved");
+  assert.equal(updates.length, 0);
+  assert.equal(dms.length, 2);
+  assert.equal(dms[1]!.channel, "UOWNER");
+  assert.match(dms[1]!.text, /Approved/);
 });

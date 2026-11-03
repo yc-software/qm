@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, TEST_TENANT, testTenantsSeeded } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 
-bindTestTenant();
+const [TEST_TENANT] = testTenants();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";
@@ -25,7 +25,6 @@ function ev(at: number, action: string, scope = scopeId("personal", "U1")): Audi
 }
 
 before(async () => {
-  await testTenantsSeeded();
   await reset(true);
 });
 

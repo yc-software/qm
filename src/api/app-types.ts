@@ -23,7 +23,6 @@ import type {
   TurnRuntime,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
-import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -173,6 +172,7 @@ interface ReachNowInput {
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   currentDestination?: Destination;
 }
 export type ReachNowResult =
@@ -648,7 +648,6 @@ export interface AppDeps {
   publicWebUrl?: string;
   inviteMailer?: Mailer;
   sessions: SessionStore;
-  screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;
   runs: RunStore;
   leaseTtlMs: number;

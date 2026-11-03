@@ -79,7 +79,7 @@
     "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@renderinc/sdk": "1.5.0",
+    "@renderinc/sdk": "1.6.0",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
     "@slack/socket-mode": "^2.0.7",
@@ -96,7 +96,7 @@
     "modal": "^0.10.1",
     "nodemailer": "^10.2.1",
     "officeparser": "^8.0.0",
-    "pg": "^8.21.0",
+    "pg": "8.23.1",
     "pg-boss": "^12.26.1",
     "pg-connection-string": "2.14.0",
     "porter-sandbox": "^0.1.41",
@@ -127,7 +127,9 @@
     },
     "ip-address": "10.7.4",
     "protobufjs": "7.6.5",
-    "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
+    "@earendil-works/pi-ai": "$@earendil-works/pi-ai",
+    "glob": "14.0.3",
+    "minimatch": "11.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

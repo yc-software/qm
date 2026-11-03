@@ -4,8 +4,7 @@ import { test } from "node:test";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -47,8 +46,6 @@ import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { afterEach } from "node:test";
-
-enterTenant(TEST_TENANT);
 afterEach(() => {
   setProviderBaseUrls(TEST_TENANT, {});
   setModelOverlays([]);
@@ -229,6 +226,8 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

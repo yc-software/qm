@@ -198,7 +198,7 @@ test("Helm separates core startup/readiness from liveness and allows probe overr
 });
 
 test("Helm ingress rejects embedded, missing, worker and disabled targets", options, () => {
-  for (const service of ["auth", "admin", "egress-proxy", "missing"]) {
+  for (const service of ["auth", "egress-proxy", "missing"]) {
     assert.throws(() => render({ ingress: { enabled: true, service } }), /ingress.service must name/);
   }
   assert.throws(
@@ -207,6 +207,10 @@ test("Helm ingress rejects embedded, missing, worker and disabled targets", opti
   );
   const ingress = render({ ingress: { enabled: true, hosts: ["qm.example.com"] } }).find((r) => r.kind === "Ingress");
   assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
+});
+
+test("Helm rejects services it does not know", options, () => {
+  assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
 });
 
 test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {

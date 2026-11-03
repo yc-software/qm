@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
-import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
@@ -14,9 +13,7 @@ import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -34,21 +31,9 @@ const close = async (server: Server) => {
 
 const database = process.env.DATABASE_URL;
 const pgTest = database ? test : test.skip;
-async function isolatedDatabase(t: TestContext) {
-  const admin = new pg.Client({ connectionString: database! });
-  await admin.connect();
-  const name = `memory_http_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE DATABASE ${name}`);
-  const fixture = { url: "", stop: async () => {} };
-  t.after(async () => {
-    await fixture.stop();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await admin.end();
-  });
-  const url = new URL(database!);
-  url.pathname = `/${name}`;
-  fixture.url = url.toString();
-  await seedTenant(fixture.url);
+function isolatedDatabase(t: TestContext) {
+  const fixture = { url: testDatabaseUrl(), stop: async () => {} };
+  t.after(() => fixture.stop());
   return fixture;
 }
 
@@ -87,7 +72,7 @@ async function seedVectors(
 }
 
 pgTest("HTTP turn injects semantic matches; grep remains independent", async (t) => {
-  const databaseFixture = await isolatedDatabase(t);
+  const databaseFixture = isolatedDatabase(t);
   const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {
@@ -207,7 +192,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
 });
 
 pgTest("HTTP Open DM combines room and current memory, then blocks reads after membership revocation", async (t) => {
-  const databaseFixture = await isolatedDatabase(t);
+  const databaseFixture = isolatedDatabase(t);
   const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {

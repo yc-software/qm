@@ -5,10 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
-import { enterTenant } from "../../src/tenants/context.ts";
 import { TENANT_SETTING_KEYS, type TenantSettingValues } from "../../src/tenants/settings.ts";
 import { testTenantSettings } from "../support/build-app.ts";
-import { TEST_TENANT } from "../support/tenant.ts";
+import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -23,7 +22,6 @@ async function main(): Promise<void> {
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL must point at a Postgres server");
   const config = loadConfig();
-  enterTenant(TEST_TENANT);
   const fromEnv: TenantSettingValues = Object.fromEntries(
     TENANT_SETTING_KEYS.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
   );
@@ -46,6 +44,7 @@ async function main(): Promise<void> {
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
+    await migrateRegisteredPgSchemas(process.env.DATABASE_URL);
     await built.identity.refresh();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();

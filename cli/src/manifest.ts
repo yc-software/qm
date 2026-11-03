@@ -47,6 +47,10 @@ export function manifestRef(service: ServiceName): string {
   return immutableRef(ref, service);
 }
 
+export function isPlaceholderRef(ref: string): boolean {
+  return ref.split("/")[0]!.endsWith(".invalid");
+}
+
 export function sandboxBaseRef(): string {
   return immutableRef(loadManifest().sandboxBase, "sandbox base");
 }

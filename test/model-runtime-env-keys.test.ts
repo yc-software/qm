@@ -3,7 +3,9 @@ import test from "node:test";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
 import { DEFAULT_AGENT_MODEL_ID, getRequiredModel } from "../src/model/pi-models.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("the model runtime never authenticates with provider keys from the process environment", async () => {
   const saved = { anthropic: process.env.ANTHROPIC_API_KEY, openai: process.env.OPENAI_API_KEY };

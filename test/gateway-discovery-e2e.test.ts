@@ -8,10 +8,8 @@ import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
-import { enterTenant } from "../src/tenants/context.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
@@ -24,8 +22,6 @@ function gatewaySettings(config: { url: string; apiKey: string; apiKeyHeader: st
     MODEL_GATEWAY_API_KEY_HEADER: config.apiKeyHeader,
   };
 }
-
-enterTenant(TEST_TENANT);
 
 const metadata = {
   model_group: "acme/future",

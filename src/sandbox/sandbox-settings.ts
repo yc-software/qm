@@ -1,3 +1,4 @@
+import { parseRenderSandboxImage } from "./render-limits.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 
 export interface SandboxSettings {
@@ -148,12 +149,18 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
 }
 
 interface RenderSandboxEnv {
+  image?: string;
   defaultTimeoutSec?: number;
 }
 
 function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
   const defaultTimeoutSec = numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC);
-  return defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {};
+  const image = env.RENDER_SANDBOX_IMAGE?.trim();
+  if (image) parseRenderSandboxImage(image);
+  return {
+    ...(image ? { image } : {}),
+    ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
+  };
 }
 
 interface ManagedAgentsSandboxEnv {

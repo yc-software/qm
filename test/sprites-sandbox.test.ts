@@ -24,8 +24,10 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { OTHER_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { withTenant } from "../src/tenants/context.ts";
+
+const [, OTHER_TENANT] = testTenants();
 
 let fake: FakeSprites;
 let sandbox: Sandbox;

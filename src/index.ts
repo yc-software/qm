@@ -12,16 +12,12 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { instanceTenant } from "./tenants/instance.ts";
-import { enterTenant } from "./tenants/context.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.tenantSettings.refreshAll();
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);

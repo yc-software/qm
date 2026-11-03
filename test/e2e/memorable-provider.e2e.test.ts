@@ -14,8 +14,6 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { testTenantSettings } from "../support/build-app.ts";
-import { TEST_TENANT } from "../support/tenant.ts";
-import { enterTenant } from "../../src/tenants/context.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
@@ -67,7 +65,6 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
       }),
       cliEnv,
     );
-    enterTenant(TEST_TENANT);
     const built = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "memorable-e2e-")),

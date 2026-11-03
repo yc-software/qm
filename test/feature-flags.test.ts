@@ -5,8 +5,10 @@ import pg from "pg";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { FEATURE_FLAGS_MIGRATION, TENANCY_BASE } from "../src/tenants/migrations.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testDatabaseUrl, testMap, testMigratedDatabaseUrl } from "./support/test-database.ts";
+
+const [TEST_TENANT, OTHER_TENANT] = testTenants();
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());

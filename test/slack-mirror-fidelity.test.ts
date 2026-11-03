@@ -9,9 +9,6 @@ import { createConversationSerializer } from "../src/slack/conversation-view.ts"
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {

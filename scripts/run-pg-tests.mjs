@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
-import { seedTestTenants } from "../test/support/tenant-seed.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -24,12 +22,12 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   throw new Error(`--timeout must be a positive number of seconds, got ${values.timeout}`);
 }
 if (positionals.length === 0) throw new Error("Pass the Postgres test files to run");
-const tenantBoundEntry = new URL("../test/support/tenant-bound-entry.ts", import.meta.url).pathname;
 const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
 
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
+const tenantEnv = { QM_TEST_TENANT: randomUUID(), QM_TEST_OTHER_TENANT: randomUUID() };
 const children = new Set();
 const admin = new pg.Pool({ connectionString: baseUrl, max: jobs });
 let stopping = false;
@@ -38,6 +36,23 @@ let ended = null;
 function endPool() {
   ended ??= admin.end();
   return ended;
+}
+
+function runnerAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+async function dropAbandonedRuns() {
+  const { rows } = await admin.query("SELECT datname FROM pg_database WHERE datname ~ '^qmt_[0-9]+_'");
+  for (const { datname } of rows) {
+    if (runnerAlive(Number(datname.split("_")[1]))) continue;
+    await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
+  }
 }
 
 function killGroup(child) {
@@ -77,10 +92,15 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", tenantBoundEntry], {
-      detached: true,
-      env: { ...process.env, ...env, QM_TEST_FILE: path.resolve(file) },
-    });
+    const child = spawn(
+      process.execPath,
+      [
+        "--experimental-test-module-mocks",
+        new URL("../test/support/tenant-bound-test.ts", import.meta.url).pathname,
+        file,
+      ],
+      { detached: true, env: { ...process.env, ...tenantEnv, ...env } },
+    );
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
     child.stderr?.on("data", (chunk) => (output += chunk));
@@ -100,36 +120,45 @@ function runFile(file, env) {
 async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
-    await admin.query(`CREATE DATABASE ${name}`);
-    await seedTestTenants(databaseUrl(name));
+    await admin.query(`CREATE DATABASE ${name} TEMPLATE ${tenantsName}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
-    return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
+    return await runFile(file, {
+      DATABASE_URL: databaseUrl(name),
+      QM_TEST_TEMPLATE_DATABASE: templateName,
+      QM_TEST_TENANTS_DATABASE: tenantsName,
+    });
   } finally {
     await dropDatabase(name);
   }
 }
 
 const templateName = `${runId}_template`;
+const tenantsName = `${runId}_tenants`;
 
-function migrateTemplate() {
+function migrateTemplate(mode, name) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [new URL("../test/support/test-template.ts", import.meta.url).pathname, databaseUrl(templateName)],
-      { stdio: ["ignore", "ignore", "inherit"] },
+      [new URL("../test/support/test-template.ts", import.meta.url).pathname, mode, databaseUrl(name)],
+      { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, ...tenantEnv } },
     );
     child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`Migrating ${templateName} exited ${code}`)),
-    );
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Migrating ${name} exited ${code}`))));
   });
 }
 
+async function prepareTemplates() {
+  await admin.query(`CREATE DATABASE ${tenantsName}`);
+  await migrateTemplate("tenants", tenantsName);
+  await admin.query(`CREATE DATABASE ${templateName} TEMPLATE ${tenantsName}`);
+  await migrateTemplate("all", templateName);
+}
+
 const started = Date.now();
-await admin.query(`CREATE DATABASE ${templateName}`);
-await migrateTemplate().catch(async (error) => {
+await dropAbandonedRuns();
+await prepareTemplates().catch(async (error) => {
   try {
-    await dropDatabase(templateName);
+    await dropDatabase(runId);
     await endPool();
   } catch (cleanupError) {
     throw new AggregateError([error, cleanupError], `Migrating ${templateName} failed and cleanup failed`, {

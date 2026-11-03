@@ -3,9 +3,6 @@ import assert from "node:assert/strict";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { companySubscriptionAuthFor, configuredModelFor, defaultModelFor } from "../src/model/tenant-models.ts";
 import { DEFAULT_CODEX_MODEL_ID, defaultModel, defaultModelForProvider } from "../src/model/pi-models.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const parse = (values: Parameters<typeof parseTenantSettings>[0]) => parseTenantSettings(values);
 

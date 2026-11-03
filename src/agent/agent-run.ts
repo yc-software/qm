@@ -1659,17 +1659,11 @@ export function createAgent(opts?: AgentOptions): Agent {
       });
     },
 
-    async screenSecurity({
-      payload,
-      modelId: configuredScreenModel,
-      systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-      signal,
-      recordModelCall,
-      recordLlmRequest,
-    }) {
+    async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
+      const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
       try {
         const models = await resolveModels();
-        const modelId = configuredScreenModel ?? detectModelId();
+        const modelId = detectModelId();
         const model = requiredModel(modelId);
         if (!keyForModel(models, model)) return undefined;
         recordModelCall({
