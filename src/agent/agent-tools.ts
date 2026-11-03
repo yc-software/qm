@@ -148,7 +148,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const kit = createToolKit(ref, opts);
   const { retryMarks, resourceTool } = kit;
   const { execute, sandboxManagement, background } = computerTools(kit);
-  const { discoverSkills, skill, read, installCanvas, write, publish } = workspaceTools(kit);
+  const { discoverSkills, skill, saveSkill, editSkill, read, installCanvas, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
   const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
   const { cron } = cronTools(kit);
@@ -164,6 +164,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
+      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
     {

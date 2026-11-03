@@ -1,4 +1,5 @@
 import type { AdminToolAccess } from "./admin.ts";
+import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -195,6 +196,7 @@ export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) =
 export interface ToolContext extends SurfaceToolDeps {
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
+  selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
@@ -467,6 +469,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
+  selfApi?: SelfApiCall;
   installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
@@ -715,6 +718,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
+    ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
