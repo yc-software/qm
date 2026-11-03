@@ -140,6 +140,10 @@ interface BodyRef {
   endpoint: string;
 }
 
+export function awsHomePrefix(prefix = "sandbox-home"): string {
+  return prefix.replace(/\/+$/, "");
+}
+
 export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): Sandbox {
   const region = opts.region;
   const api =
@@ -160,7 +164,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
-  const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
+  const s3Prefix = awsHomePrefix(opts.s3Prefix);
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;

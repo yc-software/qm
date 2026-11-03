@@ -18,6 +18,7 @@ import { swallowAs } from "../util/errors.ts";
 import { FILES_AREA } from "../files/durable-byte-store.ts";
 import { HOME_SNAPSHOT_AREAS } from "../sandbox/home-snapshot.ts";
 import { deployDataArea } from "../deploy/aws-deploy-provider.ts";
+import { awsHomePrefix } from "../sandbox/aws-sandbox.ts";
 
 const COPY_PART_BYTES = 1024 ** 3;
 const SINGLE_COPY_MAX = 5 * 1024 ** 3;
@@ -55,6 +56,7 @@ function storageAreas(config: Config, clientFor: (region?: string, endpoint?: st
   add(snapshots, config.e2bSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.e2b);
   add(snapshots, config.managedAgentsSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.managedAgents);
   add(snapshots, config.modalSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.modal);
+  add(clientFor(config.awsSandbox.region), config.awsSandbox.s3Bucket, awsHomePrefix(config.awsSandbox.s3Prefix));
   add(clientFor(config.awsDeploy.region), config.awsDeploy.dataBucket, deployDataArea(config.awsDeploy.dataPrefix));
   const dirs = ["transfer", FILES_AREA, "session-shares", "workspaces"].map((area) => join(config.dataDir, area));
   return { objects, dirs: [...dirs, config.deployGitDir] };
