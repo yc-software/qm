@@ -38,7 +38,7 @@ export function turnTools(kit: ToolKit) {
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing worth telling anyone, though a recurring report still posts). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook or watch fire.",
+      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing to report). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook or watch fire.",
     parameters: Type.Object({
       reason: Type.Optional(Type.String({ description: "Short phrase for the audit log." })),
     }),
