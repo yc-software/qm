@@ -535,6 +535,7 @@ export interface SessionStore {
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
   listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
+  inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 

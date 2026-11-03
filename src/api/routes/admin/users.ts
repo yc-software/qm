@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
@@ -59,9 +60,12 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
+  const actorKey = deps.modelGatewayTransport?.actorKey;
   return sendJson(res, 200, {
     scopeId: scope,
-    users,
+    users: actorKey
+      ? users.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
+      : users,
     grants,
     externalUsers,
     inviteEmail,
