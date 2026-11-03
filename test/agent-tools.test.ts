@@ -664,26 +664,6 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   };
   const calm = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
   assert.doesNotMatch(calm.content[0]!.text!, /\[pressure\]/);
-
-  ref.current = {
-    ...pressured,
-    execute: async () => ({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      timedOut: false,
-      pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
-      reached: { scopeId: "personal:other", label: "Other" },
-    }),
-  };
-  const reached = (await call(execute, { command: "echo ok", scope: "person:other", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.doesNotMatch(
-    reached.content[0]!.text!,
-    /\[pressure\]/,
-    "pressure advice about the local computer must not attach to another computer's exec",
-  );
 });
 
 test("a giant tool result is capped for the model, keeping the tail and matching the persisted replay record", async () => {
@@ -2740,6 +2720,10 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       ),
       /background jobs require|invalid execute arguments/,
     );
+  assert.match(
+    textOut(await call(execute, { command: "forbidden", purpose: "Test invalid routing", scope: "#room" })),
+    /invalid execute arguments/,
+  );
   assert.equal(dispatched, 0);
 });
 

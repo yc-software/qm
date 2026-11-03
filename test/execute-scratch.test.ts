@@ -55,6 +55,8 @@ test("execute routes scratch:true to the scratch box and default to the scoped b
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 0, ranOn: ["scoped-box"] });
   await ctx.execute("echo hi", { scratch: true });
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 1, ranOn: ["scoped-box", "scratch-box"] });
+  await assert.rejects(ctx.execute("echo hi", { scratch: true, sandboxId: "box" }), /one computer/);
+  assert.deepEqual(calls.ranOn, ["scoped-box", "scratch-box"]);
 });
 
 test("execute scratch:true without a wired scratch path fails loudly, never silently scoped", async () => {
