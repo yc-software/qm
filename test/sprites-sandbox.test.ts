@@ -24,6 +24,9 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const TENANT8 = testTenants()[0].slice(0, 8);
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -169,7 +172,7 @@ test("background processes inherit the force-through proxy env", async () => {
 test("scope name is stable and slugged", () => {
   const a = sandboxScopeName("qmt", "person:tester");
   assert.equal(a, sandboxScopeName("qmt", "person:tester"));
-  assert.match(a, /^qmt-00000000-person-tester-[0-9a-f]{12}$/);
+  assert.match(a, new RegExp(`^qmt-${TENANT8}-person-tester-[0-9a-f]{12}$`));
 });
 
 test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
@@ -188,7 +191,7 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
   }
   assert.match(
     sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
-    /^qm-long-generic-fleet-tenant-prefix-00000000-[a-z0-9-]*[0-9a-f]{12}$/,
+    new RegExp(`^qm-long-generic-fleet-tenant-prefix-${TENANT8}-[a-z0-9-]*[0-9a-f]{12}$`),
   );
 });
 

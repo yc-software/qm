@@ -100,18 +100,16 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const id = currentTenant();
       const put = await opts.bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
-         VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
-                 to_timestamp($5::double precision / 1000), to_timestamp($6::double precision / 1000))
+         VALUES (qm_tenant_id(), decode($1, 'hex'), $2, 'text/plain; charset=utf-8', $3,
+                 to_timestamp($4::double precision / 1000), to_timestamp($5::double precision / 1000))
          ON CONFLICT (tenant_id, sha256) DO NOTHING`,
         [
-          id,
           put.sha256,
           put.sizeBytes,
-          `${TOOL_OUTPUT_PATH}${id}/${put.blobKey}`,
+          `${TOOL_OUTPUT_PATH}${currentTenant()}/${put.blobKey}`,
           now(),
           now() + TOOL_OUTPUT_RETENTION_MS,
         ],
