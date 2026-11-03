@@ -1,5 +1,6 @@
 import { test as nodeTest, type TestContext, type TestOptions } from "node:test";
 import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { test, type TestContext, type TestOptions } from "node:test";
 import { isTenantId, withTenant } from "../../src/tenants/context.ts";
 
 export function testTenants(): [string, string] {
@@ -17,6 +18,13 @@ export function tenantBoundUrl(databaseUrl: string, tenant = testTenants()[0]): 
 
 export function inTestTenant<T>(fn: () => T, tenant = testTenants()[0]): T {
   return withTenant(tenant, fn);
+}
+
+type TestBody = (t: TestContext) => void | Promise<void>;
+
+export function tenantTest(name: string, ...args: [TestBody] | [TestOptions, TestBody]): void {
+  const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
+  test(name, options, (t) => inTestTenant(() => fn(t)));
 }
 
 export function testTenantHeaders(tenant = testTenants()[0]): Record<string, string> {
