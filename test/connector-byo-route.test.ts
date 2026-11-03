@@ -16,8 +16,13 @@ import { testConfig } from "./support/test-config.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
@@ -103,7 +108,7 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
     const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
     const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
 
-    assert.equal((await fetch(`${srv.base}${startPath}`)).status, 501);
+    assert.equal((await fetch(`${srv.base}${startPath}`, { headers: testTenantHeaders() })).status, 501);
 
     const putRes = await putConnector(srv.base, {
       provider: "google",
@@ -115,12 +120,12 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
 
     const denied = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/connectors`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org", ...testTenantHeaders() },
       body: JSON.stringify({ provider: "google", clientId: "x", clientSecret: "y" }),
     });
     assert.equal(denied.status, 403);
 
-    const startRes = await fetch(`${srv.base}${startPath}`);
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: testTenantHeaders() });
     assert.equal(startRes.status, 200);
     const body = (await startRes.json()) as { authorizeUrl: string };
     assert.equal(new URL(body.authorizeUrl).searchParams.get("client_id"), "byo-cid");
@@ -134,7 +139,7 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
     assert.doesNotMatch(JSON.stringify(cfg), /byo-super-secret/);
 
     const badPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent("https://evil/cb")}`;
-    const bad = await fetch(`${srv.base}${badPath}`);
+    const bad = await fetch(`${srv.base}${badPath}`, { headers: testTenantHeaders() });
     assert.equal(bad.status, 400);
     assert.match(await bad.text(), /redirect_not_allowed/);
   } finally {
@@ -162,11 +167,11 @@ test("admin stores validated Slack tokens without ever returning them", async ()
     const createUrl = new URL((JSON.parse(statusText) as { createUrl: string }).createUrl);
     assert.equal(createUrl.searchParams.get("new_app"), "1");
     assert.equal(JSON.parse(createUrl.searchParams.get("manifest_json")!).display_information.name, "qm");
-    assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-super-secret");
+    assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-super-secret");
 
     const del = await fetch(`${srv.base}/v1/admin/slack-installation`, { method: "DELETE", headers: ADMIN });
     assert.equal(del.status, 200);
-    assert.equal(await srv.built.slackInstallation.get(), null);
+    assert.equal(await inTestTenant(() => srv.built.slackInstallation.get()), null);
   } finally {
     await srv.close();
   }
@@ -182,7 +187,7 @@ test("admin rejects Slack bot and Socket Mode tokens from different apps", async
     });
     assert.equal(put.status, 400);
     assert.match(await put.text(), /different Slack apps/);
-    assert.equal(await srv.built.slackInstallation.get(), null);
+    assert.equal(await inTestTenant(() => srv.built.slackInstallation.get()), null);
   } finally {
     await srv.close();
   }
@@ -193,13 +198,13 @@ test("disabling a BYO connector grays it out in the app-grid status", async () =
   try {
     await putConnector(srv.base, { provider: "google", clientId: "c", clientSecret: "s", enabled: true });
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
-    let st = (await (await fetch(`${srv.base}${statusPath}`)).json()) as {
+    let st = (await (await fetch(`${srv.base}${statusPath}`, { headers: testTenantHeaders() })).json()) as {
       providers: Record<string, { configured: boolean }>;
     };
     assert.equal(st.providers.google!.configured, true);
 
     await putConnector(srv.base, { provider: "google", clientId: "c", clientSecret: "s", enabled: false });
-    st = (await (await fetch(`${srv.base}${statusPath}`)).json()) as {
+    st = (await (await fetch(`${srv.base}${statusPath}`, { headers: testTenantHeaders() })).json()) as {
       providers: Record<string, { configured: boolean }>;
     };
     assert.equal(st.providers.google!.configured, false);
@@ -211,7 +216,9 @@ test("disabling a BYO connector grays it out in the app-grid status", async () =
 test("the catalog endpoint exposes per-provider setup guidance (no secrets)", async () => {
   const srv = start();
   try {
-    const { catalog } = (await (await fetch(`${srv.base}/v1/connectors/catalog`)).json()) as {
+    const { catalog } = (await (
+      await fetch(`${srv.base}/v1/connectors/catalog`, { headers: testTenantHeaders() })
+    ).json()) as {
       catalog: Array<{ provider: string; setupGuide: { url: string; steps: string[] }; consentMode: string }>;
     };
     const names = catalog.map((c) => c.provider).sort();
@@ -228,13 +235,15 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
 test("managed deployments accept validated own apps and preserve credentials on invalid replacement", async () => {
   const srv = start("A-ACME", true);
   try {
-    await srv.built.slackInstallation.setManaged({
-      botToken: "xoxb-managed",
-      appId: "A123",
-      teamId: "T-ACME",
-      installId: "I1",
-      installedAt: 1,
-    });
+    await inTestTenant(() =>
+      srv.built.slackInstallation.setManaged({
+        botToken: "xoxb-managed",
+        appId: "A123",
+        teamId: "T-ACME",
+        installId: "I1",
+        installedAt: 1,
+      }),
+    );
     const put = (botToken: string) =>
       fetch(`${srv.base}/v1/admin/slack-installation`, {
         method: "PUT",
@@ -242,7 +251,7 @@ test("managed deployments accept validated own apps and preserve credentials on 
         body: JSON.stringify({ botToken, appToken: "xapp-own" }),
       });
     assert.equal((await put("invalid")).status, 400);
-    assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-managed");
+    assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-managed");
     assert.equal((await put("xoxb-own")).status, 200);
     const status = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
       source: string;
@@ -252,7 +261,7 @@ test("managed deployments accept validated own apps and preserve credentials on 
     assert.equal(status.source, "admin");
     assert.equal(status.installAvailable, true);
     assert.equal(new URL(status.createUrl).searchParams.get("new_app"), "1");
-    assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-own");
+    assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-own");
   } finally {
     await srv.close();
   }
@@ -272,11 +281,13 @@ test("an agent capability token can read the connector catalog; an unauthenticat
       { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
       secret,
     );
-    const res = await fetch(`${base}/v1/connectors/catalog`, { headers: { "x-agent-capability": token } });
+    const res = await fetch(`${base}/v1/connectors/catalog`, {
+      headers: { "x-agent-capability": token, ...testTenantHeaders() },
+    });
     assert.equal(res.status, 200);
     const { catalog } = (await res.json()) as { catalog: Array<{ provider: string; configured: boolean }> };
     assert.ok(catalog.some((c) => c.provider === "google" && c.configured === false));
-    assert.equal((await fetch(`${base}/v1/connectors/catalog`)).status, 401);
+    assert.equal((await fetch(`${base}/v1/connectors/catalog`, { headers: testTenantHeaders() })).status, 401);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -298,7 +309,7 @@ test("connector writes save without consulting another scope's client", async ()
       body: JSON.stringify({ provider: "google", clientId: "team-cid", clientSecret: "team-secret" }),
     });
     assert.equal(team.status, 200);
-    const saved = await srv.built.config.getConnectorClientSecret(scopeId("team", "eng"), "google");
+    const saved = await inTestTenant(() => srv.built.config.getConnectorClientSecret(scopeId("team", "eng"), "google"));
     assert.equal(saved?.clientId, "team-cid");
   } finally {
     await srv.close();
