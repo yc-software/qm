@@ -173,6 +173,7 @@ interface ReachNowInput {
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   currentDestination?: Destination;
 }
 export type ReachNowResult =
