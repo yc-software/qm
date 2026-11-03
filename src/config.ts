@@ -64,6 +64,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
+  databaseOwnerUrl?: string;
   databasePoolUrl?: string;
   databasePoolCaCert?: string;
   securityPosture: SecurityPosture;
@@ -90,8 +91,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   emailAuthDomain?: string;
   resendApiKey?: string;
   emailFrom?: string;
-  rateLimitPerWindow: number;
-  rateLimitWindowMs: number;
   budgetUsdPerWindow?: number;
   orgBudgetUsdPerWindow?: number;
   budgetWindowMs: number;
@@ -171,7 +170,6 @@ export interface Config extends SandboxSettings, DeploySettings {
     endpoint: string;
     token: string;
   };
-  reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
 }
 
@@ -218,8 +216,6 @@ export function orgScope(): string {
 
 export const CONFIG_DEFAULTS = {
   port: 8080,
-  rateLimitPerWindow: 60,
-  rateLimitWindowMs: 60_000,
   budgetWindowMs: 86_400_000,
   execTimeoutDefaultSec: 120,
   execTimeoutMaxSec: 300,
@@ -506,6 +502,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
@@ -557,10 +554,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
     captureLlmRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
-    rateLimitPerWindow:
-      numEnvStrict("RATE_LIMIT_PER_WINDOW", env.RATE_LIMIT_PER_WINDOW) ?? CONFIG_DEFAULTS.rateLimitPerWindow,
-    rateLimitWindowMs:
-      numEnvStrict("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS) ?? CONFIG_DEFAULTS.rateLimitWindowMs,
     ...optNum(env, "BUDGET_USD_PER_WINDOW", "budgetUsdPerWindow"),
     ...optNum(env, "ORG_BUDGET_USD_PER_WINDOW", "orgBudgetUsdPerWindow"),
     budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
@@ -668,7 +661,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs,
-    reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     ...sandbox,
     ...deploy,

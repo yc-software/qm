@@ -4,7 +4,7 @@ import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, GatewayContext, GrantedHandle, SessionEntry } from "../../types.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
-import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
+import type { DirectoryMember } from "../../directory/directory-store.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
@@ -278,25 +278,6 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   ].join("\n");
 }
 
-const REACH_ROSTER_CAP = 30;
-export function renderReachRoster(channels: DirectoryChannel[], displayName: string): string | null {
-  if (channels.length === 0) return null;
-  const shown = channels
-    .toSorted((a, b) => a.channelId.localeCompare(b.channelId))
-    .slice(0, REACH_ROSTER_CAP)
-    .map((c) => `#${c.name}`)
-    .join(", ");
-  const more =
-    channels.length > REACH_ROSTER_CAP ? ` …and ${channels.length - REACH_ROSTER_CAP} more — name one to check` : "";
-  return [
-    "## Other computers you can reach",
-    `Rooms you and ${displayName} share: ${shown}${more}`,
-    "This conversation's computer is where you work. Other rooms' computers are places you visit:",
-    'read, search, fetch — don\'t rearrange. Run a command there with execute(scope: "#room").',
-    "Say where anything you bring back came from.",
-  ].join("\n");
-}
-
 const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
@@ -322,7 +303,6 @@ const SYSTEM_CONTEXT_ORDER = [
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",
-  "Other computers you can reach",
   "Files",
   "Sandboxes",
   "Model access",
