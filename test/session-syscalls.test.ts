@@ -934,7 +934,13 @@ test("a delegation chain whose older runs were pruned still sends; a deleted cur
     request: { actor, conversation, origin: { kind: "direct" }, text: "continue", delegatingRunId: spawner.id },
   });
   await r.runs.pruneFinished(Date.now() + 1, { deadline: Date.now() + 60_000, stop: () => false });
-  assert.equal(await r.runs.get(spawner.id), undefined);
+  assert.equal(await r.runs.get(spawner.id), null);
+  const { run: recent } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "later" },
+  });
+  const recentLease = await r.runs.claimById(recent.id, "parent-worker", 30_000);
+  await r.runs.complete(recent.id, recentLease!.leaseToken!, { status: "ok", reply: "later" });
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const api = factory.forTurn({ session: child, scopeId: scope, request: { actor, conversation, runId: childRun.id } });
   assert.equal((await api.write({ target: "parent", text: "still here", wake: false })).ok, true);
@@ -943,10 +949,10 @@ test("a delegation chain whose older runs were pruned still sends; a deleted cur
     scopeId: scope,
     request: { actor, conversation, runId: "missing-run" },
   });
-  await assert.rejects(
-    gone.write({ target: "parent", text: "too late", wake: false }),
-    /this delegated task was stopped/,
-  );
+  assert.deepEqual(await gone.write({ target: "parent", text: "too late", wake: false }), {
+    ok: false,
+    message: "this delegated task was stopped",
+  });
 });
 
 test("an empty mailbox check skips sender validation and a delivered message still validates", async () => {
