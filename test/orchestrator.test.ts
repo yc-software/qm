@@ -4520,6 +4520,7 @@ test("inventories ride a byte-stable system prompt; a warm turn's environment ca
 
 test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
   const built = freshApp({ sharingPosture: "isolated" });
+  await built.identity.ready();
   await built.directory.replace([
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },

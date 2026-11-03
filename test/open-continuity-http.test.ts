@@ -53,7 +53,7 @@ async function fixture(t: TestContext) {
   await b.identity.ready();
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerStore.hydrate();
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,
@@ -82,7 +82,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>

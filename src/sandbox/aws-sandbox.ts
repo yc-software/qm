@@ -85,8 +85,8 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   diskGb?: number;
   store: DurableMap<StoredMicrovm>;
   advisoryLock: AdvisoryLock;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
   api?: AwsMicrovmApi;
   s3?: Pick<S3Client, "send">;
@@ -127,7 +127,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const cpus = opts.cpus ?? 4;
   const memoryMb = opts.memoryMb ?? 8192;
   const diskGb = opts.diskGb ?? 8;
-  const credentialPaths = opts.credentialPaths ?? [];
+  const credentialPaths = () => opts.credentialPaths?.() ?? [];
 
   const endpointById = new Map<string, string>();
   const scopeByMicrovm = new Map<string, string>();
@@ -179,7 +179,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     label: "aws",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
-    prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
+    prunePaths: () => [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths()).map(({ rel }) => `./${rel}`)],
     store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
@@ -337,11 +337,11 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           "python3",
           "gh",
           "aws (CLI v2)",
-          ...(opts.extraTools ?? []),
+          ...(opts.extraTools?.() ?? []),
         ]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gcloud", "kubectl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gcloud", "kubectl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus,
       memoryMb,
@@ -371,7 +371,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(credentialPaths()).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("aws", (id, script, t) => execRaw(id, script, t), opts);
@@ -439,7 +439,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       try {
         const prepared = await execRaw(
           id,
-          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
+          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths())}`,
           PREP_TIMEOUT_SEC,
         );
         if (prepared.code !== 0)

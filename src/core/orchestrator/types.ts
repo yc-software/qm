@@ -158,7 +158,6 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -199,8 +198,7 @@ export interface OrchestratorDeps {
   reachExec?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
-  brokeredTools?: readonly BrokeredLayerTool[];
-  deploymentLayer?: DeploymentLayerRuntime;
+  deploymentLayer?: () => DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
