@@ -11,12 +11,16 @@ export function corePluginSettings(
   now: () => number = Date.now,
   failureTtlMs = 2_000,
 ): () => Promise<PluginSettings> {
-  let cached: { until: number; settings: Promise<PluginSettings> } | undefined;
-  const load = async (): Promise<PluginSettings> => {
+  type Entry = { until: number; unreachable: boolean; settings: Promise<PluginSettings> };
+  let cached: Entry | undefined;
+  const load = async (entry: Entry): Promise<PluginSettings> => {
     const path = withSourceAuthNonce(PLUGIN_SETTINGS_PATH, signingSecret);
     const response = await fetch(`${coreApiUrl}${path}`, {
       headers: signedHeaders(signingSecret, "GET", path),
       signal: AbortSignal.timeout(4_000),
+    }).catch((error: unknown) => {
+      entry.unreachable = true;
+      throw error;
     });
     if (!response.ok) throw new Error(`core refused the plugin settings read: HTTP ${response.status}`);
     const { values } = (await response.json()) as { values?: Record<string, unknown> };
@@ -26,10 +30,13 @@ export function corePluginSettings(
   };
   return () => {
     if (cached && now() < cached.until) return cached.settings;
-    const entry = { until: now() + ttlMs, settings: load() };
+    const entry: Entry = { until: now() + ttlMs, unreachable: false, settings: Promise.resolve({}) };
+    entry.settings = load(entry);
     cached = entry;
     entry.settings.catch(() => {
-      entry.until = Math.min(entry.until, now() + failureTtlMs);
+      if (cached !== entry) return;
+      if (entry.unreachable) entry.until = now() + failureTtlMs;
+      else cached = undefined;
     });
     return entry.settings;
   };
