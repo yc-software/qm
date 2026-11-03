@@ -1,9 +1,9 @@
+import { json, ms, num, text } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Monitor } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type TenantMonitor = Monitor & { tenantId: string };
 
@@ -27,10 +27,6 @@ const SELECT = `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM monitors`;
 
 const LAST_ACTIVITY = "GREATEST(expires_at, COALESCE(last_fired_at, 0), created_at)";
 
-const text = (value: string | undefined): string | null => (value === undefined ? null : pgTextSafe(value));
-
-const ms = (value: number | undefined): number | null => (value === undefined ? null : Math.round(value));
-
 function monitorParams(m: Monitor): unknown[] {
   return [
     m.id,
@@ -38,12 +34,12 @@ function monitorParams(m: Monitor): unknown[] {
     m.owner,
     m.createdBy,
     ms(m.ownerConsentedAt),
-    m.destination === undefined ? null : jsonbStringify(m.destination),
+    json(m.destination),
     m.enabled,
     ms(m.createdAt),
     ms(m.lastFiredAt),
     m.processId,
-    pgTextSafe(m.command),
+    text(m.command),
     text(m.purpose),
     m.threadRef,
     text(m.instructions),
@@ -55,19 +51,17 @@ function monitorParams(m: Monitor): unknown[] {
   ];
 }
 
-const epoch = (value: unknown): number | undefined => (value === null ? undefined : Number(value));
-
 function rowToMonitor(r: Record<string, unknown>): Monitor {
   const monitor: Monitor = {
     id: r.id as string,
     ownerScopeId: r.owner_scope_id as Monitor["ownerScopeId"],
     owner: r.owner as string,
     createdBy: r.created_by as string,
-    ownerConsentedAt: epoch(r.owner_consented_at),
+    ownerConsentedAt: num(r.owner_consented_at),
     destination: (r.destination ?? undefined) as Monitor["destination"],
     enabled: r.enabled as boolean,
     createdAt: Number(r.created_at),
-    lastFiredAt: epoch(r.last_fired_at),
+    lastFiredAt: num(r.last_fired_at),
     processId: r.process_id as string,
     command: r.command as string,
     purpose: (r.purpose ?? undefined) as string | undefined,

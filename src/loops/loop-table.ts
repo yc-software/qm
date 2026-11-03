@@ -3,7 +3,18 @@ import type { Loop } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
+import {
+  columnList,
+  json,
+  kvBigint,
+  kvJsonb,
+  kvTexts,
+  num,
+  present,
+  text,
+  texts,
+  type Row,
+} from "../persistence/pg-values.ts";
 
 export type TenantLoop = Loop & { tenantId: string };
 
@@ -97,7 +108,7 @@ const LOOPS_MIGRATION = typedTableMigration({
     "CREATE INDEX loops_by_owner ON loops(tenant_id, owner, surface)",
     "CREATE INDEX loops_by_scope ON loops(tenant_id, owner_scope_id, surface)",
     "CREATE INDEX loops_by_cron ON loops(tenant_id, cron_id) WHERE cron_id IS NOT NULL",
-    "CREATE INDEX loops_inbox ON loops(state) WHERE surface = 'inbox' OR surface LIKE 'inbox:%'",
+    "CREATE INDEX loops_inbox ON loops(state) WHERE surface LIKE 'inbox:%'",
     "CREATE INDEX loops_stale_governed ON loops(state) WHERE governor ? 'staleFireMs'",
   ],
 });
@@ -141,7 +152,7 @@ const SELECT = `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM loops`;
 
 const MINE = `tenant_id = ${TENANT}`;
 
-const INBOX = "(surface = 'inbox' OR surface LIKE 'inbox:%')";
+const INBOX = "surface LIKE 'inbox:%'";
 
 function params(loop: Loop): unknown[] {
   return [

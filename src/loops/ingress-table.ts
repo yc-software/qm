@@ -3,13 +3,24 @@ import type { IngressDelivery, LoopIngress } from "./ingress.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
+import {
+  columnList,
+  json,
+  kvBigint,
+  kvJsonb,
+  kvTexts,
+  num,
+  present,
+  text,
+  texts,
+  type Row,
+} from "../persistence/pg-values.ts";
 
 type TenantIngress = LoopIngress & { tenantId: string };
 
 export interface IngressSourceRows {
   get(id: string): Promise<LoopIngress | null>;
-  claim(id: string): Promise<TenantIngress | null>;
+  tenantOf(id: string): Promise<string | undefined>;
   byLoop(loopId: string): Promise<LoopIngress[]>;
   insert(source: LoopIngress): Promise<void>;
   update(id: string, apply: (source: LoopIngress) => LoopIngress): Promise<LoopIngress | null>;
@@ -248,9 +259,12 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
     async enabled() {
       return (await claimAcrossTenants(`${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).rows.map(tenantSource);
     },
-    async claim(id) {
-      const { rows } = await claimAcrossTenants(`${SELECT_SOURCE} WHERE id = $1`, [id]);
-      return rows[0] ? tenantSource(rows[0]) : null;
+    async tenantOf(id) {
+      const { rows } = await claimAcrossTenants(
+        `SELECT tenant_id::text AS tenant_id FROM loop_ingress WHERE id = $1 LIMIT 2`,
+        [id],
+      );
+      return rows.length === 1 ? (rows[0]!.tenant_id as string) : undefined;
     },
     async gmailWatching(email) {
       const { rows } = await claimAcrossTenants(

@@ -2,7 +2,7 @@ import type { ShipGrant } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { columnList, json, kvBigint, kvJsonb, num, present, text, type Row } from "./pg-values.ts";
+import { columnList, json, kvBigint, kvJsonb, num, present, text, type Row } from "../persistence/pg-values.ts";
 
 export interface ShipGrantRows {
   insertIfAbsent(grant: ShipGrant): Promise<ShipGrant>;

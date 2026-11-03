@@ -113,7 +113,7 @@ test(
   { skip },
   async () => {
     await withTypedTableDb(loopTables, async ({ store, tenant, otherTenant }) => {
-      const { loop } = await withTenant(tenant, () => store.loopStore.create(loopInput({ surface: "inbox" })));
+      const { loop } = await withTenant(tenant, () => store.loopStore.create(loopInput({ surface: "inbox:slack" })));
       await withTenant(tenant, async () => {
         await store.ledger.ingest([entry(loop.id, "t1")]);
         const item = (await store.ledger.byLoop(loop.id))[0]!;
@@ -156,7 +156,7 @@ test(
         await store.ledger.deleteByLoop(loop.id);
         await store.outputStore.deleteByLoop(loop.id);
         await store.grantStore.deleteByLoop(loop.id);
-        const twin = await store.loopStore.create(loopInput({ surface: "inbox" }));
+        const twin = await store.loopStore.create(loopInput({ surface: "inbox:slack" }));
         assert.equal(twin.created, true);
         assert.notEqual(twin.loop.id, loop.id);
       });
@@ -361,13 +361,13 @@ test("ingress sources and deliveries queue per tenant and background claims span
         );
         await store.loopStore.create(loopInput({ surface: "inbox:gmail", governor: { staleFireMs: 1 } }));
         await store.loopStore
-          .create(loopInput({ name: "Archived", surface: "inbox" }))
+          .create(loopInput({ name: "Archived", surface: "inbox:slack" }))
           .then(({ loop }) => store.loopStore.setState(loop.id, "archived"));
       });
       await withTenant(otherTenant, async () => {
         await store.sources.insert(source("s9", { kind: "gmail", gmail }));
         await store.deliveries.insertIfAbsent(delivery("d9", { completedAt: 10 }));
-        await store.loopStore.create(loopInput({ name: "Other inbox", surface: "inbox" }));
+        await store.loopStore.create(loopInput({ name: "Other inbox", surface: "inbox:slack" }));
         assert.deepEqual(await store.deliveries.pending("s1", 100, 20), []);
       });
       assert.deepEqual(
@@ -385,11 +385,10 @@ test("ingress sources and deliveries queue per tenant and background claims span
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
       assert.equal(await withoutTenant(() => owner.deliveries.pruneCompleted(60)), 2);
-      const claimed = await withoutTenant(() => store.sources.claim("s1"));
-      assert.deepEqual([claimed?.id, claimed?.tenantId], ["s1", tenant]);
-      assert.equal(await withoutTenant(() => store.sources.claim("missing")), null);
+      assert.equal(await withoutTenant(() => store.sources.tenantOf("s1")), tenant);
+      assert.equal(await withoutTenant(() => store.sources.tenantOf("missing")), undefined);
       await assert.rejects(
-        withTenant(tenant, () => store.sources.claim("s1")),
+        withTenant(tenant, () => store.sources.tenantOf("s1")),
         /cannot run while a tenant is bound/,
       );
       assert.deepEqual(
@@ -429,7 +428,7 @@ const LEGACY = {
       enabled: true,
       createdAt: 1_700_000_000_000,
       name: "Inbox",
-      surface: "inbox",
+      surface: "inbox:slack",
       sources: ["gmail", "slack"],
       playbook: "Draft",
       playbookVersion: 2,

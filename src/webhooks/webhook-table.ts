@@ -1,10 +1,10 @@
+import { json, ms, text } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Webhook } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { WEBHOOK_SEARCH_DESCRIPTION, WEBHOOK_SEARCH_TITLE } from "../search/resource-search.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export interface WebhookEvent {
   deliveryId: string;
@@ -14,12 +14,10 @@ export interface WebhookEvent {
 
 const WEBHOOK_EVENTS_KEPT = 50;
 
-export type TenantWebhook = Webhook & { tenantId: string };
-
 export interface WebhookRows {
   insertIfAbsent(webhook: Webhook): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
-  claim(id: string): Promise<TenantWebhook | null>;
+  tenantOf(id: string): Promise<string | undefined>;
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
   update(id: string, apply: (webhook: Webhook) => Webhook): Promise<Webhook | null>;
@@ -34,10 +32,6 @@ const VALUES = "$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb, $12:
 
 const SELECT = `SELECT ${COLUMNS} FROM webhooks`;
 
-const json = (value: unknown): string | null => (value === undefined || value === null ? null : jsonbStringify(value));
-
-const ms = (value: number | undefined): number | null => (value === undefined ? null : Math.round(value));
-
 function webhookParams(w: Webhook): unknown[] {
   return [
     w.id,
@@ -49,11 +43,11 @@ function webhookParams(w: Webhook): unknown[] {
     w.enabled,
     ms(w.createdAt),
     ms(w.lastFiredAt),
-    pgTextSafe(w.action),
+    text(w.action),
     json(w.verification),
     json(w.filters),
     w.lastDeliveryId ?? null,
-    w.lastError === undefined ? null : pgTextSafe(w.lastError),
+    text(w.lastError),
   ];
 }
 
@@ -174,12 +168,12 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
     async get(id) {
       return (await many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]))[0] ?? null;
     },
-    async claim(id) {
+    async tenantOf(id) {
       const { rows } = await claimAcrossTenants(
-        `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM webhooks WHERE id = $1`,
+        `SELECT tenant_id::text AS tenant_id FROM webhooks WHERE id = $1 LIMIT 2`,
         [id],
       );
-      return rows[0] ? { ...rowToWebhook(rows[0]), tenantId: rows[0].tenant_id as string } : null;
+      return rows.length === 1 ? (rows[0]!.tenant_id as string) : undefined;
     },
     list: () => many(`${SELECT} WHERE tenant_id = qm_bound_tenant() ORDER BY id`),
     ownedBy: (scopeId) =>
@@ -203,7 +197,7 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
         await client.query(
           `INSERT INTO webhook_events(webhook_id, delivery_id, received_at, payload) VALUES ($1, $2, $3, $4)
            ON CONFLICT DO NOTHING`,
-          [webhookId, pgTextSafe(event.deliveryId), Math.round(event.receivedAt), pgTextSafe(event.payload)],
+          [webhookId, text(event.deliveryId), Math.round(event.receivedAt), text(event.payload)],
         );
         await client.query(
           `DELETE FROM webhook_events WHERE tenant_id = qm_bound_tenant() AND webhook_id = $1 AND delivery_id IN (

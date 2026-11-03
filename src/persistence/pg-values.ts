@@ -9,11 +9,15 @@ export const texts = (value: readonly string[] | undefined | null): string[] | n
 
 export const json = (value: unknown): string | null => (value == null ? null : jsonbStringify(value));
 
+export const ms = (value: number | undefined | null): number | null => (value == null ? null : Math.round(value));
+
 export const num = (value: unknown): number | undefined => (value == null ? undefined : Number(value));
 
 export function present<T>(record: Record<string, unknown>): T {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== null && value !== undefined)) as T;
 }
+
+export const kvText = (field: string): string => `json->>'${field}'`;
 
 export const kvBigint = (field: string): string => `(json->>'${field}')::numeric::bigint`;
 

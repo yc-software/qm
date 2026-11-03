@@ -1,10 +1,11 @@
+import { jsonbStringify } from "../util/text.ts";
+import { json, kvBigint, kvJsonb, kvText, ms, num, text } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Cron } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { CRON_SEARCH_DESCRIPTION, CRON_SEARCH_TITLE } from "../search/resource-search.ts";
-import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type TenantCron = Cron & { tenantId: string };
 
@@ -28,11 +29,6 @@ const VALUES = `$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $
   $19, $20::text[], $21, $22::jsonb`;
 
 const SELECT = `SELECT tenant_id::text AS tenant_id, ${COLUMNS}, runtime::text AS runtime_json FROM crons`;
-
-const json = (value: unknown): string | null => (value === undefined || value === null ? null : jsonbStringify(value));
-const text = (value: string | undefined): string | null => (value === undefined ? null : pgTextSafe(value));
-
-const ms = (value: number | undefined): number | null => (value === undefined ? null : Math.round(value));
 
 function cronParams(c: Cron): unknown[] {
   return [
@@ -61,23 +57,21 @@ function cronParams(c: Cron): unknown[] {
   ];
 }
 
-const epoch = (value: unknown): number | undefined => (value === null ? undefined : Number(value));
-
 function rowToCron(r: Record<string, unknown>): Cron {
   const cron: Cron = {
     id: r.id as string,
     ownerScopeId: r.owner_scope_id as Cron["ownerScopeId"],
     owner: r.owner as string,
     createdBy: r.created_by as string,
-    ownerConsentedAt: epoch(r.owner_consented_at),
+    ownerConsentedAt: num(r.owner_consented_at),
     destination: (r.destination ?? undefined) as Cron["destination"],
     enabled: r.enabled as boolean,
     archived: (r.archived ?? undefined) as boolean | undefined,
     createdAt: Number(r.created_at),
-    lastFiredAt: epoch(r.last_fired_at),
-    lastAttemptAt: epoch(r.last_attempt_at),
-    nextFireAt: epoch(r.next_fire_at),
-    deferUntil: epoch(r.defer_until),
+    lastFiredAt: num(r.last_fired_at),
+    lastAttemptAt: num(r.last_attempt_at),
+    nextFireAt: num(r.next_fire_at),
+    deferUntil: num(r.defer_until),
     runtime: typeof r.runtime_json === "string" ? (JSON.parse(r.runtime_json) as Cron["runtime"]) : undefined,
     schedule: r.schedule as Cron["schedule"],
     title: (r.title ?? undefined) as string | undefined,
@@ -93,10 +87,6 @@ function rowToCron(r: Record<string, unknown>): Cron {
 }
 
 const tenantRow = (r: Record<string, unknown>): TenantCron => ({ ...rowToCron(r), tenantId: r.tenant_id as string });
-
-const jsonText = (field: string) => `json->>'${field}'`;
-const jsonEpoch = (field: string) => `(json->>'${field}')::numeric::bigint`;
-const jsonObject = (field: string) => `NULLIF(json->'${field}', 'null'::jsonb)`;
 
 const CRONS_MIGRATION = typedTableMigration({
   table: "crons",
@@ -127,28 +117,29 @@ const CRONS_MIGRATION = typedTableMigration({
   primaryKey: ["id"],
   backfill: {
     id: "id",
-    owner_scope_id: jsonText("ownerScopeId"),
-    owner: jsonText("owner"),
-    created_by: jsonText("createdBy"),
-    owner_consented_at: jsonEpoch("ownerConsentedAt"),
-    destination: jsonObject("destination"),
+    owner_scope_id: kvText("ownerScopeId"),
+    owner: `CASE WHEN json->>'runAs' = 'scopeFloor' AND json->>'loopId' IS NULL AND json->>'ownerScopeId' NOT LIKE 'personal:%'
+      THEN 'system:' || (json->>'ownerScopeId') ELSE json->>'owner' END`,
+    created_by: kvText("createdBy"),
+    owner_consented_at: kvBigint("ownerConsentedAt"),
+    destination: kvJsonb("destination"),
     enabled: "COALESCE((json->>'enabled')::boolean, false)",
     archived: "(json->>'archived')::boolean",
-    created_at: `COALESCE(${jsonEpoch("createdAt")}, 0)`,
-    last_fired_at: jsonEpoch("lastFiredAt"),
-    last_attempt_at: jsonEpoch("lastAttemptAt"),
-    next_fire_at: jsonEpoch("nextFireAt"),
-    defer_until: jsonEpoch("deferUntil"),
+    created_at: `COALESCE(${kvBigint("createdAt")}, 0)`,
+    last_fired_at: kvBigint("lastFiredAt"),
+    last_attempt_at: kvBigint("lastAttemptAt"),
+    next_fire_at: kvBigint("nextFireAt"),
+    defer_until: kvBigint("deferUntil"),
     runtime: "json->'runtime'",
     schedule: "json->'schedule'",
-    title: jsonText("title"),
-    action: jsonText("action"),
-    message: jsonText("message"),
-    loop_id: jsonText("loopId"),
+    title: kvText("title"),
+    action: kvText("action"),
+    message: kvText("message"),
+    loop_id: kvText("loopId"),
     unattended_grants:
       "CASE WHEN jsonb_typeof(json->'unattendedGrants') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'unattendedGrants')) END",
-    session_ref: jsonText("sessionRef"),
-    last_fire_note: jsonObject("lastFireNote"),
+    session_ref: kvText("sessionRef"),
+    last_fire_note: kvJsonb("lastFireNote"),
   },
   where:
     "json ? 'owner' AND json ? 'createdBy' AND json ? 'ownerScopeId' AND jsonb_typeof(json->'schedule') = 'object'",

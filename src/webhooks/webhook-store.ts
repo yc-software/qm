@@ -6,7 +6,7 @@ import {
   type CreateTriggerInput,
   withFields,
 } from "../triggers/trigger-store.ts";
-import { type TenantWebhook, type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
+import { type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
@@ -24,7 +24,7 @@ export interface WebhookStore {
   listEvents(id: string): Promise<WebhookEvent[]>;
   create(input: CreateWebhookInput): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
-  claim(id: string): Promise<TenantWebhook | null>;
+  tenantOf(id: string): Promise<string | undefined>;
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -72,7 +72,7 @@ export function createWebhookStore(rows: WebhookRows): WebhookStore {
       return { ...webhook, enabled: true };
     },
     get: (id) => rows.get(id),
-    claim: (id) => rows.claim(id),
+    tenantOf: (id) => rows.tenantOf(id),
     list: () => rows.list(),
     ownedBy: (scopeId) => rows.ownedBy(scopeId),
     async setEnabled(id, enabled) {

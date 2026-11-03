@@ -201,7 +201,9 @@ test(
         assert.deepEqual(meta, [
           { tenant, dropped: true, versions: 0 },
           { tenant, dropped: true, versions: 0 },
+          { tenant, dropped: true, versions: 0 },
         ]);
+        assert.equal((await withTenant(tenant, () => rows.get("scope-floor")))?.owner, "system:channel:C1");
         assert.equal((await withTenant(tenant, () => rows.get("legacy-2")))?.enabled, false);
         assert.equal(await withTenant(tenant, () => rows.get("broken")), null);
       },
@@ -212,6 +214,7 @@ test(
           "legacy-1": LEGACY_CRON,
           "legacy-2": { ...unflagged, id: "legacy-2" },
           broken: { ...broken, id: "broken" },
+          "scope-floor": { ...LEGACY_CRON, id: "scope-floor", ownerScopeId: "channel:C1", runAs: "scopeFloor" },
         });
       },
     );

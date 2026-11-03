@@ -480,7 +480,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         await mergeSource(id, { enabled });
       });
     },
-    tenantOf: crossTenantLoop(async (id: string) => (await deps.sources.claim(id))?.tenantId),
+    tenantOf: crossTenantLoop(async (id: string) => deps.sources.tenantOf(id)),
     async receive(
       id: string,
       request: { headers: VerifierInput["headers"]; rawBody: string },

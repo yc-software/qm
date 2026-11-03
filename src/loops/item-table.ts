@@ -2,7 +2,18 @@ import type { LoopItem } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
+import {
+  columnList,
+  json,
+  kvBigint,
+  kvJsonb,
+  kvTexts,
+  num,
+  present,
+  text,
+  texts,
+  type Row,
+} from "../persistence/pg-values.ts";
 
 type ItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload"> &
   Partial<Pick<LoopItem, "sourcePayload">>;

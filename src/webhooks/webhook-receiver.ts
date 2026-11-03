@@ -149,7 +149,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
   }
 
   return {
-    tenantOf: crossTenantLoop(async (id: string) => (await deps.webhooks.claim(id))?.tenantId),
+    tenantOf: crossTenantLoop(async (id: string) => deps.webhooks.tenantOf(id)),
     async deliver(id, req) {
       const wh = await deps.webhooks.get(id);
       if (!wh?.enabled) return { status: 404 };

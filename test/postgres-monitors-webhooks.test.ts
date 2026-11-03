@@ -154,11 +154,10 @@ test("webhooks dedupe per tenant and keep the newest events per webhook", { skip
         const twin = await webhooks.create(hook());
         assert.notEqual(twin.id, mine.id);
       });
-      const claimed = await withoutTenant(() => webhooks.claim(mine.id));
-      assert.deepEqual([claimed?.id, claimed?.tenantId], [mine.id, tenant]);
-      assert.equal(await withoutTenant(() => webhooks.claim("missing")), null);
+      assert.equal(await withoutTenant(() => webhooks.tenantOf(mine.id)), tenant);
+      assert.equal(await withoutTenant(() => webhooks.tenantOf("missing")), undefined);
       await assert.rejects(
-        withTenant(tenant, () => webhooks.claim(mine.id)),
+        withTenant(tenant, () => webhooks.tenantOf(mine.id)),
         /cannot run while a tenant is bound/,
       );
       assert.equal((await withTenant(tenant, () => webhooks.get(mine.id)))?.action, "triage the event");
