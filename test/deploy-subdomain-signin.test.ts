@@ -21,6 +21,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -195,13 +196,15 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
   const deliveries: { destination: unknown; text: string; idempotencyKey: string }[] = [];
   (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
     deliveries.push(input);
@@ -237,7 +240,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
 
-    await app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await inTestTenant(() => app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" }));
     const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
     assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
     assert.equal(publicVisitor.body, "UPSTREAM OK");
@@ -261,7 +264,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const lockedXhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(lockedXhr.status, 401);
     externalSharing = true;
-    await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
+    await inTestTenant(() => app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" }));
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
@@ -346,7 +349,10 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",
       onBehalfOf: "mallory@example.com",
-      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
+      deploymentAccess: {
+        deploymentId: (await inTestTenant(() => app.getDeployment("mysite")))!.id,
+        requesterId: "mallory@example.com",
+      },
     });
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
@@ -397,13 +403,15 @@ test("org-wide app access admits only signed-in org members", async () => {
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "teamsite",
-  });
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "teamsite",
+    }),
+  );
   const server = createInsecureTestServer(app, {
     featureFlags: { enabled: async () => false } as unknown as FeatureFlagStore,
     identity,
@@ -422,13 +430,17 @@ test("org-wide app access admits only signed-in org members", async () => {
     });
   try {
     assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
+    await inTestTenant(() =>
+      app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" }),
+    );
     assert.equal((await visit()).status, 401, "org access still requires sign-in");
     assert.equal((await visit("bob@example.com")).status, 200, "any signed-in org member can open it");
     assert.equal((await visit("guest@partner.test", true)).status, 403, "an app-only outside session is not the org");
-    await identity.deactivate("carol@example.com", "directory-sync");
+    await inTestTenant(() => identity.deactivate("carol@example.com", "directory-sync"));
     assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
+    await inTestTenant(() =>
+      app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" }),
+    );
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -458,13 +470,15 @@ test("subdomain ingress: without the session config the domain has no door — a
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
   const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
