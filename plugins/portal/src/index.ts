@@ -1117,7 +1117,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
-    if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
+    const actor = session ?? staleSession;
+    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target);
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
       return void res.end();
