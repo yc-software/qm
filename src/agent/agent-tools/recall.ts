@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
-import { problemLine } from "../../memory/provider-outcome.ts";
+import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
 import { text, type ToolKit } from "./kit.ts";
 
@@ -111,8 +111,10 @@ export function recallTools(kit: ToolKit) {
           case "add": {
             const texts = facts.map((fact) => fact.text).filter(Boolean);
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
-            if (texts.length > 20)
-              return fail("memory add takes at most 20 facts per call; add the rest in another call.");
+            if (texts.length > MAX_FACTS_PER_WRITE)
+              return fail(
+                `memory add takes at most ${MAX_FACTS_PER_WRITE} facts per call; add the rest in another call.`,
+              );
             const written = await tc.memoryAdd(texts);
             if (written === null) return unavailable();
             const { added, outcomes, problems } = written;

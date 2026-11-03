@@ -15,6 +15,7 @@ export const DENIED_CODES: ReadonlySet<string> = new Set([
   "scope_denied",
   "insufficient_scope",
 ]);
+export const MAX_FACTS_PER_WRITE = 20;
 const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
 
 const envelopes = new AsyncLocalStorage<(envelope: McpEnvelope) => void>();
