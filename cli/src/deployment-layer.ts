@@ -140,7 +140,7 @@ export function signingHeaders(
   tenant = "",
 ): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const canonical = `${method}\n${path}\n${tenant}\n${body}`;
+  const canonical = tenant ? `${method}\n${path}\n${tenant}\n${body}` : `${method}\n${path}\n${body}`;
   const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${canonical}`).digest("hex");
   return {
     "content-type": "application/json",

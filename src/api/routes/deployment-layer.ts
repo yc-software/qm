@@ -6,6 +6,7 @@ import {
 } from "../../deployment/deployment-layer-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
+import { signedTenant } from "./tenant-settings.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 function bundleFrom(body: unknown): DeploymentLayerBundle | null {
@@ -16,6 +17,7 @@ function bundleFrom(body: unknown): DeploymentLayerBundle | null {
 async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
   const store = ctx.deps.deploymentLayer;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!signedTenant(ctx.res)) return;
   const record = await store.get();
   if (!record) {
     const live = store.live();
@@ -45,6 +47,7 @@ async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
 async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
   const store = ctx.deps.deploymentLayer;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
+  if (!signedTenant(ctx.res)) return;
   const bundle = bundleFrom(ctx.body);
   if (!bundle) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "contract: 1, tools[], and skills[] required" });
@@ -79,9 +82,7 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const operator = { auth: "source" } as const;
-
 export const deploymentLayerRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/deployment-layer", ...operator, handle: getDeploymentLayer },
-  { method: "PUT", path: "/v1/deployment-layer", actor: "system", ...operator, handle: putDeploymentLayer },
+  { method: "GET", path: "/v1/deployment-layer", auth: "source", handle: getDeploymentLayer },
+  { method: "PUT", path: "/v1/deployment-layer", actor: "system", auth: "source", handle: putDeploymentLayer },
 ];

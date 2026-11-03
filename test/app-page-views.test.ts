@@ -19,7 +19,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -30,15 +30,7 @@ function session(sub: string, appOnly?: true): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({
-      k: "session",
-      sub,
-      org: "acme",
-      tenant: TEST_TENANT,
-      iat: now,
-      exp: now + 3600,
-      ...(appOnly ? { appOnly } : {}),
-    }),
+    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600, ...(appOnly ? { appOnly } : {}) }),
   ).toString("base64url");
   return `portal_session=${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
@@ -86,21 +78,22 @@ async function agent(log: AppPageViewLog) {
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
-  const deployed = await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const deployed = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
     appPageViews: log,
-    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   return {
@@ -157,7 +150,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
     await settle();
     assert.equal(views.length, 1, "denied and signed-out requests that never reach the app are not recorded");
 
-    await h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await inTestTenant(() => h.app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" }));
     await get(h.port, "/", { Accept: "text/html", "x-qm-client-ip": "198.51.100.9" });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("mallory@example.com") });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("guest@example.org", true) });

@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFeatureFlagStore, postgresFeatureFlags, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import pg from "pg";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { FEATURE_FLAGS_MIGRATION, TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { testTenants } from "./support/test-tenants.ts";
-import { testDatabaseUrl, testMap, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl, testMap, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const [TEST_TENANT, OTHER_TENANT] = testTenants();
 
@@ -81,7 +81,7 @@ test("each tenant keeps its own flags for the same person", async () => {
 });
 
 test("upgrading moves the install's existing flags into its original tenant", async () => {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const raw = new pg.Client({ connectionString: url });
   await raw.connect();
   try {
@@ -92,8 +92,10 @@ test("upgrading moves the install's existing flags into its original tenant", as
     await raw.query("INSERT INTO feature_flags VALUES ('inbox_loops', $1)", [
       { featureName: "inbox_loops", enabledScopes: ["personal:ada"], updatedAt: 1_700_000_000_000, updatedBy: "admin" },
     ]);
-    const owner = createPgPool(url, [TENANCY_BASE, FEATURE_FLAGS_MIGRATION]);
-    await owner.q("SELECT 1").finally(() => owner.close());
+    const owner = new pg.Pool({ connectionString: url, max: 1 });
+    await applyPgMigrations(owner, [TENANCY_BASE, FEATURE_FLAGS_MIGRATION].map(definePgMigration)).finally(() =>
+      owner.end(),
+    );
     const { rows } = await raw.query(
       "SELECT tenant_id::text AS tenant, feature_name, enabled_scopes, updated_by FROM feature_flags",
     );

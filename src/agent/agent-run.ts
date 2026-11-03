@@ -7,6 +7,7 @@ import {
   type ProviderKeys,
 } from "../model/model-runtime.ts";
 import {
+  emitEntry,
   recordSteerIntake,
   recordStoppedTurn,
   imageRefs,
@@ -152,7 +153,6 @@ export interface AgentOptions {
   resolveModelGateway?: () => Promise<ModelGatewayTransportConfig | undefined>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -878,7 +878,6 @@ export function createAgent(opts?: AgentOptions): Agent {
   const keyForModel = ({ keys, gateway }: TurnModels, model: Model<Api>): string | undefined =>
     modelGatewayRequest(gateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -886,7 +885,6 @@ export function createAgent(opts?: AgentOptions): Agent {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
@@ -1031,7 +1029,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         screenToolResult: dispatched.screenToolResult,
         governGoal: dispatched.governGoal,
         saveGoal: dispatched.saveGoal,
-        emit: dispatched.emit,
+        emit: (entry) => emitEntry(dispatched, entry),
         scopeLabel: dispatched.scopeLabel,
         orgScopeId: dispatched.orgScopeId,
         toolApprovalGate: dispatched.toolApprovalGate,
@@ -1085,7 +1083,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         })();
         const userEntry = continueTurn
           ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
-          : await turn.emit({
+          : await emitEntry(turn, {
               type: "user",
               payload: {
                 text: turn.input,
@@ -1095,7 +1093,6 @@ export function createAgent(opts?: AgentOptions): Agent {
                 ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
                 ...imageRefs(turn.images),
               },
-              scopeLabel: turn.scopeLabel,
               ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
             });
         const modelPrompt =
@@ -1157,7 +1154,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             persist(() =>
               steer
                 ? recordSteerIntake(turn, steer)
-                : turn.emit({ type: "system", payload: { kind: WAKE_KIND, text }, scopeLabel: turn.scopeLabel }),
+                : emitEntry(turn, { type: "system", payload: { kind: WAKE_KIND, text } }),
             );
           }
           await thinkTail;
@@ -1509,7 +1506,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           entry.ref.firstTokenPhase = undefined;
           steps.settleResults();
           activeSteps = undefined;
-          entry.ref.emit = turn.emit;
+          entry.ref.emit = (recorded) => emitEntry(turn, recorded);
           await thinkTail;
           await drainCaptured();
           entry.ref.onModelRequest = undefined;
@@ -1576,11 +1573,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         await settleGoal(false);
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
         const reply = entry.ref.silentRequested ? "" : closingText;
-        await turn.emit({
-          type: "assistant",
-          payload: { text: reply, ...steps.closing(reply) },
-          scopeLabel: turn.scopeLabel,
-        });
+        await emitEntry(turn, { type: "assistant", payload: { text: reply, ...steps.closing(reply) } });
         const pendingApprovals = entry.ref.pendingApprovals ?? [];
         return result(reply, {
           ...(pendingApprovals.length ? { pendingApprovals } : {}),

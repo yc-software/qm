@@ -21,7 +21,7 @@ import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { inTenantOf } from "../tenants/claim.ts";
 import { withoutTenant } from "../tenants/context.ts";
-import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
+import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -33,13 +33,17 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
+export const SHUTDOWN_SETTLE_MS = 5_000;
+
+const SHUTDOWN_HANDBACK_MS = 3_000;
+
+export const SHUTDOWN_RELEASE_MS = SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS;
+
+export const SHUTDOWN_EXIT_MS = SHUTDOWN_RELEASE_MS + SHUTDOWN_HANDBACK_MS + FLUSH_MS;
+
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
-export async function processRun(
-  deps: ProcessDeps,
-  run: Run,
-  opts?: { background?: boolean; shutdown?: AbortSignal },
-): Promise<TurnResult> {
+export async function processRun(deps: ProcessDeps, run: Run, opts?: { shutdown?: AbortSignal }): Promise<TurnResult> {
   const { trace, ...request } = run.request;
   return inTenantOf(run.tenantId, () =>
     traceQueued(
@@ -61,16 +65,23 @@ export async function processRun(
   );
 }
 
-async function attemptRun(
-  deps: ProcessDeps,
-  run: Run,
-  opts?: { background?: boolean; shutdown?: AbortSignal },
-): Promise<TurnResult> {
+async function attemptRun(deps: ProcessDeps, run: Run, opts?: { shutdown?: AbortSignal }): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
-  const onShutdown = (): void => cancel.abort();
+  let stranded = false;
+  let strandTimer: ReturnType<typeof setTimeout> | undefined;
+  const strand = Promise.withResolvers<TurnResult>();
+  const shutdown = opts?.shutdown;
+  const onShutdown = (): void => {
+    cancel.abort();
+    if (!shutdown || handbackStop(shutdown).kind !== "shutdown") return;
+    strandTimer = setTimeout(() => {
+      stranded = true;
+      strand.resolve({ status: "queued", sessionId: run.sessionId, runId: run.id });
+    }, SHUTDOWN_SETTLE_MS);
+  };
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let started = false;
@@ -109,7 +120,7 @@ async function attemptRun(
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     started = true;
-    const result = await deps.orchestrator.handleTurn({
+    const turn = deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
@@ -117,11 +128,14 @@ async function attemptRun(
       ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
       runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
-      background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
+    const result = await Promise.race([turn, strand.promise]);
+    clearTimeout(strandTimer);
+    shutdown?.removeEventListener("abort", onShutdown);
+    if (stranded) turn.catch((e: unknown) => swallow(`worker: stranded run=${run.id} failed after hand-back`, e));
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
@@ -150,12 +164,33 @@ async function attemptRun(
     throw err;
   } finally {
     stopBeat();
+    clearTimeout(strandTimer);
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
-      await deps.runs
-        .releaseLease(run.id, token, started ? handbackStop(opts.shutdown) : undefined)
-        .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
+      await handBack(deps, run, token, started ? handbackStop(opts.shutdown) : undefined, stranded).catch((e) =>
+        swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e),
+      );
   }
+}
+
+async function handBack(
+  deps: ProcessDeps,
+  run: Run,
+  token: string,
+  stop: RunStop | undefined,
+  stranded: boolean,
+): Promise<void> {
+  if (!stranded) {
+    await deps.runs.releaseLease(run.id, token, stop);
+    return;
+  }
+  const exited = Date.now() + SHUTDOWN_EXIT_MS;
+  if (!(await deps.runs.heartbeat(run.id, token, deps.leaseTtlMs))) {
+    console.warn(`[worker] run ${run.id} ignored shutdown and is no longer held here; leaving it to its owner`);
+    return;
+  }
+  console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
+  await deps.runs.releaseLease(run.id, token, stop, exited);
 }
 
 export interface WorkerDeps extends ProcessDeps {
@@ -267,7 +302,7 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimed();
       claimDone = null;
       try {
-        const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
+        const work = () => processRun(deps, run, { shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);
         else await work();
       } catch (e) {

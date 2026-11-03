@@ -23,11 +23,11 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ORG = "default-org";
 const ADMIN = "https://portal.example.com";
@@ -77,7 +77,6 @@ function buildOrchestrator(sessions: SessionStore) {
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -86,9 +85,10 @@ function buildOrchestrator(sessions: SessionStore) {
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(url);
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
@@ -99,21 +99,21 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
     origin: { kind: "direct" as const },
     text: "!boom",
   };
-  const { run } = await runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 });
+  const { run } = await inTestTenant(() => runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 }));
 
-  const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
+  const claimed = await inTestTenant(() => runs.claimById(run.id, "w1", leaseTtlMs));
   assert.ok(claimed, "claimed for processing");
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
 
-  const stored = await runs.get(run.id);
+  const stored = await inTestTenant(() => runs.get(run.id));
   assert.equal(stored?.result?.status, "failed");
   assert.equal(stored?.result?.sessionId, threadRef, "raw stored result holds the threadRef");
 
-  const session = await sessions.getByThread(threadRef);
+  const session = await inTestTenant(() => sessions.getByThread(threadRef));
   assert.ok(session, "session row exists for the threadRef");
 
   const app = createApp({ sessions, runs, publicWebUrl: ADMIN } as unknown as AppDeps);
-  const got = await app.getRun(run.id);
+  const got = await inTestTenant(() => app.getRun(run.id));
   assert.equal(got?.result?.sessionId, session!.id, "getRun resolved threadRef → real UUID");
   assert.notEqual(got?.result?.sessionId, threadRef);
   assert.equal(got?.result?.adminUrl, `${ADMIN}/settings/history/s/${session!.id}`);

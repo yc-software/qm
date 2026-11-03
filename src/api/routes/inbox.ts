@@ -1,8 +1,7 @@
-import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId } from "../../types.ts";
 import type { Loop } from "../../loops/types.ts";
-import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
+import { ensureDefaultInboxLoops } from "../../loops/inbox-loop.ts";
 import {
   compareKeys,
   consolidates,
@@ -28,18 +27,14 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   if (ctx.capability && ctx.capability.privateScope !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
   const defaults = await ensureDefaultInboxLoops(deps.store, acting.actorId);
-  const legacy = await findInboxLoop(deps.store, acting.actorId);
-  const migrated = legacy ? await migrateInbox(deps, preferences, legacy, defaults) : true;
-  const legacyItems = legacy ? await deps.items.summaries([legacy.id]) : [];
   const id = uiStateId(acting.actorId, "inbox-loops");
   const pref = await preferences.putIfAbsent(id, {
-    value: [...defaults.map((loop) => loop.id), ...(legacy && (!migrated || legacyItems.length) ? [legacy.id] : [])],
+    value: defaults.map((loop) => loop.id),
     updatedAt: Date.now(),
   });
   const available: Loop[] = [];
   for (const loop of await deps.store.list()) {
-    if (loop.id === legacy?.id && migrated && legacyItems.length === 0) continue;
-    if (await canAdministerLoop(ctx, loop, acting)) available.push(loop);
+    if (loop.state !== "archived" && (await canAdministerLoop(ctx, loop, acting))) available.push(loop);
   }
   let ids = Array.isArray(pref.value) ? pref.value.filter((value): value is string => typeof value === "string") : [];
   if (ctx.method === "PUT") {
@@ -62,12 +57,12 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     const mailLoops = selected.filter(
       (loop) =>
         loop.owner === acting.actorId &&
-        (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) &&
+        loop.surface?.startsWith("inbox:") &&
         (!loop.sources?.length || loop.sources.includes("gmail")),
     );
     const mail = (await Promise.all(mailLoops.map((loop) => deps.items.byLoop(loop.id))))
       .flat()
-      .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
+      .filter((item) => !isResolved(item) && item.source === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
   const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(
@@ -197,7 +192,6 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
       selected: selectedIds.includes(loop.id),
     })),
-    migrationPending: !migrated,
     filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
     items: page.map((item) =>
@@ -247,7 +241,7 @@ async function viewers(ctx: ApiCtx): Promise<void> {
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
-  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", unbound: true, handle: viewers },
+  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", handle: viewers },
   { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
   { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
 ];

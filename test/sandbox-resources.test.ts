@@ -38,6 +38,8 @@ function wired(options: ResourceOptions, backends: ResourceOptions["backends"], 
     }),
   };
 }
+import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -604,15 +606,18 @@ test("retirement waits for background startup to commit its live registry row", 
     return register(row);
   };
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  const starting = broker.start(handle, "sleep 60", "Run background tests");
+  const starting = inTestTenant(() => broker.start(handle, "sleep 60", "Run background tests"));
   await entering.promise;
   let destroyed = false;
   backend.destroyScope = async () => void (destroyed = true);
-  const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
+  const retiring = assert.rejects(
+    inTestTenant(() => resources.retire("alice", record.id)),
+    /live background work/,
+  );
   release.resolve();
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
-  assert.equal((await registry.get("job"))?.sandboxId, record.id);
+  assert.equal((await inTestTenant(() => registry.get("job")))?.sandboxId, record.id);
 });
 
 test("failed background registration kills its process and releases the resource lock", async () => {
@@ -634,9 +639,12 @@ test("failed background registration kills its process and releases the resource
   const signals: string[] = [];
   backend.signalProcess = async (_handle, id, signal) => void signals.push(`${id}:${signal}`);
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  await assert.rejects(broker.start(handle, "sleep 60", "Run background tests"), /registry unavailable/);
+  await assert.rejects(
+    inTestTenant(() => broker.start(handle, "sleep 60", "Run background tests")),
+    /registry unavailable/,
+  );
   assert.deepEqual(signals, ["unregistered:KILL"]);
-  await resources.retire("alice", record.id);
+  await inTestTenant(() => resources.retire("alice", record.id));
   assert.equal((await resources.get(record.id)).cleanupPending, false);
 });
 
@@ -874,8 +882,8 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   parking.teardown = async (_handle, opts) => void teardowns.push(opts ?? {});
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
-    await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
-    return (await runs.claim("worker", 60_000))!;
+    await inTestTenant(() => runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never }));
+    return (await withoutTenant(() => runs.claim("worker", 60_000)))!;
   };
   const turn = (runId: string, sessionId: string) =>
     createTurnSandboxes({
@@ -900,7 +908,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   const second = turn(b.id, "sb");
   await Promise.all([first.provision(), second.provision()]);
   await first.reclaimBox();
-  await runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" });
+  await inTestTenant(() => runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" }));
   assert.deepEqual(teardowns, [{ keepWarm: true }]);
   await second.reclaimBox();
   assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);

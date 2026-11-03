@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_OWNER_URL;
 
 test(
   "migration command closes runtime listeners and exits naturally",

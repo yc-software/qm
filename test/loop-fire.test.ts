@@ -1,5 +1,5 @@
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
-import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
+import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
@@ -19,6 +19,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeIdentity() {
@@ -362,11 +363,13 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
-    { principalId: "josh", displayName: "Josh", type: "internal" },
-    { principalId: "U2", displayName: "Bob", type: "internal" },
-  ]);
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  await inTestTenant(async () => {
+    await directory.replace([
+      { principalId: "josh", displayName: "Josh", type: "internal" },
+      { principalId: "U2", displayName: "Bob", type: "internal" },
+    ]);
+    await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  });
   const s = service(HAPPY, { directory });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
@@ -646,7 +649,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
       fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
     });
     await scheduler.tick(cron.createdAt + 60_000);
-    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+    assert.equal((await inTestTenant(() => s.crons.listFires(cron.id))).runs[0]?.status, "ok");
     assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
     await s.fire.fire(loop.id, "manual");
     const output = (await s.outputs.awaitingReview(loop.id))[0]!;
@@ -715,17 +718,6 @@ test("bound loops reject missing crons, foreign scheduler bindings, and authorit
   await s.crons.delete(cron.id);
   assert.equal((await s.fire.fire(loop.id, "deleted")).status, "failed");
   assert.equal(s.turns.length, 0);
-});
-
-test("legacy inbox sync cron is not a grant source for inbox event turns", async () => {
-  const s = service(HAPPY);
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
-  const cron = await bindCron(s, loop, { loopId: undefined, unattendedGrants: ["admin.sessions.read"] });
-  assert.equal((await s.fire.fire(loop.id, "slack-event")).status, "silent");
-  assert.equal(s.turns.length, 1);
-  assert.equal(s.turns[0]?.text, renderInboxSyncTask(loop.id));
-  assert.ok(s.turns.every((turn) => turn.unattendedGrants === undefined));
-  assert.equal((await s.fire.fire(loop.id, "invalid-delegation", cron.id)).status, "failed");
 });
 
 test("privileged item turns inherit grants only for the owner", async () => {
@@ -829,7 +821,7 @@ test("an admitted loop drains all stages after ownership closes", async () => {
 
 test("inbox fires repair an existing shell without creating generic intake records", async () => {
   const s = service(async (req) => {
-    assert.equal(req.text, renderInboxSyncTask(loop.id));
+    assert.equal(req.text, renderSourceInboxTask(loop.id, "slack"));
     await s.items.ingest([
       {
         loopId: loop.id,
@@ -847,7 +839,7 @@ test("inbox fires repair an existing shell without creating generic intake recor
     ]);
     return "Synced";
   });
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   await s.items.enqueue({ loopId: loop.id, sourceKey: "channel:123", sourceSummary: "support request" });
   assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
   assert.equal((await s.fire.fire(loop.id, "sync-one")).status, "silent");
@@ -883,7 +875,7 @@ test("inbox sync exceptions count once and recover on a successful retry", async
     if (fail) throw new Error("connector unavailable");
     return "Synced";
   });
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   assert.equal((await s.fire.fire(loop.id, "broken")).status, "failed");
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
   assert.equal((await s.items.byLoop(loop.id)).length, 0);
@@ -919,7 +911,7 @@ for (const [label, failure] of [
       },
       { dynamicResult: () => (fail && "result" in failure ? (failure.result as TurnResult) : undefined) },
     );
-    const loop = await makeLoop(s.loops, { surface: "inbox" });
+    const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
     for (let i = 0; i < 5; i++) assert.equal((await s.fire.fire(loop.id, `limited-${i}`)).status, "failed");
     const limited = await s.loops.get(loop.id);
     assert.equal(limited?.state, "enabled");
@@ -935,7 +927,7 @@ test("persistent inbox failures still quarantine and alert the owner when no des
   const s = service(() => {
     throw new Error("playbook asked for a tool that does not exist");
   });
-  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
   for (let i = 0; i < 3; i++) await s.fire.fire(loop.id, `broken-${i}`);
   const after = await s.loops.get(loop.id);
   assert.equal(after?.state, "quarantined");
@@ -981,7 +973,7 @@ test("event-only Email work skips scanning and holds its draft instead of markin
       dedupeKey: "thread1",
       source: "gmail",
       sourceAt: 1000,
-      sourcePayload: { source: "gmail", snippet: "Hello from email", gmail: { threadId: "thread1" } },
+      sourcePayload: { snippet: "Hello from email", gmail: { threadId: "thread1" } },
     },
   ]);
   const result = await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
@@ -1261,7 +1253,6 @@ test("a reply Loop's work stage can settle an event as replied or no reply neede
         source: "gmail",
         sourceAt: 2000,
         sourcePayload: {
-          source: "gmail",
           snippet: "Can you send the deck?",
           gmail: { threadId: "thread1" },
           latestEvent: { author: "owner", at: 2000, text: "Sent it over" },

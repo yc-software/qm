@@ -8,12 +8,13 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { signedCoreHeaders } from "./support/signed-core.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -24,10 +25,13 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   let base: string;
   let built: BuiltApp;
 
-  const signedPost = async (path: string) =>
+  const signedPost = (path: string) =>
     fetch(`${base}${path}`, {
       method: "POST",
-      headers: await signedCoreHeaders(SECRET, "POST", path, "", { headers: { "content-type": "application/json" } }),
+      headers: signedRequestHeaders(SECRET, "POST", path, "", {
+        "content-type": "application/json",
+        ...testTenantHeaders(),
+      }),
     });
 
   before(async () => {
@@ -51,36 +55,40 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
-    await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
+    await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("U-leave")]));
     assert.equal(built.identity.classify("U-leave").type, "internal");
 
-    await built.app.upsertDirectory([member("U-stay")]);
+    await inTestTenant(() => built.app.upsertDirectory([member("U-stay")]));
     assert.equal(built.identity.classify("U-leave").type, "guest");
     assert.equal(built.identity.classify("U-stay").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.deactivate" && e.principalId === "U-leave"),
+      (await inTestTenant(() => built.auditLog.events())).some(
+        (e) => e.action === "principal.deactivate" && e.principalId === "U-leave",
+      ),
     );
 
-    await built.app.upsertDirectory([member("U-stay"), member("U-leave")]);
+    await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("U-leave")]));
     assert.equal(built.identity.classify("U-leave").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-leave"),
+      (await inTestTenant(() => built.auditLog.events())).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-leave",
+      ),
     );
   });
 
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
-    await built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]);
-    await built.app.upsertDirectory([member("U-stay")]);
+    await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]));
+    await inTestTenant(() => built.app.upsertDirectory([member("U-stay")]));
 
     assert.equal(built.identity.classify("allowed@example.com").type, "internal");
-    const resolved = await built.app.resolveRecipient("allowed@example.com");
+    const resolved = await inTestTenant(() => built.app.resolveRecipient("allowed@example.com"));
     assert.equal(resolved.kind, "one");
     if (resolved.kind === "one") {
       assert.equal(resolved.member.principalId, "allowed@example.com");
       assert.equal(resolved.member.displayName, "allowed@example.com");
     }
     assert.ok(
-      !(await built.auditLog.events()).some(
+      !(await inTestTenant(() => built.auditLog.events())).some(
         (e) => e.action === "principal.deactivate" && e.principalId === "allowed@example.com",
       ),
     );
@@ -92,7 +100,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
     assert.equal(built.identity.classify("U-manual").type, "guest");
 
-    await built.app.upsertDirectory([member("U-manual")]);
+    await inTestTenant(() => built.app.upsertDirectory([member("U-manual")]));
     assert.equal(built.identity.classify("U-manual").type, "guest");
 
     const on = await signedPost("/v1/principals/U-manual/reactivate");
@@ -100,13 +108,13 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     assert.deepEqual(await on.json(), { ok: true, principalId: "U-manual", active: true });
     assert.equal(built.identity.classify("U-manual").type, "internal");
     assert.ok(
-      (await built.auditLog.events()).some((e) => e.action === "principal.reactivate" && e.principalId === "U-manual"),
+      (await inTestTenant(() => built.auditLog.events())).some(
+        (e) => e.action === "principal.reactivate" && e.principalId === "U-manual",
+      ),
     );
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
-    await built.app.upsertDirectory([member("U-stay")]);
-    assert.equal(built.identity.classify("U-stay").type, "internal");
     const cap = await mintCapabilityToken(
       { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
@@ -115,7 +123,6 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },
     });
-    assert.equal(res.status, 403);
-    assert.equal(((await res.json()) as { message: string }).message, "capability token not valid for this route");
+    assert.equal(res.status, 401);
   });
 });

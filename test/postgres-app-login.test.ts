@@ -7,12 +7,13 @@ import {
   createPgPool,
   migrateRegisteredPgSchemas,
   ownerDatabaseUrl,
+  registerPgMigrations,
 } from "../src/persistence/pg-pool.ts";
 import { ensureAppLogin } from "../src/persistence/app-login.ts";
 import { scramVerifier } from "../cli/src/scram-verifier.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the managed login password test";
+const URL = process.env.DATABASE_OWNER_URL;
+const skip = URL ? false : "set DATABASE_OWNER_URL (a Postgres superuser) to run the managed login password test";
 
 test("scramVerifier emits a SCRAM-SHA-256 verifier and refuses non-ASCII passwords", () => {
   const verifier = scramVerifier("secret", Buffer.alloc(16, 1));
@@ -93,7 +94,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     await ensureAppLogin(ownerUrl.toString(), appUrl.toString());
     configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
-    const store = createPgPool(appUrl.toString(), [
+    registerPgMigrations(ownerUrl.toString(), [
       {
         id: "0001_login_probe",
         statements: [
@@ -103,10 +104,11 @@ test(
         ],
       },
     ]);
+    const store = createPgPool(appUrl.toString());
     try {
       assert.equal(ownerDatabaseUrl(appUrl.toString()), ownerUrl.toString(), "pg-boss and migrations use the owner");
       assert.equal(ownerDatabaseUrl("postgres://other@db/x"), "postgres://other@db/x");
-      await migrateRegisteredPgSchemas(appUrl.toString());
+      await migrateRegisteredPgSchemas(ownerUrl.toString());
       const owner = await admin.query(`SELECT tableowner FROM pg_tables WHERE schemaname = $1`, [schema]);
       assert.equal(owner.rows[0].tableowner, decodeURIComponent(ownerUrl.username));
       await store.q(`INSERT INTO login_probe VALUES (1)`);

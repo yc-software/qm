@@ -8,8 +8,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { prepareDevTenant } from "../scripts/dev/supervisor/durability.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant creation test";
+const URL = process.env.DATABASE_OWNER_URL;
+const skip = URL ? false : "set DATABASE_OWNER_URL (a Postgres owner login) to run the tenant creation test";
 
 test("creating a tenant inserts exactly the given id once, even when creations race", { skip }, async () => {
   const schema = `tenant_${randomUUID().replaceAll("-", "")}`;

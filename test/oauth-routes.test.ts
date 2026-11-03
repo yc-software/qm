@@ -9,10 +9,10 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signedCoreHeaders } from "./support/signed-core.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -20,16 +20,16 @@ const oauthEnv = {
   GOOGLE_OAUTH_CLIENT_SECRET: "gsecret",
 } as NodeJS.ProcessEnv;
 
-function sign(method: string, pathWithQuery: string, body = "", actor = "U1"): Promise<Record<string, string>> {
-  return signedCoreHeaders(SECRET, method, pathWithQuery, body, {
-    actor,
-    headers: { "content-type": "application/json" },
+function sign(method: string, pathWithQuery: string, body = ""): Record<string, string> {
+  return signedRequestHeaders(SECRET, method, pathWithQuery, body, {
+    "content-type": "application/json",
+    ...testTenantHeaders(),
   });
 }
 
 function start(
   fetchImpl: FetchLike,
-  opts: { oauthEnv?: NodeJS.ProcessEnv; flowTenant?: () => string } = {},
+  opts: { oauthEnv?: NodeJS.ProcessEnv } = {},
 ): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
@@ -41,7 +41,6 @@ function start(
     replayDedupe: built.replayDedupe,
     connectorTokens: built.connectorTokens,
     oauthFlows: built.oauthFlows,
-    rowTenants: async () => [opts.flowTenant?.() ?? TEST_TENANT],
     auditLog: built.auditLog,
     oauthEnv: opts.oauthEnv ?? oauthEnv,
     oauthFetch: fetchImpl,
@@ -69,7 +68,7 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
   try {
     const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
     const startPath = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
-    const startRes = await fetch(`${srv.base}${startPath}`, { headers: await sign("GET", startPath) });
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
     assert.equal(startRes.status, 200);
     const startBody = (await startRes.json()) as { authorizeUrl: string; hosts: string[] };
     assert.deepEqual(startBody.hosts, PROVIDERS.google!.hosts);
@@ -85,11 +84,17 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     const replay = await fetch(`${srv.base}${callbackPath}`);
     assert.equal(replay.status, 400);
     assert.match(((await replay.json()) as { message: string }).message, /already used|invalid OAuth state/);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-google");
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U2"), null);
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
+      "at-google",
+    );
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U2")),
+      null,
+    );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
-    const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: await sign("GET", statusPath) });
+    const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
     assert.equal(statusRes.status, 200);
     const statusBody = await statusRes.text();
     assert.match(statusBody, /"google"/);
@@ -99,11 +104,14 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     const revokeBody = JSON.stringify({ principalId: "U1", provider: "google" });
     const revokeRes = await fetch(`${srv.base}/v1/connectors/oauth/revoke`, {
       method: "POST",
-      headers: await sign("POST", "/v1/connectors/oauth/revoke", revokeBody),
+      headers: sign("POST", "/v1/connectors/oauth/revoke", revokeBody),
       body: revokeBody,
     });
     assert.equal(revokeRes.status, 200);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1")),
+      null,
+    );
   } finally {
     await srv.close();
   }
@@ -114,17 +122,17 @@ test("revoke clears a connector linked under a non-default account type", async 
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.connectorTokens.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      { accessToken: "at-company", expiresAt: Date.now() + 3_600_000 },
-      "company",
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken(
+        "gmail.googleapis.com",
+        "U1",
+        { accessToken: "at-company", expiresAt: Date.now() + 3_600_000 },
+        "company",
+      ),
     );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
-    const before = (await (
-      await fetch(`${srv.base}${statusPath}`, { headers: await sign("GET", statusPath) })
-    ).json()) as {
+    const before = (await (await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) })).json()) as {
       providers: Record<string, { connected?: boolean }>;
     };
     assert.equal(before.providers.google?.connected, true);
@@ -132,15 +140,16 @@ test("revoke clears a connector linked under a non-default account type", async 
     const revokeBody = JSON.stringify({ principalId: "U1", provider: "google" });
     const revokeRes = await fetch(`${srv.base}/v1/connectors/oauth/revoke`, {
       method: "POST",
-      headers: await sign("POST", "/v1/connectors/oauth/revoke", revokeBody),
+      headers: sign("POST", "/v1/connectors/oauth/revoke", revokeBody),
       body: revokeBody,
     });
     assert.equal(revokeRes.status, 200);
 
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1", "company"), null);
-    const after = (await (
-      await fetch(`${srv.base}${statusPath}`, { headers: await sign("GET", statusPath) })
-    ).json()) as {
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1", "company")),
+      null,
+    );
+    const after = (await (await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) })).json()) as {
       providers: Record<string, { connected?: boolean }>;
     };
     assert.equal(after.providers.google?.connected, false);
@@ -154,10 +163,12 @@ test("OAuth status reports expired non-refreshable connectors as reconnect-neede
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.connectorTokens.setConnectorToken("slack.com", "U1", { accessToken: "stale-slack", expiresAt: 1 });
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken("slack.com", "U1", { accessToken: "stale-slack", expiresAt: 1 }),
+    );
 
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
-    const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: await sign("GET", statusPath) });
+    const statusRes = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
     assert.equal(statusRes.status, 200);
     const status = (await statusRes.json()) as {
       providers: Record<string, { connected?: boolean; needsReconnect?: boolean }>;
@@ -196,11 +207,11 @@ test("connector token route normalizes expiry seconds before storing", async () 
     });
     const res = await fetch(`${srv.base}/v1/connectors/token`, {
       method: "POST",
-      headers: await sign("POST", "/v1/connectors/token", body),
+      headers: sign("POST", "/v1/connectors/token", body),
       body,
     });
     assert.equal(res.status, 200);
-    const status = await srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1");
+    const status = await inTestTenant(() => srv.built.connectorTokens.connectorTokenStatus("api.example.test", "U1"));
     assert.equal(status.connected, true);
     assert.equal(status.expiresAt, expiresAtMs);
   } finally {
@@ -224,9 +235,7 @@ test("authorize state stays inside the tightest provider limit and still carries
     const redirectUri = "https://acme-portal.fly.dev/v1/connectors/oauth/x/callback";
     const query = `principalId=${encodeURIComponent("person@acme-corp.com")}&redirectUri=${encodeURIComponent(redirectUri)}&returnTo=${encodeURIComponent("/keychain")}`;
     const startPath = `/v1/connectors/oauth/x/start?${query}`;
-    const startRes = await fetch(`${srv.base}${startPath}`, {
-      headers: await sign("GET", startPath, "", "person@acme-corp.com"),
-    });
+    const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
     assert.equal(startRes.status, 200);
     const consent = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl);
     const state = consent.searchParams.get("state") ?? "";
@@ -241,7 +250,10 @@ test("authorize state stays inside the tightest provider limit and still carries
     assert.equal(cb.status, 302, await cb.text());
     assert.equal(cb.headers.get("location"), "/keychain?connector=x&status=connected");
     assert.match(body, /code_verifier=/);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com"), "at-x");
+    assert.equal(
+      await inTestTenant(() => srv.built.connectorTokens.connectorAccessToken("api.x.com", "person@acme-corp.com")),
+      "at-x",
+    );
     const replayed = await fetch(`${srv.base}${callbackPath}`, { redirect: "manual" });
     assert.equal(replayed.status, 400, "the state is single-use");
   } finally {
@@ -255,26 +267,28 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     throw new Error("no token exchange expected");
   });
   try {
-    await srv.built.mcpServers.put({
-      id: "orders",
-      name: "Orders",
-      url: "https://mcp.orders.example/mcp",
-      auth: "oauth-user",
-      credentialHost: "api.orders.example",
-      clientId: "public-client",
-      oauthAuthorizeUrl: "https://id.orders.example/authorize",
-      oauthTokenUrl: "https://id.orders.example/token",
-      oauthScopes: ["orders:write"],
-      tools: [],
-      readOnly: false,
-      enabled: true,
-      updatedAt: Date.now(),
-      updatedBy: "admin",
-    });
-    await srv.built.mcpToolService.refresh();
+    await inTestTenant(() =>
+      srv.built.mcpServers.put({
+        id: "orders",
+        name: "Orders",
+        url: "https://mcp.orders.example/mcp",
+        auth: "oauth-user",
+        credentialHost: "api.orders.example",
+        clientId: "public-client",
+        oauthAuthorizeUrl: "https://id.orders.example/authorize",
+        oauthTokenUrl: "https://id.orders.example/token",
+        oauthScopes: ["orders:write"],
+        tools: [],
+        readOnly: false,
+        enabled: true,
+        updatedAt: Date.now(),
+        updatedBy: "admin",
+      }),
+    );
+    await inTestTenant(() => srv.built.mcpToolService.refresh());
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const read = async () => {
-      const res = await fetch(`${srv.base}${statusPath}`, { headers: await sign("GET", statusPath) });
+      const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
       assert.equal(res.status, 200);
       return (await res.json()) as {
         providers: Record<string, { connected?: boolean; mcpLabel?: string; available?: boolean }>;
@@ -282,46 +296,16 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
     };
     assert.equal((await read()).providers.orders, undefined, "unlinked MCP sign-ins stay out of the list");
 
-    await srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
-      accessToken: "orders-token",
-      expiresAt: Date.now() + 3_600_000,
-    });
+    await inTestTenant(() =>
+      srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
+        accessToken: "orders-token",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
     const linked = (await read()).providers.orders;
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");
     assert.equal(linked?.available, true);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("an OAuth callback whose flow belongs to another tenant is refused", async () => {
-  let flowTenant = TEST_TENANT;
-  let exchanged = false;
-  const srv = start(
-    async () => {
-      exchanged = true;
-      return { ok: true, status: 200, json: async () => ({ access_token: "at-x", expires_in: 7200 }) };
-    },
-    { oauthEnv: X_ENV, flowTenant: () => flowTenant },
-  );
-  try {
-    const redirectUri = "https://acme-portal.fly.dev/v1/connectors/oauth/x/callback";
-    const startPath = `/v1/connectors/oauth/x/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}`;
-    const startRes = await fetch(`${srv.base}${startPath}`, { headers: await sign("GET", startPath) });
-    assert.equal(startRes.status, 200);
-    const state = new URL(((await startRes.json()) as { authorizeUrl: string }).authorizeUrl).searchParams.get("state");
-    flowTenant = OTHER_TENANT;
-    const cb = await fetch(
-      `${srv.base}/v1/connectors/oauth/x/callback?code=c&state=${encodeURIComponent(state ?? "")}`,
-      {
-        redirect: "manual",
-      },
-    );
-    assert.equal(cb.status, 400);
-    assert.match(((await cb.json()) as { message: string }).message, /invalid OAuth state|different tenant/);
-    assert.equal(exchanged, false);
-    assert.equal(await srv.built.connectorTokens.connectorAccessToken("api.x.com", "U1"), null);
   } finally {
     await srv.close();
   }

@@ -10,6 +10,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { scopeId } from "../src/types.ts";
 import { materializeRoLayers } from "../src/sandbox/ro-layers.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL to test Render workspace storage";
@@ -34,10 +35,8 @@ async function workspaces(t: import("node:test").TestContext) {
   };
 }
 
-test(
-  "Render workspace retains bytes across cores and rebuilds the file cache for shared consumers",
-  { skip },
-  async (t) => {
+test("Render workspace retains bytes across cores and rebuilds the file cache for shared consumers", { skip }, (t) =>
+  inTestTenant(async () => {
     const { scope, other, core } = await workspaces(t);
     const a = core("first");
     const b = core("second");
@@ -80,88 +79,95 @@ test(
     assert.equal((await b.list(scope, { limit: 1 })).length, 1);
     await assert.rejects(b.write(scope, "../escape", "bad"), /escapes workspace/);
     await assert.rejects(b.read(scope, "/etc/passwd"), /escapes workspace/);
-  },
+  }),
 );
 
 test(
   "Render workspace keeps its file cache while a scope is unchanged and refreshes it after another core writes",
   { skip },
-  async (t) => {
-    const { scope, core } = await workspaces(t);
-    const first = core("first");
-    const second = core("second");
-    await first.write(scope, "notes/a.md", "one");
-    await second.ensureScope(scope);
-    const cached = join(second.scopeDir(scope), "notes/a.md");
-    const loaded = (await stat(cached)).mtimeMs;
-    await second.ensureScope(scope);
-    await second.write(scope, "notes/b.md", "own write");
-    await second.ensureScope(scope);
-    assert.equal((await stat(cached)).mtimeMs, loaded);
-    await first.write(scope, "notes/a.md", "two");
-    await second.ensureScope(scope);
-    assert.equal(await readFile(cached, "utf8"), "two");
-    await first.remove(scope, "notes/b.md");
-    await second.ensureScope(scope);
-    assert.equal(existsSync(join(second.scopeDir(scope), "notes/b.md")), false);
-  },
+  (t) =>
+    inTestTenant(async () => {
+      const { scope, core } = await workspaces(t);
+      const first = core("first");
+      const second = core("second");
+      await first.write(scope, "notes/a.md", "one");
+      await second.ensureScope(scope);
+      const cached = join(second.scopeDir(scope), "notes/a.md");
+      const loaded = (await stat(cached)).mtimeMs;
+      await second.ensureScope(scope);
+      await second.write(scope, "notes/b.md", "own write");
+      await second.ensureScope(scope);
+      assert.equal((await stat(cached)).mtimeMs, loaded);
+      await first.write(scope, "notes/a.md", "two");
+      await second.ensureScope(scope);
+      assert.equal(await readFile(cached, "utf8"), "two");
+      await first.remove(scope, "notes/b.md");
+      await second.ensureScope(scope);
+      assert.equal(existsSync(join(second.scopeDir(scope), "notes/b.md")), false);
+    }),
 );
 
-test("Render workspace keeps a scope revision when a write changes no bytes", { skip }, async (t) => {
-  const { scope, core, db } = await workspaces(t);
-  const store = core("only");
-  const revision = async () =>
-    Number(
-      (await db.query("SELECT revision FROM render_workspace_scopes WHERE scope_id=$1", [scope])).rows[0]!.revision,
-    );
-  await store.write(scope, "notes/a.md", "one");
-  const first = await revision();
-  await store.write(scope, "notes/a.md", "one");
-  assert.equal(await revision(), first);
-  await store.write(scope, "notes/a.md", "two");
-  assert.equal(await revision(), first + 1);
-});
+test("Render workspace keeps a scope revision when a write changes no bytes", { skip }, (t) =>
+  inTestTenant(async () => {
+    const { scope, core, db } = await workspaces(t);
+    const store = core("only");
+    const revision = async () =>
+      Number(
+        (await db.query("SELECT revision FROM render_workspace_scopes WHERE scope_id=$1", [scope])).rows[0]!.revision,
+      );
+    await store.write(scope, "notes/a.md", "one");
+    const first = await revision();
+    await store.write(scope, "notes/a.md", "one");
+    assert.equal(await revision(), first);
+    await store.write(scope, "notes/a.md", "two");
+    assert.equal(await revision(), first + 1);
+  }),
+);
 
-test("Render workspace refreshes a core's file cache after a writer that bypasses the store", { skip }, async (t) => {
-  const { scope, other, db, core } = await workspaces(t);
-  const first = core("first");
-  await first.write(scope, "shared/report.md", "one");
-  await first.ensureScope(scope);
-  await db.query("UPDATE render_workspace_files SET data=$3 WHERE scope_id=$1 AND path=$2", [
-    scope,
-    "shared/report.md",
-    Buffer.from("two"),
-  ]);
-  await first.ensureScope(scope);
-  assert.equal(await readFile(join(first.scopeDir(scope), "shared/report.md"), "utf8"), "two");
-  await first.ensureScope(other);
-  await db.query("UPDATE render_workspace_files SET scope_id=$2 WHERE scope_id=$1", [scope, other]);
-  await first.ensureScope(scope);
-  await first.ensureScope(other);
-  assert.equal(existsSync(join(first.scopeDir(scope), "shared/report.md")), false);
-  assert.equal(await readFile(join(first.scopeDir(other), "shared/report.md"), "utf8"), "two");
-});
+test("Render workspace refreshes a core's file cache after a writer that bypasses the store", { skip }, (t) =>
+  inTestTenant(async () => {
+    const { scope, other, db, core } = await workspaces(t);
+    const first = core("first");
+    await first.write(scope, "shared/report.md", "one");
+    await first.ensureScope(scope);
+    await db.query("UPDATE render_workspace_files SET data=$3 WHERE scope_id=$1 AND path=$2", [
+      scope,
+      "shared/report.md",
+      Buffer.from("two"),
+    ]);
+    await first.ensureScope(scope);
+    assert.equal(await readFile(join(first.scopeDir(scope), "shared/report.md"), "utf8"), "two");
+    await first.ensureScope(other);
+    await db.query("UPDATE render_workspace_files SET scope_id=$2 WHERE scope_id=$1", [scope, other]);
+    await first.ensureScope(scope);
+    await first.ensureScope(other);
+    assert.equal(existsSync(join(first.scopeDir(scope), "shared/report.md")), false);
+    assert.equal(await readFile(join(first.scopeDir(other), "shared/report.md"), "utf8"), "two");
+  }),
+);
 
-test("Render workspace gives its file cache the shape that Postgres has for a path", { skip }, async (t) => {
-  const { root, scope, core } = await workspaces(t);
-  const first = core("first");
-  const second = core("second");
-  await first.write(scope, "report/part.md", "part");
-  await second.ensureScope(scope);
-  await first.remove(scope, "report/part.md");
-  await first.write(scope, "report", "whole");
-  assert.equal(await first.read(scope, "report"), "whole");
-  await second.ensureScope(scope);
-  assert.equal(await readFile(join(second.scopeDir(scope), "report"), "utf8"), "whole");
-  await second.remove(scope, "report");
-  await second.write(scope, "report/part.md", "again");
-  await first.ensureScope(scope);
-  assert.equal(await readFile(join(first.scopeDir(scope), "report/part.md"), "utf8"), "again");
-  assert.equal(await first.read(scope, "report"), null);
-  const legacy = createLocalWorkspaceStore(join(root, "third"));
-  await legacy.write(scope, "report/part.md/old.md", "conflicting legacy file");
-  const third = core("third");
-  await third.ensureScope(scope);
-  assert.equal(await readFile(join(third.scopeDir(scope), "report/part.md"), "utf8"), "again");
-  assert.equal(await third.read(scope, "report/part.md/old.md"), null);
-});
+test("Render workspace gives its file cache the shape that Postgres has for a path", { skip }, (t) =>
+  inTestTenant(async () => {
+    const { root, scope, core } = await workspaces(t);
+    const first = core("first");
+    const second = core("second");
+    await first.write(scope, "report/part.md", "part");
+    await second.ensureScope(scope);
+    await first.remove(scope, "report/part.md");
+    await first.write(scope, "report", "whole");
+    assert.equal(await first.read(scope, "report"), "whole");
+    await second.ensureScope(scope);
+    assert.equal(await readFile(join(second.scopeDir(scope), "report"), "utf8"), "whole");
+    await second.remove(scope, "report");
+    await second.write(scope, "report/part.md", "again");
+    await first.ensureScope(scope);
+    assert.equal(await readFile(join(first.scopeDir(scope), "report/part.md"), "utf8"), "again");
+    assert.equal(await first.read(scope, "report"), null);
+    const legacy = createLocalWorkspaceStore(join(root, "third"));
+    await legacy.write(scope, "report/part.md/old.md", "conflicting legacy file");
+    const third = core("third");
+    await third.ensureScope(scope);
+    assert.equal(await readFile(join(third.scopeDir(scope), "report/part.md"), "utf8"), "again");
+    assert.equal(await third.read(scope, "report/part.md/old.md"), null);
+  }),
+);

@@ -18,7 +18,7 @@ const [TEST_TENANT] = testTenants();
 
 test("the CLI import lands in the named tenant through core's operator routes and keeps admin edits", async () => {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  await built.tenantSettings.get();
+  await withTenant(TEST_TENANT, () => built.tenantSettings.get());
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),

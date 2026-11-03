@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -61,15 +62,11 @@ export async function fireAskResolution(
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
-    deferWhenBusy: true,
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });
-  if (
-    outcome.deferred ||
-    (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
-  )
-    throw new Error("credential approval resume is waiting for the original conversation to become idle");
+  if (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
+    throw new Error("credential approval resume is already running for this request");
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (cronId && (!outcome.ran || outcome.status === "refused")) return outcome;
   if (!outcome.ran && !outcome.authzFailed) {
@@ -145,27 +142,29 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
 }
 
 export function createAskExpirySweep(deps: {
-  keychain: Keychain;
+  keychain: Pick<Keychain, "unnotifiedResolvedAsks" | "markAskNotified">;
   fire: (ask: KeychainAsk) => Promise<unknown>;
   auditLog?: AuditLog;
 }): (now: number) => Promise<void> {
-  return async (now) => {
-    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now)) {
-      if (ask.status === "expired") {
-        deps.auditLog?.record({
-          at: now,
-          principalId: ask.ownerId,
-          action: "keychain.ask.expire",
-          resource: ask.id,
-          scopeLabel: ask.requesterScopeId,
-        });
-      }
-      try {
-        await deps.fire(ask);
-        await deps.keychain.markAskNotified(ask.id, ask.status);
-      } catch (e) {
-        swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
-      }
+  const settle = async (ask: KeychainAsk, now: number): Promise<void> => {
+    if (ask.status === "expired") {
+      deps.auditLog?.record({
+        at: now,
+        principalId: ask.ownerId,
+        action: "keychain.ask.expire",
+        resource: ask.id,
+        scopeLabel: ask.requesterScopeId,
+      });
     }
+    try {
+      await deps.fire(ask);
+      await deps.keychain.markAskNotified(ask.id, ask.status);
+    } catch (e) {
+      swallow(`keychain: ask sweep fire failed for ${ask.id} (will retry next tick)`, e);
+    }
+  };
+  return async (now) => {
+    for (const ask of await deps.keychain.unnotifiedResolvedAsks(now))
+      await inTenantOf(ask.tenantId, () => settle(ask, now));
   };
 }

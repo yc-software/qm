@@ -3,7 +3,7 @@ import type { SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { currentTenant, isTenantId } from "../tenants/context.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 import { reportFailureAs, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { perTenant } from "../tenants/context.ts";
@@ -619,7 +619,8 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  tenant: string;
+  orgId?: string;
+  tenant?: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -636,7 +637,8 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    isTenantId(s.tenant) &&
+    (s.orgId === undefined || typeof s.orgId === "string") &&
+    (s.tenant === undefined || isTenantId(s.tenant)) &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
@@ -654,7 +656,7 @@ export function sealOAuthState(
       ...state,
       issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
       nonce: state.nonce ?? randomUUID(),
-      tenant: currentTenant(),
+      ...tenantClaim(),
     },
     opts.secret,
   );

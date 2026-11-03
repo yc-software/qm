@@ -5,6 +5,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function reply(): Response {
   const events = [
@@ -36,7 +37,7 @@ for (const warm of [false, true]) {
     const config = testConfig({ memoryStrategy: "agent-only" });
     const app = () => buildApp(config, { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
     let built = app();
-    await built.modelCredentials.set("anthropic", "sk-test", "test");
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -58,7 +59,10 @@ for (const warm of [false, true]) {
     };
     try {
       if (warm) {
-        assert.equal((await built.app.turn({ ...base, text: "Can you check the worker?" })).status, "ok");
+        assert.equal(
+          (await inTestTenant(() => built.app.turn({ ...base, text: "Can you check the worker?" }))).status,
+          "ok",
+        );
       }
       const input: TurnRequest = {
         ...base,
@@ -68,7 +72,7 @@ for (const warm of [false, true]) {
           { ts: "100.003", role: "user", name: "Blair", text: "Alex, can you approve the restart above?" },
         ],
       };
-      const first = await built.app.turn(input);
+      const first = await inTestTenant(() => built.app.turn(input));
       assert.equal(first.status, "ok", first.reason);
       const messages = JSON.parse(requests.at(-1)!).messages as Array<{ role: string; content: unknown }>;
       const quoted = messages.filter((m) => JSON.stringify(m.content).includes("Shall I restart the worker?"));
@@ -80,11 +84,11 @@ for (const warm of [false, true]) {
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
       built = app();
-      const second = await built.app.turn({ ...input, text: "yes, go ahead" });
+      const second = await inTestTenant(() => built.app.turn({ ...input, text: "yes, go ahead" }));
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);
       assert.equal(next.split("Shall I restart the worker?").length - 1, 1);
-      const session = await built.app.getSession(first.sessionId!);
+      const session = await inTestTenant(() => built.app.getSession(first.sessionId!));
       const imports = session!.entries.filter(
         (e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard,
       );

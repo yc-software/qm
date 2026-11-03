@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   currentTimeBlock,
+  guidanceUpdateEvent,
   membershipEvent,
   renderSandboxProviders,
   renderStandingObligations,
@@ -121,4 +122,68 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
   assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
   assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
   assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+});
+
+const revision = (version: number, content: string, sessionId?: string) => ({
+  scopeId: "personal:u1" as const,
+  content,
+  version,
+  updatedAt: version,
+  ...(sessionId ? { sessionId } : {}),
+});
+
+function guidanceTurn(seq: number, guidance: Parameters<typeof guidanceUpdateEvent>[0], history: SessionEntry[]) {
+  const event = guidanceUpdateEvent(guidance, history, "s");
+  const turn: SessionEntry = {
+    sessionId: "s",
+    seq,
+    parentSeq: seq - 1,
+    type: "user",
+    createdAt: seq,
+    scopeLabel: "personal:u1",
+    payload: { text: "hi", environment: event.text, guidanceSnapshot: event.record },
+  };
+  return { event, history: [...history, turn] };
+}
+
+test("a guidance change made in another session is announced once on this session's next turn", () => {
+  const v1 = revision(1, "Be brief.");
+  const v2 = revision(2, "Be brief.\nNever cite a PR by bare number.", "1aedf13a-0000-4000-8000-000000000000");
+  const first = guidanceTurn(1, { version: 1, personal: true, revisions: [v1] }, []);
+  assert.equal(first.event.text, "");
+  const second = guidanceTurn(2, { version: 2, personal: true, revisions: [v2, v1] }, first.history);
+  assert.equal(
+    second.event.text,
+    'In a different session (1aedf13) the user updated their standing guidance: "Never cite a PR by bare number.". ' +
+      "Follow it moving forward but no need to directly mention you're doing so.",
+  );
+  assert.equal(guidanceTurn(3, { version: 2, personal: true, revisions: [v2, v1] }, second.history).event.text, "");
+});
+
+test("guidance this session wrote itself is not announced back to it", () => {
+  const v1 = revision(1, "Be brief.");
+  const v2 = revision(2, "Be terse.", "s");
+  const first = guidanceTurn(1, { version: 1, personal: true, revisions: [v1] }, []);
+  assert.equal(guidanceTurn(2, { version: 2, personal: true, revisions: [v2, v1] }, first.history).event.text, "");
+});
+
+test("removed guidance and edits made outside any session are announced too", () => {
+  const v1 = revision(1, "Be brief.\nUse metric units.");
+  const v2 = revision(2, "Be brief.");
+  const first = guidanceTurn(1, { version: 1, personal: false, revisions: [v1] }, []);
+  assert.equal(
+    guidanceTurn(2, { version: 2, personal: false, revisions: [v2, v1] }, first.history).event.text,
+    'Outside this session this conversation\'s standing guidance was updated, removing: "Use metric units.". ' +
+      "Follow it moving forward but no need to directly mention you're doing so.",
+  );
+});
+
+test("when the revision this session last saw has been pruned, the notice points at the current instructions", () => {
+  const first = guidanceTurn(1, { version: 1, personal: true, revisions: [revision(1, "Be brief.")] }, []);
+  assert.equal(
+    guidanceTurn(2, { version: 40, personal: true, revisions: [revision(40, "Be terse.", "other")] }, first.history)
+      .event.text,
+    "In a different session (other) the user updated their standing guidance; the current text is in your instructions. " +
+      "Follow it moving forward but no need to directly mention you're doing so.",
+  );
 });

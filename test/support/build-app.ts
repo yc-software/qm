@@ -13,7 +13,7 @@ import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.
 import { createMockAgent } from "./mock-agent.ts";
 import { testTenants } from "./test-tenants.ts";
 import { migrateSettings, seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
-import { TEST_ADMIN_GRANTS } from "./test-database.ts";
+import { ownerUrlOf, TEST_ADMIN_GRANTS } from "./test-database.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -26,7 +26,10 @@ export const TEST_TENANT_SETTINGS: TenantSettingValues = {
 
 export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl?: string): TenantSettingsStore {
   const target = databaseUrl
-    ? { url: databaseUrl, ready: migrateSettings(databaseUrl).then(() => seedSettingsTenants(databaseUrl)) }
+    ? {
+        url: databaseUrl,
+        ready: migrateSettings(ownerUrlOf(databaseUrl)).then(() => seedSettingsTenants(ownerUrlOf(databaseUrl))),
+      }
     : settingsDatabase();
   const store = createTenantSettingsStore({
     databaseUrl: target.url,

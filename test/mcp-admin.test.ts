@@ -15,15 +15,19 @@ import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { errMessage } from "../src/util/errors.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(testMap<McpServer>());
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,
@@ -140,28 +144,39 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     else process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = previous;
     await rm(dir, { recursive: true, force: true });
   });
-  await built.mcpServers.put({
-    id: "crm",
-    name: "CRM",
-    url: `${remote.url}/mcp`,
-    auth: "oauth-user",
-    credentialScope: "per-user",
-    credentialHost: "accounts.example.com",
-    tools: [{ name: "identity", description: "", inputSchema: { type: "object" } }],
-    readOnly: true,
-    enabled: true,
-    updatedAt: Date.now(),
-    updatedBy: "internal:admin",
-  });
-  await built.mcpToolService.refresh();
-  assert.equal(await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"), null);
-  assert.match(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Sign in to CRM/);
+  await inTestTenant(() =>
+    built.mcpServers.put({
+      id: "crm",
+      name: "CRM",
+      url: `${remote.url}/mcp`,
+      auth: "oauth-user",
+      credentialScope: "per-user",
+      credentialHost: "accounts.example.com",
+      tools: [{ name: "identity", description: "", inputSchema: { type: "object" } }],
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "internal:admin",
+    }),
+  );
+  await inTestTenant(() => built.mcpToolService.refresh());
+  assert.equal(
+    await inTestTenant(() => built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice")),
+    null,
+  );
+  assert.match(
+    await inTestTenant(() => built.mcpToolService.call("crm_identity", {}, "internal:alice")),
+    /Sign in to CRM/,
+  );
   assert.equal(remote.requests.length, 0);
-  await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
-    accessToken: "alice-only",
-  });
-  await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), (e: unknown) =>
-    /private network address/.test(errMessage(e)),
+  await inTestTenant(() =>
+    built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
+      accessToken: "alice-only",
+    }),
+  );
+  await assert.rejects(
+    inTestTenant(() => built.mcpToolService.call("crm_identity", {}, "internal:alice")),
+    (e: unknown) => /private network address/.test(errMessage(e)),
   );
   assert.equal(remote.requests.length, 0, "production wiring refuses a loopback MCP server");
 });
@@ -170,7 +185,7 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints only from pu
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(testMap<McpServer>());
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,
@@ -254,7 +269,7 @@ test("MCP admin save stores the server's own description from the probe", async 
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     mcpServers: store,

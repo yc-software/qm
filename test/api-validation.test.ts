@@ -9,18 +9,18 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "apival-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app);
+  const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
 const post = (base: string, path: string, body: string) =>
-  fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body });
+  fetch(base + path, { method: "POST", headers: { ...testTenantHeaders(), "content-type": "application/json" }, body });
 
 test("malformed request bodies are 400", async () => {
   const s = start();
@@ -41,9 +41,12 @@ test("unknown resources are 404, not silent 200 or 500", async () => {
     assert.equal((await post(s.base, "/v1/deployments/nope/rollback", JSON.stringify({ version: 1 }))).status, 404);
     assert.equal((await post(s.base, "/v1/deployments/nope/archive", "")).status, 404);
     assert.equal((await post(s.base, "/v1/crons/nope/disable", "")).status, 404);
-    assert.equal((await fetch(`${s.base}/v1/sessions/nope?viewer=someone`)).status, 404);
-    assert.equal((await fetch(`${s.base}/v1/sessions/nope`)).status, 400);
-    assert.equal((await fetch(`${s.base}/v1/unknown-route`)).status, 404);
+    assert.equal(
+      (await fetch(`${s.base}/v1/sessions/nope?viewer=someone`, { headers: testTenantHeaders() })).status,
+      404,
+    );
+    assert.equal((await fetch(`${s.base}/v1/sessions/nope`, { headers: testTenantHeaders() })).status, 400);
+    assert.equal((await fetch(`${s.base}/v1/unknown-route`, { headers: testTenantHeaders() })).status, 404);
   } finally {
     await s.close();
   }

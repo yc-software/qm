@@ -179,7 +179,7 @@ import {
   replacePendingSession,
   groupDmTitle,
   refreshSessions,
-  refreshSubagentRows,
+  refreshTree,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -2748,7 +2748,7 @@ export function createChatSurface(
   function syncSubagentRowsRefresh(rootId: string | null): void {
     if (subagentUi.rowsRoot === rootId) return;
     if (subagentUi.rowsTimer) clearInterval(subagentUi.rowsTimer);
-    subagentUi.rowsTimer = rootId ? setInterval(() => void refreshSubagentRows(rootId), SUBAGENT_POLL_MS) : null;
+    subagentUi.rowsTimer = rootId ? setInterval(() => refreshTree(rootId), SUBAGENT_POLL_MS) : null;
     subagentUi.rowsRoot = rootId;
   }
 
@@ -3314,28 +3314,26 @@ export function createChatSurface(
     return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
-  const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-    execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-    read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
-    write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-    publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-    recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-    memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
+  const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
+    execute: { icon: Terminal, active: "Running command", attempted: "Tried running command" },
+    read: { icon: BookOpen, active: "Reading file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", attempted: "Tried loading skill" },
+    write: { icon: Pencil, active: "Writing file", attempted: "Tried writing file" },
+    publish: { icon: Rocket, active: "Publishing", attempted: "Tried publishing" },
+    recall: { icon: Brain, active: "Searching memory", attempted: "Tried searching memory" },
+    memory: { icon: Brain, active: "Using memory", attempted: "Tried using memory" },
     history: {
       icon: ScrollText,
       active: "Searching history",
-      done: "Searched history",
       attempted: "Tried searching history",
     },
     background: {
       icon: Terminal,
       active: "Managing process",
-      done: "Managed process",
       attempted: "Tried managing process",
     },
   };
-  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", attempted: "Tried step" };
 
   function toolName(tool: string): string {
     const parts = tool.split(/__|[/:.]/).filter(Boolean);
@@ -3526,7 +3524,7 @@ export function createChatSurface(
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
-    } else if (kind === "ok") label = knownMeta ? meta.done : name;
+    } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
     if (kind === "approval") why = firstLine(result.reason ?? "", 90);

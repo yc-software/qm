@@ -23,7 +23,7 @@ Commands use `execute(command, sandbox_id?, credentials?, background?)`. Set
 with the job and displayed instead of the command; the raw command remains available
 in expanded output. `timeout_seconds` is the foreground wall-clock timeout or the
 background job lifetime. Background jobs require scoped, durable execution; disposable
-scratch and reached-room routing remain foreground-only.
+scratch routing remains foreground-only.
 
 In a shared conversation (anything other than the acting person's personal scope, or a
 personal scope whose environment another conversation is attached to), a

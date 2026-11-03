@@ -20,7 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -83,23 +83,24 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   await new Promise((r) => upstream.once("listening", r));
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const { app, directory, acl } = await appServingUpstream(upstreamPort);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-    createdInScope: scopeId("channel", "CBUILT"),
-  });
-  await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+      createdInScope: scopeId("channel", "CBUILT"),
+    }),
+  );
+  await inTestTenant(() => app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" }));
   const featureFlags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const server = createInsecureTestServer(app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,
     deployAppsSessionSecret: "portal-session-secret",
-    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -115,7 +116,7 @@ function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", tenant: TEST_TENANT, iat: now, exp: now + expiresInSeconds }),
+    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
   ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
@@ -346,10 +347,14 @@ test("app shell: an app cannot plant the owner cookie on its visitors", async ()
 test("app shell: manage grants are checked on every navigation and version request", async () => {
   const f = await widgetFixture();
   try {
-    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "write", { createdBy: "U1" });
+    await inTestTenant(() =>
+      f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "write", { createdBy: "U1" }),
+    );
     const page = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
     assert.match(page.body, /__qmAppShell/);
-    await f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
+    await inTestTenant(() =>
+      f.app.shareDeployment("mysite", scopeId("personal", "U-viewer"), "read", { createdBy: "U1" }),
+    );
     const revoked = await httpGet(f.port, "/", { Host: HOST, Cookie: viewerCookie(), "Sec-Fetch-Dest": "document" });
     assert.doesNotMatch(revoked.body, /__qmAppShell/);
     const version = await httpGet(f.port, "/__claw__/version", { Host: HOST, Cookie: viewerCookie() });
@@ -362,13 +367,17 @@ test("app shell: manage grants are checked on every navigation and version reque
 test("app shell: a manager from the creation scope can load the app and its assets without a read grant", async () => {
   const f = await widgetFixture();
   try {
-    await f.acl.revoke(f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1");
-    await f.directory.replaceChannels(
-      [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
-      [{ channelId: "CBUILT", principalId: "U2" }],
+    await inTestTenant(() =>
+      f.acl.revoke(f.d.ownerScopeId, `deployment:${f.d.id}`, scopeId("channel", "CBUILT"), "U1"),
     );
-    assert.equal(await f.app.canManageDeployment("mysite", "U2"), true);
-    assert.equal((await f.app.reachDeployment("mysite", "U2")).status, "denied");
+    await inTestTenant(() =>
+      f.directory.replaceChannels(
+        [{ channelId: "CBUILT", name: "builders", isPrivate: true }],
+        [{ channelId: "CBUILT", principalId: "U2" }],
+      ),
+    );
+    assert.equal(await inTestTenant(() => f.app.canManageDeployment("mysite", "U2")), true);
+    assert.equal((await inTestTenant(() => f.app.reachDeployment("mysite", "U2"))).status, "denied");
     const headers = { Host: HOST, Cookie: `portal_session=${mintPortalSession("U2")}` };
     const page = await httpGet(f.port, "/", { ...headers, "Sec-Fetch-Dest": "document" });
     assert.match(page.body, /__qmAppShell/);
@@ -377,7 +386,9 @@ test("app shell: a manager from the creation scope can load the app and its asse
       assert.equal(resource.status, 200);
       assert.equal(resource.body, "<html><body>APP</body></html>");
     }
-    await f.directory.replaceChannels([{ channelId: "CBUILT", name: "builders", isPrivate: true }], []);
+    await inTestTenant(() =>
+      f.directory.replaceChannels([{ channelId: "CBUILT", name: "builders", isPrivate: true }], []),
+    );
     const denied = await httpGet(f.port, "/", headers);
     assert.equal(denied.status, 403);
   } finally {
@@ -434,7 +445,7 @@ test("app shell: bare escape renders frame-denying apps at top level without for
 
 test("app shell: annotation assets are served to a flagged app owner", async () => {
   const f = await widgetFixture();
-  await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin");
+  await inTestTenant(() => f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin"));
   try {
     for (const kind of ["js", "css"]) {
       const asset = await httpGet(f.port, `/__claw__/annotate.${kind}`, {
@@ -457,11 +468,13 @@ test("app shell: annotations default off and follow the signed-in manager flag",
     const disabled = await httpGet(f.port, "/", headers);
     assert.doesNotMatch(disabled.body, /ann-toggle|qm:devbar/);
     assert.equal((await httpGet(f.port, "/__claw__/annotate.js", headers)).status, 404);
-    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "someone-else"), true, "admin");
+    await inTestTenant(() =>
+      f.featureFlags.setEnabled("app_annotations", scopeId("personal", "someone-else"), true, "admin"),
+    );
     assert.doesNotMatch((await httpGet(f.port, "/", headers)).body, /ann-toggle/);
-    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin");
+    await inTestTenant(() => f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), true, "admin"));
     assert.match((await httpGet(f.port, "/", headers)).body, /ann-toggle/);
-    await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), false, "admin");
+    await inTestTenant(() => f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), false, "admin"));
     assert.equal((await httpGet(f.port, "/__claw__/annotate.css", headers)).status, 404);
   } finally {
     await f.close();

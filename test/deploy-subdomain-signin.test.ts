@@ -20,7 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -29,13 +29,7 @@ const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 
-function mintPortalSession(
-  sub: string,
-  expInSeconds = 3600,
-  secret = SESSION_SECRET,
-  appOnly?: true,
-  tenant = TEST_TENANT,
-): string {
+function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SECRET, appOnly?: true): string {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
@@ -43,7 +37,6 @@ function mintPortalSession(
       k: "session",
       sub,
       org: "acme",
-      tenant,
       iat: now,
       exp: now + expInSeconds,
       ...(appOnly ? { appOnly } : {}),
@@ -70,8 +63,6 @@ test("portalSession: verifies, and rejects tampering, expiry, wrong kind, wrong 
     "an app's junk same-named cookie cannot shadow the real session",
   );
   assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret"), null, "wrong secret");
-  const foreign = mintPortalSession("alice@example.com", 3600, SESSION_SECRET, undefined, OTHER_TENANT);
-  assert.deepEqual(portalSession(`portal_session=${foreign}`, SESSION_SECRET), null, "another tenant's session");
   assert.deepEqual(
     portalSession(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET),
     null,
@@ -93,7 +84,7 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer(TEST_TENANT, {} as Parameters<typeof createInsecureTestServer>[1], config);
+    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
     server.listen(0);
     try {
       const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
@@ -125,15 +116,13 @@ function httpGet(
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
   const server = createInsecureTestServer(
-    TEST_TENANT,
-    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[1],
+    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
     {
       deployAppsDomain: "apps.example.com",
       deployGateSecret: "gate",
       deployAppsSessionSecret: SESSION_SECRET,
       deployAppsLoginUrl: LOGIN_URL,
       deployAppsLoginPath: "/auth/trusted/login",
-      rowTenants: async () => [TEST_TENANT],
     },
   );
   server.listen(0);
@@ -206,24 +195,25 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
   const deliveries: { destination: unknown; text: string; idempotencyKey: string }[] = [];
   (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
     deliveries.push(input);
   };
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
-    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -249,7 +239,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
 
-    await app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" });
+    await inTestTenant(() => app.setDeploymentPublic("mysite", true, { createdBy: "alice@example.com" }));
     const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
     assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
     assert.equal(publicVisitor.body, "UPSTREAM OK");
@@ -273,7 +263,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const lockedXhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(lockedXhr.status, 401);
     externalSharing = true;
-    await app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" });
+    await inTestTenant(() => app.setDeploymentPublic("mysite", false, { createdBy: "alice@example.com" }));
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
@@ -358,7 +348,10 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",
       onBehalfOf: "mallory@example.com",
-      deploymentAccess: { deploymentId: (await app.getDeployment("mysite"))!.id, requesterId: "mallory@example.com" },
+      deploymentAccess: {
+        deploymentId: (await inTestTenant(() => app.getDeployment("mysite")))!.id,
+        requesterId: "mallory@example.com",
+      },
     });
 
     const signedOutAsk = await httpPost(port, "/__claw__/request-access", { Host: host });
@@ -409,21 +402,22 @@ test("org-wide app access admits only signed-in org members", async () => {
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "teamsite",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "teamsite",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     featureFlags: { enabled: async () => false } as unknown as FeatureFlagStore,
     identity,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
-    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -435,13 +429,17 @@ test("org-wide app access admits only signed-in org members", async () => {
     });
   try {
     assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
+    await inTestTenant(() =>
+      app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" }),
+    );
     assert.equal((await visit()).status, 401, "org access still requires sign-in");
     assert.equal((await visit("bob@example.com")).status, 200, "any signed-in org member can open it");
     assert.equal((await visit("guest@partner.test", true)).status, 403, "an app-only outside session is not the org");
-    await identity.deactivate("carol@example.com", "directory-sync");
+    await inTestTenant(() => identity.deactivate("carol@example.com", "directory-sync"));
     assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
+    await inTestTenant(() =>
+      app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" }),
+    );
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -471,18 +469,19 @@ test("subdomain ingress: without the session config the domain has no door — a
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
-    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { canonicalPayload, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -15,7 +15,7 @@ import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -24,9 +24,8 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   let base: string;
   let built: BuiltApp;
 
-  const cap = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
+  const cap = await inTestTenant(() =>
+    mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS }, SECRET),
   );
 
   before(async () => {
@@ -38,12 +37,14 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
-    ]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+        { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+        { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+        { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      ]),
+    );
   });
 
   after(async () => {
@@ -53,9 +54,11 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   const get = (path: string) => fetch(`${base}${path}`, { headers: { "x-agent-capability": cap } });
 
   it("membership reads require source authentication and report only persisted channel members", async () => {
-    await built.app.upsertChannels(
-      [{ channelId: "CPUBLIC", name: "public", isPrivate: false }],
-      [{ channelId: "CPUBLIC", principalId: "carol@acme.com" }],
+    await inTestTenant(() =>
+      built.app.upsertChannels(
+        [{ channelId: "CPUBLIC", name: "public", isPrivate: false }],
+        [{ channelId: "CPUBLIC", principalId: "carol@acme.com" }],
+      ),
     );
     for (const [channel, principal, member] of [
       ["CPUBLIC", "carol@acme.com", true],
@@ -66,7 +69,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       assert.equal((await fetch(`${base}${path}`)).status, 401);
       assert.equal((await get(path)).status, 403);
       const response = await fetch(`${base}${path}`, {
-        headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }),
+        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
       });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { member });
@@ -83,33 +86,41 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   });
 
   it("recovers the mention id from the principal id in slack-id identity mode (no slackId field)", async () => {
-    await built.app.upsertDirectory([{ principalId: "U0SLACKID", displayName: "Morgan", type: "internal" }]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([{ principalId: "U0SLACKID", displayName: "Morgan", type: "internal" }]),
+    );
     const res = await get("/v1/directory/resolve?q=Morgan");
     assert.equal(res.status, 200);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string; slackId?: string }> };
     assert.equal(matches.length, 1);
     assert.equal(matches[0]!.slackId, "U0SLACKID");
-    await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
-    ]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+        { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+        { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+        { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      ]),
+    );
   });
 
   it("does not fabricate a mention id from a principal id that isn't Slack-id-shaped", async () => {
-    await built.app.upsertDirectory([{ principalId: "USER123", displayName: "Pat", type: "internal" }]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([{ principalId: "USER123", displayName: "Pat", type: "internal" }]),
+    );
     const res = await get("/v1/directory/resolve?q=Pat");
     assert.equal(res.status, 200);
     const { matches } = (await res.json()) as { matches: Array<{ principalId: string; slackId?: string }> };
     assert.equal(matches.length, 1);
     assert.equal(matches[0]!.slackId, undefined, "a too-short id (U+6) must not be mistaken for a mention handle");
-    await built.app.upsertDirectory([
-      { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
-      { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
-      { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
-      { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
-    ]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "carol@acme.com", displayName: "Carol Example", type: "internal", slackId: "U0CAROL" },
+        { principalId: "alice@acme.com", displayName: "Alice", type: "internal", slackId: "U0ALICE" },
+        { principalId: "jordan@acme.com", displayName: "Jordan", type: "internal", slackId: "U0JORDAN" },
+        { principalId: "joan@acme.com", displayName: "Joan", type: "internal", slackId: "U0JOAN" },
+      ]),
+    );
   });
 
   it("returns the candidate set for an ambiguous prefix", async () => {
@@ -142,13 +153,13 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       return fetch(`${base}/v1/directory`, {
         method: "POST",
         headers: {
-          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw, { ...TENANT_HEADERS }),
+          ...inTestTenant(() => signedRequestHeaders(SECRET, "POST", "/v1/directory", raw)),
           "content-type": "application/json",
         },
         body: raw,
       });
     };
-    await built.app.upsertChannels([{ channelId: "C_OTHER", name: "other" }], [], 10);
+    await inTestTenant(() => built.app.upsertChannels([{ channelId: "C_OTHER", name: "other" }], [], 10));
     const body = {
       channels: [{ channelId: "C_LIVE", name: "live", isPrivate: true }],
       channelMembers: [{ channelId: "C_LIVE", principalId: "U1" }],
@@ -156,8 +167,8 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       partialChannels: true,
     };
     assert.equal((await post(body)).status, 200);
-    assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
-    assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
+    assert.equal(await inTestTenant(() => built.directory.channelPrivacy("C_OTHER")), false);
+    assert.equal(await inTestTenant(() => built.directory.channelMember("C_LIVE", "U1")), true);
     assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
     for (const invalid of [
       { ...body, channelsSyncedAt: undefined },
@@ -173,9 +184,11 @@ describe("a deployment without the Slack surface (the directory store is never p
   let base: string;
   let built: BuiltApp;
 
-  const cap = await mintCapabilityToken(
-    { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
+  const cap = await inTestTenant(() =>
+    mintCapabilityToken(
+      { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
+      SECRET,
+    ),
   );
 
   before(async () => {
@@ -190,8 +203,10 @@ describe("a deployment without the Slack surface (the directory store is never p
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
-    await built.sessions.addParticipant(session.id, "rex@acme.com");
+    const session = await inTestTenant(() =>
+      built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com"),
+    );
+    await inTestTenant(() => built.sessions.addParticipant(session.id, "rex@acme.com"));
   });
 
   after(async () => {
@@ -236,9 +251,9 @@ describe("a deployment without the Slack surface (the directory store is never p
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...TENANT_HEADERS,
+        ...testTenantHeaders(),
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, canonicalPayload("POST", "/v1/directory", body, TEST_TENANT)),
+        "x-signature": signRequest(SECRET, ts, `POST\n/v1/directory\n${testTenants()[0]}\n${body}`),
       },
       body,
     });
@@ -253,19 +268,24 @@ describe("qualification membership readiness with signed portal identity enforce
     const portalSecret = "readiness-portal-key-distinct-from-source";
     const originalPortalSecret = process.env.PORTAL_IDENTITY_SECRET;
     const app = buildApp(testConfig({ signingSecret: SECRET }));
-    await app.app.upsertDirectory([
-      { principalId: process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice", displayName: "Admin", type: "internal" },
-      { principalId: "qa@example.com", displayName: "QA", type: "internal", slackId: "UQA" },
-    ]);
-    await app.app.upsertChannels(
-      [{ channelId: "CQA", name: "qa", isPrivate: false }],
-      [{ channelId: "CQA", principalId: "qa@example.com" }],
+    await inTestTenant(() =>
+      app.app.upsertDirectory([
+        { principalId: process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice", displayName: "Admin", type: "internal" },
+        { principalId: "qa@example.com", displayName: "QA", type: "internal", slackId: "UQA" },
+      ]),
+    );
+    await inTestTenant(() =>
+      app.app.upsertChannels(
+        [{ channelId: "CQA", name: "qa", isPrivate: false }],
+        [{ channelId: "CQA", principalId: "qa@example.com" }],
+      ),
     );
     const server = createServer(app.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalIdentitySecret: portalSecret,
       capabilitySecret: "readiness-capability-key-distinct-from-source",
+      requireSignedPortalIdentity: true,
       identity: app.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -273,14 +293,17 @@ describe("qualification membership readiness with signed portal identity enforce
     try {
       const path = "/v1/directory/resolve?q=UQA";
       const unsigned = await fetch(`${base}${path}`, {
-        headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }),
+        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
       });
       assert.equal(unsigned.status, 401);
       process.env.PORTAL_IDENTITY_SECRET = portalSecret;
       const core = new CoreClient(base, SECRET);
-      await core.waitForChannelMembership("CQA", "UQA", 5000);
+      await inTestTenant(() => core.waitForChannelMembership("CQA", "UQA", 5000));
       process.env.PORTAL_IDENTITY_SECRET = SECRET;
-      await assert.rejects(core.waitForChannelMembership("CQA", "UQA", 5000), /401.*portal identity required/);
+      await assert.rejects(
+        inTestTenant(() => core.waitForChannelMembership("CQA", "UQA", 5000)),
+        /401.*portal identity required/,
+      );
     } finally {
       if (originalPortalSecret === undefined) delete process.env.PORTAL_IDENTITY_SECRET;
       else process.env.PORTAL_IDENTITY_SECRET = originalPortalSecret;

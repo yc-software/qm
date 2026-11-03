@@ -4,8 +4,8 @@ import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { assertRuntimeLogin } from "../src/persistence/runtime-login.ts";
 
-const URL_ = process.env.DATABASE_URL;
-const skip = URL_ ? false : "set DATABASE_URL (a Postgres) to run the runtime login check";
+const URL_ = process.env.DATABASE_OWNER_URL;
+const skip = URL_ ? false : "set DATABASE_OWNER_URL (a Postgres superuser) to run the runtime login check";
 
 function loginUrl(user: string, password: string): string {
   const url = new URL(URL_!);

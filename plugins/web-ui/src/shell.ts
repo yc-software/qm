@@ -78,6 +78,7 @@ import { replaceChildrenPreservingFocus } from "./pane-focus";
 import {
   openSession,
   closeOpenSessionMenu,
+  refreshOpenTrees,
   refreshSessions,
   renderChatsPage,
   renderList,
@@ -1011,7 +1012,10 @@ window.addEventListener("popstate", () => {
 window.addEventListener("focus", () => {
   if (!appState.me) return;
   if (appState.currentView === "contexts") void renderContexts();
-  else if (appState.currentView === "chats") void refreshSessions({ silent: true, refreshContexts: true });
+  else if (appState.currentView === "chats") {
+    void refreshSessions({ silent: true, refreshContexts: true });
+    refreshOpenTrees();
+  }
 });
 
 function warmDeferredChunks(): void {

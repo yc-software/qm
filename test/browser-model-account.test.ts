@@ -3,7 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
@@ -220,8 +220,8 @@ test("company ChatGPT subscription auth uses the native subscription transport w
     auth_mode: "chatgpt",
     tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
   });
-  await built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL });
-  await built.modelCredentials.set("openai", "must-not-fallback", "admin");
+  await inTestTenant(() => built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL }));
+  await inTestTenant(() => built.modelCredentials.set("openai", "must-not-fallback", "admin"));
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { configStoreMaps, type PersistedSoul, type PersistedSoulRevision } from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
@@ -13,32 +13,6 @@ import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
-
-const TABLES = [
-  "soul_configs",
-  "soul_history",
-  "command_policies",
-  "security_postures",
-  "sharing_postures",
-  "egress_policies",
-  "deploy_auth_split",
-  "publish_member_grants",
-  "slack_quiet_status_flag",
-  "base_model_configs",
-  "browse_provider_configs",
-  "browse_max_steps_configs",
-  "browse_model_configs",
-  "deployment_identity",
-];
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  for (const t of TABLES) await p.query(`DROP TABLE IF EXISTS ${t} CASCADE`);
-  await p.end();
-});
 
 const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
 
@@ -94,6 +68,24 @@ test("setSoul advances the canonical row without trusting a stale instance cache
     [
       { version: 2, content: "right" },
       { version: 1, content: "left" },
+    ],
+  );
+});
+
+test("a guidance revision keeps the session that wrote it after another instance hydrates it", async () => {
+  const souls = testMap<PersistedSoul>();
+  const writer = testConfigStore("default-org", { souls });
+  const channel = scopeId("channel", "revision-session");
+  await writer.setSoul(channel, "first", "alice", "session-a");
+  await writer.setSoulIfVersion(channel, 1, "second", "alice", "session-b");
+
+  const reader = testConfigStore("default-org", { souls });
+  await reader.refreshScope(channel);
+  assert.deepEqual(
+    reader.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
+    [
+      { version: 2, sessionId: "session-b" },
+      { version: 1, sessionId: "session-a" },
     ],
   );
 });

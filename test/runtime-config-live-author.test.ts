@@ -11,7 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "test-capability-secret";
 
@@ -24,7 +24,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(TEST_TENANT, built.app, { capabilitySecret: SECRET, config: built.config });
+  const server = createInsecureTestServer(built.app, { capabilitySecret: SECRET, config: built.config });
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
@@ -56,8 +56,10 @@ async function put(base: string, cap: string): Promise<Response> {
 test("runtime-config accepts a liveAuthor capability (a human replying in a thread)", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    const res = await put(srv.base, await token({ liveAuthor: true }));
+    await inTestTenant(() =>
+      srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]),
+    );
+    const res = await put(srv.base, await inTestTenant(() => token({ liveAuthor: true })));
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string; effortLevel: string; fastMode: boolean };
@@ -75,8 +77,10 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
 test("runtime-config still refuses an automated trigger with neither liveActor nor liveAuthor", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    const res = await put(srv.base, await token({ triggered: true }));
+    await inTestTenant(() =>
+      srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]),
+    );
+    const res = await put(srv.base, await inTestTenant(() => token({ triggered: true })));
     assert.equal(res.status, 403);
     assert.deepEqual(await res.json(), { error: "live_actor_required" });
   } finally {

@@ -7,7 +7,7 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
-import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrlOf, testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -26,7 +26,7 @@ const role = `tenant_probe_${randomUUID().slice(0, 8)}`;
 
 before(async () => {
   if (skip) return;
-  url = testMigratedDatabaseUrl();
+  url = ownerUrlOf(testMigratedDatabaseUrl());
   owner = new pg.Pool({ connectionString: url });
   await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
   app = new pg.Pool({ connectionString: asRole(url, role) });
@@ -65,8 +65,10 @@ test("the pool binds the current tenant to each query and transaction in one bat
   const pool = createPgPool(asRole(url, role));
   try {
     const setting = "SELECT current_setting('qm.tenant_id', true) AS t";
-    const probe = await withTenant(b, () => pool.q("SELECT n FROM tenant_probe", [], { timeoutMs: 5_000 }));
-    assert.deepEqual(probe, [{ n: 2 }]);
+    const probe = await withTenant(b, () =>
+      pool.q("SELECT n, current_setting('statement_timeout') AS timeout FROM tenant_probe", [], { timeoutMs: 5_000 }),
+    );
+    assert.deepEqual(probe, [{ n: 2, timeout: "5s" }]);
     const seen = await Promise.all([a, b, a, b].map((id) => withTenant(id, async () => (await pool.q(setting))[0]!.t)));
     assert.deepEqual(seen, [a, b, a, b]);
     const inTx = await withTenant(b, async () =>
@@ -80,32 +82,29 @@ test("the pool binds the current tenant to each query and transaction in one bat
       withPgTransaction(app, async (client) => (await client.query(setting)).rows[0].t),
     );
     assert.equal(unpipelined, a);
-    await withoutTenant(async () => {
-      await assert.rejects(pool.q("SELECT n FROM tenant_probe"), { code: "42501" });
-      await assert.rejects(pool.q("INSERT INTO tenant_probe(n) VALUES (4)"), { code: "42501" });
-    });
-  } finally {
-    await pool.close();
-  }
-});
-
-test("a bound tenant cannot see or write another tenant's rows", { skip }, async () => {
-  const pool = createPgPool(asRole(url, role));
-  try {
     await withTenant(a, async () => {
-      assert.deepEqual(await pool.q("SELECT n FROM tenant_probe"), [{ n: 1 }]);
+      await pool.q("INSERT INTO tenant_probe(n) VALUES (6)", [], { signal: new AbortController().signal });
       assert.equal((await pool.query("UPDATE tenant_probe SET n = 9 WHERE tenant_id = $1", [b])).rowCount, 0);
       assert.equal((await pool.query("DELETE FROM tenant_probe WHERE tenant_id = $1", [b])).rowCount, 0);
       await assert.rejects(pool.q("INSERT INTO tenant_probe(tenant_id, n) VALUES ($1, 5)", [b]), { code: "42501" });
     });
-    const rows = await owner.query("SELECT n FROM tenant_probe WHERE tenant_id = $1 ORDER BY n", [b]);
-    assert.deepEqual(rows.rows, [{ n: 2 }, { n: 3 }]);
+    await withoutTenant(async () => {
+      await assert.rejects(pool.q("SELECT n FROM tenant_probe"), { code: "42501" });
+      await assert.rejects(pool.q("INSERT INTO tenant_probe(n) VALUES (4)"), { code: "42501" });
+    });
+    const rows = await owner.query("SELECT tenant_id::text AS t, n FROM tenant_probe ORDER BY n");
+    assert.deepEqual(rows.rows, [
+      { t: a, n: 1 },
+      { t: b, n: 2 },
+      { t: b, n: 3 },
+      { t: a, n: 6 },
+    ]);
   } finally {
     await pool.close();
   }
 });
 
-test("an open transaction refuses work for a different tenant", { skip }, async () => {
+test("an open transaction refuses work for a different tenant until it has ended", { skip }, async () => {
   await withTenant(a, () =>
     withPgTransaction(app, async (client) => {
       assert.throws(() => withTenant(b, () => 0), /already open for another tenant/);
@@ -120,33 +119,35 @@ test("an open transaction refuses work for a different tenant", { skip }, async 
   await withoutTenant(() =>
     withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
   );
-  assert.equal(
-    await withTenant(a, async () => {
-      await withPgTransaction(app, async () => undefined);
-      return withTenant(b, () => 2);
-    }),
-    2,
-  );
-});
-
-test("work spawned inside a transaction may bind another tenant only after it ends", { skip }, async () => {
-  const outcomes: string[] = [];
-  const attempt = () => {
+  for (const fails of [false, true]) {
+    const outcomes: string[] = [];
+    let settled = false;
+    let spawned: Promise<string[]> | undefined;
+    const watch = (resolve: (seen: string[]) => void) => {
+      try {
+        withTenant(b, () => outcomes.push("bound"));
+      } catch {
+        outcomes.push("refused");
+      }
+      if (settled) resolve(outcomes);
+      else setImmediate(watch, resolve);
+    };
+    const transaction = withTenant(a, () =>
+      withPgTransaction(app, async () => {
+        spawned = new Promise(watch);
+        if (fails) throw new Error("body failed");
+      }),
+    );
     try {
-      withTenant(b, () => outcomes.push("bound"));
-    } catch {
-      outcomes.push("refused");
+      if (fails) await assert.rejects(transaction, /body failed/);
+      else await transaction;
+    } finally {
+      settled = true;
     }
-  };
-  const chain = (ticks: number): Promise<void> =>
-    ticks ? Promise.resolve().then(() => chain(ticks - 1)) : Promise.resolve();
-  await withTenant(a, () =>
-    withPgTransaction(app, async () => {
-      for (let ticks = 0; ticks < 6; ticks++) void chain(ticks).then(attempt);
-    }),
-  );
-  attempt();
-  assert.deepEqual(outcomes, [...Array(6).fill("refused"), "bound"]);
+    const seen = await spawned!;
+    assert.equal(seen.pop(), "bound");
+    assert.deepEqual(new Set(seen), new Set(["refused"]));
+  }
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {

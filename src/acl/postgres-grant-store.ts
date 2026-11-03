@@ -2,7 +2,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import { sameGrantSet, type GrantPersistence } from "./acl-store.ts";
 import { TENANCY_BASE, TENANT, tenantTables } from "../tenants/migrations.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { perTenant } from "../tenants/context.ts";
 
 function rowToGrant(r: Record<string, unknown>): Grant {
   return {
@@ -118,20 +118,20 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
     ),
   ]);
   const { q } = db;
-  const cache = new Map<string, { v: string; grants: readonly Grant[] }>();
+  const cache = perTenant<{ v?: string; grants: readonly Grant[] }>(() => ({ grants: [] }));
 
   return {
     async all() {
       const versionRows = await q(`SELECT v FROM acl_grants_version WHERE tenant_id = ${TENANT}`);
       const version = versionRows.length ? String(versionRows[0]!.v) : "0";
-      const tenant = currentTenant();
-      const cached = cache.get(tenant);
-      if (cached?.v === version) return [...cached.grants];
+      const cached = cache();
+      if (cached.v === version) return [...cached.grants];
       const rows = await q(
         "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants ORDER BY owner_scope_id, path, grantee_scope_id, permission",
       );
       const grants = rows.map(rowToGrant);
-      cache.set(tenant, { v: version, grants });
+      cached.v = version;
+      cached.grants = grants;
       return [...grants];
     },
     async put(g) {

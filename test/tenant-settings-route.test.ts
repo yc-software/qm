@@ -9,7 +9,7 @@ import { canonicalPayload, TENANT_HEADER } from "../plugins/chassis/src/source-a
 import { orgScope } from "../src/config.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const [TEST_TENANT, OTHER_TENANT] = testTenants();
@@ -21,7 +21,7 @@ const path = "/v1/tenant-settings";
 async function fixture(secret: string | undefined = controlSecret) {
   const config = testConfig({ signingSecret: sourceSecret });
   const built = buildApp(config);
-  await built.tenantSettings.get();
+  await inTestTenant(() => built.tenantSettings.get());
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),

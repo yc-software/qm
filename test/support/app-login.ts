@@ -10,18 +10,26 @@ export interface AppLogin {
 export async function createAppLogin(databaseUrl: string): Promise<AppLogin> {
   const role = `qmt_app_${randomBytes(6).toString("hex")}`;
   const owner = new pg.Pool({ connectionString: databaseUrl, max: 1 });
-  await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
+  await owner.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
   const named = new URL(databaseUrl);
   named.username = role;
   await grantAppLogin(owner, named.toString());
-  const url = new URL(databaseUrl);
-  url.searchParams.set("options", [url.searchParams.get("options"), `-c role=${role}`].filter(Boolean).join(" "));
+  named.password = role;
   return {
-    url: url.toString(),
+    url: named.toString(),
     async drop() {
       await owner.query(`DROP OWNED BY ${role}`);
       await owner.query(`DROP ROLE ${role}`);
       await owner.end();
     },
   };
+}
+
+export async function grantTestAppLogin(ownerUrl: string, appUrl: string): Promise<void> {
+  const owner = new pg.Pool({ connectionString: ownerUrl, max: 1 });
+  try {
+    await grantAppLogin(owner, appUrl);
+  } finally {
+    await owner.end();
+  }
 }

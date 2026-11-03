@@ -6,6 +6,8 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,7 +29,11 @@ const backends: Array<{ name: string; skip: string | false; make: () => Promise<
 
 async function claimAll(runs: RunStore): Promise<string[]> {
   const order: string[] = [];
-  for (let run = await runs.claim("w", 60_000); run; run = await runs.claim("w", 60_000)) {
+  for (
+    let run = await withoutTenant(() => runs.claim("w", 60_000));
+    run;
+    run = await withoutTenant(() => runs.claim("w", 60_000))
+  ) {
     order.push(run.request.text);
     await runs.complete(run.id, run.leaseToken!, { status: "ok", sessionId: run.sessionId, reply: "" });
   }
@@ -38,55 +44,58 @@ for (const backend of backends) {
   test(
     `[${backend.name}] people's turns run first, then their subagents, then background work`,
     { skip: backend.skip },
-    async () => {
-      const runs = await backend.make();
-      try {
-        const nightly = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
-        const human = (await runs.enqueue({ sessionId: "dm", request: request("person") })).run;
-        const child = (await runs.enqueue({ sessionId: "c", request: subagentOf(human, "subagent") })).run;
-        await runs.enqueue({ sessionId: "g", request: subagentOf(child, "sub-subagent") });
-        await runs.enqueue({ sessionId: "nc", request: subagentOf(nightly, "cron subagent") });
-        await runs.enqueue({ sessionId: "sw", request: { ...subagentOf(human, "swarm worker"), swarm } });
-        await runs.enqueue({ sessionId: "shared", request: cron("background first in its conversation") });
-        await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") });
-        assert.equal(await runs.personWaiting(Date.now() - 60_000), false, "only turns past the grace period count");
-        assert.equal(await runs.personWaiting(Date.now()), true);
-        assert.deepEqual(await claimAll(runs), [
-          "person",
-          "subagent",
-          "sub-subagent",
-          "cron",
-          "cron subagent",
-          "swarm worker",
-          "background first in its conversation",
-          "person second in its conversation",
-        ]);
-      } finally {
-        await runs.close?.();
-      }
-    },
+    () =>
+      inTestTenant(async () => {
+        const runs = await backend.make();
+        try {
+          const nightly = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
+          const human = (await runs.enqueue({ sessionId: "dm", request: request("person") })).run;
+          const child = (await runs.enqueue({ sessionId: "c", request: subagentOf(human, "subagent") })).run;
+          await runs.enqueue({ sessionId: "g", request: subagentOf(child, "sub-subagent") });
+          await runs.enqueue({ sessionId: "nc", request: subagentOf(nightly, "cron subagent") });
+          await runs.enqueue({ sessionId: "sw", request: { ...subagentOf(human, "swarm worker"), swarm } });
+          await runs.enqueue({ sessionId: "shared", request: cron("background first in its conversation") });
+          await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") });
+          assert.equal(
+            await withoutTenant(() => runs.personWaiting(Date.now() - 60_000)),
+            false,
+            "only turns past the grace period count",
+          );
+          assert.equal(await withoutTenant(() => runs.personWaiting(Date.now())), true);
+          assert.deepEqual(await claimAll(runs), [
+            "person",
+            "subagent",
+            "sub-subagent",
+            "cron",
+            "cron subagent",
+            "swarm worker",
+            "background first in its conversation",
+            "person second in its conversation",
+          ]);
+        } finally {
+          await runs.close?.();
+        }
+      }),
   );
 }
 
 for (const backend of backends) {
-  test(
-    `[${backend.name}] a parked run records why it stopped and is not charged a claim`,
-    { skip: backend.skip },
-    async () => {
+  test(`[${backend.name}] a parked run records why it stopped and is not charged a claim`, { skip: backend.skip }, () =>
+    inTestTenant(async () => {
       const runs = await backend.make();
       try {
         const queued = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
-        const lease = (await runs.claim("w", 60_000))!;
+        const lease = (await withoutTenant(() => runs.claim("w", 60_000)))!;
         assert.equal(await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" }), true);
         const parked = (await runs.get(queued.id))!;
         assert.deepEqual([parked.status, parked.preemptions, parked.lastStop], ["pending", 1, { kind: "parked" }]);
-        const again = (await runs.claim("w", 60_000))!;
+        const again = (await withoutTenant(() => runs.claim("w", 60_000)))!;
         await runs.releaseLease(again.id, again.leaseToken!, { kind: "shutdown" });
         assert.equal((await runs.get(queued.id))!.preemptions, 1, "a deploy handback is not a park");
       } finally {
         await runs.close?.();
       }
-    },
+    }),
   );
 }
 
@@ -134,18 +143,20 @@ async function withWorkers(
   }
 }
 
-const status = (runs: RunStore, run: Run, want: string) => async () => (await runs.get(run.id))?.status === want;
+const status = (runs: RunStore, run: Run, want: string) => async () =>
+  (await inTestTenant(() => runs.get(run.id)))?.status === want;
 
 test("a busy worker parks a cron turn for a person's turn, then resumes it", () =>
   withWorkers(
     1,
     async ({ runs, log, sweep }) => {
-      const background = (await runs.enqueue({ sessionId: "cron", request: cron("long cron") })).run;
+      const background = (await inTestTenant(() => runs.enqueue({ sessionId: "cron", request: cron("long cron") })))
+        .run;
       await until(status(runs, background, "running"));
-      await runs.enqueue({ sessionId: "dm", request: request("quick person") });
+      await inTestTenant(() => runs.enqueue({ sessionId: "dm", request: request("quick person") }));
       assert.equal(await sweep(), true);
       await until(status(runs, background, "done"));
-      assert.equal((await runs.get(background.id))?.preemptions, 1);
+      assert.equal((await inTestTenant(() => runs.get(background.id)))?.preemptions, 1);
       assert.deepEqual(log, [
         "start long cron #1",
         "start quick person #1",
@@ -161,12 +172,14 @@ test("one waiting turn parks one run, even while that run is slow to stop", () =
   withWorkers(3, async ({ runs, sweep }) => {
     const crons: Run[] = [];
     for (const name of ["a", "b", "c"])
-      crons.push((await runs.enqueue({ sessionId: name, request: cron(`slow ${name}`) })).run);
+      crons.push((await inTestTenant(() => runs.enqueue({ sessionId: name, request: cron(`slow ${name}`) }))).run);
     for (const run of crons) await until(status(runs, run, "running"));
-    const person = (await runs.enqueue({ sessionId: "dm", request: request("quick person") })).run;
+    const person = (await inTestTenant(() => runs.enqueue({ sessionId: "dm", request: request("quick person") }))).run;
     assert.deepEqual([await sweep(), await sweep(), await sweep()], [true, false, false]);
     await until(status(runs, person, "done"));
-    const parks = await Promise.all(crons.map(async (run) => (await runs.get(run.id))!.preemptions));
+    const parks = await Promise.all(
+      crons.map(async (run) => (await inTestTenant(() => runs.get(run.id)))!.preemptions),
+    );
     assert.deepEqual(parks.sort(), [0, 0, 1]);
   }));
 
@@ -175,23 +188,32 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
   return withWorkers(
     2,
     async ({ runs, sweep }) => {
-      const parent = (await runs.enqueue({ sessionId: "parent", request: request("quick parent") })).run;
+      const parent = (await inTestTenant(() => runs.enqueue({ sessionId: "parent", request: request("quick parent") })))
+        .run;
       await until(status(runs, parent, "done"));
-      const child = (await runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") })).run;
+      const child = (
+        await inTestTenant(() => runs.enqueue({ sessionId: "child", request: subagentOf(parent, "forever child") }))
+      ).run;
       await until(status(runs, capped, "running"));
       await until(status(runs, child, "running"));
-      await runs.enqueue({ sessionId: "dm", request: request("quick person") });
+      await inTestTenant(() => runs.enqueue({ sessionId: "dm", request: request("quick person") }));
       assert.equal(await sweep(), false);
-      assert.equal((await runs.get(capped.id))?.attempts, 4, "parks don't spend a swarm worker's claim budget");
+      assert.equal(
+        (await inTestTenant(() => runs.get(capped.id)))?.attempts,
+        4,
+        "parks don't spend a swarm worker's claim budget",
+      );
     },
     undefined,
     async (runs) => {
       capped = (
-        await runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } })
+        await inTestTenant(() =>
+          runs.enqueue({ sessionId: "cron", request: { ...cron("forever cron"), swarm, turnWallClockMs: 60_000 } }),
+        )
       ).run;
       for (let i = 0; i < 3; i++) {
         const lease = (await runs.claim("w", 60_000))!;
-        await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" });
+        await inTestTenant(() => runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" }));
       }
     },
   );

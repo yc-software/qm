@@ -17,5 +17,5 @@ async function createTenant(ctx: ApiCtx): Promise<void> {
 }
 
 export const createTenantRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "PUT", path: "/v1/tenants/:tenant", actor: "system", auth: "source", unbound: true, handle: createTenant },
+  { method: "PUT", path: "/v1/tenants/:tenant", actor: "system", auth: "source", handle: createTenant },
 ];

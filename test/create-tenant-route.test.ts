@@ -44,7 +44,7 @@ async function fixture(
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `PUT\n${target}\n\n${body}`),
+        "x-signature": signRequest(sourceSecret, ts, `PUT\n${target}\n${body}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },

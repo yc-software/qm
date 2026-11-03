@@ -35,8 +35,7 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
-import { boundTenant } from "../../chassis/src/tenant.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 
@@ -463,9 +462,9 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1_000, ttl: 5 * 60_000 });
+const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
 async function slackWorkspaceUrl(): Promise<string | null> {
-  const hit = slackUrlCache.get(boundTenant() ?? "");
+  const hit = slackUrlCache.get("url");
   if (hit) return hit.url;
   let urlValue: string | null = null;
   try {
@@ -474,7 +473,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   } catch {
     void 0;
   }
-  slackUrlCache.set(boundTenant() ?? "", { url: urlValue });
+  slackUrlCache.set("url", { url: urlValue });
   return urlValue;
 }
 
@@ -2218,6 +2217,19 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/spend",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["from", "to", "bucket"]) {
+        const value = url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/spend?${qs.toString()}`);
+    },
+  },
+  {
     method: "PATCH",
     path: "/api/memory",
     handle: async (c) => {
@@ -3502,9 +3514,8 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("x-frame-options", "DENY");
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  const route = () => portalTokenStore.run(token, () => routeRequest(req, res));
   try {
-    await withIdentityTenant(token, PORTAL_IDENTITY_SECRET, route);
+    await portalTokenStore.run(token, () => routeRequest(req, res));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

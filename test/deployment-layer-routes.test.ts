@@ -8,7 +8,6 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
@@ -16,7 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
@@ -44,9 +43,9 @@ function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Reco
 function signed(method: string, body: string, ts = Math.floor(Date.now() / 1000)): Record<string, string> {
   return {
     "content-type": "application/json",
-    ...TENANT_HEADERS,
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, canonicalPayload(method, PATH, body, TEST_TENANT)),
+    "x-qm-tenant": testTenants()[0],
+    "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${testTenants()[0]}\n${body}`),
   };
 }
 
@@ -62,6 +61,31 @@ test("an empty layer GETs the version-0 shape with a source discriminator under 
     const res = await fetch(`${srv.base}${PATH}`, { headers: signed("GET", "") });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { contract: 1, version: 0, contentHash: null, source: "none", resolved: null });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a signed request that names no tenant is refused before the layer is read or written", async () => {
+  const srv = start();
+  try {
+    for (const [method, body] of [
+      ["GET", ""],
+      ["PUT", JSON.stringify({ contract: 1, tools: [], skills: [] })],
+    ] as const) {
+      const ts = Math.floor(Date.now() / 1000);
+      const res = await fetch(`${srv.base}${PATH}`, {
+        method,
+        headers: {
+          "content-type": "application/json",
+          "x-timestamp": String(ts),
+          "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${body}`),
+        },
+        ...(body ? { body } : {}),
+      });
+      assert.equal(res.status, 401);
+      assert.match(((await res.json()) as { message: string }).message, /must name their tenant in a signed header/);
+    }
   } finally {
     await srv.close();
   }
@@ -93,7 +117,10 @@ test("a baked filesystem layer with no durable record GETs source=filesystem and
 });
 
 test("a signed PUT lands under portal-identity enforcement (deploy-time sync is a SYSTEM write)", async () => {
-  const srv = start({}, { capabilitySecret: `${SECRET}-cap`, portalIdentitySecret: `${SECRET}-portal` });
+  const srv = start(
+    {},
+    { requireSignedPortalIdentity: true, capabilitySecret: `${SECRET}-cap`, portalIdentitySecret: `${SECRET}-portal` },
+  );
   try {
     const unsigned = await fetch(`${srv.base}${PATH}`, {
       method: "PUT",
@@ -179,7 +206,7 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
     assert.equal(failedBody.ok, true);
     assert.equal(failedBody.status, "degraded");
     assert.match(failedBody.message, /poisoned skill store/);
-    const audits = await srv.auditLog.events();
+    const audits = await inTestTenant(() => srv.auditLog.events());
     assert.equal(
       audits.filter((event) => event.action === "deployment_layer.updated").length,
       2,
@@ -322,7 +349,9 @@ test("cross-tool credential collisions and unpaired surrogates are 400s", async 
 test("a skill collision racing after validation is accepted degraded and audited", async (t) => {
   const srv = start();
   try {
-    const record = await srv.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup");
+    const record = await inTestTenant(() =>
+      srv.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup"),
+    );
     t.mock.method(srv.deploymentLayerStore, "put", async () => {
       throw new DeploymentLayerPersistedError("deployment layer persisted but skills acme collide", record);
     });
@@ -336,7 +365,7 @@ test("a skill collision racing after validation is accepted degraded and audited
     assert.equal(body.status, "degraded");
     assert.match(body.message, /persisted but skills acme collide/);
 
-    const events = await srv.auditLog.events();
+    const events = await inTestTenant(() => srv.auditLog.events());
     assert.ok(
       events.some((event) => event.action === "deployment_layer.updated" && event.resource === body.contentHash),
     );

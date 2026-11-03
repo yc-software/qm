@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
 import { createAppLogin } from "./support/app-login.ts";
 
-const URL = process.env.DATABASE_URL;
-const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant settings test";
+const URL = process.env.DATABASE_OWNER_URL;
+const skip = URL ? false : "set DATABASE_OWNER_URL (a Postgres owner login) to run the tenant settings test";
 const KEY = "connector-key-".padEnd(48, "x");
 
 async function withSettingsDb(
@@ -26,9 +26,8 @@ async function withSettingsDb(
   schemaUrl.searchParams.set("options", `-c search_path=${schema}`);
   const admin = new pg.Pool({ connectionString: schemaUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const owner = createPgPool(schemaUrl.toString(), [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
   try {
-    await migrateRegisteredPgSchemas(schemaUrl.toString());
+    await applyPgMigrations(admin, [TENANCY_BASE, TENANT_SETTINGS_MIGRATION].map(definePgMigration));
     const a = randomUUID();
     const b = randomUUID();
     await admin.query(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [a, b]);
@@ -42,7 +41,6 @@ async function withSettingsDb(
       await login.drop();
     }
   } finally {
-    await owner.close();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.end();
   }

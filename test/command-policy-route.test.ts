@@ -11,13 +11,17 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "policy-route-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
@@ -37,7 +41,7 @@ const putPolicy = (base: string, b: unknown) =>
 test("a pending approval survives a surface restart: GET /v1/approvals/:id returns a replayable request", async () => {
   const srv = start();
   try {
-    await selectDefaultSandbox(srv.built, "U1", "personal:U1");
+    await inTestTenant(() => selectDefaultSandbox(srv.built, "U1", "personal:U1"));
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",
@@ -47,7 +51,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
     };
     const first = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify(turn),
     });
     const firstBody = (await first.json()) as {
@@ -60,6 +64,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
 
     const pendingByThread = await fetch(
       `${srv.base}/v1/approvals/pending?threadRef=${encodeURIComponent(turn.conversation.threadRef)}`,
+      { headers: testTenantHeaders() },
     );
     assert.equal(pendingByThread.status, 200);
     const pendingBody = (await pendingByThread.json()) as {
@@ -68,7 +73,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
     assert.equal(pendingBody.pending?.status, "pending_approval");
     assert.equal(pendingBody.pending?.pendingApprovals?.[0]?.requestId, requestId);
 
-    const fetched = await fetch(`${srv.base}/v1/approvals/${requestId}`);
+    const fetched = await fetch(`${srv.base}/v1/approvals/${requestId}`, { headers: testTenantHeaders() });
     assert.equal(fetched.status, 200);
     const record = (await fetched.json()) as {
       requestId: string;
@@ -91,16 +96,17 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
 
     const approved = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify({ ...record.request, approval: { requestId, approved: true } }),
     });
     const approvedBody = (await approved.json()) as { status: string };
     assert.equal(approvedBody.status, "ok");
 
-    const gone = await fetch(`${srv.base}/v1/approvals/${requestId}`);
+    const gone = await fetch(`${srv.base}/v1/approvals/${requestId}`, { headers: testTenantHeaders() });
     assert.equal(gone.status, 404);
     const pendingGone = await fetch(
       `${srv.base}/v1/approvals/pending?threadRef=${encodeURIComponent(turn.conversation.threadRef)}`,
+      { headers: testTenantHeaders() },
     );
     assert.equal(((await pendingGone.json()) as { pending?: unknown }).pending, null);
   } finally {
@@ -120,7 +126,7 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
     };
     const first = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify(turn),
     });
     const firstBody = (await first.json()) as {
@@ -134,6 +140,7 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
 
     const listed = await fetch(
       `${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals?viewer=U2`,
+      { headers: testTenantHeaders() },
     );
     assert.equal(listed.status, 200);
     const body = (await listed.json()) as { approvals: { requestId: string; command: string; reason: string }[] };
@@ -144,14 +151,19 @@ test("GET /v1/sessions/:id/approvals lists the commands the session is still pau
 
     const otherViewer = await fetch(
       `${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals?viewer=U999`,
+      { headers: testTenantHeaders() },
     );
     assert.equal(otherViewer.status, 200);
     assert.deepEqual(((await otherViewer.json()) as { approvals: unknown[] }).approvals, []);
 
-    const noViewer = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals`);
+    const noViewer = await fetch(`${srv.base}/v1/sessions/${encodeURIComponent(firstBody.sessionId)}/approvals`, {
+      headers: testTenantHeaders(),
+    });
     assert.equal(noViewer.status, 400);
 
-    const empty = await fetch(`${srv.base}/v1/sessions/some-other-session/approvals?viewer=U2`);
+    const empty = await fetch(`${srv.base}/v1/sessions/some-other-session/approvals?viewer=U2`, {
+      headers: testTenantHeaders(),
+    });
     assert.equal(empty.status, 200);
     assert.deepEqual(((await empty.json()) as { approvals: unknown[] }).approvals, []);
   } finally {

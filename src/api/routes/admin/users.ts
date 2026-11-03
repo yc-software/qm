@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { currentTenant } from "../../../tenants/context.ts";
 import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
@@ -189,7 +188,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             purpose: "teammate-invite",
             inviteId: member.inviteId,
             email,
-            tenant: currentTenant(),
+            org: scope,
             aud: deps.portalUrl!.replace(/\/+$/, ""),
             iat: now,
             exp: now + 24 * 60 * 60 * 1000,
@@ -367,7 +366,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
 }
 
-async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+export async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
   const member = await deps.directory?.get(requestedPrincipal);
   return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
 }
@@ -403,6 +402,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
+    deactivated: deps.identity?.deactivationSource(principalId) !== undefined,
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

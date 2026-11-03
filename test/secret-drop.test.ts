@@ -29,7 +29,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TENANT_HEADERS } from "./support/tenant.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
@@ -206,7 +206,9 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   let built: BuiltApp;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    inTestTenant(() =>
+      mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET),
+    );
   const post = (path: string, body: unknown, cap?: string) =>
     fetch(`${base}${path}`, {
       method: "POST",
@@ -217,7 +219,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   const signed = (method: string, rawPath: string, body: string, owner?: string | null) => {
     const path = `${rawPath}${rawPath.includes("?") ? "&" : "?"}_n=${nonce++}`;
     const headers: Record<string, string> = {
-      ...signedRequestHeaders(SECRET, method, path, body, { ...TENANT_HEADERS }),
+      ...signedRequestHeaders(SECRET, method, path, body, testTenantHeaders()),
       ...(owner !== null ? { "x-drop-owner": owner ?? "U_A", "x-drop-owner-org": "acme" } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     };
@@ -236,12 +238,14 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-")), signingSecret: SECRET }));
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: false }],
-      [
-        { channelId: "C1", principalId: "U_A" },
-        { channelId: "C1", principalId: "U_SPEAKER" },
-      ],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C1", name: "drops", isPrivate: false }],
+        [
+          { channelId: "C1", principalId: "U_A" },
+          { channelId: "C1", principalId: "U_SPEAKER" },
+        ],
+      ),
     );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -273,21 +277,25 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("mints onBehalfOf a teammate who steered this live turn, binding the link to them", async () => {
     const THREAD = "ch:C1:1700000000.000200";
-    const { run } = await built.runs.enqueue({
-      sessionId: THREAD,
-      request: {
-        surface: "slack",
-        actor: { id: "U_A", type: "internal" },
-        conversation: { kind: "channel", threadRef: THREAD, audience: [] },
-        origin: { kind: "human" },
-        text: "@bot connect linear",
-      } as any,
-    });
-    await built.signals.send(run.id, {
-      kind: "steer",
-      text: "U_SPEAKER: I can provide my linear key",
-      request: { actor: { externalId: "U_SPEAKER" } } as any,
-    });
+    const { run } = await inTestTenant(() =>
+      built.runs.enqueue({
+        sessionId: THREAD,
+        request: {
+          surface: "slack",
+          actor: { id: "U_A", type: "internal" },
+          conversation: { kind: "channel", threadRef: THREAD, audience: [] },
+          origin: { kind: "human" },
+          text: "@bot connect linear",
+        } as any,
+      }),
+    );
+    await inTestTenant(() =>
+      built.signals.send(run.id, {
+        kind: "steer",
+        text: "U_SPEAKER: I can provide my linear key",
+        request: { actor: { externalId: "U_SPEAKER" } } as any,
+      }),
+    );
     const cap = await capFor("U_A", scopeId("channel", "C1"), { threadRef: THREAD });
 
     const silent = await post(
@@ -344,10 +352,11 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     assert.equal(credential.service, "stripe");
     assert.equal(credential.ownerId, "U_A");
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await inTestTenant(() => built.keychain!.grantsForScope(scopeId("channel", "C1")));
     const g = grants.find((x) => x.credential.id === credential.id);
     assert.ok(g, "a standing grant for the asking channel was minted on redeem");
-    const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
+    const grantId = g!.grant.id;
+    const m = await inTestTenant(() => materializeGrant(built.keychain!, grantId, scopeId("channel", "C1"), "U_A"));
     assert.ok(m.kind === "env" && m.env[0]!.value === "sk_test_alice");
 
     assert.equal((await redeem(dropId, { secret: "sk_test_again" }, "U_A", t)).status, 404);
@@ -364,42 +373,47 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const redeemRes = await redeem(dropId, { secret: "sk-openai-bob" }, "U_B", linkToken(formPath));
     assert.equal(redeemRes.status, 200);
 
-    const owned = await built.keychain!.listByOwner("U_B");
+    const owned = await inTestTenant(() => built.keychain!.listByOwner("U_B"));
     assert.ok(
       owned.some((c) => c.service === "openai"),
       "the credential landed in the owner's keychain",
     );
     assert.equal(
-      (await built.keychain!.listGrants({ ownerId: "U_B" })).length,
+      (await inTestTenant(() => built.keychain!.listGrants({ ownerId: "U_B" }))).length,
       0,
       "a DM drop grants nothing — own creds need no grant",
     );
   });
 
   it("a Project roster change refuses an unredeemed drop on every attempt", async () => {
-    await built.app.upsertDirectory([
-      { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },
-      { principalId: "U_PROJECT_MEMBER", displayName: "Member", type: "internal" },
-    ]);
-    const project = await built.app.createProject("U_PROJECT_OWNER", "Drop fence");
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },
+        { principalId: "U_PROJECT_MEMBER", displayName: "Member", type: "internal" },
+      ]),
+    );
+    const project = await inTestTenant(() => built.app.createProject("U_PROJECT_OWNER", "Drop fence"));
     assert.ok(project);
-    const scopeVersion = await built.projects.version(project.scopeId.slice("group:".length));
+    const scopeVersion = await inTestTenant(() => built.projects.version(project.scopeId.slice("group:".length)));
     assert.ok(scopeVersion);
     const cap = await capFor("U_PROJECT_OWNER", project.scopeId, { scopeVersion });
     const minted = await post("/v1/keychain/drops", { service: "project-stale", purpose: "test the fence" }, cap);
     assert.equal(minted.status, 200);
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
 
-    assert.equal((await built.app.addProjectMember(project.id, "U_PROJECT_OWNER", "U_PROJECT_MEMBER")).status, "ok");
+    assert.equal(
+      (await inTestTenant(() => built.app.addProjectMember(project.id, "U_PROJECT_OWNER", "U_PROJECT_MEMBER"))).status,
+      "ok",
+    );
     for (let attempt = 0; attempt < 2; attempt++)
       assert.equal(
         (await redeem(dropId, { secret: "must-not-save" }, "U_PROJECT_OWNER", linkToken(formPath))).status,
         409,
       );
-    assert.ok((await built.secretDrops.peek(dropId)).ok);
+    assert.ok((await inTestTenant(() => built.secretDrops.peek(dropId))).ok);
 
     assert.ok(
-      !(await built.keychain!.listByOwner("U_PROJECT_OWNER")).some(
+      !(await inTestTenant(() => built.keychain!.listByOwner("U_PROJECT_OWNER"))).some(
         (credential) => credential.service === "project-stale",
       ),
     );
@@ -423,7 +437,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     try {
       const failed = await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath));
       assert.equal(failed.status, 409);
-      assert.ok((await built.secretDrops.peek(dropId)).ok);
+      assert.ok((await inTestTenant(() => built.secretDrops.peek(dropId))).ok);
     } finally {
       Object.assign(directory, originals);
     }
@@ -467,9 +481,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { envKey: "DOORDASH_PASSWORD", secret: true },
     ]);
 
-    const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
+    const grants = await inTestTenant(() => built.keychain!.grantsForScope(scopeId("channel", "C1")));
     const g = grants.find((x) => x.credential.id === credential.id);
-    const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
+    const grantId = g!.grant.id;
+    const m = await inTestTenant(() => materializeGrant(built.keychain!, grantId, scopeId("channel", "C1"), "U_A"));
     assert.ok(m.kind === "env");
     assert.deepEqual(m.kind === "env" ? m.env : [], [
       { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
@@ -581,15 +596,17 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("an expired link token is refused even while the record lives", async () => {
     const { dropId } = await mintFor("U_A", "expiredtoken");
-    const stale = await mintCapabilityToken(
-      {
-        actorId: "U_A",
-        scopeId: scopeId("channel", "C1"),
-        aud: SECRET_DROP_AUD,
-        drop: dropId,
-        exp: Date.now() - 1_000,
-      },
-      SECRET,
+    const stale = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U_A",
+          scopeId: scopeId("channel", "C1"),
+          aud: SECRET_DROP_AUD,
+          drop: dropId,
+          exp: Date.now() - 1_000,
+        },
+        SECRET,
+      ),
     );
     assert.equal((await getForm(dropId, "U_A", stale)).status, 404);
     assert.equal((await redeem(dropId, { secret: "x" }, "U_A", stale)).status, 404);
@@ -607,12 +624,14 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
 
   it("a pre-token record (minted before links carried tokens) still works under the owner gate alone", async () => {
-    const { dropId } = await built.secretDrops!.mint({
-      ownerId: "U_LEGACY",
-      service: "legacysvc",
-      purpose: "old link",
-      requestedBy: "U_LEGACY",
-    });
+    const { dropId } = await inTestTenant(() =>
+      built.secretDrops!.mint({
+        ownerId: "U_LEGACY",
+        service: "legacysvc",
+        purpose: "old link",
+        requestedBy: "U_LEGACY",
+      }),
+    );
     assert.equal((await getForm(dropId, "U_LEGACY")).status, 200, "no requiresToken flag → the token is not demanded");
     assert.equal((await redeem(dropId, { secret: "sk-legacy" }, "U_LEGACY")).status, 200);
   });
@@ -625,9 +644,11 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   });
 
   it("a live bot attestation survives mint and private-scope redemption", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: true }],
-      [{ channelId: "C1", principalId: "U_A" }],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C1", name: "drops", isPrivate: true }],
+        [{ channelId: "C1", principalId: "U_A" }],
+      ),
     );
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const minted = await post(
@@ -654,10 +675,11 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     const built = buildApp(
       testConfig({ dataDir: mkdtempSync(join(tmpdir(), "secret-drop-sib-")), signingSecret: SECRET }),
     );
-    await built.identity.ready();
-    await built.directory.replaceChannels(
-      [{ channelId: "C1", name: "drops", isPrivate: false }],
-      [{ channelId: "C1", principalId: "U_A" }],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C1", name: "drops", isPrivate: false }],
+        [{ channelId: "C1", principalId: "U_A" }],
+      ),
     );
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
@@ -677,9 +699,11 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     try {
-      const cap = await mintCapabilityToken(
-        { actorId: "U_A", scopeId: scopeId("channel", "C1"), threadRef: "th1", exp: Date.now() + CAPABILITY_TTL_MS },
-        SECRET,
+      const cap = await inTestTenant(() =>
+        mintCapabilityToken(
+          { actorId: "U_A", scopeId: scopeId("channel", "C1"), threadRef: "th1", exp: Date.now() + CAPABILITY_TTL_MS },
+          SECRET,
+        ),
       );
       const mint = async (service: string) => {
         const r = await fetch(`${base}/v1/keychain/drops`, {
@@ -700,7 +724,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
         const r = await fetch(`${base}${path}`, {
           method: "POST",
           headers: {
-            ...signedRequestHeaders(SECRET, "POST", path, body, { ...TENANT_HEADERS }),
+            ...signedRequestHeaders(SECRET, "POST", path, body, testTenantHeaders()),
             "x-drop-owner": "U_A",
             "x-drop-owner-org": "acme",
             "content-type": "application/json",

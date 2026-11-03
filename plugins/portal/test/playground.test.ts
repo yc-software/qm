@@ -5,8 +5,6 @@ import type { AddressInfo } from "node:net";
 import { spawn } from "node:child_process";
 import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
 
-const TENANT = "00000000-0000-4000-8000-000000000001";
-
 const claimed = new Set<string>();
 let claimCalls = 0;
 let refuseClaims = false;
@@ -16,7 +14,6 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ values: { OIDC_CLIENT_ID: "test-client" } }));
   }
-  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   if (req.method === "POST" && req.url?.startsWith("/v1/auth/broker/claim")) {
     claimCalls++;
     const chunks: Buffer[] = [];
@@ -112,7 +109,7 @@ test("sliding renewal preserves the anon flag", async () => {
   const aged: SessionClaims = {
     k: "session",
     sub: "playground-deadbeef",
-    tenant: TENANT,
+    org: process.env.CORE_ORG_ID ?? "acme",
     name: "Guest",
     anon: true,
     auth: now - SESSION_TTL_S / 2 - 600,
@@ -124,7 +121,7 @@ test("sliding renewal preserves the anon flag", async () => {
     redirect: "manual",
   });
   assert.equal(res.status, 200);
-  const renewed = openSession(decodeURIComponent(sessionCookieOf(res).split("=")[1]!), key, Date.now(), TENANT);
+  const renewed = openSession(decodeURIComponent(sessionCookieOf(res).split("=")[1]!), key, Date.now());
   assert.ok(renewed, "expected a renewed session");
   assert.equal(renewed.anon, true);
   assert.equal(renewed.sub, "playground-deadbeef");

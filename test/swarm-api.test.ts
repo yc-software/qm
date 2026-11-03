@@ -9,10 +9,10 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
-  const fixture = await swarmFixture();
+  const fixture = await inTestTenant(() => swarmFixture());
   if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
   const capabilitySecret = "swarm-regression-capability-secret";
   const server = createServer(
@@ -25,7 +25,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
   );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
-  const token = await mintCapabilityToken(fixture.caller.claims, capabilitySecret);
+  const token = await inTestTenant(() => mintCapabilityToken(fixture.caller.claims, capabilitySecret));
   const headers = { "x-agent-capability": token, "content-type": "application/json" };
   const post = (body: unknown) => fetch(base, { method: "POST", headers, body: JSON.stringify(body) });
   try {
@@ -59,9 +59,12 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
       arbitrary: { runId: "metadata" },
     };
     assert.equal((await post({ action: "spawn", requestId: "valid", text: "Work", context })).status, 202);
-    assert.deepEqual((await fixture.service.inspect(fixture.caller)).peers[1]!.context, context);
-    const run = (await fixture.runs.get(fixture.caller.claims.runId!))!;
-    assert.equal(await fixture.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" }), true);
+    assert.deepEqual((await inTestTenant(() => fixture.service.inspect(fixture.caller))).peers[1]!.context, context);
+    const run = (await inTestTenant(() => fixture.runs.get(fixture.caller.claims.runId!)))!;
+    assert.equal(
+      await inTestTenant(() => fixture.runs.complete(run.id, run.leaseToken!, { status: "ok", reply: "Done" })),
+      true,
+    );
     for (const body of [
       { action: "spawn", requestId: "completed", text: "Work" },
       { action: "send", requestId: "completed", text: "Work", audience: "all" },
@@ -76,7 +79,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
 });
 
 test("authenticated swarm API binds agent operations to the token and human operations to portal identity", async () => {
-  const fixture = await swarmFixture();
+  const fixture = await inTestTenant(() => swarmFixture());
   const secret = "source-auth-test-secret".repeat(3);
   const capabilitySecret = "capability-test-secret".repeat(3);
   const portalIdentitySecret = "portal-test-secret".repeat(3);
@@ -93,12 +96,13 @@ test("authenticated swarm API binds agent operations to the token and human oper
     signingSecret: secret,
     capabilitySecret,
     portalIdentitySecret,
+    requireSignedPortalIdentity: true,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
-    const token = await mintCapabilityToken(fixture.caller.claims, capabilitySecret);
+    const token = await inTestTenant(() => mintCapabilityToken(fixture.caller.claims, capabilitySecret));
     const headers = { "x-agent-capability": token, "content-type": "application/json" };
     const spawn = {
       action: "spawn",
@@ -120,12 +124,14 @@ test("authenticated swarm API binds agent operations to the token and human oper
       body: JSON.stringify({ action: "send", requestId: "bad", audience: ["missing"], text: "Bad" }),
     });
     assert.equal(badAudience.status, 400);
-    const forgedToken = await mintCapabilityToken({ ...fixture.caller.claims, actorId: "bob" }, capabilitySecret);
+    const forgedToken = await inTestTenant(() =>
+      mintCapabilityToken({ ...fixture.caller.claims, actorId: "bob" }, capabilitySecret),
+    );
     assert.equal((await fetch(`${base}/v1/swarm`, { headers: { "x-agent-capability": forgedToken } })).status, 400);
     const path = `/v1/sessions/${fixture.root.id}/swarm`;
     assert.equal((await fetch(`${base}${path}`, { headers })).status, 403);
     const portal = await mintPortalIdentity(
-      { t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 },
+      { t: testTenants()[0], p: "alice", exp: Date.now() + 60_000 },
       portalIdentitySecret,
     );
     const body = JSON.stringify({
@@ -137,9 +143,9 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const human = await fetch(`${base}${path}`, {
       method: "POST",
       headers: signedRequestHeaders(secret, "POST", path, body, {
-        ...TENANT_HEADERS,
         "x-portal-identity": portal,
         "content-type": "application/json",
+        ...testTenantHeaders(),
       }),
       body,
     });
@@ -148,7 +154,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     assert.equal(humanData.message.author, "human");
     assert.equal(humanData.message.actorId, "alice");
     const unsigned = await fetch(`${base}${path}`, {
-      headers: signedRequestHeaders(secret, "GET", path, "", TENANT_HEADERS),
+      headers: signedRequestHeaders(secret, "GET", path, "", testTenantHeaders()),
     });
     assert.equal(unsigned.status, 403);
     const bodyWithoutIdentity = JSON.stringify({ ...spawn, requestId: "forged-human" });
@@ -157,9 +163,9 @@ test("authenticated swarm API binds agent operations to the token and human oper
         await fetch(`${base}/v1/swarm`, {
           method: "POST",
           headers: signedRequestHeaders(secret, "POST", "/v1/swarm", bodyWithoutIdentity, {
-            ...TENANT_HEADERS,
             "x-portal-identity": portal,
             "content-type": "application/json",
+            ...testTenantHeaders(),
           }),
           body: bodyWithoutIdentity,
         })
@@ -173,10 +179,10 @@ test("authenticated swarm API binds agent operations to the token and human oper
 });
 
 test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
-  const fixture = await swarmFixture();
+  const fixture = await inTestTenant(() => swarmFixture());
   assert.equal(fixture.caller.kind, "agent");
   if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
-  const first = (await fixture.runs.get(fixture.caller.claims.runId!))!;
+  const first = (await inTestTenant(() => fixture.runs.get(fixture.caller.claims.runId!)))!;
   const claims = {
     ...fixture.caller.claims,
     sessionId: fixture.root.id,
@@ -194,7 +200,7 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
   );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
-  const token = await mintCapabilityToken(claims, secret);
+  const token = await inTestTenant(() => mintCapabilityToken(claims, secret));
   const post = async (credential: string, requestId: string) =>
     fetch(base, {
       method: "POST",
@@ -203,23 +209,22 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
     });
   try {
     assert.equal((await post(token, "initial")).status, 202);
-    await fixture.runs.releaseLease(first.id, first.leaseToken!);
-    const next = (await fixture.runs.claimById(first.id, "replacement", 60_000))!;
+    await inTestTenant(() => fixture.runs.releaseLease(first.id, first.leaseToken!));
+    const next = (await inTestTenant(() => fixture.runs.claimById(first.id, "replacement", 60_000)))!;
     assert.ok(next);
     assert.equal((await post(token, "stale")).status, 400);
-    const current = await mintCapabilityToken(
-      { ...claims, runAttempt: next.attempts, runLeaseToken: next.leaseToken! },
-      secret,
+    const current = await inTestTenant(() =>
+      mintCapabilityToken({ ...claims, runAttempt: next.attempts, runLeaseToken: next.leaseToken! }, secret),
     );
     assert.equal((await post(current, "current")).status, 202);
-    assert.equal((await fixture.store.get(fixture.root.id))!.members.length, 3);
+    assert.equal((await inTestTenant(() => fixture.store.get(fixture.root.id)))!.members.length, 3);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });
 
 test("HTTP retry after a lost initial response exposes only a complete pool and reads it once", async () => {
-  const f = await swarmFixture();
+  const f = await inTestTenant(() => swarmFixture());
   if (f.caller.kind !== "agent") throw new Error("wrong caller");
   const capabilitySecret = "swarm-atomic-http-test-secret";
   const server = createServer({ swarms: f.service, authorizesCapabilityScope: async () => true } as unknown as App, {
@@ -230,7 +235,7 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/swarm`;
   const headers = {
-    "x-agent-capability": await mintCapabilityToken(f.caller.claims, capabilitySecret),
+    "x-agent-capability": await inTestTenant(() => mintCapabilityToken(f.caller.claims, capabilitySecret)),
     "content-type": "application/json",
   };
   const request = { action: "spawn", requestId: "initial", text: "work", count: 2, settings: { turnMs: 777 } };
@@ -261,9 +266,9 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
       members.map((m) => m.id),
       messages[0]!.audience,
     );
-    assert.equal((await get(f.root.id))!.settings.turnMs, 777);
+    assert.equal((await inTestTenant(() => get(f.root.id)))!.settings.turnMs, 777);
     await f.service.sweep();
-    assert.equal((await f.runs.list()).filter((r) => r.request.swarm).length, 2);
+    assert.equal((await inTestTenant(() => f.runs.list())).filter((r) => r.request.swarm).length, 2);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }

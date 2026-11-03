@@ -11,7 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -39,7 +39,7 @@ function start(withLayer = true): { base: string; built: BuiltApp; close: () => 
       ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
     }),
   );
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
@@ -57,16 +57,20 @@ function start(withLayer = true): { base: string; built: BuiltApp; close: () => 
 test("security flags are visible to an org admin", async () => {
   const srv = start();
   try {
-    srv.built.auditLog.record({
-      at: 123,
-      principalId: "U1",
-      action: "security_posture.flagged",
-      resource: "slack",
-      scopeLabel: "channel:C1",
-      status: "pending_approval",
-      detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
+    inTestTenant(() =>
+      srv.built.auditLog.record({
+        at: 123,
+        principalId: "U1",
+        action: "security_posture.flagged",
+        resource: "slack",
+        scopeLabel: "channel:C1",
+        status: "pending_approval",
+        detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
+      }),
+    );
+    const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
     });
-    const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, { headers: ADMIN });
     assert.equal(flags.status, 200);
     assert.deepEqual((await flags.json()) as unknown, {
       flags: [
@@ -88,11 +92,13 @@ test("security flags include quarantines and survive a busy audit log (#868)", a
   const srv = start();
   try {
     const rec = (at: number, action: string) =>
-      srv.built.auditLog.record({ at, principalId: "U1", action, resource: "slack", scopeLabel: "channel:C1" });
+      inTestTenant(() =>
+        srv.built.auditLog.record({ at, principalId: "U1", action, resource: "slack", scopeLabel: "channel:C1" }),
+      );
     rec(1, "security_posture.flagged");
     rec(2, "security_posture.tool_result_quarantine");
     for (let i = 0; i < 201; i++) rec(10 + i, "tool.call");
-    const r = await fetch(`${srv.base}/v1/admin/security/flags`, { headers: ADMIN });
+    const r = await fetch(`${srv.base}/v1/admin/security/flags`, { headers: { ...testTenantHeaders(), ...ADMIN } });
     const body = (await r.json()) as { flags: { at: number }[] };
     assert.deepEqual(
       body.flags.map((f) => f.at),
@@ -106,7 +112,7 @@ test("security flags include quarantines and survive a busy audit log (#868)", a
 test("GET /v1/admin/resources returns a manifest entry for every registered resource", async () => {
   const srv = start();
   try {
-    const r = await fetch(`${srv.base}/v1/admin/resources`, { headers: ADMIN });
+    const r = await fetch(`${srv.base}/v1/admin/resources`, { headers: { ...testTenantHeaders(), ...ADMIN } });
     assert.equal(r.status, 200);
     const body = (await r.json()) as {
       resources: { id: string; kind: string; target?: string; secret?: boolean; enumValues?: unknown[] }[];
@@ -133,7 +139,7 @@ test("branding governance validates, round-trips through surface-config, clears,
   const url = `${srv.base}/v1/admin/scopes/org:default-org/branding`;
   const surfaceBranding = async () =>
     (
-      (await (await fetch(`${srv.base}/v1/surface-config`)).json()) as {
+      (await (await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() })).json()) as {
         branding?: { accent?: string; mark?: string; selfLabel?: string };
       }
     ).branding;
@@ -142,7 +148,11 @@ test("branding governance validates, round-trips through surface-config, clears,
       (
         await fetch(url, {
           method: "PUT",
-          headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+          headers: {
+            ...testTenantHeaders(),
+            "content-type": "application/json",
+            "x-admin-actor": "nobody@default-org",
+          },
           body: JSON.stringify({ accent: "#6366f1" }),
         })
       ).status,
@@ -152,38 +162,56 @@ test("branding governance validates, round-trips through surface-config, clears,
       (
         await fetch(`${srv.base}/v1/admin/scopes/channel:C1/branding`, {
           method: "PUT",
-          headers: ADMIN,
+          headers: { ...testTenantHeaders(), ...ADMIN },
           body: JSON.stringify({ accent: "#6366f1" }),
         })
       ).status,
       400,
     );
     assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ accent: "#abcde" }) })).status,
-      400,
-    );
-    assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ accent: "#aabbccddee" }) })).status,
+      (
+        await fetch(url, {
+          method: "PUT",
+          headers: { ...testTenantHeaders(), ...ADMIN },
+          body: JSON.stringify({ accent: "#abcde" }),
+        })
+      ).status,
       400,
     );
     assert.equal(
       (
         await fetch(url, {
           method: "PUT",
-          headers: ADMIN,
+          headers: { ...testTenantHeaders(), ...ADMIN },
+          body: JSON.stringify({ accent: "#aabbccddee" }),
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(url, {
+          method: "PUT",
+          headers: { ...testTenantHeaders(), ...ADMIN },
           body: JSON.stringify({ accent: "#6366f1", mark: "Q", selfLabel: "{{qm}}", orgName: "Acme Corp" }),
         })
       ).status,
       200,
     );
     const readBack = (await (
-      await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })
+      await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: { ...testTenantHeaders(), ...ADMIN } })
     ).json()) as { branding?: { accent?: string; orgName?: string } };
     assert.equal(readBack.branding?.accent, "#6366f1");
     assert.equal(readBack.branding?.orgName, "Acme Corp");
     assert.deepEqual(await surfaceBranding(), { orgName: "Acme Corp", accent: "#6366f1", mark: "Q", selfLabel: "qm" });
     assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ mark: "<b>xy" }) })).status,
+      (
+        await fetch(url, {
+          method: "PUT",
+          headers: { ...testTenantHeaders(), ...ADMIN },
+          body: JSON.stringify({ mark: "<b>xy" }),
+        })
+      ).status,
       200,
     );
     assert.equal((await surfaceBranding())?.mark, "bx");
@@ -191,7 +219,7 @@ test("branding governance validates, round-trips through surface-config, clears,
       (
         await fetch(url, {
           method: "PUT",
-          headers: ADMIN,
+          headers: { ...testTenantHeaders(), ...ADMIN },
           body: JSON.stringify({ accent: "", mark: "", selfLabel: "" }),
         })
       ).status,
@@ -206,11 +234,13 @@ test("branding governance validates, round-trips through surface-config, clears,
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
   const srv = start();
   try {
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
-    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
+    await inTestTenant(() =>
+      srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]),
+    );
+    await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" }));
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;
 
-    const initial = (await fetch(url).then((r) => r.json())) as {
+    const initial = (await fetch(url, { headers: testTenantHeaders() }).then((r) => r.json())) as {
       effective: { modelId: string };
       scopeOverride: unknown;
       models: string[];
@@ -221,7 +251,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
 
     const set = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({
         principalId: "alice",
         scopeId: "personal:alice",
@@ -240,30 +270,38 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       fastMode: false,
     });
 
-    await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-sonnet-4-6" });
-    assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
+    await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-sonnet-4-6" }));
+    assert.equal(
+      ((await fetch(url, { headers: testTenantHeaders() }).then((r) => r.json())) as { upgradeAvailable: boolean })
+        .upgradeAvailable,
+      true,
+    );
 
     const keep = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
     });
     assert.equal(((await keep.json()) as { upgradeAvailable: boolean }).upgradeAvailable, false);
 
     const inherit = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", inherit: true }),
     });
     const inherited = (await inherit.json()) as { effective: { modelId: string }; scopeOverride: unknown };
     assert.equal(inherited.effective.modelId, "claude-sonnet-4-6");
     assert.equal(inherited.scopeOverride, null);
 
-    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
-    assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
+    await inTestTenant(() => srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6"));
+    assert.equal(
+      ((await fetch(url, { headers: testTenantHeaders() }).then((r) => r.json())) as { upgradeAvailable: boolean })
+        .upgradeAvailable,
+      true,
+    );
     const keepLegacy = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
     });
     const keptLegacy = (await keepLegacy.json()) as {
@@ -282,7 +320,7 @@ test("PUT to an unknown resource is a 404", async () => {
   try {
     const r = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/not-a-resource`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: "{}",
     });
     assert.equal(r.status, 404);
@@ -296,11 +334,13 @@ test("a generic resource round-trips through the registry dispatch + read loop",
   try {
     const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ content: "be excellent", expectedVersion: 1 }),
     });
     assert.equal(put.status, 200);
-    const get = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const get = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     const body = (await get.json()) as {
       soul: string;
       soulVersion: number;
@@ -314,7 +354,7 @@ test("a generic resource round-trips through the registry dispatch + read loop",
 
     const stale = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/soul`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ content: "overwrite", expectedVersion: 1 }),
     });
     assert.equal(stale.status, 409);
@@ -328,16 +368,18 @@ test("feature flag table changes one scope live without restart", async () => {
   const srv = start();
   try {
     const endpoint = `${srv.base}/v1/admin/scopes/org:default-org/feature-flags`;
-    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), false);
+    assert.equal(await inTestTenant(() => srv.built.featureFlags.enabled("inbox_loops", "channel:C1")), false);
     const enable = await fetch(endpoint, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ featureName: "inbox_loops", scopeId: "channel:C1", on: true }),
     });
     assert.equal(enable.status, 200);
-    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), true);
-    assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C2"), false);
-    const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    assert.equal(await inTestTenant(() => srv.built.featureFlags.enabled("inbox_loops", "channel:C1")), true);
+    assert.equal(await inTestTenant(() => srv.built.featureFlags.enabled("inbox_loops", "channel:C2")), false);
+    const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     const flags = (
       (await read.json()) as {
         featureFlags: Array<{ featureName: string; label: string; personalOnly?: boolean; enabledScopes: string[] }>;
@@ -356,21 +398,25 @@ test("feature flag table changes one scope live without restart", async () => {
 test("security posture round-trips through durable scoped governance", async () => {
   const srv = start();
   try {
-    const before = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const before = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await before.json()) as { securityPosture: string }).securityPosture, "auto");
 
     const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/security-posture`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ posture: "strict" }),
     });
     assert.equal(put.status, 200);
-    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await after.json()) as { securityPosture: string }).securityPosture, "strict");
 
     const invalid = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/security-posture`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ posture: "YOLO" }),
     });
     assert.equal(invalid.status, 400);
@@ -386,14 +432,16 @@ test("sharing posture round-trips through scoped governance with organization an
     const personal = "personal:U1";
     const room = "channel:C1";
     const read = async (scope: string) => {
-      const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, { headers: ADMIN });
+      const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, {
+        headers: { ...testTenantHeaders(), ...ADMIN },
+      });
       assert.equal(response.status, 200);
       return (await response.json()) as { sharingPosture: string };
     };
     const put = async (scope: string, posture: string) =>
       fetch(`${srv.base}/v1/admin/scopes/${scope}/sharing-posture`, {
         method: "PUT",
-        headers: ADMIN,
+        headers: { ...testTenantHeaders(), ...ADMIN },
         body: JSON.stringify({ posture }),
       });
 
@@ -410,11 +458,11 @@ test("sharing posture round-trips through scoped governance with organization an
     assert.equal((await put(org, "invalid")).status, 400);
     const reset = await fetch(`${srv.base}/v1/admin/scopes/${room}/sharing-posture`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ inherit: true }),
     });
     assert.equal(reset.status, 200);
-    assert.equal(await srv.built.config.getSharingPostureOwnDurable(room), null);
+    assert.equal(await inTestTenant(() => srv.built.config.getSharingPostureOwnDurable(room)), null);
     assert.equal((await put(org, "open")).status, 200);
     assert.equal((await read(room)).sharingPosture, "open");
   } finally {
@@ -425,7 +473,9 @@ test("sharing posture round-trips through scoped governance with organization an
 test("approval grant modes round-trip, validate, and compose tighten-only across scopes", async () => {
   const srv = start();
   try {
-    const before = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const before = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.deepEqual(((await before.json()) as { approvalGrantModes: unknown }).approvalGrantModes, {
       session: true,
       always: true,
@@ -433,11 +483,13 @@ test("approval grant modes round-trip, validate, and compose tighten-only across
 
     const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/approval-grant-modes`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ session: true, always: false }),
     });
     assert.equal(put.status, 200);
-    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const after = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.deepEqual(((await after.json()) as { approvalGrantModes: unknown }).approvalGrantModes, {
       session: true,
       always: false,
@@ -445,11 +497,13 @@ test("approval grant modes round-trip, validate, and compose tighten-only across
 
     const scoped = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/approval-grant-modes`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ session: false, always: true }),
     });
     assert.equal(scoped.status, 200);
-    const channel = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
+    const channel = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.deepEqual(((await channel.json()) as { approvalGrantModes: unknown }).approvalGrantModes, {
       session: false,
       always: false,
@@ -457,7 +511,7 @@ test("approval grant modes round-trip, validate, and compose tighten-only across
 
     const invalid = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/approval-grant-modes`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ session: "yes" }),
     });
     assert.equal(invalid.status, 400);
@@ -469,12 +523,14 @@ test("approval grant modes round-trip, validate, and compose tighten-only across
 test("base-model is a sparse per-scope override: a channel pins its own model, empty clears back to inherit", async () => {
   const srv = start();
   try {
-    const def = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
+    const def = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await def.json()) as { baseModel: string | null }).baseModel, null);
 
     const unknown = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/base-model`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "not-a-model" }),
     });
     assert.equal(unknown.status, 400);
@@ -482,20 +538,24 @@ test("base-model is a sparse per-scope override: a channel pins its own model, e
 
     const put = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/base-model`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "claude-opus-4-8" }),
     });
     assert.equal(put.status, 200);
-    const got = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
+    const got = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await got.json()) as { baseModel: string | null }).baseModel, "claude-opus-4-8");
 
     const clear = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/base-model`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "" }),
     });
     assert.equal(clear.status, 200);
-    const afterClear = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN });
+    const afterClear = await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await afterClear.json()) as { baseModel: string | null }).baseModel, null);
   } finally {
     await srv.close();
@@ -508,11 +568,11 @@ test("admin runtime saves reasoning level and fast mode with the default model",
   try {
     const saved = await fetch(url, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "claude-opus-5", effortLevel: "high", fastMode: true }),
     });
     assert.equal(saved.status, 200);
-    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+    assert.deepEqual(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("org:default-org")), {
       modelId: "claude-opus-5",
       effortLevel: "high",
       fastMode: true,
@@ -522,11 +582,11 @@ test("admin runtime saves reasoning level and fast mode with the default model",
 
     const changedModel = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "claude-fable-5" }),
     });
     assert.equal(changedModel.status, 200);
-    assert.deepEqual(await srv.built.config.getRuntimeSelectionDurable("org:default-org"), {
+    assert.deepEqual(await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("org:default-org")), {
       modelId: "claude-fable-5",
       effortLevel: "high",
       fastMode: false,
@@ -536,17 +596,24 @@ test("admin runtime saves reasoning level and fast mode with the default model",
 
     const unsupported = await fetch(url, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "claude-fable-5", effortLevel: "low", fastMode: true }),
     });
     assert.equal(unsupported.status, 200);
-    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.fastMode, false);
+    assert.equal(
+      (await inTestTenant(() => srv.built.config.getRuntimeSelectionDurable("org:default-org")))?.fastMode,
+      false,
+    );
 
     for (const body of [
       { modelId: "claude-opus-5", effortLevel: "extreme", fastMode: true },
       { modelId: "claude-opus-5", effortLevel: "high", fastMode: "yes" },
     ]) {
-      assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify(body) })).status, 400);
+      assert.equal(
+        (await fetch(url, { method: "PUT", headers: { ...testTenantHeaders(), ...ADMIN }, body: JSON.stringify(body) }))
+          .status,
+        400,
+      );
     }
   } finally {
     await srv.close();
@@ -557,36 +624,38 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
   const srv = start();
   try {
     const org = (await (
-      await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })
+      await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: { ...testTenantHeaders(), ...ADMIN } })
     ).json()) as Record<string, unknown>;
     assert.equal("ambientPolicy" in org, false);
-    const empty = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
+    const empty = (await (
+      await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: { ...testTenantHeaders(), ...ADMIN } })
+    ).json()) as {
       ambientPolicy: { orders: string; bots: object; updatedAt: number };
     };
     assert.deepEqual(empty.ambientPolicy, { orders: "", bots: {}, ambientEnabled: null, updatedAt: 0 });
 
     const badScope = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "x", bots: {} }),
     });
     assert.equal(badScope.status, 400);
     const badMode = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "mute" } } }),
     });
     assert.equal(badMode.status, 400);
     assert.match(((await badMode.json()) as { message: string }).message, /mode must be one of/);
     const badHours = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "rollup", rollupHours: -2 } } }),
     });
     assert.equal(badHours.status, 400);
     const caseDup = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "", bots: { GitHub: { mode: "action" }, github: { mode: "ignore" } } }),
     });
     assert.equal(caseDup.status, 400);
@@ -594,35 +663,40 @@ test("ambient-policy edits a channel's standing order and bot ledger through the
 
     const put = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: '{"orders":"flag anything about the Q3 launch","bots":{"GitHub":{"mode":"rollup","rollupHours":24},"Linear":{"mode":"ignore"},"__proto__":{"mode":"ignore"}}}',
     });
     assert.equal(put.status, 200);
-    const got = (await (await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: ADMIN })).json()) as {
+    const got = (await (
+      await fetch(`${srv.base}/v1/admin/scopes/channel:C1`, { headers: { ...testTenantHeaders(), ...ADMIN } })
+    ).json()) as {
       ambientPolicy: { orders: string; bots: object; updatedAt: number };
     };
-    const stored = await srv.built.channelPolicy.get("C1");
+    const stored = await inTestTenant(() => srv.built.channelPolicy.get("C1"));
     assert.equal(got.ambientPolicy.orders, "flag anything about the Q3 launch");
     assert.deepEqual(Object.keys(got.ambientPolicy.bots).sort(), ["GitHub", "Linear", "__proto__"]);
     assert.equal(got.ambientPolicy.updatedAt, stored?.updatedAt);
     assert.equal(stored?.setBy, "admin-alice");
-    const revs = await srv.built.channelPolicy.history("C1");
+    const revs = await inTestTenant(() => srv.built.channelPolicy.history("C1"));
     assert.deepEqual(Object.keys(revs[0]?.bots ?? {}).sort(), ["GitHub", "Linear", "__proto__"]);
 
     const stale = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "overwrite", bots: {}, baseUpdatedAt: 1 }),
     });
     assert.equal(stale.status, 409);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "flag anything about the Q3 launch");
+    assert.equal(
+      (await inTestTenant(() => srv.built.channelPolicy.get("C1")))?.orders,
+      "flag anything about the Q3 launch",
+    );
     const fresh = await fetch(`${srv.base}/v1/admin/scopes/channel:C1/ambient-policy`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ orders: "updated", bots: {}, baseUpdatedAt: stored?.updatedAt }),
     });
     assert.equal(fresh.status, 200);
-    assert.equal((await srv.built.channelPolicy.get("C1"))?.orders, "updated");
+    assert.equal((await inTestTenant(() => srv.built.channelPolicy.get("C1")))?.orders, "updated");
   } finally {
     await srv.close();
   }
@@ -633,7 +707,7 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
   try {
     const bad = await fetch(`${srv.base}/v1/admin/scopes/personal:U1/webui-models`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ ids: ["claude-opus-4-8"] }),
     });
     assert.equal(bad.status, 400);
@@ -641,7 +715,7 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
 
     const unknown = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/webui-models`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ ids: ["not-a-model"] }),
     });
     assert.equal(unknown.status, 400);
@@ -649,39 +723,43 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
 
     const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/webui-models`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ ids: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-sonnet-4-6"] }),
     });
     assert.equal(put.status, 200);
-    const adminGet = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const adminGet = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.deepEqual(((await adminGet.json()) as { webuiModels: string[] }).webuiModels, [
       "claude-sonnet-4-6",
       "claude-opus-4-8",
     ]);
-    const surf = await fetch(`${srv.base}/v1/surface-config`);
+    const surf = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
     assert.deepEqual(((await surf.json()) as { webuiModels: string[] }).webuiModels, [
       "claude-sonnet-4-6",
       "claude-opus-4-8",
     ]);
 
-    const before = await fetch(`${srv.base}/v1/surface-config`);
+    const before = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
     assert.equal(((await before.json()) as { baseModel: string }).baseModel, "claude-opus-5");
     const setBase = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ modelId: "claude-sonnet-4-6" }),
     });
     assert.equal(setBase.status, 200);
-    const after = await fetch(`${srv.base}/v1/surface-config`);
+    const after = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
     assert.equal(((await after.json()) as { baseModel: string }).baseModel, "claude-sonnet-4-6");
 
     const clear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/webui-models`, {
       method: "PUT",
-      headers: ADMIN,
+      headers: { ...testTenantHeaders(), ...ADMIN },
       body: JSON.stringify({ ids: [] }),
     });
     assert.equal(clear.status, 200);
-    const afterClear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const afterClear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(((await afterClear.json()) as { webuiModels: string[] | null }).webuiModels, null);
   } finally {
     await srv.close();
@@ -691,14 +769,16 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
 test("GET /v1/admin/slack-emoji surfaces 404 without a token, and serves the plugin-published catalog once one exists", async () => {
   const srv = start();
   try {
-    let r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: ADMIN });
+    let r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: { ...testTenantHeaders(), ...ADMIN } });
     assert.equal(r.status, 404);
     assert.equal(((await r.json()) as { error?: string }).error, "not_configured");
 
-    await srv.built.slackCore.publishEmojiCatalog({
-      galaxy_brain: "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png",
-    });
-    r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: ADMIN });
+    await inTestTenant(() =>
+      srv.built.slackCore.publishEmojiCatalog({
+        galaxy_brain: "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png",
+      }),
+    );
+    r = await fetch(`${srv.base}/v1/admin/slack-emoji`, { headers: { ...testTenantHeaders(), ...ADMIN } });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { emoji: Record<string, string>; standard: unknown[] };
     assert.equal(body.emoji.galaxy_brain, "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png");
@@ -712,9 +792,15 @@ test("org purpose runtimes round-trip, validate, and clear independently", async
   const srv = start();
   const scopeUrl = `${srv.base}/v1/admin/scopes/org:default-org`;
   const get = async () =>
-    (await (await fetch(`${scopeUrl}?view=models`, { headers: ADMIN })).json()) as Record<string, unknown>;
+    (await (
+      await fetch(`${scopeUrl}?view=models`, { headers: { ...testTenantHeaders(), ...ADMIN } })
+    ).json()) as Record<string, unknown>;
   const put = (resource: string, body: unknown, scope = "org:default-org", headers = ADMIN) =>
-    fetch(`${srv.base}/v1/admin/scopes/${scope}/${resource}`, { method: "PUT", headers, body: JSON.stringify(body) });
+    fetch(`${srv.base}/v1/admin/scopes/${scope}/${resource}`, {
+      method: "PUT",
+      headers: { ...testTenantHeaders(), ...headers },
+      body: JSON.stringify(body),
+    });
   try {
     assert.equal((await get()).cronRuntime, null);
     assert.equal((await get()).subagentRuntime, null);

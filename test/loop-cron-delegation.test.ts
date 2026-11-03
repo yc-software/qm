@@ -7,6 +7,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
 
@@ -41,7 +42,7 @@ test("a loop-backed cron fires the loop instead of running a bare turn", async (
   assert.equal(fired.length, 1);
   assert.match(fired[0]!, /^L1:cron:/);
   assert.deepEqual(turns, []);
-  const { runs: after } = await d.crons.listFires(cron.id);
+  const { runs: after } = await inTestTenant(() => d.crons.listFires(cron.id));
   assert.equal(after.length, 1);
   assert.equal(after[0]?.status, "ok");
   assert.equal(after[0]?.note, "worked 1");
@@ -77,7 +78,7 @@ test("a failing loop fire is recorded on the cron's fire log and the schedule ad
   const cron = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire loop L1", loopId: "L1" });
   await scheduler.tick(cron.createdAt + 60_000);
   const after = await crons.get(cron.id);
-  const { runs } = await crons.listFires(cron.id);
+  const { runs } = await inTestTenant(() => crons.listFires(cron.id));
   assert.equal(runs[0]?.status, "failed");
   assert.match(runs[0]?.note ?? "", /loop exploded/);
   assert.equal(after?.enabled, true);
@@ -100,7 +101,7 @@ test("a loop-backed cron fails closed when the loop service is unavailable", asy
   });
   const cron = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire loop L1", loopId: "L1" });
   await scheduler.tick(cron.createdAt + 60_000);
-  const { runs } = await crons.listFires(cron.id);
+  const { runs } = await inTestTenant(() => crons.listFires(cron.id));
   assert.deepEqual(turns, []);
   assert.equal(runs[0]?.status, "failed");
   assert.equal(runs[0]?.note, "loop service unavailable");

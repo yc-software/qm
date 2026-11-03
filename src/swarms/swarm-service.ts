@@ -11,6 +11,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
+import { crossTenantLoop, inTenantOf, type Claimed } from "../tenants/claim.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
@@ -178,7 +179,6 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     runLeaseToken: true,
     attempt: true,
     finalAttempt: true,
-    background: true,
     cancel: true,
     shutdown: true,
     runStartedAt: true,
@@ -534,7 +534,7 @@ export function createSwarmService(deps: {
     resources: new Map<string, Promise<void>>(),
     delivery: new Map<string, Promise<void>>(),
   };
-  async function reconcileBatch(batch: Swarm[], phase: keyof typeof reconciling): Promise<void> {
+  async function reconcileBatch(batch: Array<Claimed<Swarm>>, phase: keyof typeof reconciling): Promise<void> {
     const active = reconciling[phase];
     const remaining = batch.values();
     await Promise.all(
@@ -547,7 +547,7 @@ export function createSwarmService(deps: {
           )
             continue;
           if (active.size >= SWARM_LIMITS.sweepConcurrency) return;
-          const operation = reconcile(swarm.id, phase)
+          const operation = inTenantOf(swarm.tenantId, () => reconcile(swarm.id, phase))
             .catch((error) => swallow("swarm outbox reconciliation", error))
             .finally(() => {
               active.delete(swarm.id);
@@ -560,7 +560,7 @@ export function createSwarmService(deps: {
       }),
     );
   }
-  const sweep = (): Promise<void> => {
+  const sweep = crossTenantLoop((): Promise<void> => {
     sweeping ??= (async () => {
       selecting ??= store.pending(afterId).finally(() => {
         selecting = undefined;
@@ -573,7 +573,7 @@ export function createSwarmService(deps: {
       sweeping = undefined;
     });
     return sweeping;
-  };
+  });
   const sweeper = createSweeper(sweep, 2_000, { label: "swarm-outbox", immediate: true });
 
   return {

@@ -14,7 +14,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -49,7 +49,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     headers: {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: user, exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };
@@ -102,8 +102,10 @@ test("SSE streams partial frames then a terminal done frame carrying the reply",
 });
 
 test("SSE relays tool activity frames and folds them into the done frame", async () => {
-  const computer = await built.sandboxResources.create("alice", "personal:alice", "sprites", "default");
-  await built.sandboxResources.setDefault("alice", "personal:alice", computer.id);
+  const computer = await inTestTenant(() =>
+    built.sandboxResources.create("alice", "personal:alice", "sprites", "default"),
+  );
+  await inTestTenant(() => built.sandboxResources.setDefault("alice", "personal:alice", computer.id));
   const submit = (await (
     await fetch(
       `${webBase}/api/turn`,
@@ -258,7 +260,7 @@ test("a completed long stream replays its bounded tail with absolute offsets and
       }),
     )
   ).json()) as { runId: string };
-  await built.runs.waitFor(submit.runId, 10_000);
+  await inTestTenant(() => built.runs.waitFor(submit.runId, 10_000));
   const res = await fetch(
     `${webBase}/api/runs/${submit.runId}/events`,
     asUser("alice", {

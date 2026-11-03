@@ -4,6 +4,8 @@ Ordinary queries, including the pg-boss cron queue, share the process-wide query
 
 Notification subscriptions share one direct connection per database URL per process. Session state, ledger events, run signals, and run streaming register their channels on that connection. Closing a consumer removes its subscription; the last unsubscribe closes the listener. Reconnection restores the active channel set before notifying consumers to resynchronize from durable state. Notifications remain wake-up hints, not durable storage.
 
+Background loops claim work across tenants through `claimAcrossTenants` in src/tenants/claim.ts, which is the only code that connects as DATABASE_OWNER_URL. That URL names the table owner login, which row security does not restrict, and claims use it exactly as configured through one pool. Core and the worker refuse to start without DATABASE_OWNER_URL. In tests, the runner sets it to each file's database, and the test database helpers point the claim helper at every database they create.
+
 Session advisory locks and leader leases continue to use direct session connections. Query pool sizes, PgBouncer backend limits, and database placement are unchanged. Multiple processes and separate company databases still have separate listeners and pools.
 
 Validate notification delivery, reconnection, and teardown with test/postgres-listener.test.ts against a disposable DATABASE_URL. The race and queue lifecycle tests run with the standard module-mocking test command. scripts/test-pgbouncer.sh exercises queue startup, execution, shutdown, and restart through a one-backend transaction pool.

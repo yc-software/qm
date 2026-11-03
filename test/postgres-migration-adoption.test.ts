@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 
-const url = process.env.DATABASE_URL;
+const url = process.env.DATABASE_OWNER_URL;
 
 for (const legacyApplied of [false, true]) {
   test(`legacy migration adoption preserves a completed sweep: ${legacyApplied}`, { skip: !url }, async () => {

@@ -16,8 +16,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -56,10 +55,10 @@ test("C3 — a host-wide environment token never reaches an unconnected catalog 
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-tenant — the callback rejects sealed state that names no tenant BEFORE exchange", async () => {
+test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -73,15 +72,19 @@ test("cross-tenant — the callback rejects sealed state that names no tenant BE
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
-    const state = await mintSignedPayload(
-      { provider: "google", principalId: "U1", redirectUri, issuedAt: Date.now(), nonce: "n1", orgId: "other" },
-      SECRET,
+    const state = await sealOAuthState(
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+        orgId: "other",
+      },
+      { secret: SECRET },
     );
-    const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
-    assert.match(await res.text(), /invalid OAuth state/);
-    assert.equal(exchanged, false, "exchange must NOT run for a state that names no tenant");
+    assert.match(await res.text(), /different org/);
+    assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
     assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
@@ -90,7 +93,7 @@ test("cross-tenant — the callback rejects sealed state that names no tenant BE
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -102,11 +105,7 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-      },
+      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
       { secret: SECRET },
     );
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
@@ -124,14 +123,14 @@ test("empty-token guard — an adapter returning no access token fails the conne
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(TEST_TENANT, built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -160,21 +159,22 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
       };
 }
 
-test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
-  await built.identity.ready();
-  await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
-  await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
-  const key = envKey("gmail.googleapis.com");
-  const absent = `!run test -z "$${key}" && echo absent`;
-  assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
-  const command = `test "$${key}" = u1-gmail && echo authenticated`;
-  const selected = `!execute ${JSON.stringify({ command, credentials: ["connector:gmail.googleapis.com:default"] })}`;
-  assert.equal((await built.app.turn({ ...turn("dm", selected), liveActor: true })).reply, "authenticated");
-  assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
-  assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
-  await assert.rejects(built.app.turn(turn("channel", selected)), /not available/);
-});
+test("F1/F3 — a live DM receives only its requested connector; a channel receives none", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+    await inTestTenant(() => built.identity.ready());
+    await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
+    await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
+    const key = envKey("gmail.googleapis.com");
+    const absent = `!run test -z "$${key}" && echo absent`;
+    assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
+    const command = `test "$${key}" = u1-gmail && echo authenticated`;
+    const selected = `!execute ${JSON.stringify({ command, credentials: ["connector:gmail.googleapis.com:default"] })}`;
+    assert.equal((await built.app.turn({ ...turn("dm", selected), liveActor: true })).reply, "authenticated");
+    assert.equal((await built.app.turn({ ...turn("dm", absent), liveActor: true })).reply, "absent");
+    assert.equal((await built.app.turn(turn("channel", absent))).reply, "absent");
+    await assert.rejects(built.app.turn(turn("channel", selected)), /not available/);
+  }));
 
 function wake(text: string, readOnly: boolean): TurnRequest {
   return {
@@ -188,110 +188,120 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 }
 
 for (const surface of ["cron", "loop"]) {
-  test(`personal ${surface} selects owner credentials without grants`, async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
-    await built.identity.ready();
-    await selectDefaultSandbox(built, "U1", "personal:U1");
-    await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
-    const saved = await built.keychain!.save({
-      ownerId: "U1",
-      service: "test",
-      secret: "owner-secret",
-      envKey: "OWNER_TOKEN",
-    });
-    const other = await built.keychain!.save({
-      ownerId: "U2",
-      service: "test",
-      secret: "other-secret",
-      envKey: "OTHER_TOKEN",
-    });
-    const request = (text: string): TurnRequest => ({ ...wake(text, false), surface, origin: { kind: "automation" } });
-    const key = envKey("gmail.googleapis.com");
-    const absent = `!run test -z "$${key}" && test -z "$OWNER_TOKEN" && echo absent`;
-    assert.equal((await built.app.turn(request(absent))).reply, "absent");
-    const selected = `!execute ${JSON.stringify({ command: `test "$${key}" = u1-gmail && test "$OWNER_TOKEN" = owner-secret && echo authenticated`, credentials: ["connector:gmail.googleapis.com:default", credentialHandle(saved)] })}`;
-    assert.equal((await built.app.turn(request(selected))).reply, "authenticated");
-    assert.equal((await built.app.turn(request(absent))).reply, "absent");
-    await assert.rejects(
-      built.app.turn({
-        ...request(selected),
-        conversation: { kind: "channel", channelRef: "C1", threadRef: "shared-automation" },
-      }),
-      /not available/,
-    );
-    await assert.rejects(
-      built.app.turn(
-        request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
-      ),
-      /not available/,
-    );
-    assert.deepEqual(await built.keychain!.listGrants({}), []);
-  });
+  test(`personal ${surface} selects owner credentials without grants`, () =>
+    inTestTenant(async () => {
+      const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+      await inTestTenant(() => built.identity.ready());
+      await selectDefaultSandbox(built, "U1", "personal:U1");
+      await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
+      const saved = await built.keychain!.save({
+        ownerId: "U1",
+        service: "test",
+        secret: "owner-secret",
+        envKey: "OWNER_TOKEN",
+      });
+      const other = await built.keychain!.save({
+        ownerId: "U2",
+        service: "test",
+        secret: "other-secret",
+        envKey: "OTHER_TOKEN",
+      });
+      const request = (text: string): TurnRequest => ({
+        ...wake(text, false),
+        surface,
+        origin: { kind: "automation" },
+      });
+      const key = envKey("gmail.googleapis.com");
+      const absent = `!run test -z "$${key}" && test -z "$OWNER_TOKEN" && echo absent`;
+      assert.equal((await built.app.turn(request(absent))).reply, "absent");
+      const selected = `!execute ${JSON.stringify({ command: `test "$${key}" = u1-gmail && test "$OWNER_TOKEN" = owner-secret && echo authenticated`, credentials: ["connector:gmail.googleapis.com:default", credentialHandle(saved)] })}`;
+      assert.equal((await built.app.turn(request(selected))).reply, "authenticated");
+      assert.equal((await built.app.turn(request(absent))).reply, "absent");
+      await assert.rejects(
+        built.app.turn({
+          ...request(selected),
+          conversation: { kind: "channel", channelRef: "C1", threadRef: "shared-automation" },
+        }),
+        /not available/,
+      );
+      await assert.rejects(
+        built.app.turn(
+          request(`!execute ${JSON.stringify({ command: "true", credentials: [credentialHandle(other)] })}`),
+        ),
+        /not available/,
+      );
+      assert.deepEqual(await built.keychain!.listGrants({}), []);
+    }));
 }
 
-test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
-  await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
+test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", () =>
+  inTestTenant(async () => {
+    const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
+    await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
 
-  fakeSprites.reset();
-  const res = await built.app.turn(wake("[wake] glance only", true));
-  assert.equal(res.status, "ok");
-  assert.ok(
-    !fakeSprites.calls.some((c) => c.method === "WS" && c.path.endsWith("/exec")),
-    "a read-only wake spins no sandbox exec",
-  );
-});
+    fakeSprites.reset();
+    const res = await built.app.turn(wake("[wake] glance only", true));
+    assert.equal(res.status, "ok");
+    assert.ok(
+      !fakeSprites.calls.some((c) => c.method === "WS" && c.path.endsWith("/exec")),
+      "a read-only wake spins no sandbox exec",
+    );
+  }));
 
 for (const expiredPersonal of [false, true]) {
-  test(`connector catalog (bulk) exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }));
-    await built.identity.ready();
+  test(`connector catalog (bulk) exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, () =>
+    inTestTenant(async () => {
+      const built = buildApp(
+        testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }),
+      );
+      await inTestTenant(() => built.identity.ready());
+      await selectDefaultSandbox(built, "U1", "personal:U1");
+      const host = "gmail.googleapis.com";
+      await built.connectorTokens.setConnectorToken(
+        host,
+        "U1",
+        { accessToken: "personal-token", expiresAt: Date.now() + (expiredPersonal ? -1000 : 3600000) },
+        "personal",
+      );
+      await built.connectorTokens.setConnectorToken(
+        host,
+        "U1",
+        { accessToken: "company-token", expiresAt: Date.now() + 3600000 },
+        "company",
+      );
+      const accesses: Array<string | undefined> = [];
+      const original = built.connectorTokens.connectorAccessToken.bind(built.connectorTokens);
+      built.connectorTokens.connectorAccessToken = async (...args) => {
+        accesses.push(args[2]);
+        return original(...args);
+      };
+      const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
+      assert.deepEqual(accesses, []);
+      assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:company/);
+      if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
+      else assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
+      for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
+        const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector:gmail.googleapis.com:${account}`] })}`;
+        assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
+      }
+      assert.deepEqual(accesses, expiredPersonal ? ["company"] : ["personal", "company"]);
+    }));
+}
+
+test("explicit default OAuth accounts remain discoverable through bulk metadata", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1 }));
+    await inTestTenant(() => built.identity.ready());
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const host = "gmail.googleapis.com";
     await built.connectorTokens.setConnectorToken(
       host,
       "U1",
-      { accessToken: "personal-token", expiresAt: Date.now() + (expiredPersonal ? -1000 : 3600000) },
-      "personal",
+      { accessToken: "explicit-default-token", accountType: "default" },
+      "default",
     );
-    await built.connectorTokens.setConnectorToken(
-      host,
-      "U1",
-      { accessToken: "company-token", expiresAt: Date.now() + 3600000 },
-      "company",
-    );
-    const accesses: Array<string | undefined> = [];
-    const original = built.connectorTokens.connectorAccessToken.bind(built.connectorTokens);
-    built.connectorTokens.connectorAccessToken = async (...args) => {
-      accesses.push(args[2]);
-      return original(...args);
-    };
     const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
-    assert.deepEqual(accesses, []);
-    assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:company/);
-    if (expiredPersonal) assert.doesNotMatch(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
-    else assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:personal/);
-    for (const account of expiredPersonal ? ["company"] : ["personal", "company"]) {
-      const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = ${account}-token && echo selected`, credentials: [`connector:gmail.googleapis.com:${account}`] })}`;
-      assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
-    }
-    assert.deepEqual(accesses, expiredPersonal ? ["company"] : ["personal", "company"]);
-  });
-}
-
-test("explicit default OAuth accounts remain discoverable through bulk metadata", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1 }));
-  await built.identity.ready();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
-  const host = "gmail.googleapis.com";
-  await built.connectorTokens.setConnectorToken(
-    host,
-    "U1",
-    { accessToken: "explicit-default-token", accountType: "default" },
-    "default",
-  );
-  const prompt = await built.app.turn({ ...turn("dm", "!sysprompt"), liveActor: true });
-  assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:default/);
-  const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = explicit-default-token && echo selected`, credentials: ["connector:gmail.googleapis.com:default"] })}`;
-  assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
-});
+    assert.match(prompt.reply ?? "", /connector:gmail.googleapis.com:default/);
+    const text = `!execute ${JSON.stringify({ command: `test "$${envKey(host)}" = explicit-default-token && echo selected`, credentials: ["connector:gmail.googleapis.com:default"] })}`;
+    assert.equal((await built.app.turn({ ...turn("dm", text), liveActor: true })).reply, "selected");
+  }));

@@ -7,8 +7,13 @@ import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const [TEST_TENANT] = testTenants();
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { storedItem } from "../src/sessions/items.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
   stopAtEnd(
@@ -18,7 +23,11 @@ const buildApp = (config: Config, overrides: Parameters<typeof buildProductionAp
     }),
   );
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 const MODEL_ID = "overlay-future-model";
 
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
@@ -28,7 +37,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, serverDeps(config, built));
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -208,8 +217,8 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  await built.modelCredentials.set("openai", "local-test-key", "admin-alice");
-  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
+  await inTestTenant(() => built.modelCredentials.set("openai", "local-test-key", "admin-alice"));
+  const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
@@ -255,18 +264,20 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.ok(body.models.includes(MODEL_ID));
     const wire = JSON.stringify(body.modelCatalog);
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
-    const turn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-live-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const turn = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef: "overlay-live-test" },
+        text: "hello",
+        model: MODEL_ID,
+        async: true,
+      }),
+    );
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID });
+    await inTestTenant(() => built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID }));
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
       "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
@@ -282,31 +293,35 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.match(unavailable.unavailableReason, /deleted/);
     assert.ok(unavailable.models.includes("gpt-5.6-sol"));
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
-    const deletedTurn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const deletedTurn = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
+        text: "hello",
+        model: MODEL_ID,
+        async: true,
+      }),
+    );
     assert.equal(deletedTurn.status, "refused");
     assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
     const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });
     assert.equal(recovered.status, 200);
     assert.equal(((await recovered.json()) as { effective: { modelId: string } }).effective.modelId, "gpt-5.6-sol");
     for (const model of [undefined, "gpt-5.6-sol"]) {
-      const recoveredTurn = await built.app.turn({
-        surface: "web",
-        actor: { externalId: runtime.principalId },
-        conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
-        text: "Continue with the replacement I selected",
-        ...(model ? { model } : {}),
-        async: true,
-      });
+      const recoveredTurn = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: runtime.principalId },
+          conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
+          text: "Continue with the replacement I selected",
+          ...(model ? { model } : {}),
+          async: true,
+        }),
+      );
       assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
     }
-    const events = await built.auditLog.events();
+    const events = await inTestTenant(() => built.auditLog.events());
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {
@@ -381,13 +396,8 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
       orgScopeId: "org:default-org" as const,
-      emit: async (entry: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) => ({
-        ...entry,
-        seq: 1,
-        sessionId: "overlay-runtime",
-        parentSeq: null,
-        createdAt: Date.now(),
-      }),
+      emit: async (item: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) =>
+        storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
     };
     await agent.runTurn(turn);
     assert.equal(received?.model, MODEL_ID);
@@ -467,7 +477,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       await registry.refresh();
     },
   };
-  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
+  const server = createInsecureTestServer(built.app, deps);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
@@ -509,7 +519,6 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");

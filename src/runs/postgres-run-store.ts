@@ -9,14 +9,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import {
-  countedClaims,
-  isTerminal,
-  releasesDedupKey,
-  runPriority,
-  stopErrorCode,
-  withTraceCarrier,
-} from "./run-store.ts";
+import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../tenants/claim.ts";
@@ -66,7 +59,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     TENANCY_BASE,
     {
       id: "runs/store/0011-base-schema",
@@ -131,6 +124,7 @@ END $base_schema$`,
       },
     ]),
   ]);
+  const { query: q, close: closePool } = pg;
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -142,7 +136,7 @@ END $base_schema$`,
     availabilityTimer = setTimeout(
       crossTenantLoop(() => {
         availabilityTimer = undefined;
-        availabilityProbe = q(
+        availabilityProbe = claimAcrossTenants(
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
@@ -225,11 +219,17 @@ END $base_schema$`,
       OFFSET 0
     )`;
 
-  async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
+  async function claimWith(
+    query: (text: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>,
+    workerId: string,
+    ttlMs: number,
+    runId?: string,
+    sessionId?: string,
+  ): Promise<Run | null> {
     const token = randomUUID();
     const now = Date.now();
     try {
-      const { rows } = await q(
+      const { rows } = await query(
         `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
            attempts=attempts+1, started_at=COALESCE(started_at,$4)
          WHERE id = (
@@ -296,12 +296,12 @@ END $base_schema$`,
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    claim,
+    claim: (workerId, ttlMs) => claimWith((text, params) => claimAcrossTenants(text, params), workerId, ttlMs),
 
-    claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
-    claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
+    claimById: (runId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, runId),
+    claimForSession: (sessionId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, undefined, sessionId),
     async personWaiting(createdBefore) {
-      const { rows } = await q(
+      const { rows } = await claimAcrossTenants(
         `SELECT EXISTS (
            SELECT 1 FROM runs candidate WHERE ${claimable("$2")}
              AND candidate.claim_priority=0 AND candidate.created_at <= $1
@@ -319,20 +319,19 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async releaseLease(runId, leaseToken, stop): Promise<boolean> {
+    async releaseLease(runId, leaseToken, stop, retryAfter = 0): Promise<boolean> {
       const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4 WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0],
+        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4, retry_after=GREATEST(retry_after, $5) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
+        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0, retryAfter],
       );
       return rowCount > 0;
     },
 
     async complete(runId, leaseToken, result): Promise<boolean> {
       const { rowCount } = await q(
-        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
-           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
+        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2
          WHERE id=$3 AND lease_token=$4 RETURNING pg_notify('qm_run_available', 'null')`,
-        [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
+        [JSON.stringify(result), Date.now(), runId, leaseToken],
       );
       if (rowCount > 0) {
         settle(await getRun(runId));
@@ -404,7 +403,6 @@ END $base_schema$`,
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await claimAcrossTenants(
-        { query: q },
         `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
@@ -422,7 +420,6 @@ END $base_schema$`,
     },
     async terminalFinished(after, beforeMs, limit) {
       const { rows } = await claimAcrossTenants(
-        { query: q },
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
@@ -520,13 +517,12 @@ END $base_schema$`,
       return rows.map(rowToRun);
     },
 
-    async reapExpired(
-      onRetired?: (sessionIds: string[]) => Promise<void>,
-      opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-    ): Promise<{ requeued: number; parked: number }> {
+    async reapExpired(opts?: {
+      maxAgeMs?: number;
+      onReap?: (event: ReapEvent) => void;
+    }): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await claimAcrossTenants(
-        { query: q },
         "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
         [now],
       );
@@ -542,7 +538,6 @@ END $base_schema$`,
           [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
         );
         if (!fenced.rows[0]) return;
-        if (onRetired) await onRetired([run.sessionId]);
         const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
         if (!r.applied) return;
         if (r.requeued) requeued++;

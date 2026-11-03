@@ -22,7 +22,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -42,15 +42,14 @@ const SESSION_SECRET = "portal-session-secret";
 const SESSION_DEPS = {
   deployAppsSessionSecret: SESSION_SECRET,
   deployAppsLoginUrl: "https://portal.example.com",
-  rowTenants: async () => [TEST_TENANT],
 } as const;
 
 function mintPortalSession(sub: string): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", tenant: TEST_TENANT, iat: now, exp: now + 3600 }),
-  ).toString("base64url");
+  const body = Buffer.from(JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 })).toString(
+    "base64url",
+  );
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 
@@ -80,21 +79,23 @@ test("reachDeployment: a provider's resolveEndpoint refreshes (and persists) the
     destroy: async () => {},
   };
   const { deploy, deployStore } = serviceWithProvider(provider);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("org", "default-org"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("org", "default-org"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   assert.equal(applies, 1);
 
   resolved = { host: "warm", port: 443, tls: true, proxyHeaders: { "X-aws-proxy-auth": "fresh" } };
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const reach = await inTestTenant(() => deploy.reachDeployment(d.id, "U-any"));
   assert.equal(reach.status, "ok");
   assert.equal(reach.status === "ok" && reach.endpoint.host, "warm", "the refreshed endpoint is returned");
   assert.equal(applies, 1, "a warm refresh does not re-apply");
   assert.equal(
-    (await deployStore.get(d.id))!.endpoint!.proxyHeaders!["X-aws-proxy-auth"],
+    (await inTestTenant(() => deployStore.get(d.id)))!.endpoint!.proxyHeaders!["X-aws-proxy-auth"],
     "fresh",
     "the refreshed endpoint is persisted",
   );
@@ -112,15 +113,17 @@ test("reachDeployment: a null resolveEndpoint re-applies the current version fro
     destroy: async () => {},
   };
   const { deploy } = serviceWithProvider(provider);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("org", "default-org"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("org", "default-org"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   assert.equal(applies, 1);
 
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const reach = await inTestTenant(() => deploy.reachDeployment(d.id, "U-any"));
   assert.equal(reach.status, "ok");
   assert.equal(applies, 2, "a gone body triggers a re-apply");
   assert.equal(reach.status === "ok" && reach.endpoint.host, "body-2", "the freshly re-applied endpoint is served");
@@ -133,13 +136,15 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
     destroy: async () => {},
   };
   const { deploy } = serviceWithProvider(provider);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("org", "default-org"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
-  const reach = await deploy.reachDeployment(d.id, "U-any");
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("org", "default-org"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
+  const reach = await inTestTenant(() => deploy.reachDeployment(d.id, "U-any"));
   assert.equal(reach.status === "ok" && reach.endpoint.host, "frozen");
 });
 
@@ -196,14 +201,16 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const app = await appServingUpstream(upstreamPort);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -262,14 +269,16 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const app = await appServingUpstream(upstreamPort);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "throttled",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "throttled",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -303,14 +312,16 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const app = await appServingUpstream(upstreamPort);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "ratelimited",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "ratelimited",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -339,7 +350,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
 
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
   const app = await appServingUpstream(1);
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
@@ -363,13 +374,15 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const app = await appServingUpstream(upstreamPort);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "idsite",
-  });
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "idsite",
+    }),
+  );
   const signingSecret = "s".repeat(64);
   const server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -414,14 +427,16 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
   });
   upstream.listen(0);
   const app = await appServingUpstream((upstream.address() as AddressInfo).port);
-  const d = await app.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-    name: "framed",
-  });
-  const server = createInsecureTestServer(TEST_TENANT, app, {
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "framed",
+    }),
+  );
+  const server = createInsecureTestServer(app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -438,7 +453,9 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     assert.equal(notOptedIn.status, 401, "an app that has not opted in never honours the twin");
     assert.ok(!String(notOptedIn.headers["content-security-policy"] ?? "").includes("frame-ancestors"));
 
-    await app.setDeploymentEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]);
+    await inTestTenant(() =>
+      app.setDeploymentEmbedAncestors(d.id, ["https://internal.example.com", "https://mail.google.com"]),
+    );
 
     const framed = await httpGet(port, "/", { Host: host, Cookie: twin, ...frameDoc });
     assert.equal(framed.status, 200, "the frame document authenticates with the twin");

@@ -24,6 +24,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -59,13 +60,15 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({
-    ownerScopeId: personalScope(PUBLISHER),
-    createdBy: PUBLISHER,
-    entrypoint: "x",
-    files: [],
-    name: "mailer",
-  });
+  const d = await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: personalScope(PUBLISHER),
+      createdBy: PUBLISHER,
+      entrypoint: "x",
+      files: [],
+      name: "mailer",
+    }),
+  );
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
   const server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -91,30 +94,34 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     });
     return { status: res.status, json: (await res.json()) as Record<string, unknown> };
   };
-  const appToken = await mintCapabilityToken(
-    {
-      actorId: PUBLISHER,
-      scopeId: personalScope(PUBLISHER),
-      aud: CREDENTIAL_BROKER_AUD,
-      credentials: [],
-      deployment: d.id,
-      exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-    },
-    SIGNING,
+  const appToken = await inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId: PUBLISHER,
+        scopeId: personalScope(PUBLISHER),
+        aud: CREDENTIAL_BROKER_AUD,
+        credentials: [],
+        deployment: d.id,
+        exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+      },
+      SIGNING,
+    ),
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
   const lend = async (actorId: string, connectors: unknown, liveActor = true) =>
     call(
       `/v1/deployments/${d.id}/connectors`,
-      await mintCapabilityToken(
-        {
-          actorId,
-          scopeId: personalScope(actorId),
-          aud: CONTROL_PLANE_AUD,
-          ...(liveActor ? { liveActor: true } : {}),
-          exp: Date.now() + 60_000,
-        },
-        SIGNING,
+      await inTestTenant(() =>
+        mintCapabilityToken(
+          {
+            actorId,
+            scopeId: personalScope(actorId),
+            aud: CONTROL_PLANE_AUD,
+            ...(liveActor ? { liveActor: true } : {}),
+            exp: Date.now() + 60_000,
+          },
+          SIGNING,
+        ),
       ),
       { connectors },
     );
@@ -178,24 +185,27 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 
 test("public apps cannot borrow connectors", async (t) => {
   const h = await agent(t);
-  await h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER });
+  await inTestTenant(() => h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER }));
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
-  await h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER });
+  await inTestTenant(() => h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER }));
   await h.lend(PUBLISHER, ["slack.com"]);
-  await assert.rejects(h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER }), /cannot be public/);
+  await assert.rejects(
+    inTestTenant(() => h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER })),
+    /cannot be public/,
+  );
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
   const h = await agent(t);
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
+  await inTestTenant(() => h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER }));
   assert.equal((await h.broker(get("slack.com"))).status, 200, "the publisher's own publish keeps it");
 
-  await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: CO_MANAGER });
+  await inTestTenant(() => h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: CO_MANAGER }));
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.principalId === CO_MANAGER));
 
   await h.lend(PUBLISHER, ["slack.com"]);
-  await h.app.rollbackDeployment(h.d.id, 1, CO_MANAGER);
+  await inTestTenant(() => h.app.rollbackDeployment(h.d.id, 1, CO_MANAGER));
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "a rollback counts too");
 });

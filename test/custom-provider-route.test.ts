@@ -12,10 +12,14 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
-const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
+const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org", ...testTenantHeaders() };
 
 afterEach(() => setCustomProviders([]));
 
@@ -27,7 +31,7 @@ function start(modelCredentialFetch: typeof fetch = async () => new Response(nul
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "custom-provider-route-")) }), {
     modelCredentialFetch,
   });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,

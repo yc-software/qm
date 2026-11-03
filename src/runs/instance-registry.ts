@@ -1,4 +1,18 @@
-import type { PgPool } from "../persistence/pg-pool.ts";
+import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
+
+export const INSTANCE_HEARTBEAT_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  {
+    id: "runs/instance-heartbeats/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS instance_heartbeats(
+         instance_id TEXT PRIMARY KEY,
+         build_sha TEXT NOT NULL,
+         started_at BIGINT NOT NULL,
+         beat_at TIMESTAMPTZ NOT NULL
+       )`,
+    ],
+  },
+];
 
 export interface InstanceRegistry {
   beat(): Promise<boolean>;
@@ -15,17 +29,7 @@ export function createPostgresInstanceRegistry(
   opts: { instanceId: string; buildSha: string; startedAt: number; livenessMs?: number },
 ): InstanceRegistry {
   const livenessMs = opts.livenessMs ?? INSTANCE_LIVENESS_MS;
-  pg.registerMigration({
-    id: "runs/instance-heartbeats/0001",
-    statements: [
-      `CREATE TABLE IF NOT EXISTS instance_heartbeats(
-         instance_id TEXT PRIMARY KEY,
-         build_sha TEXT NOT NULL,
-         started_at BIGINT NOT NULL,
-         beat_at TIMESTAMPTZ NOT NULL
-       )`,
-    ],
-  });
+  for (const migration of INSTANCE_HEARTBEAT_MIGRATIONS) pg.registerMigration(migration);
 
   return {
     async beat(): Promise<boolean> {

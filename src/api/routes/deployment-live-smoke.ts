@@ -2,6 +2,7 @@ import { sendJson } from "../http.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { requireDeploymentControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
+import { signedTenant } from "./tenant-settings.ts";
 import { uuidSchema } from "../../util/ids.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -9,7 +10,7 @@ const running = new WeakSet<object>();
 const REQUEST_EXPIRY = Date.UTC(9999, 0, 1);
 
 async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
-  if (!requireDeploymentControl(ctx)) return;
+  if (!requireDeploymentControl(ctx) || !signedTenant(ctx.res)) return;
   const control = ctx.deps.backgroundOwnership!;
   const run = ctx.deps.deploymentLiveSmoke;
   const replay = ctx.deps.replayDedupe;
@@ -62,11 +63,5 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentLiveSmokeRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  {
-    method: "POST",
-    path: "/v1/deployment/live-session",
-    actor: "system",
-    auth: "source",
-    handle: deploymentLiveSmoke,
-  },
+  { method: "POST", path: "/v1/deployment/live-session", actor: "system", auth: "source", handle: deploymentLiveSmoke },
 ];

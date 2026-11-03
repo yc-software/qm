@@ -14,9 +14,13 @@ import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 async function start(
   keys: Partial<Record<ModelProvider, string>> = { anthropic: "deployment-anthropic-key" },
@@ -25,9 +29,9 @@ async function start(
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")) });
   const built = stopAtEnd(buildApp(config, { tenantSettings: testTenantSettings(settings) }));
   for (const [provider, key] of Object.entries(keys))
-    await built.modelCredentials.set(provider as ModelProvider, key, "test");
-  await built.tenantSettings.get();
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+    await inTestTenant(() => built.modelCredentials.set(provider as ModelProvider, key, "test"));
+  await inTestTenant(() => built.tenantSettings.get());
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
@@ -73,7 +77,7 @@ test("ChatGPT OAuth stays separate from OpenAI API-key availability", async () =
   const built = stopAtEnd(
     buildApp(testConfig(), { tenantSettings: testTenantSettings({ CODEX_AUTH_CREDENTIAL: "company-chatgpt" }) }),
   );
-  await built.tenantSettings.get();
+  await inTestTenant(() => built.tenantSettings.get());
   const configured = await built.modelCredentials.availability();
   assert.equal(configured.openai, false);
   assert.equal(configured.codexOAuth, true);

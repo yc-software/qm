@@ -429,6 +429,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       }),
     );
   }
+  if (config.services.includes("portal") && service === "web-ui") {
+    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
+  }
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(withoutTenantSettings(env)).sort(([a], [b]) => a.localeCompare(b)));
 }
@@ -3008,7 +3011,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${tenant}\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${tenant ? `${tenant}\n` : ""}${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,

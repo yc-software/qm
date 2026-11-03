@@ -18,6 +18,7 @@ import {
 } from "../src/memory/bench.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const FIXTURE_DIR = fileURLToPath(new URL("./memory-bench/conversations/", import.meta.url));
 
@@ -47,8 +48,8 @@ test("replayConversation runs every turn through the strategy and writes the not
       { input: "remember that I prefer terse replies", reply: "ok" },
     ],
   };
-  await replayConversation(strategy, "user:U1", conv);
-  const notebook = await memory.read("user:U1");
+  await inTestTenant(() => replayConversation(strategy, "user:U1", conv));
+  const notebook = await inTestTenant(() => memory.read("user:U1"));
   assert.match(notebook, /billing service/);
   assert.match(notebook, /terse replies/);
 });
@@ -57,8 +58,8 @@ test("replayConversation tolerates strategies with no automatic capture (agent-o
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const { strategy } = createMemoryStrategy("agent-only", { agent: createMockAgent(), memory });
   const conv: BenchConversation = { id: "t", description: "test", turns: [{ input: "hi", reply: "yo" }] };
-  await replayConversation(strategy, "user:U1", conv);
-  assert.equal(await memory.read("user:U1"), "");
+  await inTestTenant(() => replayConversation(strategy, "user:U1", conv));
+  assert.equal(await inTestTenant(() => memory.read("user:U1")), "");
 });
 
 test("renderJudgeInput includes the transcript and marks an empty notebook", () => {

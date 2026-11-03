@@ -1,6 +1,7 @@
 import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
+import { isAgentReply } from "../sessions/items.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
@@ -47,7 +48,7 @@ const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntries" | "get">;
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
@@ -81,10 +82,9 @@ export function createSuggestedActivityService(deps: {
       const session = await deps.sessions.get(run.sessionId);
       if (!session || session.scopeId !== scopeId("personal", principalId) || session.threadRef !== run.threadRef)
         continue;
-      const seq = await deps.sessions.latestEntrySeq(session.id);
-      const entries = await deps.sessions.getEntries(session.id, { sinceSeq: Math.max(0, seq - 20), limit: 20 });
-      const final = entries.findLast((entry) => entry.type === "assistant");
-      const text = (final?.payload as { text?: unknown } | undefined)?.text;
+      const seq = await deps.sessions.latestItemSeq(session.id);
+      const items = await deps.sessions.getItems(session.id, { sinceSeq: Math.max(0, seq - 20), limit: 20 });
+      const text = items.findLast(isAgentReply)?.text;
       if (typeof text !== "string") continue;
       try {
         const activities = parseSuggestedActivities(text);

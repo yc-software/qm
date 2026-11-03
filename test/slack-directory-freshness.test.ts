@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import { test, type TestContext } from "node:test";
+import { test as nodeTest, type TestContext } from "node:test";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: (t: TestContext) => void | Promise<void>): void {
+  nodeTest(name, (t) => inTestTenant(() => fn(t)));
+}
 
 const channel = (id: string, isPrivate = false) => ({
   id,

@@ -50,7 +50,6 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   operator?: true;
   allowedInStrict?: true;
   maxBodyBytes?: number;
-  unbound?: true;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {

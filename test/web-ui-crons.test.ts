@@ -13,7 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -46,7 +46,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     headers: {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: user, exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };
@@ -57,14 +57,16 @@ interface CronBody {
 }
 
 test("list, rename, archive, disable, enable, run, delete are owner-gated", async () => {
-  const created = await built.app.createCron({
-    title: "Inbox summary",
-    action: "summarize my inbox",
-    schedule: { everyMs: 3_600_000 },
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "personal:alice",
-  });
+  const created = await inTestTenant(() =>
+    built.app.createCron({
+      title: "Inbox summary",
+      action: "summarize my inbox",
+      schedule: { everyMs: 3_600_000 },
+      owner: "alice",
+      createdBy: "alice",
+      ownerScopeId: "personal:alice",
+    }),
+  );
   const id = created.id;
 
   const aliceList = (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
@@ -140,53 +142,63 @@ test("cron routes require a signed-in principal (401 without a cookie)", async (
 });
 
 test("retained cron runs are private to people who can manage the cron", async () => {
-  const cron = await built.app.createCron({
-    title: "Private report",
-    action: "compile a private report",
-    schedule: { everyMs: 3_600_000 },
-    owner: "run-owner",
-    createdBy: "run-owner",
-    ownerScopeId: "personal:run-owner",
-  });
-  await built.crons.recordFire(cron.id, {
-    fireKey: "private-fire",
-    threadRef: "cron:private-fire",
-    firedAt: Date.now(),
-    status: "ok",
-    reply: "private result",
-    sessionId: "private-session",
-  });
+  const cron = await inTestTenant(() =>
+    built.app.createCron({
+      title: "Private report",
+      action: "compile a private report",
+      schedule: { everyMs: 3_600_000 },
+      owner: "run-owner",
+      createdBy: "run-owner",
+      ownerScopeId: "personal:run-owner",
+    }),
+  );
+  await inTestTenant(() =>
+    built.crons.recordFire(cron.id, {
+      fireKey: "private-fire",
+      threadRef: "cron:private-fire",
+      firedAt: Date.now(),
+      status: "ok",
+      reply: "private result",
+      sessionId: "private-session",
+    }),
+  );
 
   const owner = await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("run-owner"));
   assert.equal(owner.status, 200);
   assert.equal(((await owner.json()) as { runs: Array<{ reply?: string }> }).runs[0]?.reply, "private result");
   assert.equal((await fetch(`${webBase}/api/crons/${cron.id}/runs`, asUser("other-user"))).status, 404);
 
-  await built.app.deleteCron(cron.id);
+  await inTestTenant(() => built.app.deleteCron(cron.id));
 });
 
 test("list splits owned crons from ones visible through shared scopes, and visibility never grants administration", async () => {
-  await built.app.upsertDirectory([
-    { principalId: "alice", displayName: "Alice", type: "internal" },
-    { principalId: "bob", displayName: "Bob", type: "internal" },
-  ]);
-  await built.app.upsertChannels(
-    [
-      { channelId: "C9", name: "general", isPrivate: false },
-      { channelId: "P1", name: "secret", isPrivate: true },
-    ],
-    [{ channelId: "P1", principalId: "bob" }],
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "alice", displayName: "Alice", type: "internal" },
+      { principalId: "bob", displayName: "Bob", type: "internal" },
+    ]),
+  );
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [
+        { channelId: "C9", name: "general", isPrivate: false },
+        { channelId: "P1", name: "secret", isPrivate: true },
+      ],
+      [{ channelId: "P1", principalId: "bob" }],
+    ),
   );
 
   const mk = (extra: Record<string, unknown>) =>
-    built.app.createCron({
-      schedule: { everyMs: 3_600_000 },
-      action: "tick",
-      owner: "bob",
-      createdBy: "bob",
-      ownerScopeId: "personal:bob",
-      ...extra,
-    } as never);
+    inTestTenant(() =>
+      built.app.createCron({
+        schedule: { everyMs: 3_600_000 },
+        action: "tick",
+        owner: "bob",
+        createdBy: "bob",
+        ownerScopeId: "personal:bob",
+        ...extra,
+      } as never),
+    );
   const publicCron = await mk({ ownerScopeId: "channel:C9" });
   const privateCron = await mk({ ownerScopeId: "channel:P1" });
   const dmCron = await mk({ destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" } });
@@ -225,28 +237,35 @@ test("list splits owned crons from ones visible through shared scopes, and visib
     assert.equal((await attempt).status, 404);
   }
 
-  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id]) await built.app.deleteCron(id);
+  for (const id of [publicCron.id, privateCron.id, dmCron.id, personalCron.id])
+    await inTestTenant(() => built.app.deleteCron(id));
 });
 
 test("a channel member sees a teammate's cron read-only via the web until the owner shares write access", async () => {
-  await built.app.upsertDirectory([
-    { principalId: "alice", displayName: "Alice", type: "internal" },
-    { principalId: "bob", displayName: "Bob", type: "internal" },
-  ]);
-  await built.app.upsertChannels(
-    [{ channelId: "PRIV", name: "secret", isPrivate: true }],
-    [
-      { channelId: "PRIV", principalId: "alice" },
-      { channelId: "PRIV", principalId: "bob" },
-    ],
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "alice", displayName: "Alice", type: "internal" },
+      { principalId: "bob", displayName: "Bob", type: "internal" },
+    ]),
   );
-  const privCron = await built.app.createCron({
-    schedule: { everyMs: 3_600_000 },
-    action: "tick",
-    owner: "bob",
-    createdBy: "bob",
-    ownerScopeId: "channel:PRIV",
-  } as never);
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [{ channelId: "PRIV", name: "secret", isPrivate: true }],
+      [
+        { channelId: "PRIV", principalId: "alice" },
+        { channelId: "PRIV", principalId: "bob" },
+      ],
+    ),
+  );
+  const privCron = await inTestTenant(() =>
+    built.app.createCron({
+      schedule: { everyMs: 3_600_000 },
+      action: "tick",
+      owner: "bob",
+      createdBy: "bob",
+      ownerScopeId: "channel:PRIV",
+    } as never),
+  );
   const aliceView = async () =>
     (
       (await (await fetch(`${webBase}/api/crons`, asUser("alice"))).json()) as {
@@ -260,30 +279,34 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   const carolPriv = await fetch(`${webBase}/api/crons/${privCron.id}`, asUser("carol", { method: "DELETE" }));
   assert.equal(carolPriv.status, 404, "a non-member is denied");
 
-  await built.app.grant({
-    ownerScopeId: "channel:PRIV",
-    ref: `cron:${privCron.id}`,
-    granteeScopeId: "personal:alice",
-    permission: "write",
-    grantedBy: "bob",
-  });
+  await inTestTenant(() =>
+    built.app.grant({
+      ownerScopeId: "channel:PRIV",
+      ref: `cron:${privCron.id}`,
+      granteeScopeId: "personal:alice",
+      permission: "write",
+      grantedBy: "bob",
+    }),
+  );
   assert.equal(await aliceView(), "manage");
   const aliceDisable = await fetch(`${webBase}/api/crons/${privCron.id}/disable`, asUser("alice", { method: "POST" }));
   assert.equal(aliceDisable.status, 200, "a write grantee manages it");
-  assert.equal((await built.app.getCron(privCron.id))!.owner, "bob");
+  assert.equal((await inTestTenant(() => built.app.getCron(privCron.id)))!.owner, "bob");
 
-  await built.app.deleteCron(privCron.id);
+  await inTestTenant(() => built.app.deleteCron(privCron.id));
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
-  const cron = await built.app.createCron({
-    title: "runtime",
-    action: "check",
-    schedule: { everyMs: 60_000 },
-    owner: "alice",
-    createdBy: "alice",
-    ownerScopeId: "personal:alice",
-  });
+  const cron = await inTestTenant(() =>
+    built.app.createCron({
+      title: "runtime",
+      action: "check",
+      schedule: { everyMs: 60_000 },
+      owner: "alice",
+      createdBy: "alice",
+      ownerScopeId: "personal:alice",
+    }),
+  );
   const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
     fetch(
@@ -292,9 +315,9 @@ test("cron runtime patches pass through the web API, validate, and clear", async
     );
   const selected = await patch(runtime);
   assert.equal(selected.status, 200, await selected.clone().text());
-  assert.deepEqual((await built.app.getCron(cron.id))?.runtime, runtime);
+  assert.deepEqual((await inTestTenant(() => built.app.getCron(cron.id)))?.runtime, runtime);
   assert.equal((await patch({ modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch({ ...runtime, modelId: "does-not-exist" })).status, 400);
   assert.equal((await patch(null)).status, 200);
-  assert.equal((await built.app.getCron(cron.id))?.runtime, null);
+  assert.equal((await inTestTenant(() => built.app.getCron(cron.id)))?.runtime, null);
 });

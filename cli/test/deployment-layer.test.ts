@@ -20,8 +20,6 @@ import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
 
 const SECRET = "conformance-test-secret";
-const CONTROL = "conformance-control-secret-0000000000";
-process.env.DEPLOYMENT_CONTROL_SECRET = CONTROL;
 
 function writeLayer(dir: string): void {
   mkdirSync(join(dir, "sandbox", "skills", "a"), { recursive: true });
@@ -330,8 +328,7 @@ test("conformance passes against a live core: base-port override, signed request
     const expected = createHmac("sha256", SECRET)
       .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n${TENANT}\n`)
       .digest("hex");
-    assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\ntenant\\nbody");
-    assert.equal(request.authorization, `Bearer ${CONTROL}`);
+    assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\nbody");
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
