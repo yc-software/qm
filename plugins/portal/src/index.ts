@@ -309,25 +309,19 @@ async function isAdmin(sub: string): Promise<boolean> {
 }
 
 const CANONICAL_TIMEOUT_MS = 4_000;
-const CORE_UNVERIFIED_ROUTES = new Set(["auth", "connect", "drop", "d", "deployments"]);
 
 const canonicalPrincipal = createCanonicalResolver(async (sub) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
-  try {
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
-    });
-    if (!r.ok) {
-      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
-      return null;
-    }
-    const body = (await r.json()) as { canonicalId?: unknown };
-    return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-  } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+  const r = await fetch(`${CORE}${path}`, {
+    headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+  });
+  if (!r.ok) {
+    console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
   }
+  const body = (await r.json()) as { canonicalId?: unknown };
+  return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
 });
 
 function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
@@ -1076,15 +1070,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
+  let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
-    if (!canonical || (canonical.stale && CORE_UNVERIFIED_ROUTES.has(pathname.split("/")[1] ?? "")))
-      return identityUnavailable(req, res);
-    session = { ...session, sub: canonical.id };
+    if (!canonical) return identityUnavailable(req, res);
+    if (canonical.stale) staleSession = { ...session, sub: canonical.id };
+    session = canonical.stale ? null : { ...session, sub: canonical.id };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
-    if (!session) return json(res, 401, { error: "sign in" });
+    if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
@@ -1161,6 +1156,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   const consentBounce = (): void => {
+    if (staleSession) return identityUnavailable(req, res);
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();
   };
@@ -1196,6 +1192,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
   const dropSubmit = /^\/drop\/([^/]+)$/.exec(pathname);
   if (method === "POST" && dropSubmit) {
+    if (staleSession) return identityUnavailable(req, res);
     if (!session)
       return json(res, 401, {
         error: "sign in",
@@ -1256,7 +1253,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (!isDeployment) session ??= staleSession;
   if (!session) {
+    if (staleSession) return identityUnavailable(req, res);
     if (method === "GET" && wantsHtml(req)) {
       if (PLAYGROUND) {
         session = await mintPlaygroundSession(req, res);

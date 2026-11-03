@@ -1,4 +1,5 @@
 import { LRUCache } from "lru-cache";
+import { errMessage } from "../../chassis/src/errors.ts";
 
 const FRESH_MS = 60_000;
 const STALE_MS = 5 * 60_000;
@@ -12,7 +13,10 @@ export function createCanonicalResolver(
     const pending = inflight.get(sub);
     if (pending) return pending;
     const started = lookup(sub)
-      .catch(() => null)
+      .catch((error: unknown) => {
+        console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+        return null;
+      })
       .then((id) => {
         if (id !== null) known.set(sub, { id, at: Date.now() });
         return id;

@@ -239,6 +239,13 @@ test("a signed-in user keeps their last known identity while core cannot answer 
     }
     const drop = await fetch(`${base}/drop/abc/form`, { headers: { cookie: sessionCookie("U-flaky") } });
     assert.equal(drop.status, 503, "routes core does not re-verify never act on a stale identity");
+    const app = await fetch(`${base}/d/demo/`, { headers: { cookie: sessionCookie("U-flaky") } });
+    assert.equal(app.status, 503);
+    const impersonate = await fetch(`${base}/auth/impersonate?target=U2`, {
+      method: "POST",
+      headers: { cookie: sessionCookie("U-flaky"), origin: PUBLIC },
+    });
+    assert.equal(impersonate.status, 503);
   } finally {
     mock.timers.reset();
   }
