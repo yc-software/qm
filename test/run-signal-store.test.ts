@@ -441,13 +441,13 @@ test("store: a dedupe key collapses a redelivered steer to one row", async () =>
   }
 });
 
-test("store: hasDedupeKey answers for keys already recorded", async () => {
+test("store: runForDedupeKey names the run a recorded key went to", async () => {
   const store = signalStore();
   const key = `slack:B:C1:${Date.now()}:has`;
   try {
-    assert.equal(await store.hasDedupeKey(key), false);
+    assert.equal(await store.runForDedupeKey(key), undefined);
     await store.send("r-has", { kind: "steer", text: "go", dedupeKey: key });
-    assert.equal(await store.hasDedupeKey(key), true);
+    assert.equal(await store.runForDedupeKey(key), "r-has");
   } finally {
     await store.close?.();
   }

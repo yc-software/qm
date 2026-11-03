@@ -14,13 +14,15 @@ import {
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
+import { liveTurnOf, routeIncoming } from "../wake/route-incoming.ts";
+import type { AppHelpers } from "./app-helpers.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 
-export function createAmbientHelpers(deps: AppDeps, app: App) {
+export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
     const { conversation } = input;
     return (
@@ -326,9 +328,28 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
-    await deps.signals.send(live.id, { kind: "steer", text: req.text, ts: latestTs, request: req });
-    const after = await deps.runs.get(live.id);
-    if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
+    const route = routeIncoming(
+      {
+        origin: "ambient",
+        person: false,
+        text: req.text,
+        hasFiles: false,
+        actorId: req.actor.externalId,
+        modelAccount: "company",
+        ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
+        routed: false,
+      },
+      liveTurnOf(live),
+      { midTurn: "steer" },
+    );
+    if (route.kind !== "steer") return false;
+    await h.steerRun(live, {
+      kind: "steer",
+      text: req.text,
+      ts: latestTs,
+      request: req,
+      ...(req.idempotencyKey ? { dedupeKey: req.idempotencyKey } : {}),
+    });
     return true;
   }
 

@@ -92,7 +92,7 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
       for (const cb of listeners.get(runId) ?? []) cb();
       return true;
     },
-    hasDedupeKey: async () => false,
+    runForDedupeKey: async () => undefined,
     pending: async (runId) => [...(queued.get(runId) ?? [])],
     acknowledge: async (runId, id) =>
       void queued.set(

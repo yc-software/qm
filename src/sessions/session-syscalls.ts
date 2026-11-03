@@ -532,14 +532,14 @@ export async function stopSessionTree(
   return stopped;
 }
 
-export async function sessionTreeRunCount(
+export async function sessionTreeRuns(
   sessions: Pick<SessionStore, "childrenOf">,
   runs: Pick<RunStore, "inFlightForThread">,
   root: Session,
-): Promise<number> {
-  let live = 0;
+): Promise<Run[]> {
+  const live: Run[] = [];
   for (const session of await treeSessions(sessions, root)) {
-    live += (await runs.inFlightForThread(session.threadRef)).length;
+    live.push(...(await runs.inFlightForThread(session.threadRef)));
   }
   return live;
 }
@@ -693,7 +693,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 deps.sessions,
                 existing ?? (await deps.sessions.get(binding.session.id))!,
               );
-              const live = await sessionTreeRunCount(deps.sessions, deps.runs, root);
+              const live = (await sessionTreeRuns(deps.sessions, deps.runs, root)).length;
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
@@ -883,8 +883,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 }
               }
               if (
-                (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
-                cap
+                (await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target)))
+                  .length >= cap
               )
                 return {
                   ok: false,

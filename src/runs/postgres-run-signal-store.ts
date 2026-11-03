@@ -91,9 +91,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return rows.length > 0;
     },
 
-    async hasDedupeKey(dedupeKey) {
-      const { rows } = await q(`SELECT 1 FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
-      return rows.length > 0;
+    async runForDedupeKey(dedupeKey) {
+      const { rows } = await q(`SELECT run_id FROM run_signals WHERE dedupe_key = $1 LIMIT 1`, [dedupeKey]);
+      return rows[0]?.run_id as string | undefined;
     },
 
     async steerAuthors(runId) {

@@ -42,7 +42,6 @@ function agent(run: (hooks: any) => Promise<unknown>) {
     },
     flow: {
       inFlightRuns: { add() {}, delete() {}, has: () => false },
-      inFlightRunByThread: { get() {}, set() {}, clear() {} },
       ackRunDelivery() {},
       callCore: async (turn: any, hooks: any) => {
         turns.push(turn);

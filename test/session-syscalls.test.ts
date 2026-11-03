@@ -13,7 +13,7 @@ import {
   renderSubagentMail,
   SUBAGENT_TREE_RUN_CAP,
   requiresDelegation,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   delegatedAuthorizationOrigin,
   stopSessionTree,
   sessionContextOf,
@@ -1376,7 +1376,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `result ${i}` });
     const finished = (await r.runs.get(run!.id))!;
     assert.equal(await deliverSubagentMail(deps, finished), false);
-    assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+    assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
   }
   const pending = await r.runs.pendingReturns();
   assert.equal(pending.length, 12);
@@ -1393,7 +1393,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.markReturned(run.id);
   }
   assert.deepEqual(await r.runs.pendingReturns(), []);
-  assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
 });
 
 test("unread completions survive parent shutdown and share one pending wakeup", async () => {
