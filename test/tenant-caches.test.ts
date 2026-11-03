@@ -66,6 +66,7 @@ function tenantMap<T>(): DurableMap<T> & { reads: string[] } {
     async entries() {
       return [...own().entries()];
     },
+    acrossTenants: unsupported,
     select: unsupported,
     selectEntries: unsupported,
     async get(id) {
