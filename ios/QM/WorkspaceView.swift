@@ -35,9 +35,6 @@ struct WorkspaceDestination: Identifiable {
     if identity.permissions?.contains("loops") == true {
       destinations.append(.init(id: "loops", title: "Loops", icon: "repeat"))
     }
-    if identity.permissions?.contains("admin") == true {
-      destinations.append(.init(id: "admin", title: "Admin", icon: "person.badge.key"))
-    }
     return destinations
   }
 }
@@ -84,8 +81,6 @@ struct BrowseView: View {
                 NativeMemoryView(client: client)
               } else if destination.id == "voice.html" {
                 VoiceView(client: client)
-              } else if destination.id == "admin" {
-                NativeAdminView(client: client)
               }
             } label: {
               Label(destination.title, systemImage: destination.icon).padding(.vertical, 10)

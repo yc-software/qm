@@ -88,7 +88,7 @@ final class NativeVoiceBridgeTests: XCTestCase {
       [.submit(text: request("Thanks"), delegation: "d2")])
   }
 
-  func testWorkingRunIsSteeredStoppedOrDescribedLocally() {
+  func testWorkingRunIsSteeredWithEveryHandOff() {
     var bridge = NativeVoiceBridge()
     bridge.started(run: "run1", delegation: "d0")
     bridge.progress("Searching Slack", run: "run1")
@@ -98,14 +98,9 @@ final class NativeVoiceBridgeTests: XCTestCase {
       bridge.receive(delegated("d1", 500), now: 1),
       [.steer(text: request("Also include email"), delegation: "d1", remark: false)])
     _ = bridge.receive(heard("How's it going?", 1000, 1500), now: 2)
-    XCTAssertEqual(bridge.receive(delegated("d2", 1500), now: 2.5), [])
-    let status = bridge.takeOutgoing(canSend: true).last
-    XCTAssertEqual(status?["type"] as? String, "session.commentary.append")
-    XCTAssertEqual(status?["delegation_id"] as? String, "d2")
     XCTAssertEqual(
-      status?["content"] as? String, "QM is still working on it. Latest step: Searching Slack")
-    _ = bridge.receive(heard("Stop it.", 3000, 3400), now: 4)
-    XCTAssertEqual(bridge.receive(delegated("d3", 3400), now: 4.5), [.abort(delegation: "d3")])
+      bridge.receive(delegated("d2", 1500), now: 2.5),
+      [.steer(text: request("How's it going?"), delegation: "d2", remark: false)])
   }
 
   func testWordsNotHandedOffWhileWorkingBecomeARemark() {
@@ -126,18 +121,6 @@ final class NativeVoiceBridgeTests: XCTestCase {
     XCTAssertEqual(
       bridge.takeOutgoing(canSend: true).last?["content"] as? String,
       "Already added to the running task.")
-  }
-
-  func testUndelegatedStopIsNotSentAsARemarkAndALateHandOffStillStops() {
-    var bridge = NativeVoiceBridge()
-    bridge.started(run: "run1", delegation: "d0")
-    _ = bridge.takeOutgoing(canSend: true)
-    _ = bridge.receive(heard("Stop", 0, 300), now: 0)
-    XCTAssertEqual(bridge.tick(now: 4), [])
-    let said = bridge.takeOutgoing(canSend: true)
-    XCTAssertEqual(said.last?["type"] as? String, "session.commentary.append")
-    XCTAssertTrue((said.last?["content"] as? String)?.contains("it has not stopped") == true)
-    XCTAssertEqual(bridge.receive(delegated("d1", 300), now: 5), [.abort(delegation: "d1")])
   }
 
   func testResultsAreSpokenForTheirDelegationWithoutClaimingUnconfirmedWork() {
@@ -231,15 +214,13 @@ final class NativeVoiceBridgeTests: XCTestCase {
     XCTAssertEqual(bridge.takeOutgoing(canSend: true).last?["delegation_id"] as? String, "d0")
   }
 
-  func testStoppedRunIsNotReadOutAndQueuedRunStaysActive() {
+  func testQueuedRunStaysActiveAfterTheEarlierRunFinishes() {
     var bridge = NativeVoiceBridge()
     bridge.observe(run: "other")
     bridge.started(run: "mine", delegation: "d1")
     XCTAssertEqual(bridge.activeRun, "other")
-    bridge.stop(run: "other")
     _ = bridge.takeOutgoing(canSend: true)
-    XCTAssertNil(bridge.finish(run: "other", status: "failed", reply: nil, reason: "Stopped"))
-    XCTAssertTrue(bridge.outgoing.isEmpty)
+    bridge.finish(run: "other", status: "failed", reply: nil, reason: "Stopped")
     XCTAssertEqual(bridge.activeRun, "mine")
     XCTAssertTrue(bridge.busy)
   }

@@ -8,7 +8,6 @@ struct NativeConnector: Decodable {
 }
 struct NativeConnectors: Decodable { let providers: [String: NativeConnector] }
 struct NativeCredential: Decodable, Identifiable {
-  var ownerId: String? = nil
   let id: String
   let service: String
   let kind: String?
@@ -19,9 +18,6 @@ struct NativeCredential: Decodable, Identifiable {
   let expiresAt: Double?
 }
 struct NativeCredentialGrant: Decodable, Identifiable {
-  var ownerId: String? = nil
-  var useCount: Int? = nil
-  var usedBy: String? = nil
   let id: String
   let credentialId: String
   let audienceScopeId: String
@@ -31,9 +27,6 @@ struct NativeCredentialGrant: Decodable, Identifiable {
   let expiresAt: Double?
 }
 struct NativeCredentialAsk: Decodable, Identifiable {
-  var ownerId: String? = nil
-  var status: String? = nil
-  var requesterScopeId: String? = nil
   let id: String
   let credentialId: String
   let requesterId: String

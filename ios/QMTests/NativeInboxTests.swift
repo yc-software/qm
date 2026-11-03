@@ -127,19 +127,4 @@ final class NativeInboxTests: XCTestCase {
         "<!-- <p>hidden</p> --><a title=\"a>b\">1 &lt; 2</a> &bogus; <SCRIPT>if (a<b) {}</SCRIPT>&#39;ok&#39;"
       ), "1 < 2 &bogus; 'ok'")
   }
-  func testLegacyNetworkPolicyAndVersionedSoulPayload() throws {
-    let config = try JSONDecoder().decode(
-      NativeAdminConfiguration.self,
-      from: Data(
-        #"{"egress":{"allowedHosts":["example.com"]},"soul":"Original","soulVersion":4}"#.utf8))
-    XCTAssertEqual(config.egress?.deniedHosts, [])
-    var soul = NativeAdminSettingDraft(.soul, config)
-    soul.text = "Updated"
-    XCTAssertEqual(
-      try soul.payload(.soul, version: config.soulVersion)["expectedVersion"] as? Int, 4)
-    XCTAssertThrowsError(try soul.payload(.soul, version: nil))
-    var emoji = NativeAdminSettingDraft(.emoji, config)
-    emoji.text = "wave\n eyes\n"
-    XCTAssertEqual(try emoji.payload(.emoji, version: nil)["names"] as? [String], ["wave", "eyes"])
-  }
 }

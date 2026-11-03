@@ -3,7 +3,6 @@ import Foundation
 enum NativeVoiceAction: Equatable {
   case submit(text: String, delegation: String?)
   case steer(text: String, delegation: String?, remark: Bool)
-  case abort(delegation: String?)
 }
 
 struct NativeVoiceBridge {
@@ -46,7 +45,6 @@ struct NativeVoiceBridge {
   private(set) var delegation: String?
   private var runs: [String] = []
   private var pending: Set<String> = []
-  private var stopped: Set<String> = []
   private var progress: String?
   private var runDelegations: [String: String] = [:]
   private var sequence = 0
@@ -109,14 +107,6 @@ struct NativeVoiceBridge {
     let words = Self.join(pending.map { heard[$0] })
     let id = activeRun.flatMap { runDelegations[$0] } ?? delegation
     for index in pending { heard[index].handled = true }
-    if Self.isStop(words) {
-      append(
-        "session.commentary.append", id,
-        "The user said \"\(words)\", but it did not reach the task: it is still running. Tell them plainly that it has not stopped, and to say stop again."
-      )
-      return []
-    }
-    if Self.isStatus(words) { return [] }
     for index in pending { heard[index].sent = true }
     consumed = max(consumed, pending.map { heard[$0].end }.max() ?? consumed)
     remarked = true
@@ -155,10 +145,6 @@ struct NativeVoiceBridge {
     append("session.commentary.append", delegation, text)
   }
 
-  mutating func stop(run: String) {
-    stopped.insert(run)
-  }
-
   mutating func unconfirmed(delegation: String?) {
     append("session.commentary.append", delegation, Self.unconfirmed)
   }
@@ -171,7 +157,6 @@ struct NativeVoiceBridge {
     if let run {
       if activeRun == run { progress = nil }
       runs.removeAll { $0 == run }
-      if stopped.remove(run) != nil { return nil }
     }
     let lost = heard.indices.filter { heard[$0].busy && !heard[$0].sent && !heard[$0].handled }
     let words = Self.join(lost.map { heard[$0] })
@@ -226,15 +211,6 @@ struct NativeVoiceBridge {
       return []
     }
     remarked = false
-    if busy, Self.isStop(words) || Self.isStatus(words) {
-      for index in fresh { heard[index].handled = true }
-      if Self.isStop(words) { return [.abort(delegation: id)] }
-      append(
-        "session.commentary.append", id,
-        progress.map { "QM is still working on it. Latest step: \($0)" }
-          ?? "QM is still working on it.")
-      return []
-    }
     let text =
       Self.requestPrefix + words + (exchange.isEmpty ? "" : Self.exchangeMark + exchange)
       + Self.spokenNote
@@ -308,20 +284,6 @@ struct NativeVoiceBridge {
       end = match.range.upperBound
     }
     return text
-  }
-
-  private static func isStop(_ words: String) -> Bool {
-    words.wholeMatch(
-      of:
-        /(?i)(please\s+)?(stop|cancel|abort|halt|never\s?mind|forget it)(\s+(it|that|this|the task|the job|everything|qm|now))*(\s+please)?[.!]*/
-    ) != nil
-  }
-
-  private static func isStatus(_ words: String) -> Bool {
-    words.wholeMatch(
-      of:
-        /(?i)(so\s+|and\s+|okay,?\s+|ok,?\s+)?(what('?s| is)\s+(qm|it|he|she)\s+doing|what('?re|\s+are)\s+you\s+(doing|working\s+on|up\s+to)|how('?s| is)\s+it\s+going|how far|(is|are)\s+(it|qm|you)\s+(done|finished)|any\s+(news|progress|update)|status|progress)\b[^.!?]{0,40}[.?!]*/
-    ) != nil
   }
 
   private static func join(_ fragments: [Heard]) -> String {

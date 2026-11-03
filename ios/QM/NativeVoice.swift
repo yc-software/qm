@@ -407,8 +407,6 @@ final class NativeVoiceModel: NSObject {
             await submit(text, delegation: delegation, revision: current)
           case .steer(let text, let delegation, let remark):
             await steer(text, delegation: delegation, remark: remark, revision: current)
-          case .abort(let delegation):
-            await abort(delegation: delegation, revision: current)
           }
         })
     }
@@ -494,27 +492,6 @@ final class NativeVoiceModel: NSObject {
       bridge.unconfirmed(delegation: delegation)
       flushEvents()
     }
-  }
-  func abort(delegation: String?, revision current: UUID) async {
-    guard current == revision, !Task.isCancelled else { return }
-    guard let run = bridge.activeRun else {
-      bridge.say("Nothing is running in QM right now.", delegation: delegation)
-      return flushEvents()
-    }
-    do {
-      let _: VoiceSignal = try await client.fetch(
-        "api/runs/\(run.apiComponent)/signal", body: ["kind": "abort", "threadRef": threadRef])
-      guard current == revision, !Task.isCancelled else { return }
-      transcript.appendStatus("Stopped QM's task")
-      bridge.stop(run: run)
-      bridge.say("I stopped the task.", delegation: delegation)
-    } catch {
-      guard current == revision, !Task.isCancelled else { return }
-      bridge.say(
-        "I could not confirm that the task stopped. Tell the user to check the QM conversation.",
-        delegation: delegation)
-    }
-    flushEvents()
   }
   func follow(_ runID: String, delegation: String?, revision current: UUID) async {
     guard current == revision else { return }

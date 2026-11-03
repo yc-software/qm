@@ -100,6 +100,7 @@ struct WorkspaceTests {
     #expect(!basicIDs.contains("inbox"))
     #expect(!basicIDs.contains("calendar"))
     #expect(!basicIDs.contains("admin"))
-    #expect(fullIDs.isSuperset(of: ["inbox", "calendar", "loops", "admin"]))
+    #expect(fullIDs.isSuperset(of: ["inbox", "calendar", "loops"]))
+    #expect(!fullIDs.contains("admin"))
   }
 }

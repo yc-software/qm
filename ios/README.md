@@ -59,9 +59,7 @@ For local end-to-end QA, use a portal with desktop authentication support and th
 
 Native screens cover sign-in, conversation lists and drafts, new personal conversations, streaming/history, stop and permission-aware approval grants, queued-message editing/withdrawal/steering, per-turn model/harness/effort/fast-mode settings, skill completion, message search, pin/rename/archive/restore, file selection, formatted Markdown and QuickLook previews with sharing. Home includes Active/Waiting/Archived filters; forks identify their origin and separate inherited history. Transcript notices preserve approval decisions, Slack revisions and linked subagent updates.
 
-Browse routes to SwiftUI Projects, Files, Crons, Webhooks, Keychain, Apps, Memory, Skills, and Settings. Inbox, Calendar, Loops, and Admin follow server permissions. Search opens a native transcript at its matching message. Conversation tools provide native snapshot sharing, forks, linked conversations, scoped resources, activity and background process output. Calendar matches the current web placeholder.
-
-Advanced Admin workflows are still being expanded. Native implementation is not a claim of complete workflow parity.
+Browse routes to SwiftUI Projects, Files, Crons, Webhooks, Keychain, Apps, Memory, Skills, and Settings. Inbox, Calendar, and Loops follow server permissions. Organization administration stays in the web Settings pages. Search opens a native transcript at its matching message. Conversation tools provide native snapshot sharing, forks, linked conversations, scoped resources, activity and background process output. Calendar matches the current web placeholder.
 
 Native Markdown images use authenticated workspace file requests with an 8 MiB transfer limit and bounded thumbnails. External block images appear as links, and external inline images use placeholders; they do not load automatically. Oversized or unsupported images can still be opened through the existing file preview or an external browser.
 

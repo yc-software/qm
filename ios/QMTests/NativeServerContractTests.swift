@@ -3,23 +3,6 @@ import XCTest
 @testable import QM
 
 final class NativeServerContractTests: XCTestCase {
-  func testFeatureRolloutUsesServerFlagList() throws {
-    let json = #"""
-      {"featureFlags":[
-        {"featureName":"swarms","label":"Swarms","personalOnly":true,"enabledScopes":["personal:a"]},
-        {"featureName":"team_scopes","label":"Team scopes","enabledScopes":[]},
-        {"featureName":"future_flag","enabledScopes":[],"updatedAt":1,"updatedBy":"x"}
-      ]}
-      """#
-    let flags = try XCTUnwrap(
-      JSONDecoder().decode(NativeAdminFlags.Configuration.self, from: Data(json.utf8)).featureFlags)
-    XCTAssertEqual(flags.map(\.featureName), ["swarms", "team_scopes", "future_flag"])
-    XCTAssertEqual(flags.map(\.title), ["Swarms", "Team scopes", "future flag"])
-    XCTAssertTrue(flags[0].accepts("personal:b"))
-    XCTAssertFalse(flags[0].accepts("org:o"))
-    XCTAssertTrue(flags[1].accepts("org:o"))
-  }
-
   func testInboxFeedDecodesWithoutMigrationField() throws {
     let json = #"{"selected":[],"available":[],"items":[],"total":0}"#
     let feed = try JSONDecoder().decode(NativeInboxFeed.self, from: Data(json.utf8))
