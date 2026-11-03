@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -26,7 +26,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query } = createPgPool(connectionString, [
+  const { q, query, pool } = createPgPool(connectionString, [
     {
       id: "delivery/store/0001",
       statements: [
@@ -153,22 +153,33 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       await expireOveraged();
-      const rows = await q(
-        `UPDATE deliveries
+      const claim = `UPDATE deliveries
             SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
-            SELECT id FROM deliveries
+            SELECT id FROM deliveries d
              WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
                AND (claim_expires_at IS NULL
                  OR claim_expires_at <= ${NOW_MS_SQL})
+               ${
+                 opts?.wholeConversations
+                   ? `AND NOT EXISTS (
+                 SELECT 1 FROM deliveries o
+                  WHERE o.destination->>'type' = $1 AND o.destination->>'target' = d.destination->>'target'
+                    AND o.delivered_at IS NULL AND o.expired_at IS NULL AND o.claim_expires_at > ${NOW_MS_SQL})`
+                   : ""
+               }
              ORDER BY created_at
                FOR UPDATE SKIP LOCKED
           )
-          RETURNING *`,
-        [type, ttlMs],
-      );
+          RETURNING *`;
+      const rows = opts?.wholeConversations
+        ? await withPgTransaction(await pool(), async (client) => {
+            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`deliveries:claim:${type}`]);
+            return (await client.query(claim, [type, ttlMs])).rows;
+          })
+        : await q(claim, [type, ttlMs]);
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
     async listShadow(opts) {

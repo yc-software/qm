@@ -43,7 +43,7 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number, opts?: { wholeConversations?: boolean }): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -122,16 +122,15 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
       );
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, opts) {
       const now = Date.now();
       expireOveraged(now);
-      const rows = [...deliveries.values()].filter(
-        (d) =>
-          d.deliveredAt === null &&
-          d.expiredAt === undefined &&
-          !d.shadow &&
-          d.destination.type === type &&
-          (claimedUntil.get(d.id) ?? 0) <= now,
+      const open = [...deliveries.values()].filter(
+        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+      );
+      const busy = new Set(open.filter((d) => (claimedUntil.get(d.id) ?? 0) > now).map((d) => d.destination.target));
+      const rows = open.filter(
+        (d) => (claimedUntil.get(d.id) ?? 0) <= now && !(opts?.wholeConversations && busy.has(d.destination.target)),
       );
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);
       return rows;
