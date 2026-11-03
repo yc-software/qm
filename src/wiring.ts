@@ -2480,7 +2480,8 @@ export function buildApp(
     : null;
   if (partnerChatOutbound)
     deliveries.onEnqueue((type) => {
-      if (type === "partner-chat") void partnerChatOutbound.drain();
+      if (type === "partner-chat")
+        void partnerChatOutbound.drain().catch(reportFailureAs("partner-chat: drain deliveries", undefined));
     });
   const partnerChatDeliverySweeper = partnerChatOutbound
     ? createSweeper(() => partnerChatOutbound.drain(), 15_000, {
