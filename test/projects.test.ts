@@ -24,7 +24,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 
@@ -318,7 +318,8 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) });
+  const built = buildApp(config);
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -448,7 +449,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     approval: { requestId: pendingApproval.requestId, approved: true },
   });
   assert.equal(forgedApproval.status, "refused");
-  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployAcl = createAclStore(createPostgresGrantStore(config.databaseUrl!));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: createDeployStore(testDeployBackings()),

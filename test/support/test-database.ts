@@ -117,7 +117,7 @@ export function testAdminGrantStore(
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
+  const maps = createPostgresMapFactory(databaseUrl(createDatabaseSync({})));
   return {
     deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
     pg: maps.pool,

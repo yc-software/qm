@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -16,6 +16,8 @@ const request: OrchestratorInput = {
   origin: { kind: "direct" },
   text: "availability",
 };
+afterEach(restoreFileOwner);
+
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3_000;
   while (!predicate()) {
@@ -36,7 +38,6 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
     url: url.toString(),
     admin,
     async cleanup() {
-      restoreFileOwner();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
     },
