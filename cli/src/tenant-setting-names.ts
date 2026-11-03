@@ -1,0 +1,103 @@
+export const TENANT_SETTING_KEYS = [
+  "MODEL_PROVIDER",
+  "PI_MODEL",
+  "PI_DETECT_MODEL",
+  "PI_TITLE_MODEL",
+  "PI_JUDGE_MODEL",
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+  "OPENROUTER_BASE_URL",
+  "MODEL_GATEWAY_URL",
+  "MODEL_GATEWAY_API_KEY",
+  "MODEL_GATEWAY_API_KEY_HEADER",
+  "MODEL_GATEWAY_MODELS",
+  "CODEX_AUTH_CREDENTIAL",
+  "CLAUDE_AUTH_CREDENTIAL",
+  "SANDBOX_BACKEND",
+  "SPRITES_TOKEN",
+  "E2B_API_KEY",
+  "MODAL_TOKEN_ID",
+  "MODAL_TOKEN_SECRET",
+  "DO_AGENTS_API_TOKEN",
+  "SMOLMACHINES_TOKEN",
+  "AGENT37_API_KEY",
+  "SUPERSERVE_API_KEY",
+  "RENDER_SANDBOX_API_KEY",
+  "RENDER_SANDBOX_WORKSPACE_ID",
+  "SECURITY_SCREEN",
+  "SECURITY_SCREEN_CLASSIFIER",
+  "SECURITY_SCREEN_PROXY_PROVIDER",
+  "SECURITY_SCREEN_PROXY_ENDPOINT",
+  "SECURITY_SCREEN_PROXY_TOKEN",
+  "AUTH_ALLOWED_EMAILS",
+  "AUTH_ALLOWED_EMAIL_DOMAIN",
+  "TRUSTED_OIDC_ADMIN_ISSUER",
+  "SUGGESTED_ACTIVITIES_CONTEXT",
+  "ADMIN_GRANTS",
+  "OIDC_ISSUER",
+  "OIDC_AUTH_ENDPOINT",
+  "OIDC_TOKEN_ENDPOINT",
+  "OIDC_USERINFO_ENDPOINT",
+  "OIDC_JWKS_URI",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "OIDC_SCOPES",
+  "OIDC_PROMPT",
+  "OIDC_PRINCIPAL_CLAIM",
+  "OIDC_ALLOWED_EMAIL_DOMAIN",
+  "OIDC_ALLOWED_EMAILS",
+  "PORTAL_EXPECTED_TEAM_ID",
+] as const;
+
+export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
+
+export const MODEL_KEY_ENV = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+} as const;
+
+export const BRANDING_ENV = {
+  ORG_BRAND_ACCENT: "accent",
+  ORG_BRAND_MARK: "mark",
+  ORG_BRAND_SELF_LABEL: "selfLabel",
+  ORG_BRAND_ORG_NAME: "orgName",
+} as const;
+
+export const POSTURE_ENV = {
+  HARNESS_SECURITY_POSTURE: "security-posture",
+  HARNESS_SHARING_POSTURE: "sharing-posture",
+} as const;
+
+export const OAUTH_CLIENT_ENV = {
+  google: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+  slack: ["SLACK_OAUTH_CLIENT_ID", "SLACK_OAUTH_CLIENT_SECRET"],
+  notion: ["NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET"],
+  linear: ["LINEAR_OAUTH_CLIENT_ID", "LINEAR_OAUTH_CLIENT_SECRET"],
+  dropbox: ["DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_OAUTH_CLIENT_SECRET"],
+  github: ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"],
+  x: ["X_OAUTH_CLIENT_ID", "X_OAUTH_CLIENT_SECRET"],
+  zoom: ["ZOOM_OAUTH_CLIENT_ID", "ZOOM_OAUTH_CLIENT_SECRET"],
+} as const;
+
+export const GOOGLE_WORKSPACE_DOMAIN = "GOOGLE_WORKSPACE_DOMAIN";
+export const LOOPS_USERS = "LOOPS_USERS";
+
+export const TENANT_ENV_NAMES: ReadonlySet<string> = new Set<string>([
+  ...TENANT_SETTING_KEYS,
+  ...Object.values(MODEL_KEY_ENV),
+  ...Object.keys(BRANDING_ENV),
+  ...Object.keys(POSTURE_ENV),
+  ...Object.values(OAUTH_CLIENT_ENV).flat(),
+  GOOGLE_WORKSPACE_DOMAIN,
+  LOOPS_USERS,
+]);
+
+export const isTenantSettingKey = (name: string): name is TenantSettingKey =>
+  (TENANT_SETTING_KEYS as readonly string[]).includes(name);
+
+export const isTenantSetting = (name: string): boolean => TENANT_ENV_NAMES.has(name);
+
+export function withoutTenantSettings(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !isTenantSetting(name)));
+}

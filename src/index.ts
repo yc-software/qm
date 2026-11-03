@@ -13,12 +13,14 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/claim.ts";
 import { verifyRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { assertRuntimeLogin } from "./persistence/runtime-login.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await verifyRegisteredPgSchemas(config.databaseUrl);
+await assertRuntimeLogin(config.databaseUrl!);
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);

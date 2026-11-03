@@ -6,7 +6,7 @@ import {
   configPathInDir,
   loadConfigAt,
   renderSource,
-  validOrgId,
+  validDeploymentId,
   type EmailTransport,
   type ModelProvider,
   type Target,
@@ -15,7 +15,8 @@ import {
 import { die, note, ok, warn } from "../log.ts";
 import { assertNodeEngine } from "../preflight.ts";
 import { cliPackageName, cliVersion } from "../manifest.ts";
-import { computedSecrets, mintLocalSecret, renderEnvExample } from "../secrets.ts";
+import { computedSecrets, mintLocalSecret } from "../secrets.ts";
+import { renderEnvExample } from "../env-example.ts";
 import { renderSlackManifests, usesSlackOidc } from "../slack-manifests.ts";
 import { hostingProvider } from "../backends/registry.ts";
 
@@ -174,7 +175,7 @@ function template(rel: string): string {
   return readFileSync(existsSync(source) ? source : packaged, "utf8");
 }
 
-function packageContent(dir: string, orgId: string): string {
+function packageContent(dir: string, deploymentId: string): string {
   const packagePath = join(dir, "package.json");
   let existing: Record<string, unknown> = {};
   const exists = existsSync(packagePath);
@@ -223,7 +224,7 @@ function packageContent(dir: string, orgId: string): string {
     [packageName]: installedPackage,
   };
   const packageJson = {
-    ...(exists ? {} : { name: `${orgId}-qm-deployment`, version: "0.0.0" }),
+    ...(exists ? {} : { name: `${deploymentId}-qm-deployment`, version: "0.0.0" }),
     ...existing,
     private: true,
     engines,
@@ -274,8 +275,8 @@ export function runInit(opts: {
   dir?: string;
 }): void {
   assertNodeEngine();
-  const orgId = opts.org ?? "default-org";
-  if (!validOrgId(orgId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
+  const deploymentId = opts.org ?? "default-org";
+  if (!validDeploymentId(deploymentId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
   const target: Target = opts.target ?? "docker";
   if ((opts.repo !== undefined) !== (opts.branch !== undefined)) die(`--repo and --branch must be given together`);
   if (opts.repo !== undefined && target !== "render") die(`--repo and --branch require --target render`);
@@ -286,7 +287,7 @@ export function runInit(opts: {
   const configPath = join(dir, CONFIG_FILENAME);
   const existingConfigPath = configPathInDir(dir);
   if (existingConfigPath) die(`${existingConfigPath} already exists — refusing to overwrite.`);
-  const preparedPackage = packageContent(dir, orgId);
+  const preparedPackage = packageContent(dir, deploymentId);
 
   mkdirSync(dir, { recursive: true });
   if (envPathIsTracked(dir)) {
@@ -296,8 +297,8 @@ export function runInit(opts: {
   const modelProvider: ModelProvider = opts.modelProvider ?? "anthropic";
   const emailTransport: EmailTransport = opts.emailTransport ?? "resend";
   const provider = hostingProvider(target);
-  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider, emailTransport, source));
-  ok(`wrote ${CONFIG_FILENAME} (orgId=${orgId}, target=${target}, modelProvider=${modelProvider})`);
+  writeFileSync(configPath, provider.scaffold.renderConfig(deploymentId, modelProvider, emailTransport, source));
+  ok(`wrote ${CONFIG_FILENAME} (deploymentId=${deploymentId}, target=${target}, modelProvider=${modelProvider})`);
 
   const config = loadConfigAt(configPath).config;
   writePackage(dir, preparedPackage);

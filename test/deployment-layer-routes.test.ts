@@ -66,6 +66,31 @@ test("an empty layer GETs the version-0 shape with a source discriminator under 
   }
 });
 
+test("a signed request that names no tenant is refused before the layer is read or written", async () => {
+  const srv = start();
+  try {
+    for (const [method, body] of [
+      ["GET", ""],
+      ["PUT", JSON.stringify({ contract: 1, tools: [], skills: [] })],
+    ] as const) {
+      const ts = Math.floor(Date.now() / 1000);
+      const res = await fetch(`${srv.base}${PATH}`, {
+        method,
+        headers: {
+          "content-type": "application/json",
+          "x-timestamp": String(ts),
+          "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${body}`),
+        },
+        ...(body ? { body } : {}),
+      });
+      assert.equal(res.status, 401);
+      assert.match(((await res.json()) as { message: string }).message, /no verifiable tenant/);
+    }
+  } finally {
+    await srv.close();
+  }
+});
+
 test("a baked filesystem layer with no durable record GETs source=filesystem and its live resolved state", async () => {
   const dir = mkdtempSync(join(tmpdir(), "layer-routes-fs-"));
   mkdirSync(join(dir, "tools", "acme"), { recursive: true });

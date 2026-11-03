@@ -15,7 +15,7 @@ import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "http://localhost:8080",
   target: "docker",
   services: ["core"],
@@ -34,7 +34,7 @@ test("Docker doctor rejects missing and placeholder required secrets before exte
   try {
     await assert.rejects(
       dockerDoctor(config, dir),
-      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
+      /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, DEPLOYMENT_CONTROL_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -58,6 +58,7 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
     ["CORE_SIGNING_SECRET", "c".repeat(64)],
     ["PORTAL_IDENTITY_SECRET", "d".repeat(64)],
     ["SKILL_SIGNING_SECRET", "e".repeat(64)],
+    ["DEPLOYMENT_CONTROL_SECRET", "f".repeat(64)],
   ]);
   await assert.doesNotReject(doctorCommon(deferredConfig, required));
   await assert.rejects(
@@ -196,7 +197,7 @@ test("Fly doctor requires the signing secret for source plugins absent from conf
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\n");
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nDEPLOYMENT_CONTROL_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\n");
 `,
   );
   chmodSync(bin, 0o755);
@@ -222,7 +223,7 @@ test("Fly doctor rejects persisted core access on coreless plugins", async () =>
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
+if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nDEPLOYMENT_CONTROL_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
 if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SECRET\\n");
 `,
   );
@@ -242,42 +243,6 @@ if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SEC
         dir,
       ),
       /unexpected CORE_API_URL[\s\S]*unexpected CORE_SIGNING_SECRET/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  try {
-    await assert.rejects(
-      flyDoctor(
-        {
-          ...config,
-          target: "fly",
-          appPrefix: "acme",
-          region: "sjc",
-          flyOrg: "personal",
-          sandbox: { app: "acme-sandboxes", secretEnv: ["ANTHROPIC_API_KEY"] },
-        },
-        dir,
-      ),
-      /acme-core: missing ANTHROPIC_API_KEY/,
     );
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
@@ -622,6 +587,7 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
         ["CORE_SIGNING_SECRET", "source-value".repeat(4)],
         ["PORTAL_IDENTITY_SECRET", "identity-value"],
         ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
+        ["DEPLOYMENT_CONTROL_SECRET", "control-value".repeat(4)],
       ]),
     );
     assert.ok(

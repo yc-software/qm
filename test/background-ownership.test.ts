@@ -88,3 +88,18 @@ test("a member-protocol transition written after the owner record wins until the
   assert.equal(reclaimed.ownerDeploymentId, "core:green");
   assert.equal(((await map.get("ownership")) as unknown as Record<string, unknown>).desiredDeploymentId, "core:green");
 });
+
+test("a never-set record is claimed once, and an operator's owner or pause is never overridden", async () => {
+  const fresh = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
+  const claimed = await fresh.claimIfNeverSet("first");
+  assert.equal(claimed.ownerDeploymentId, "first");
+  assert.equal(claimed.setBy, "first");
+  assert.deepEqual(await fresh.claimIfNeverSet("second"), claimed);
+  const paused = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
+  await paused.set({ ownerDeploymentId: "chosen", setBy: "operator" });
+  const stopped = await paused.set({ ownerDeploymentId: null, expectedOwnerDeploymentId: "chosen", setBy: "operator" });
+  assert.deepEqual(await paused.claimIfNeverSet("intruder"), stopped);
+  const owned = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
+  const chosen = await owned.set({ ownerDeploymentId: "chosen", setBy: "operator" });
+  assert.deepEqual(await owned.claimIfNeverSet("intruder"), chosen);
+});

@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import type { QmConfig } from "./config.ts";
+import { deploymentTenantId, type QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue, readEnvFile, sleep } from "./util.ts";
 import { parseToolDescriptor } from "./tool-descriptor.ts";
@@ -132,9 +132,15 @@ export function deploymentLayerBody(sandboxDir: string): string {
   return body;
 }
 
-function signingHeaders(secret: string, method: string, path: string, body: string): Record<string, string> {
+export function signingHeaders(
+  secret: string,
+  method: string,
+  path: string,
+  body: string,
+  tenant = "",
+): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const canonical = `${method}\n${path}\n${body}`;
+  const canonical = tenant ? `${method}\n${path}\n${tenant}\n${body}` : `${method}\n${path}\n${body}`;
   const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${canonical}`).digest("hex");
   return {
     "content-type": "application/json",
@@ -143,9 +149,9 @@ function signingHeaders(secret: string, method: string, path: string, body: stri
   };
 }
 
-function defaultCoreUrl(config: QmConfig): URL {
-  const url = new URL(config.publicUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
+export function coreUrl(base: URL, path: string): URL {
+  const url = new URL(base);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
   return url;
 }
 
@@ -168,7 +174,7 @@ export const CONNECTIVITY_CODES = new Set([
 export const DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS = 5;
 const DEPLOYMENT_LAYER_UNAVAILABLE_BACKOFF_MS = 2_000;
 
-function isCoreUnreachable(error: unknown): boolean {
+export function isCoreUnreachable(error: unknown): boolean {
   if (error instanceof CoreUnreachableError) return true;
   if (error instanceof CliError) return false;
   for (let e: unknown = error; e instanceof Error; e = e.cause) {
@@ -182,6 +188,8 @@ interface DeploymentLayerTransportOpts {
   config: QmConfig;
   configDir: string;
   method: "GET" | "PUT";
+  path: string;
+  tenant?: string;
   body: string;
   envFile?: string;
 }
@@ -197,8 +205,8 @@ export type DeploymentLayerTransport = (
 /** Signed-HTTP transport used by providers whose core is reachable over plain HTTPS. */
 export function httpDeploymentLayerTransport(
   o: {
-    urlOf?: (config: QmConfig) => URL;
-    secretFallback?: (config: QmConfig) => string | undefined;
+    baseOf?: (config: QmConfig) => URL;
+    secretFallback?: (config: QmConfig, name: string) => string | undefined;
     timeoutMs?: number;
     request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
   } = {},
@@ -206,13 +214,18 @@ export function httpDeploymentLayerTransport(
   return async (opts) => {
     const envPath = opts.envFile ?? join(opts.configDir, ".env");
     const env = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
-    let secret = deploymentSecretValue("CORE_SIGNING_SECRET", env.get("CORE_SIGNING_SECRET"));
-    if (!secret && o.secretFallback) secret = o.secretFallback(opts.config);
+    const read = (name: string) => deploymentSecretValue(name, env.get(name)) ?? o.secretFallback?.(opts.config, name);
+    const secret = read("CORE_SIGNING_SECRET");
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
-    const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
+    const control = read("DEPLOYMENT_CONTROL_SECRET");
+    const url = coreUrl((o.baseOf ?? ((config) => new URL(config.publicUrl)))(opts.config), opts.path);
     const init: RequestInit = {
       method: opts.method,
-      headers: signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
+      headers: {
+        ...signingHeaders(secret, opts.method, url.pathname + url.search, opts.body, opts.tenant),
+        ...(opts.tenant ? { "x-qm-tenant": opts.tenant } : {}),
+        ...(control ? { authorization: `Bearer ${control}` } : {}),
+      },
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
       ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}),
       redirect: "error",
@@ -231,13 +244,22 @@ export async function deploymentLayerRequest(opts: {
   envFile?: string;
   transport: DeploymentLayerTransport;
 }): Promise<{ status: number; body: string }> {
-  return opts.transport({
-    config: opts.config,
-    configDir: opts.configDir,
-    method: opts.method,
-    body: opts.body ?? "",
-    ...(opts.envFile ? { envFile: opts.envFile } : {}),
-  });
+  const tenant = deploymentTenantId(opts.config);
+  const send = (method: "GET" | "PUT", path: string, body: string, bound?: string) =>
+    opts.transport({
+      config: opts.config,
+      configDir: opts.configDir,
+      method,
+      path,
+      body,
+      ...(bound ? { tenant: bound } : {}),
+      ...(opts.envFile ? { envFile: opts.envFile } : {}),
+    });
+  if (opts.method === "PUT") {
+    const created = await send("PUT", `/v1/tenants/${tenant}`, "{}");
+    if (created.status < 200 || created.status >= 300) return created;
+  }
+  return send(opts.method, "/v1/deployment-layer", opts.body ?? "", tenant);
 }
 
 export async function syncDeploymentLayer(opts: {

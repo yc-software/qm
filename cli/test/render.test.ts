@@ -24,6 +24,7 @@ import { renderInternalUrl } from "../src/render-domains.ts";
 import { renderMinioCommand } from "../src/render-minio.ts";
 import { renderClient, streamRenderLogs } from "../src/render-api.ts";
 import { runChecks } from "../src/commands/check.ts";
+import { isTenantSetting } from "../src/tenant-setting-names.ts";
 
 function deployment(t: TestContext, portal = false) {
   const dir = mkdtempSync(join(tmpdir(), "qm-render-api-"));
@@ -44,6 +45,7 @@ function deployment(t: TestContext, portal = false) {
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
+  raw.tenant = "00000000-0000-4000-8000-0000000000c1";
   raw.services = portal ? ["core", "web-ui", "portal", "auth"] : ["core", "web-ui"];
   raw.sandbox = {
     ...raw.sandbox,
@@ -163,7 +165,10 @@ function cloud(t: TestContext, d: Deployment) {
     if (intercepted) return intercepted;
     if (url.origin !== "https://api.render.com") {
       if (path === "/healthz") return new Response("ok");
+      if (path === `/v1/tenants/${d.ctx.config.tenant}` && method === "PUT")
+        return Response.json({ tenant: d.ctx.config.tenant, created: false });
       if (path === "/v1/deployment-layer") {
+        assert.equal(new Headers(init?.headers).get("x-qm-tenant"), d.ctx.config.tenant);
         assert.ok([state.services.get("srv-acme-core")!.serviceDetails.url, d.ctx.config.apiUrl].includes(url.origin));
         return Response.json({ status: "applied", durable: true, version: 1 });
       }
@@ -344,7 +349,11 @@ function cloud(t: TestContext, d: Deployment) {
         return Response.json(domain);
       }
       if (path.startsWith(`/services/${id}/env-vars/`)) {
-        state.envs.get(id)![decodeURIComponent(path.split("/").at(-1)!)] = body.value;
+        const key = decodeURIComponent(path.split("/").at(-1)!);
+        if (method === "DELETE") {
+          if (!(key in state.envs.get(id)!)) return missing();
+          delete state.envs.get(id)![key];
+        } else state.envs.get(id)![key] = body.value;
         return empty();
       }
       if (path === `/services/${id}/rollback`) {
@@ -528,7 +537,9 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
   assert.equal(core.RENDER_PROJECT_ID, "prj-acme");
 
   assert.equal(core.RENDER_ENVIRONMENT_ID, "evm-acme");
-  assert.equal(core.DATABASE_URL, "postgresql://qm:private-password@pg/qm");
+  assert.equal(core.DATABASE_OWNER_URL, "postgresql://qm:private-password@pg/qm");
+  assert.match(core.DATABASE_URL!, /^postgresql:\/\/acme_app:[A-Za-z0-9_-]{43}@pg\/qm$/);
+  assert.equal(core.SANDBOX_BACKEND, undefined, "the sandbox backend is a tenant setting");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-web-ui-assigned.onrender.com");
   assert.equal(minio.MINIO_BROWSER, "off");
@@ -695,6 +706,7 @@ test("Render config rejects retired compute plan names and names their replaceme
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
+  raw.tenant = "00000000-0000-4000-8000-0000000000c1";
   raw.render.postgresPlan = "standard";
   delete raw.modelProvider;
   delete raw.secretEnv;
@@ -1272,6 +1284,21 @@ test("Render updates retain stored operator secrets for the core", async (t) => 
   assert.equal(c.envs.get("srv-acme-web-ui")!.RESEND_API_KEY, undefined);
 });
 
+test("Render keeps tenant settings out of service env and runs the database release before core", async (t) => {
+  const d = deployment(t, true);
+  const c = cloud(t, d);
+  await d.backend.up({ dryRun: false });
+  assert.deepEqual(
+    [...c.envs.values()].flatMap((env) => Object.keys(env).filter(isTenantSetting)),
+    [],
+  );
+  const core = c.services.get("srv-acme-core")!.serviceDetails as { preDeployCommand?: string };
+  assert.equal(core.preDeployCommand, "node src/migrate-main.ts");
+  for (const [id, service] of c.services)
+    if (id !== "srv-acme-core")
+      assert.equal((service.serviceDetails as { preDeployCommand?: string }).preDeployCommand, undefined, id);
+});
+
 test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async (t) => {
   const d = deployment(t);
   cloud(t, d);
@@ -1524,6 +1551,7 @@ test("Render layer transport rejects missing or invalid core URLs before sending
         renderDeploymentLayerTransport({
           config: d.ctx.config,
           configDir: d.ctx.configDir,
+          path: "/v1/deployment-layer",
           method: "GET",
           body: "",
         }),
@@ -1639,7 +1667,8 @@ test("Render connects a private web UI to the public portal and copies shared au
   assert.equal(c.services.get("srv-acme-web-ui")!.type, "private_service");
   assert.equal(portal.WEB_UI_UPSTREAM, "http://acme-web-ui-assigned:8080");
   assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
-  assert.equal(portal.AUTH_CLIENT_SECRET, portal.OIDC_CLIENT_SECRET);
+  assert.ok(portal.AUTH_CLIENT_SECRET);
+  assert.equal(portal.OIDC_CLIENT_SECRET, undefined, "the portal's OIDC client secret is a tenant setting");
   assert.equal(portal.CORE_SIGNING_SECRET, core.CORE_SIGNING_SECRET);
   assert.equal(c.envs.get("srv-acme-minio")!.MINIO_BROWSER, "off");
 });

@@ -9,7 +9,7 @@ if (import.meta.main) {
   if (mode === "tenants") {
     await seedTestTenants(databaseUrl);
   } else {
-    const { runtime } = buildApp(testConfig({ databaseUrl }));
+    const { runtime } = buildApp(testConfig({ databaseUrl, databaseOwnerUrl: databaseUrl }));
     await migrateRegisteredPgSchemas(databaseUrl);
     await runtime.stop();
   }

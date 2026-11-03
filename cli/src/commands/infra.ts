@@ -228,9 +228,9 @@ function assertTaskDefinitionOwnership(config: QmConfig, awsBin: string, arn: st
   const tags = Object.fromEntries(
     (parsed.tags ?? []).flatMap((tag) => (tag.key && tag.value ? [[tag.key, tag.value] as const] : [])),
   );
-  if (tags["Deployment"] !== config.orgId || !["qm-cli", "terraform"].includes(tags["ManagedBy"] ?? "")) {
+  if (tags["Deployment"] !== config.deploymentId || !["qm-cli", "terraform"].includes(tags["ManagedBy"] ?? "")) {
     throw new CliError(
-      `refusing to delete task definition ${arn}: ownership tags do not match deployment ${config.orgId}`,
+      `refusing to delete task definition ${arn}: ownership tags do not match deployment ${config.deploymentId}`,
     );
   }
 }
@@ -309,9 +309,9 @@ function assertImageIdentity(config: QmConfig, awsBin: string, image: ImageSumma
   if (image.imageArn !== expectedArn)
     throw new CliError(`refusing to manage unexpected MicroVM image ARN ${image.imageArn}`);
   const tags = imageTags(awsBin, config.aws!.region, image.imageArn);
-  if (tags["ManagedBy"] !== "qm-cli" || tags["Deployment"] !== config.orgId) {
+  if (tags["ManagedBy"] !== "qm-cli" || tags["Deployment"] !== config.deploymentId) {
     throw new CliError(
-      `refusing to manage MicroVM image ${image.name}: ownership tags do not match deployment ${config.orgId}`,
+      `refusing to manage MicroVM image ${image.name}: ownership tags do not match deployment ${config.deploymentId}`,
     );
   }
   return { ...image, tags };
@@ -471,7 +471,7 @@ async function buildAwsMicrovmImageLocked(
       const command = existing ? "update-microvm-image" : "create-microvm-image";
       const identityArgs = existing
         ? ["--image-identifier", existing.imageArn]
-        : ["--name", imageName, "--tags", JSON.stringify({ ManagedBy: "qm-cli", Deployment: config.orgId })];
+        : ["--name", imageName, "--tags", JSON.stringify({ ManagedBy: "qm-cli", Deployment: config.deploymentId })];
       try {
         operation = JSON.parse(
           capture(awsBin, [

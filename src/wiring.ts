@@ -109,6 +109,7 @@ import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
+import { createTenant } from "./tenants/create.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -544,6 +545,7 @@ export function buildApp(
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
+    ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
   });
@@ -3010,6 +3012,7 @@ export function serverDeps(
     ...(config.deploymentControlSecret ? { deploymentControlSecret: config.deploymentControlSecret } : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
+    createTenant: (tenant) => createTenant(config.databaseUrl!, tenant),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,

@@ -1,4 +1,6 @@
-import { securityScreenEnv, type QmConfig, type RenderConfig } from "./config.ts";
+import type { QmConfig, RenderConfig } from "./config.ts";
+import { databaseLoginEnv } from "./database-logins.ts";
+import { withoutTenantSettings } from "./tenant-setting-names.ts";
 import { CliError } from "./log.ts";
 import { sandboxBaseRef } from "./manifest.ts";
 import { discoverPlugins, type ResolvedPlugin } from "./plugins.ts";
@@ -9,7 +11,7 @@ import {
   brokerWiring,
   hostedServiceEnv,
   ordered,
-  orgEnv,
+  serviceUrlEnv,
   runnableServices,
   virtualServiceEnv,
 } from "./services.ts";
@@ -47,6 +49,7 @@ export type RenderWorkload = RenderBuild & {
   plan: string;
   plugin?: ResolvedPlugin;
   command?: string;
+  preDeploy?: string;
   health?: string;
   diskSizeGB?: number;
 };
@@ -57,7 +60,6 @@ export function renderManagedCoreEnv(render: RenderConfig, baseImage?: string): 
     WORKSPACE_STORE: "postgres",
     SNAPSHOT_STORE: "s3",
     TRANSFER_STORE: "s3",
-    SANDBOX_BACKEND: "render",
     DEPLOY_PROVIDER: "render",
     RENDER_WORKSPACE_ID: render.workspaceId,
     RENDER_REGION: render.region,
@@ -82,7 +84,7 @@ export function renderServiceEnv(
   service: string,
   values: ReadonlyMap<string, string>,
   connections: {
-    databaseUrl: string;
+    databaseOwnerUrl: string;
     coreUrl: string;
     webUiUrl?: string;
     projectId?: string;
@@ -100,7 +102,7 @@ export function renderServiceEnv(
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
-    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
+    ...serviceUrlEnv(service, config.publicUrl, brandEnvOf(config)),
     PORT: "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };
@@ -110,13 +112,10 @@ export function renderServiceEnv(
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: "http://127.0.0.1:8099",
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   const managedValues: Record<string, string> = {
-    ...(coreAccess ? { DATABASE_URL: connections.databaseUrl } : {}),
+    ...(coreAccess ? databaseLoginEnv(connections.databaseOwnerUrl, config.deploymentId) : {}),
     PUBLIC_API_URL: config.apiUrl ?? config.publicUrl,
   };
   for (const secret of computedSecrets(config)) {
@@ -131,7 +130,6 @@ export function renderServiceEnv(
   }
   if (service === "core")
     Object.assign(out, {
-      ...securityScreenEnv(config),
       ...renderManagedCoreEnv(render, config.sandbox?.baseImage),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),
@@ -140,14 +138,8 @@ export function renderServiceEnv(
       RENDER_DEPLOY_REPO: render.source.repo,
       RENDER_DEPLOY_BRANCH: render.source.branch,
       ...(connections.commit ? { GIT_SHA: connections.commit } : {}),
-      ...(config.model ? { PI_MODEL: config.model } : {}),
-      ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
     });
   if (service === "core") {
-    out.AUTH_ALLOWED_EMAIL_DOMAIN =
-      (config.services.includes("auth") ? config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN : undefined) ??
-      config.env.core?.AUTH_ALLOWED_EMAIL_DOMAIN ??
-      "";
     if (!config.services.includes("slack")) {
       for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) out[key] = "";
     }
@@ -155,24 +147,7 @@ export function renderServiceEnv(
   }
   if (service === "portal") {
     if (connections.webUiUrl) out.WEB_UI_UPSTREAM = connections.webUiUrl;
-    if (config.services.includes("auth")) {
-      for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
-        out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";
-    } else {
-      out.AUTH_EMBEDDED = "0";
-      for (const [key, value] of Object.entries({
-        AUTH_BROKER_UPSTREAM: "",
-        OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize",
-        OIDC_TOKEN_ENDPOINT: "https://slack.com/api/openid.connect.token",
-        OIDC_USERINFO_ENDPOINT: "https://slack.com/api/openid.connect.userInfo",
-        OIDC_ISSUER: "https://slack.com",
-        OIDC_JWKS_URI: "https://slack.com/openid/connect/keys",
-        OIDC_SCOPES: "openid profile email",
-        OIDC_PRINCIPAL_CLAIM: "email",
-        OIDC_ALLOWED_EMAIL_DOMAIN: "",
-      }))
-        out[key] = config.env.portal?.[key] ?? value;
-    }
+    if (!config.services.includes("auth")) Object.assign(out, { AUTH_EMBEDDED: "0", AUTH_BROKER_UPSTREAM: "" });
   }
-  return out;
+  return withoutTenantSettings(out);
 }

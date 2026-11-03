@@ -1,5 +1,6 @@
 import { serviceEnvironment } from "../src/backends/aws.ts";
 import { computedSecrets } from "../src/secrets.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,12 +12,19 @@ import {
   loadConfigAt,
   loadConfigInDir,
   localSandboxActive,
+  sandboxConfigBackend,
   sandboxCoreEnv,
   securityScreenEnv,
   updateConfigImageOverrides,
 } from "../src/config.ts";
 
-const BASE = { contract: 1, orgId: "acme", publicUrl: "http://localhost:8080", target: "docker", services: ["core"] };
+const BASE = {
+  contract: 1,
+  deploymentId: "acme",
+  publicUrl: "http://localhost:8080",
+  target: "docker",
+  services: ["core"],
+};
 
 function writeConfig(extra: Record<string, unknown>): { dir: string; path: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-cfg-"));
@@ -45,16 +53,22 @@ function withConfig(extra: Record<string, unknown>, fn: (r: { dir: string; path:
   }
 }
 
-test("required fields: orgId, target, services (must include core), valid service names", () => {
-  withConfig({ orgId: "" }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /"orgId" must be a lowercase DNS label/),
+test("required fields: deploymentId, target, services (must include core), valid service names", () => {
+  withConfig({ deploymentId: "" }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /"deploymentId" must be a lowercase DNS label/),
   );
-  for (const orgId of ["../other", "ACME", "a/b", "-acme", "acme-"]) {
-    withConfig({ orgId }, ({ path }) =>
-      assert.throws(() => loadConfigAt(path), /"orgId" must be a lowercase DNS label/),
+  for (const deploymentId of ["../other", "ACME", "a/b", "-acme", "acme-"]) {
+    withConfig({ deploymentId }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"deploymentId" must be a lowercase DNS label/),
     );
   }
   withConfig({ target: "k8s" }, ({ path }) => assert.throws(() => loadConfigAt(path), /"target" must be/));
+  const tenant = "00000000-0000-4000-8000-00000000000a";
+  withConfig({ tenant }, ({ path }) => assert.equal(loadConfigAt(path).config.tenant, tenant));
+  for (const bad of ["main", tenant.toUpperCase(), 7])
+    withConfig({ tenant: bad }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"tenant" must be the deployment's tenant id/),
+    );
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );
@@ -891,7 +905,7 @@ test("docker accepts an explicit local sandbox image without Fly coordinates", (
   withConfig({ sandbox: { backend: "local", image: "qm-sandbox-local:latest" } }, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
-      env: { SANDBOX_BACKEND: "local", LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
+      env: { LOCAL_SANDBOX_IMAGE: "qm-sandbox-local:latest" },
       missingSecrets: [],
     });
   });
@@ -910,10 +924,8 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
   for (const target of ["docker", "fly"] as const) {
     withConfig({ target, sandbox: { backend: "agent37" } }, ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: { SANDBOX_BACKEND: "agent37" },
-        missingSecrets: [],
-      });
+      assert.deepEqual(sandboxCoreEnv(config), { env: {}, missingSecrets: [] });
+      assert.equal(sandboxConfigBackend(config), "agent37");
     });
   }
   withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
@@ -925,10 +937,8 @@ test("e2b is a deployment backend on every target and rejects unused Fly setting
   for (const target of ["docker", "fly"] as const) {
     withConfig({ target, sandbox: { backend: "e2b" } }, ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: { SANDBOX_BACKEND: "e2b" },
-        missingSecrets: [],
-      });
+      assert.deepEqual(sandboxCoreEnv(config), { env: {}, missingSecrets: [] });
+      assert.equal(sandboxConfigBackend(config), "e2b");
     });
   }
   withConfig({ sandbox: { backend: "e2b", app: "unused" } }, ({ path }) => {
@@ -950,7 +960,7 @@ test("superserve backend requires the agent template in env.core", () => {
     { sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
     ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] });
+      assert.equal(sandboxConfigBackend(config), "superserve");
     },
   );
   withConfig(
@@ -986,9 +996,10 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
       const { config } = loadConfigAt(path);
       assert.deepEqual(
         sandboxCoreEnv(config),
-        { env: { SANDBOX_BACKEND: "superserve" }, missingSecrets: [] },
+        { env: {}, missingSecrets: [] },
         "the overridden backend's settings are not demanded or injected",
       );
+      assert.equal(sandboxConfigBackend(config), "superserve");
     },
   );
   withConfig(
@@ -1004,7 +1015,7 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   withConfig({ sandbox: { backend: "superserve" }, env: { core: { SANDBOX_BACKEND: "local" } } }, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.equal(localSandboxActive(config), true, "docker prepares the local sandbox the override actually runs");
-    assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
+    assert.equal(sandboxConfigBackend(config), "local");
   });
   withConfig(
     {
@@ -1026,11 +1037,11 @@ test("Superserve configuration preserves existing backend selection and validati
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: override } } }, ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.equal(localSandboxActive(config), true);
-      assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
+      assert.equal(sandboxConfigBackend(config), "local");
     });
   }
   withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } }, ({ path }) =>
-    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "agent37"),
+    assert.equal(sandboxConfigBackend(loadConfigAt(path).config), "agent37"),
   );
   for (const scopes of ["invalid", "[]", "null", "42"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_SCOPE_BACKENDS: scopes } } }, ({ path }) =>
@@ -1079,7 +1090,7 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
   withConfig({ target: "aws", aws, sandbox: { backend: "agent37" } }, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.equal(config.sandbox?.backend, "agent37");
-    assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "agent37");
+    assert.equal(sandboxConfigBackend(config), "agent37");
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
@@ -1110,7 +1121,7 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
 
 test("loadConfigInDir reads qm.config.jsonc from the deployment dir (no walk-up)", () => {
   withConfig({}, ({ dir }) => {
-    assert.equal(loadConfigInDir(dir).config.orgId, "acme");
+    assert.equal(loadConfigInDir(dir).config.deploymentId, "acme");
   });
   const empty = mkdtempSync(join(tmpdir(), "qm-empty-"));
   try {
@@ -1129,7 +1140,7 @@ test("config JSONC accepts comments and trailing commas like tsconfig.json", () 
       `{
       // JSONC comment
       "contract": 1,
-      "orgId": "acme",
+      "deploymentId": "acme",
       "publicUrl": "http://localhost:8080",
       "target": "docker",
       "services": ["core",],
@@ -1352,7 +1363,8 @@ test("blank model provider overrides preserve the declared provider in runtime a
     ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.equal(config.env.core?.MODEL_PROVIDER, undefined);
-      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, "openrouter");
+      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, undefined);
+      assert.equal(tenantSettingsEnv(config, new Map()).MODEL_PROVIDER, "openrouter");
       assert.equal(computedSecrets(config).find((secret) => secret.name === "OPENROUTER_API_KEY")?.required, true);
     },
   );

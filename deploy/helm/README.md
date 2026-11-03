@@ -53,16 +53,31 @@ Bring these before installing:
 
 Store credentials in a Kubernetes Secret and use `envFrom`, or supply `secretEnv`
 through a protected values file. Helm stores `secretEnv` values in its release
-history. Never commit these values. With `envFrom`, explicitly provide both
-`AUTH_ALLOWED_EMAILS` and `OIDC_ALLOWED_EMAILS` (or both corresponding domain
-variables); Helm cannot inspect externally supplied Secret values. When `envFrom`
-is present, the chart does not derive OIDC allowlist environment entries from
-`env` or `services.auth.env`, since those entries would override a potentially
-narrower policy in an external Secret. Set OIDC explicitly in values or the external
-Secret, including when mixing auth values with `envFrom`. Without `envFrom`, auth
-allowlists in `env` or `services.auth.env` propagate unless explicit OIDC values
-in `env` or `secretEnv` override them. Auth allowlists in `secretEnv` are aliased
-inside the chart-managed Secret; later `envFrom` sources retain their precedence.
+history. Never commit these values.
+
+Settings that belong to the install's tenant go under `tenantSettings`, not in any
+service's environment: `ADMIN_GRANTS`, `AUTH_ALLOWED_EMAILS` or
+`AUTH_ALLOWED_EMAIL_DOMAIN`, the portal's `OIDC_*` values, `PORTAL_EXPECTED_TEAM_ID`,
+the model, gateway and sandbox settings (`SANDBOX_BACKEND` and its provider
+tokens), and the values the hook imports into the tenant's admin settings:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ORG_BRAND_*`,
+`HARNESS_SECURITY_POSTURE`, `HARNESS_SHARING_POSTURE`, the
+`<PROVIDER>_OAUTH_CLIENT_ID`/`_SECRET` pairs with `GOOGLE_WORKSPACE_DOMAIN`, and
+`LOOPS_USERS`. The chart refuses all of them in `env`, `secretEnv` or
+`services.<name>.env`. Set `tenant` to this deployment's tenant id: generate a
+lowercase UUID once (`uuidgen | tr A-F a-f`) and keep it in your values; the chart
+refuses to render without one. After each install or upgrade, a hook Job running the core
+image creates the deployment's tenant (`PUT /v1/tenants/<tenant>`, a no-op once it
+exists), writes the settings to it (`PUT /v1/tenant-settings`)
+and imports the rest through the admin routes, keeping any branding, posture,
+OAuth client or model key the tenant already has; each `LOOPS_USERS` entry turns on
+`inbox_loops` for that person. Every call is signed with `CORE_SIGNING_SECRET` and
+authorized by `DEPLOYMENT_CONTROL_SECRET`. With the embedded auth broker, the chart
+derives the portal's OIDC endpoints and copies `AUTH_CLIENT_ID`/`AUTH_CLIENT_SECRET`
+from `secretEnv` and the auth allowlist into the matching `OIDC_*` settings; an
+explicit `tenantSettings.OIDC_*` value wins. With `envFrom`, set
+`tenantSettings.OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` yourself, since Helm
+cannot read an external Secret.
 
 Only portal should normally have public ingress. `ingress.service` accepts an
 enabled `portal`, `core` or `web-ui`, not embedded modules or the TCP egress proxy.
@@ -93,8 +108,9 @@ services:
       S3_REGION: us-west-2
 ```
 
-This fragment expects `DATABASE_URL`, a remote `SANDBOX_BACKEND` and S3 credentials
-in `qm-runtime`; see
+This fragment expects `DATABASE_OWNER_URL`, `DATABASE_URL`,
+`DEPLOYMENT_CONTROL_SECRET` and S3 credentials in `qm-runtime`, and a remote
+`tenantSettings.SANDBOX_BACKEND` with its provider token; see
 [Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
 runtime config and `images.yaml`, render and inspect before applying:
 
@@ -110,12 +126,23 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 
 ## Core data and rollout behavior
 
-Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
-store for file bytes. Choose one of two layouts.
+Core keeps durable state in two places: Postgres and an object store for file
+bytes. Postgres takes two URLs: `DATABASE_OWNER_URL` owns the tables and runs
+migrations, and `DATABASE_URL` is the login requests use (not the owner, not a
+superuser, no `BYPASSRLS`). Before core starts, the core pod's `database` init
+container runs `node src/migrate-main.ts` as the owner login: it creates the login
+`DATABASE_URL` names when that login does not exist, then applies the migrations.
+It never changes an existing login's password, since Postgres logins are shared by
+every database on the server; name a login of this deployment's own. Both URLs go
+into their own Secret, mounted only into the core pod; portal, web-ui and the
+other pods never receive them. Core refuses to start without `DATABASE_OWNER_URL`, or when
+`DATABASE_URL` logs in as the owner, a superuser or a role that bypasses
+row-level security.
+Choose one of two layouts.
 
 **Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
 with `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`
-and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
+and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `tenantSettings.SANDBOX_BACKEND`,
 and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and
 sandbox file transfers go to the bucket, so replicas share that state and pods can

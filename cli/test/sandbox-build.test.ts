@@ -8,7 +8,7 @@ import type { QmConfig } from "../src/config.ts";
 
 const CONFIG: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "http://localhost:8080",
   target: "docker",
   services: ["core"],

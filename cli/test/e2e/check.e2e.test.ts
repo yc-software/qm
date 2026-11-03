@@ -51,7 +51,7 @@ test("check fails on a tool descriptor missing its id", () => {
 test("check fails on a config plugin that resolves to neither a source folder nor an image", () => {
   const dir = tmp("check-badplugin");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker", plugins: [{ name: "widget" }] });
+    writeConfig(dir, { deploymentId: "acme", target: "docker", plugins: [{ name: "widget" }] });
     const r = runCli(["check"], { cwd: dir });
     assert.equal(r.code, 1);
     assert.match(r.out, /check failed/);
@@ -65,7 +65,7 @@ test("--sandbox-dir validates a sandbox layer kept outside the deployment dir", 
   const layerSrc = scaffold("check-layer-src");
   const dep = tmp("check-layer-dep");
   try {
-    writeConfig(dep, { orgId: "acme", target: "docker" });
+    writeConfig(dep, { deploymentId: "acme", target: "docker" });
     const r = runCli(["check", "--sandbox-dir", join(layerSrc, "sandbox")], { cwd: dep });
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /example-tool/);

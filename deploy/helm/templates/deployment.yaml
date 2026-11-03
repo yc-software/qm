@@ -53,6 +53,107 @@ spec:
           persistentVolumeClaim:
             claimName: {{ $svc.persistence.existingClaim | default (printf "%s-core-data" (include "qm.fullname" $root)) | quote }}
       {{- end }}
+      {{- $wired := dict }}
+      {{- $svcHost := printf "%s-%%s.%s.svc.cluster.local" (include "qm.fullname" $root) $root.Release.Namespace }}
+      {{- if ne $name "core" }}
+      {{- $_ := set $wired "CORE_API_URL" (printf "http://%s:%v" (printf $svcHost "core") (index $root.Values.services "core").port) }}
+      {{- end }}
+      {{- $authEnabled := (index $root.Values.services "auth").enabled }}
+      {{- $authUpstream := "http://127.0.0.1:8099" }}
+      {{- $base := trimSuffix "/" ($root.Values.publicUrl | default "") }}
+      {{- $issuer := printf "%s/idp" $base }}
+      {{- if eq $name "portal" }}
+      {{- $_ := set $wired "WEB_UI_UPSTREAM" (printf "http://%s:%v" (printf $svcHost "web-ui") (index $root.Values.services "web-ui").port) }}
+      {{- if $authEnabled }}
+      {{- $_ := set $wired "AUTH_BROKER_UPSTREAM" $authUpstream }}
+      {{- $_ := set $wired "AUTH_EMBEDDED" "1" }}
+      {{- $_ := set $wired "AUTH_BROKER_PREFIX" "/idp" }}
+      {{- end }}
+      {{- end }}
+      {{- if $root.Values.publicUrl }}
+      {{- if eq $name "core" }}
+      {{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}
+      {{- $_ := set $wired "PUBLIC_WEB_URL" $root.Values.publicUrl }}
+      {{- end }}
+      {{- if eq $name "portal" }}
+      {{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}
+      {{- end }}
+      {{- if and (eq $name "portal") $authEnabled }}
+      {{- $_ := set $wired "AUTH_ISSUER" $issuer }}
+      {{- $_ := set $wired "AUTH_REDIRECT_URI" (printf "%s/auth/callback" $base) }}
+      {{- end }}
+      {{- if eq $name "web-ui" }}
+      {{- $_ := set $wired "WEB_UI_PUBLIC_URL" $root.Values.publicUrl }}
+      {{- end }}
+      {{- end }}
+      {{- $componentEnv := deepCopy ($svc.env | default dict) }}
+      {{- $component := "" }}
+      {{- if eq $name "portal" }}{{- $component = "auth" }}{{- end }}
+      {{- if and $component (index $root.Values.services $component).enabled }}
+      {{- range $k, $v := (index $root.Values.services $component).env }}
+      {{- if ne $k "PORT" }}
+      {{- if and (hasKey $componentEnv $k) (ne (toString (index $componentEnv $k)) (toString $v)) }}
+      {{- fail (printf "Conflicting %s settings in %s and %s" $k $name $component) }}
+      {{- end }}
+      {{- $_ := set $componentEnv $k $v }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $componentEnv }}
+      {{- if eq $name "egress-proxy" }}
+      {{- if ne (int $svc.port) 48080 }}
+      {{- fail "services.egress-proxy.port must be 48080: the Envoy listener is fixed in the image" }}
+      {{- end }}
+      {{- else }}
+      {{- if and (hasKey $env "PORT") (ne (toString (index $env "PORT")) (toString $svc.port)) }}
+      {{- fail (printf "%s PORT conflicts with services.%s.port; configure the port there" $name $name) }}
+      {{- end }}
+      {{- $_ := set $env "PORT" (toString $svc.port) }}
+      {{- end }}
+      {{- if and (eq $name "core") $svc.persistence.enabled }}
+      {{- if and (hasKey $env "DATA_DIR") (ne (index $env "DATA_DIR") "/data") }}
+      {{- fail "core persistence requires DATA_DIR=/data" }}
+      {{- end }}
+      {{- $_ := set $env "DATA_DIR" "/data" }}
+      {{- end }}
+      {{- if eq $name "core" }}
+      initContainers:
+        - name: database
+          image: {{ include "qm.image" (dict "root" $root "name" $name "service" $svc) | quote }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["node", "src/migrate-main.ts"]
+          {{- if $svc.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+          {{- with $svc.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $env }}
+          env:
+            {{- range $k, $v := $env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- $databaseEnv := and (eq $name "core") (include "qm.hasDatabaseEnv" $root) }}
+          {{- if or (include "qm.hasSecretEnv" $root) $databaseEnv $root.Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" $root }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- if $databaseEnv }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-database
+            {{- end }}
+            {{- with $root.Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ include "qm.image" (dict "root" $root "name" $name "service" $svc) | quote }}
@@ -69,87 +170,6 @@ spec:
           ports:
             - name: {{ ternary "http" "proxy" (eq $svc.type "web") }}
               containerPort: {{ $svc.port }}
-          {{- $wired := dict }}
-          {{- $svcHost := printf "%s-%%s.%s.svc.cluster.local" (include "qm.fullname" $root) $root.Release.Namespace }}
-          {{- if ne $name "core" }}
-          {{- $_ := set $wired "CORE_API_URL" (printf "http://%s:%v" (printf $svcHost "core") (index $root.Values.services "core").port) }}
-          {{- end }}
-          {{- $authEnabled := (index $root.Values.services "auth").enabled }}
-          {{- $authUpstream := "http://127.0.0.1:8099" }}
-          {{- $base := trimSuffix "/" ($root.Values.publicUrl | default "") }}
-          {{- $issuer := printf "%s/idp" $base }}
-          {{- if eq $name "portal" }}
-          {{- $_ := set $wired "WEB_UI_UPSTREAM" (printf "http://%s:%v" (printf $svcHost "web-ui") (index $root.Values.services "web-ui").port) }}
-          {{- if $authEnabled }}
-          {{- $_ := set $wired "AUTH_BROKER_UPSTREAM" $authUpstream }}
-          {{- $_ := set $wired "AUTH_EMBEDDED" "1" }}
-          {{- $_ := set $wired "AUTH_BROKER_PREFIX" "/idp" }}
-          {{- end }}
-          {{- end }}
-          {{- if $root.Values.publicUrl }}
-          {{- if eq $name "core" }}
-          {{- $_ := set $wired "AGENT_API_URL" $root.Values.publicUrl }}
-          {{- $_ := set $wired "PUBLIC_WEB_URL" $root.Values.publicUrl }}
-          {{- end }}
-          {{- if eq $name "portal" }}
-          {{- $_ := set $wired "PORTAL_PUBLIC_URL" $root.Values.publicUrl }}
-          {{- if $authEnabled }}
-          {{- $_ := set $wired "OIDC_ISSUER" $issuer }}
-          {{- $_ := set $wired "OIDC_AUTH_ENDPOINT" (printf "%s/authorize" $issuer) }}
-          {{- $_ := set $wired "OIDC_TOKEN_ENDPOINT" (printf "%s/token" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_USERINFO_ENDPOINT" (printf "%s/userinfo" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_JWKS_URI" (printf "%s/.well-known/jwks.json" $authUpstream) }}
-          {{- $_ := set $wired "OIDC_SCOPES" "openid email" }}
-          {{- $_ := set $wired "OIDC_PRINCIPAL_CLAIM" "email" }}
-          {{- end }}
-          {{- end }}
-          {{- if and (eq $name "portal") $authEnabled }}
-          {{- $_ := set $wired "AUTH_ISSUER" $issuer }}
-          {{- $_ := set $wired "AUTH_REDIRECT_URI" (printf "%s/auth/callback" $base) }}
-          {{- end }}
-          {{- if eq $name "web-ui" }}
-          {{- $_ := set $wired "WEB_UI_PUBLIC_URL" $root.Values.publicUrl }}
-          {{- end }}
-          {{- end }}
-          {{- $componentEnv := deepCopy ($svc.env | default dict) }}
-          {{- $component := "" }}
-          {{- if eq $name "portal" }}{{- $component = "auth" }}{{- end }}
-          {{- if and $component (index $root.Values.services $component).enabled }}
-          {{- range $k, $v := (index $root.Values.services $component).env }}
-          {{- if ne $k "PORT" }}
-          {{- if and (hasKey $componentEnv $k) (ne (toString (index $componentEnv $k)) (toString $v)) }}
-          {{- fail (printf "Conflicting %s settings in %s and %s" $k $name $component) }}
-          {{- end }}
-          {{- $_ := set $componentEnv $k $v }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
-          {{- $env := mergeOverwrite (deepCopy $wired) (deepCopy ($root.Values.env | default dict)) $componentEnv }}
-          {{- if eq $name "egress-proxy" }}
-          {{- if ne (int $svc.port) 48080 }}
-          {{- fail "services.egress-proxy.port must be 48080: the Envoy listener is fixed in the image" }}
-          {{- end }}
-          {{- else }}
-          {{- if and (hasKey $env "PORT") (ne (toString (index $env "PORT")) (toString $svc.port)) }}
-          {{- fail (printf "%s PORT conflicts with services.%s.port; configure the port there" $name $name) }}
-          {{- end }}
-          {{- $_ := set $env "PORT" (toString $svc.port) }}
-          {{- end }}
-          {{- if and (eq $name "core") $svc.persistence.enabled }}
-          {{- if and (hasKey $env "DATA_DIR") (ne (index $env "DATA_DIR") "/data") }}
-          {{- fail "core persistence requires DATA_DIR=/data" }}
-          {{- end }}
-          {{- $_ := set $env "DATA_DIR" "/data" }}
-          {{- end }}
-          {{- if and (eq $name "portal") $authEnabled (not $root.Values.envFrom) }}
-          {{- range $authKey, $oidcKey := dict "AUTH_ALLOWED_EMAILS" "OIDC_ALLOWED_EMAILS" "AUTH_ALLOWED_EMAIL_DOMAIN" "OIDC_ALLOWED_EMAIL_DOMAIN" }}
-          {{- if and (not (hasKey $env $oidcKey)) (not (index $root.Values.secretEnv $oidcKey)) }}
-          {{- if hasKey $env $authKey }}
-          {{- $_ := set $env $oidcKey (index $env $authKey) }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
-          {{- end }}
           {{- if $env }}
           env:
             {{- range $k, $v := $env }}
@@ -157,11 +177,16 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           {{- end }}
-          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          {{- $databaseEnv := and (eq $name "core") (include "qm.hasDatabaseEnv" $root) }}
+          {{- if or (include "qm.hasSecretEnv" $root) $databaseEnv $root.Values.envFrom }}
           envFrom:
             {{- if include "qm.hasSecretEnv" $root }}
             - secretRef:
                 name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- if $databaseEnv }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-database
             {{- end }}
             {{- with $root.Values.envFrom }}
             {{- toYaml . | nindent 12 }}

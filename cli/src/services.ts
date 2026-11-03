@@ -66,11 +66,9 @@ export interface LogOpts {
 
 export interface ServiceCtx {
   appPrefix: string;
-  orgId: string;
   deployAppPrefix: string;
   publicUrl: string;
   hasAuth: boolean;
-  authAllowedEmailDomain?: string;
   brand?: BrandEnv;
   /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
@@ -116,24 +114,14 @@ export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv 
     ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
     : undefined;
 
-export function orgEnv(service: string, orgId: string, publicUrl: string, brand?: BrandEnv): Record<string, string> {
+export function serviceUrlEnv(service: string, publicUrl: string, brand?: BrandEnv): Record<string, string> {
   const base = publicUrl.replace(/\/$/, "");
-  const identity: Record<string, string> = service === "core" ? { ORG_ID: orgId } : { CORE_ORG_ID: orgId };
-  const webUiUrl = base;
-  if (service === "core") {
-    return {
-      ...identity,
-      PUBLIC_WEB_URL: base,
-      WEB_UI_PUBLIC_URL: webUiUrl,
-      ...(brand?.botName ? { ORG_BRAND_SELF_LABEL: brand.botName } : {}),
-      ...(brand?.orgName ? { ORG_BRAND_ORG_NAME: brand.orgName } : {}),
-    };
-  }
-  if (service === "web-ui") return { ...identity, WEB_UI_PUBLIC_URL: webUiUrl };
-  if (service === "portal")
-    return { ...identity, PORTAL_PUBLIC_URL: base, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
-  if (service === "auth") return { ...identity, ...(brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {}) };
-  return identity;
+  const brandName: Record<string, string> = brand?.botName ? { AUTH_BRAND_NAME: brand.botName } : {};
+  if (service === "core") return { PUBLIC_WEB_URL: base, WEB_UI_PUBLIC_URL: base };
+  if (service === "web-ui") return { WEB_UI_PUBLIC_URL: base };
+  if (service === "portal") return { PORTAL_PUBLIC_URL: base, ...brandName };
+  if (service === "auth") return brandName;
+  return {};
 }
 
 const AUTH_PATH_PREFIX = "/idp";
@@ -153,12 +141,26 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
-export function brokerWiring(
-  service: string,
-  o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
-): Record<string, string> {
+const brokerIssuer = (publicUrl: string): string => `${publicUrl.replace(/\/$/, "")}${AUTH_PATH_PREFIX}`;
+
+export function portalBrokerSignIn(publicUrl: string, allowedEmailDomain?: string): Record<string, string> {
+  const issuer = brokerIssuer(publicUrl);
+  return {
+    OIDC_CLIENT_ID: AUTH_CLIENT_ID,
+    OIDC_ISSUER: issuer,
+    OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+    OIDC_SCOPES: "openid email",
+    OIDC_PRINCIPAL_CLAIM: "email",
+    ...(allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: allowedEmailDomain } : {}),
+  };
+}
+
+export function brokerWiring(service: string, o: { publicUrl: string; authBaseUrl: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
-  const issuer = `${base}${AUTH_PATH_PREFIX}`;
+  const issuer = brokerIssuer(base);
   if (service === "portal") {
     return {
       AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
@@ -167,18 +169,8 @@ export function brokerWiring(
       AUTH_CLIENT_ID,
       AUTH_REDIRECT_URI: `${base}/auth/callback`,
       AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
-      OIDC_CLIENT_ID: AUTH_CLIENT_ID,
-      OIDC_ISSUER: issuer,
-      OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
-      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
-      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
-      OIDC_SCOPES: "openid email",
-      OIDC_PRINCIPAL_CLAIM: "email",
-      ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
     };
   }
-  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
   if (service === "auth") {
     return {
       AUTH_ISSUER: issuer,
@@ -194,13 +186,12 @@ const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
     ? brokerWiring(service, {
         publicUrl: s.publicUrl,
         authBaseUrl: s.authUrl,
-        ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
       })
     : {};
 
 const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
   CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.brand),
+  ...serviceUrlEnv(service, s.publicUrl, s.brand),
   ...brokerEnv(service, s),
 });
 
@@ -213,19 +204,11 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
       managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.brand),
+        ...serviceUrlEnv("core", s.publicUrl, s.brand),
         ...brokerEnv("core", s),
         FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
       }),
-      stackKeys: [
-        "SNAPSHOT_STORE",
-        "TRANSFER_STORE",
-        "S3_BUCKET",
-        "S3_REGION",
-        "PUBLIC_WEB_URL",
-        "FLY_ORG",
-        "PI_DETECT_MODEL",
-      ],
+      stackKeys: ["SNAPSHOT_STORE", "TRANSFER_STORE", "S3_BUCKET", "S3_REGION", "PUBLIC_WEB_URL", "FLY_ORG"],
       deployFlags: ["--ha=false"],
     },
   },
@@ -258,23 +241,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         ...pluginWiring("portal", s),
         WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
       }),
-      stackKeys: [
-        "PORTAL_PUBLIC_URL",
-        "OIDC_CLIENT_ID",
-        "OIDC_ALLOWED_EMAILS",
-        "OIDC_ALLOWED_EMAIL_DOMAIN",
-        "PORTAL_EXPECTED_TEAM_ID",
-        "OIDC_AUTH_ENDPOINT",
-        "OIDC_TOKEN_ENDPOINT",
-        "OIDC_USERINFO_ENDPOINT",
-        "OIDC_ISSUER",
-        "OIDC_JWKS_URI",
-        "OIDC_SCOPES",
-        "OIDC_PRINCIPAL_CLAIM",
-        "OIDC_PROMPT",
-        "AUTH_BROKER_UPSTREAM",
-        "AUTH_BROKER_PREFIX",
-      ],
+      stackKeys: ["PORTAL_PUBLIC_URL", "AUTH_BROKER_UPSTREAM", "AUTH_BROKER_PREFIX"],
       deployFlags: ["--ha=false"],
     },
   },

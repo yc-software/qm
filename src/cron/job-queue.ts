@@ -1,5 +1,5 @@
 import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, ownerDatabaseUrl, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
@@ -24,10 +24,28 @@ export interface CronJobQueue {
 const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 
 const FIRE_QUEUE = "cron-fire";
+const SCHEMA = "pgboss";
+
+export async function installCronQueueSchema(ownerUrl: string): Promise<void> {
+  const pg = createPgPool(ownerUrl);
+  const boss = new PgBoss({
+    schema: SCHEMA,
+    supervise: false,
+    schedule: false,
+    db: { executeSql: async (text, values) => (await pg.pool()).query(text, values) },
+  });
+  try {
+    await boss.start();
+    await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
+    await boss.stop({ graceful: false });
+  } finally {
+    await pg.close();
+  }
+}
 
 export function createPgBossCronQueue(
   databaseUrl: string,
-  schema: string = "pgboss",
+  schema: string = SCHEMA,
   fireConcurrency: number = 1,
 ): CronJobQueue {
   let pg: PgPool | null = null;
@@ -55,7 +73,7 @@ export function createPgBossCronQueue(
   return {
     async start(handlers) {
       if (started) return;
-      pg ??= createPgPool(databaseUrl);
+      pg ??= createPgPool(ownerDatabaseUrl(databaseUrl));
       try {
         if (!initialized) {
           await boss.start();

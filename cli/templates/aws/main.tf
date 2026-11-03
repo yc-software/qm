@@ -1,6 +1,6 @@
 locals {
   qm_scaffold_version     = 3
-  tags                    = { Deployment = var.org_id, ManagedBy = "terraform" }
+  tags                    = { Deployment = var.deployment_id, ManagedBy = "terraform" }
   azs                     = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
   subnet_ids              = values(aws_subnet.public)[*].id
   vpc_id                  = aws_vpc.this.id
@@ -583,6 +583,12 @@ resource "random_password" "database" {
   special = false
 }
 
+resource "random_password" "database_login" {
+  for_each = toset([local.app_login])
+  length   = 32
+  special  = false
+}
+
 resource "random_id" "final_snapshot" {
   byte_length = 4
   keepers = {
@@ -773,10 +779,23 @@ resource "aws_secretsmanager_secret" "contract" {
   recovery_window_in_days = var.secret_recovery_window_days
   tags                    = local.tags
 }
+locals {
+  app_login = "${replace(substr(var.deployment_id, 0, 59), "-", "_")}_app"
+  database_logins = {
+    DATABASE_OWNER_URL = { user = var.db_username, password = random_password.database.result }
+    DATABASE_URL       = { user = local.app_login, password = random_password.database_login[local.app_login].result }
+  }
+}
+
 resource "aws_secretsmanager_secret_version" "database" {
-  count         = contains(var.secret_names, "DATABASE_URL") ? 1 : 0
-  secret_id     = aws_secretsmanager_secret.contract["DATABASE_URL"].id
-  secret_string = "postgresql://${var.db_username}:${urlencode(random_password.database.result)}@${aws_db_instance.this.address}:5432/${var.db_name}?sslmode=no-verify"
+  for_each      = { for name, login in local.database_logins : name => login if contains(var.secret_names, name) }
+  secret_id     = aws_secretsmanager_secret.contract[each.key].id
+  secret_string = "postgresql://${each.value.user}:${urlencode(each.value.password)}@${aws_db_instance.this.address}:5432/${var.db_name}?sslmode=no-verify"
+}
+
+moved {
+  from = aws_secretsmanager_secret_version.database[0]
+  to   = aws_secretsmanager_secret_version.database["DATABASE_URL"]
 }
 
 resource "aws_lb" "this" {

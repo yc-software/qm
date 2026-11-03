@@ -13,7 +13,7 @@ const manifest = (url: URL): SlackManifest => JSON.parse(readFileSync(url, "utf8
 
 const manifestConfig = (botName?: string): QmConfig =>
   ({
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://qm.example.com",
     ...(botName ? { botName } : {}),
   }) as QmConfig;

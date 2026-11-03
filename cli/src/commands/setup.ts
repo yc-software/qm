@@ -2,7 +2,14 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
 import { Writable } from "node:stream";
-import { CONFIG_FILENAME, configPathInDir, loadConfigAt, validOrgId, type Target, type QmConfig } from "../config.ts";
+import {
+  CONFIG_FILENAME,
+  configPathInDir,
+  loadConfigAt,
+  validDeploymentId,
+  type Target,
+  type QmConfig,
+} from "../config.ts";
 import { bold, die, dim, header, note, ok, warn } from "../log.ts";
 import { HOSTING_PROVIDER_IDS, isTarget } from "../providers.ts";
 import {
@@ -112,8 +119,9 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
   ],
   FLY_DEPLOY_API_TOKEN: [
     "Required only when env.core.DEPLOY_PROVIDER is explicitly set to fly.",
-    "A separate Fly organization token for qm's per-deployment apps.",
-    "Scope it to the configured organization <fly-org>; do not reuse a personal token.",
+    "Prefer env.core.FLY_DEPLOY_SHARED_APP_NAME with a deploy token for that one app",
+    "(fly tokens create deploy -a <app>). An organization token can change every app in",
+    "<fly-org>, including this deployment's own apps; never reuse a personal token.",
   ],
   GOOGLE_OAUTH_CLIENT_SECRET: ["From your Google Cloud OAuth client (APIs & Services -> Credentials)."],
   DROPBOX_OAUTH_CLIENT_SECRET: ["From your Dropbox app console (https://www.dropbox.com/developers/apps)."],
@@ -217,10 +225,10 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
     if (!configPathInDir(dir)) {
       header("New deployment");
       note("No QM deployment config here — let's create one.");
-      let orgId = "";
-      while (!validOrgId(orgId)) {
-        orgId = await ask("Organization id (lowercase DNS label, e.g. acme): ");
-        if (!validOrgId(orgId)) warn("must be lowercase letters, digits, and inner hyphens");
+      let deploymentId = "";
+      while (!validDeploymentId(deploymentId)) {
+        deploymentId = await ask("Deployment id (lowercase DNS label, e.g. acme): ");
+        if (!validDeploymentId(deploymentId)) warn("must be lowercase letters, digits, and inner hyphens");
       }
       let target: Target | undefined;
       while (target === undefined) {
@@ -229,7 +237,7 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
         else warn(`answer ${HOSTING_PROVIDER_IDS.join(", ")}`);
       }
       note("");
-      runInit({ dir, org: orgId, target });
+      runInit({ dir, org: deploymentId, target });
       configPath = join(dir, CONFIG_FILENAME);
       note("");
     }
@@ -244,7 +252,7 @@ export async function runSetup(opts: { dir: string }): Promise<void> {
         /^y/i.test(await ask("Set up sign-in email now? Admins can use qm admin-login without email. [y/N]: ")));
     const { todo, done } = pendingSecrets(config, env, includeEmail);
 
-    header(`Secrets for org ${config.orgId} (target ${config.target})`);
+    header(`Secrets for deployment ${config.deploymentId} (target ${config.target})`);
     if (done.length > 0) ok(`${done.length} already set in .env — skipping: ${done.map((s) => s.name).join(", ")}`);
     if (todo.length === 0) {
       ok("every secret this configuration needs is already set");

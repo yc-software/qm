@@ -22,7 +22,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
     configPath,
     JSON.stringify({
       contract: 1,
-      orgId: "acme",
+      deploymentId: "acme",
       target: "aws",
       publicUrl: "https://acme.example",
       apiUrl: "https://api.acme.example",

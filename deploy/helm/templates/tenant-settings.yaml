@@ -1,0 +1,125 @@
+{{- $tenantKeys := list "MODEL_PROVIDER" "PI_MODEL" "PI_DETECT_MODEL" "PI_TITLE_MODEL" "PI_JUDGE_MODEL" "ANTHROPIC_BASE_URL" "OPENAI_BASE_URL" "OPENROUTER_BASE_URL" "MODEL_GATEWAY_URL" "MODEL_GATEWAY_API_KEY" "MODEL_GATEWAY_API_KEY_HEADER" "MODEL_GATEWAY_MODELS" "CODEX_AUTH_CREDENTIAL" "CLAUDE_AUTH_CREDENTIAL" "SANDBOX_BACKEND" "SPRITES_TOKEN" "E2B_API_KEY" "MODAL_TOKEN_ID" "MODAL_TOKEN_SECRET" "DO_AGENTS_API_TOKEN" "SMOLMACHINES_TOKEN" "AGENT37_API_KEY" "SUPERSERVE_API_KEY" "RENDER_SANDBOX_API_KEY" "RENDER_SANDBOX_WORKSPACE_ID" "SECURITY_SCREEN" "SECURITY_SCREEN_CLASSIFIER" "SECURITY_SCREEN_PROXY_PROVIDER" "SECURITY_SCREEN_PROXY_ENDPOINT" "SECURITY_SCREEN_PROXY_TOKEN" "AUTH_ALLOWED_EMAILS" "AUTH_ALLOWED_EMAIL_DOMAIN" "TRUSTED_OIDC_ADMIN_ISSUER" "SUGGESTED_ACTIVITIES_CONTEXT" "ADMIN_GRANTS" "OIDC_ISSUER" "OIDC_AUTH_ENDPOINT" "OIDC_TOKEN_ENDPOINT" "OIDC_USERINFO_ENDPOINT" "OIDC_JWKS_URI" "OIDC_CLIENT_ID" "OIDC_CLIENT_SECRET" "OIDC_SCOPES" "OIDC_PROMPT" "OIDC_PRINCIPAL_CLAIM" "OIDC_ALLOWED_EMAIL_DOMAIN" "OIDC_ALLOWED_EMAILS" "PORTAL_EXPECTED_TEAM_ID" "ANTHROPIC_API_KEY" "OPENAI_API_KEY" "OPENROUTER_API_KEY" "ORG_BRAND_ACCENT" "ORG_BRAND_MARK" "ORG_BRAND_SELF_LABEL" "ORG_BRAND_ORG_NAME" "HARNESS_SECURITY_POSTURE" "HARNESS_SHARING_POSTURE" "GOOGLE_OAUTH_CLIENT_ID" "GOOGLE_OAUTH_CLIENT_SECRET" "SLACK_OAUTH_CLIENT_ID" "SLACK_OAUTH_CLIENT_SECRET" "NOTION_OAUTH_CLIENT_ID" "NOTION_OAUTH_CLIENT_SECRET" "LINEAR_OAUTH_CLIENT_ID" "LINEAR_OAUTH_CLIENT_SECRET" "DROPBOX_OAUTH_CLIENT_ID" "DROPBOX_OAUTH_CLIENT_SECRET" "GITHUB_OAUTH_CLIENT_ID" "GITHUB_OAUTH_CLIENT_SECRET" "X_OAUTH_CLIENT_ID" "X_OAUTH_CLIENT_SECRET" "ZOOM_OAUTH_CLIENT_ID" "ZOOM_OAUTH_CLIENT_SECRET" "GOOGLE_WORKSPACE_DOMAIN" "LOOPS_USERS" }}
+{{- $sources := dict "env" (.Values.env | default dict) "secretEnv" (.Values.secretEnv | default dict) }}
+{{- range $name, $svc := .Values.services }}
+{{- $_ := set $sources (printf "services.%s.env" $name) ($svc.env | default dict) }}
+{{- end }}
+{{- range $source, $values := $sources }}
+{{- range $key := $tenantKeys }}
+{{- if index $values $key }}
+{{- fail (printf "%s.%s is a tenant setting; move it to tenantSettings.%s" $source $key $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $core := index .Values.services "core" }}
+{{- if $core.enabled }}
+{{- $settings := dict }}
+{{- if (index .Values.services "auth").enabled }}
+{{- $issuer := printf "%s/idp" (trimSuffix "/" (.Values.publicUrl | default "")) }}
+{{- $_ := set $settings "OIDC_ISSUER" $issuer }}
+{{- $_ := set $settings "OIDC_AUTH_ENDPOINT" (printf "%s/authorize" $issuer) }}
+{{- $_ := set $settings "OIDC_TOKEN_ENDPOINT" "http://127.0.0.1:8099/token" }}
+{{- $_ := set $settings "OIDC_USERINFO_ENDPOINT" "http://127.0.0.1:8099/userinfo" }}
+{{- $_ := set $settings "OIDC_JWKS_URI" "http://127.0.0.1:8099/.well-known/jwks.json" }}
+{{- $_ := set $settings "OIDC_SCOPES" "openid email" }}
+{{- $_ := set $settings "OIDC_PRINCIPAL_CLAIM" "email" }}
+{{- with .Values.secretEnv.AUTH_CLIENT_ID }}{{ $_ := set $settings "OIDC_CLIENT_ID" . }}{{ end }}
+{{- with .Values.secretEnv.AUTH_CLIENT_SECRET }}{{ $_ := set $settings "OIDC_CLIENT_SECRET" . }}{{ end }}
+{{- with .Values.tenantSettings.AUTH_ALLOWED_EMAILS }}{{ $_ := set $settings "OIDC_ALLOWED_EMAILS" . }}{{ end }}
+{{- with .Values.tenantSettings.AUTH_ALLOWED_EMAIL_DOMAIN }}{{ $_ := set $settings "OIDC_ALLOWED_EMAIL_DOMAIN" . }}{{ end }}
+{{- end }}
+{{- $settings = mergeOverwrite $settings (deepCopy (.Values.tenantSettings | default dict)) }}
+{{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" (toString .Values.tenant)) }}
+{{- fail "tenant must be this deployment's tenant id: generate a lowercase UUID once (uuidgen | tr A-F a-f) and keep it in your values" }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "qm.fullname" . }}-tenant-settings
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+type: Opaque
+stringData:
+  settings.json: {{ dict "tenant" .Values.tenant "env" $settings | toJson | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "qm.fullname" . }}-tenant-settings
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "qm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tenant-settings
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "qm.serviceAccountName" . }}
+      volumes:
+        - name: tenant-settings
+          secret:
+            secretName: {{ include "qm.fullname" . }}-tenant-settings
+      containers:
+        - name: tenant-settings
+          image: {{ include "qm.image" (dict "root" . "name" "core" "service" $core) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if or (include "qm.hasSecretEnv" .) .Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" . }}
+            - secretRef:
+                name: {{ include "qm.fullname" . }}-env
+            {{- end }}
+            {{- with .Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          env:
+            - name: QM_CORE_URL
+              value: {{ printf "http://%s-core.%s.svc.cluster.local:%v" (include "qm.fullname" .) .Release.Namespace $core.port | quote }}
+          volumeMounts:
+            - name: tenant-settings
+              mountPath: /tenant
+              readOnly: true
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { readFileSync } from "node:fs";
+              import { signedRequestHeaders } from "/app/plugins/chassis/src/source-auth-sign.ts";
+              import { applyTenantImport, tenantImport } from "/app/cli/src/tenant-import.ts";
+              const { tenant, env } = JSON.parse(readFileSync("/tenant/settings.json", "utf8"));
+              async function call(path, body, bound) {
+                const text = JSON.stringify(body);
+                const headers = signedRequestHeaders(process.env.CORE_SIGNING_SECRET, "PUT", path, text, {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${process.env.DEPLOYMENT_CONTROL_SECRET}`,
+                  ...(bound ? { "x-qm-tenant": bound } : {}),
+                });
+                const response = await fetch(`${process.env.QM_CORE_URL}${path}`, {
+                  method: "PUT",
+                  headers,
+                  body: text,
+                  redirect: "error",
+                  signal: AbortSignal.timeout(60_000),
+                });
+                return { status: response.status, body: await response.text() };
+              }
+              const warn = (message) => console.warn(`[tenant-settings] ${message}`);
+              const { applied } = await applyTenantImport(tenantImport(env), tenant, call, warn);
+              console.log(`[tenant-settings] wrote ${applied.join(", ") || "nothing new"} to tenant ${tenant}`);
+{{- end }}

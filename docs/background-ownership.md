@@ -13,7 +13,7 @@ Configure every core replica with:
 | `CORE_SIGNING_SECRET`       | The normal source request signing secret.                                                                                                                |
 | `DATABASE_URL`              | The shared PostgreSQL database.                                                                                                                          |
 
-With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner, so no deployment runs background work until an operator sets one. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
+With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner until the first `PUT /v1/tenants/<tenant>` (which `qm up`, the Helm hook and the dev supervisor send after deploying core): it names the answering deployment as owner when the record has never been set, so a fresh install answers turns without a separate step. After that, only the operator endpoint changes the owner, and an explicit `null` stays paused. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
 
 ## The owner record
 
@@ -75,7 +75,7 @@ Rolling back ownership is the same operation in the other direction. Nothing nee
 
 ## Live deployment session check
 
-A deployment that owns background work accepts `POST /v1/deployment/live-session` with the same source signature and distinct deployment bearer credential. The body contains exactly `requestId` (a fresh UUID) and `expectedDeploymentId`. The endpoint rejects unknown fields, a mismatched deployment, a non-owning deployment, and an inactive responder before starting work.
+A deployment that owns background work accepts `POST /v1/deployment/live-session` with the same source signature and distinct deployment bearer credential, plus the deployment's tenant id in the signed `x-qm-tenant` header. The body contains exactly `requestId` (a fresh UUID) and `expectedDeploymentId`. The endpoint rejects unknown fields, a mismatched deployment, a non-owning deployment, and an inactive responder before starting work.
 
 The check runs the same fixed session command used by the standalone deployment smoke: a real model reply, persisted turns, generated title, session error log, session archival, then the configured PostgreSQL catalog checks. The request cannot select a principal, URL, model, prompt, or command. Model HTTP requests have a five-minute limit; other HTTP requests and database operations have 30-second limits.
 

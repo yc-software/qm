@@ -31,9 +31,9 @@ import {
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
-  securityScreenEnv,
   type AwsConfig,
   type QmConfig,
+  deploymentTenantId,
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
 import {
@@ -43,10 +43,11 @@ import {
   secretsForService,
   type ComputedSecret,
 } from "../secrets.ts";
+import { withoutTenantSettings } from "../tenant-setting-names.ts";
 import {
   brokerWiring,
   brandEnvOf,
-  orgEnv,
+  serviceUrlEnv,
   runnableServices,
   hostedServiceEnv,
   serviceHost,
@@ -176,21 +177,20 @@ export async function awsCoreRequest(
 }
 
 export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
-  urlOf: (config) => {
+  baseOf: (config) => {
     const url = new URL(config.apiUrl ?? config.publicUrl);
     if (url.protocol !== "https:" || url.username || url.password || url.hash)
       throw new CliError("AWS deployment-layer URL must be HTTPS without credentials or a fragment");
-    url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
     return url;
   },
   request: awsCoreRequest,
-  secretFallback: (config) =>
+  secretFallback: (config, name) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [
           "secretsmanager",
           "get-secret-value",
           "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
+          `${config.aws.secretsPrefix}${name}`,
           "--query",
           "SecretString",
           "--output",
@@ -311,7 +311,7 @@ function registerTaskDefinition(config: QmConfig, file: string): string {
     "--tags",
     JSON.stringify([
       { key: "ManagedBy", value: "qm-cli" },
-      { key: "Deployment", value: config.orgId },
+      { key: "Deployment", value: config.deploymentId },
     ]),
     "--query",
     "taskDefinition.taskDefinitionArn",
@@ -380,16 +380,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   const aws = requireAws(config);
   const def = serviceDef(service);
   const coreUrl = `http://core.${aws.networking.cloudMapNamespace}:8080`;
-  const coreEnv =
-    service === "core"
-      ? {
-          ...(config.model ? { PI_MODEL: config.model } : {}),
-          ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
-          ...virtualServiceEnv(config.services, config.env),
-        }
-      : {};
+  const coreEnv = service === "core" ? virtualServiceEnv(config.services, config.env) : {};
   const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
+    ...serviceUrlEnv(service, config.publicUrl, brandEnvOf(config)),
     ...(service === "core"
       ? {}
       : {
@@ -398,7 +391,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }),
     ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
     const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
@@ -411,13 +403,9 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       S3_REGION: aws.region,
     };
     if (sandboxBackend && sandboxBackend !== "aws") {
-      Object.assign(env, sandboxCoreEnv(config).env, {
-        SANDBOX_BACKEND: sandboxBackend,
-        ...stores,
-      });
+      Object.assign(env, sandboxCoreEnv(config).env, stores);
     } else {
       Object.assign(env, {
-        SANDBOX_BACKEND: "aws",
         AWS_SANDBOX_REGION: aws.region,
         AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
         AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
@@ -438,9 +426,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       brokerWiring(service, {
         publicUrl: config.publicUrl,
         authBaseUrl: `http://auth.${aws.networking.cloudMapNamespace}:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
       }),
     );
   }
@@ -448,7 +433,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
     env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
-  return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
+  return Object.fromEntries(Object.entries(withoutTenantSettings(env)).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function workloadEnvironment(
@@ -471,7 +456,7 @@ function workloadEnvironment(
       ...(plugin?.coreAccess === false
         ? {}
         : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...orgEnv(workload, config.orgId, config.publicUrl, brandEnvOf(config)),
+      ...serviceUrlEnv(workload, config.publicUrl, brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -857,11 +842,11 @@ export async function awsMigrateCandidate(config: QmConfig, configDir: string, c
     if (aws.predeployDbSnapshot === false)
       note("pre-migration database restore point: disabled (aws.predeployDbSnapshot)");
     else assertPredeployDbRestorePoint(config);
-    await runAwsCandidateMigration(config, coreImage, candidate.label);
+    await runAwsMigrationTask(config, coreImage, candidate.label);
   });
 }
 
-async function runAwsCandidateMigration(
+async function runAwsMigrationTask(
   config: QmConfig,
   coreImage: string,
   label: string,
@@ -901,7 +886,7 @@ async function runAwsCandidateMigration(
       writeFileSync(definitionPath, JSON.stringify(definition));
       taskDefinition = registerTaskDefinition(config, definitionPath);
     }
-    header(`qm migrate — ${config.orgId} (AWS candidate ${label})`);
+    header(`database migrations and logins — ${config.deploymentId} (${label})`);
     const started = awsJson<{
       tasks?: Array<{ taskArn?: string }>;
       failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
@@ -931,7 +916,7 @@ async function runAwsCandidateMigration(
     }
     step(`migration task: ${taskArn}`);
     await awaitEcsTaskExit(aws, taskArn, "migration");
-    ok(`candidate ${label} migrations applied`);
+    ok(`${label}: migrations applied and database logins set`);
   } finally {
     if (taskDefinition && !existingTaskDefinition) {
       try {
@@ -941,6 +926,27 @@ async function runAwsCandidateMigration(
       }
     }
     rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+export function awsOperatorSecret(config: QmConfig, name: string): string | undefined {
+  const aws = requireAws(config);
+  try {
+    return capture(process.env.AWS_BIN ?? "aws", [
+      "secretsmanager",
+      "get-secret-value",
+      "--secret-id",
+      `${aws.secretsPrefix}${name}`,
+      "--query",
+      "SecretString",
+      "--output",
+      "text",
+      "--region",
+      aws.region,
+    ]).trim();
+  } catch (error) {
+    if (/ResourceNotFoundException/.test(errMessage(error))) return undefined;
+    throw error;
   }
 }
 
@@ -1501,9 +1507,9 @@ function assertOwnedServices(config: QmConfig, states: Map<string, EcsServiceSta
     const tags = Object.fromEntries(
       (service.tags ?? []).flatMap((tag) => (tag.key && tag.value ? [[tag.key, tag.value] as const] : [])),
     );
-    if (tags["Deployment"] !== config.orgId || tags["ManagedBy"] !== "terraform") {
+    if (tags["Deployment"] !== config.deploymentId || tags["ManagedBy"] !== "terraform") {
       throw new CliError(
-        `refusing to mutate ${service.serviceName ?? workload}: ownership tags do not match deployment ${config.orgId}`,
+        `refusing to mutate ${service.serviceName ?? workload}: ownership tags do not match deployment ${config.deploymentId}`,
       );
     }
   }
@@ -2257,10 +2263,14 @@ function deploymentProgress(
   return (targets) => {
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temporary, JSON.stringify({ phase: "monitoring", token, orgId: config.orgId, targets }), {
-        flag: "wx",
-        mode: 0o600,
-      });
+      writeFileSync(
+        temporary,
+        JSON.stringify({ phase: "monitoring", token, deploymentId: config.deploymentId, targets }),
+        {
+          flag: "wx",
+          mode: 0o600,
+        },
+      );
       linkSync(temporary, file);
     } catch (error) {
       warn(`could not publish deployment progress: ${errMessage(error)}`);
@@ -2314,7 +2324,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
   if (opts.buildOnly) {
     assertAwsCallerAccount(aws);
-    header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.orgId} (aws candidate ${opts.imageLabel})`);
+    header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.deploymentId} (aws candidate ${opts.imageLabel})`);
     if (opts.dryRun) {
       for (const service of services) step(`${service}: build immutable candidate image`);
       note(`Plan only. Candidate manifest would be written to ${opts.candidateOut}.`);
@@ -2381,7 +2391,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (!opts.dryRun && !opts.inactive) await assertAwsPublicNetwork(config);
   assertAwsPublicApiUrl(config);
   assertAwsDeployImage(config);
-  header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.orgId} (aws)`);
+  header(`qm ${opts.dryRun ? "plan" : "up"} — ${config.deploymentId} (aws)`);
   const allServices = topology.workloads;
   assertOwnedServices(config, describedServices(config, allServices), allServices);
   const arns = secretArns(config);
@@ -2567,9 +2577,9 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       const taskDefinition = registerTaskDefinition(config, file);
       targets[item.service] = taskDefinition;
     }
-    if (candidate?.images.core && services.includes("core")) {
-      await runAwsCandidateMigration(config, candidate.images.core, candidate.label, targets.core!);
-      migratedCandidate = true;
+    if (services.includes("core")) {
+      await runAwsMigrationTask(config, images.core!, candidate?.label ?? releaseId, targets.core!);
+      migratedCandidate = !!candidate?.images.core;
     }
     const rolloutTargets = Object.fromEntries(
       services
@@ -2716,7 +2726,7 @@ export function awsStatus(config: QmConfig, configDir = process.cwd()): void {
   const { aws, workloads } = awsTopology(config, configDir);
   assertAwsCallerAccount(aws);
   const result = describedServices(config, workloads);
-  header(`qm status — ${config.orgId} (aws)`);
+  header(`qm status — ${config.deploymentId} (aws)`);
   for (const workload of workloads) {
     const service = result.get(workload)!;
     note(`${service.serviceName}: ${service.runningCount}/${service.desiredCount} running · ${service.taskDefinition}`);
@@ -2925,7 +2935,7 @@ export async function awsRollback(
   } finally {
     releaseLease(aws, lease);
   }
-  ok(`rolled back ${config.orgId}`);
+  ok(`rolled back ${config.deploymentId}`);
 }
 
 export function taskDefinitionForBackgroundWork(
@@ -2970,10 +2980,13 @@ export function taskDefinitionForBackgroundWork(
 
 function awsBackgroundWorkTransport(
   config: QmConfig,
-  path = "/v1/background-work",
-  timeoutMs = 30_000,
-  maxResponseBytes?: number,
-  productionRoute = false,
+  {
+    path = "/v1/background-work",
+    timeoutMs = 30_000,
+    maxResponseBytes,
+    productionRoute = false,
+    tenant = "",
+  }: { path?: string; timeoutMs?: number; maxResponseBytes?: number; productionRoute?: boolean; tenant?: string } = {},
 ): BackgroundWorkTransport {
   const aws = requireAws(config);
   const secret = (name: string): string =>
@@ -2998,7 +3011,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${tenant ? `${tenant}\n` : ""}${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,
@@ -3006,6 +3019,7 @@ function awsBackgroundWorkTransport(
         "content-type": "application/json",
         "x-timestamp": String(timestamp),
         "x-signature": `v0=${signature}`,
+        ...(tenant ? { "x-qm-tenant": tenant } : {}),
         authorization: `Bearer ${control}`,
       },
       ...(method === "POST" ? { body } : {}),
@@ -3297,7 +3311,7 @@ export async function awsStoppedCoreOwner(
   const state = describedServices(config, ["core"]).get("core");
   if (!state || state.desiredCount !== 0) return undefined;
   stableWorkloadCapacity(config, "core", state, state.taskDefinition ?? "", 0);
-  return readProductionOwner(awsBackgroundWorkTransport(config, undefined, undefined, undefined, true), deploymentId);
+  return readProductionOwner(awsBackgroundWorkTransport(config, { productionRoute: true }), deploymentId);
 }
 
 async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentManifest | undefined): Promise<void> {
@@ -4462,7 +4476,7 @@ export function probeAwsSecretStore(
 
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
   const { aws } = awsTopology(config, configDir);
-  header(`qm doctor — ${config.orgId} (aws)`);
+  header(`qm doctor — ${config.deploymentId} (aws)`);
   assertAwsCallerAccount(aws);
   step("AWS caller account: ok");
   const failures: string[] = [];
@@ -4859,7 +4873,12 @@ async function checkLive(
     try {
       const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
       if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
-        const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
+        const transport = awsBackgroundWorkTransport(config, {
+          path: "/v1/deployment/live-session",
+          timeoutMs: 600_000,
+          maxResponseBytes: 65_536,
+          tenant: deploymentTenantId(config),
+        });
         await checkControlledLiveSession({
           before: cohort,
           read: () => awsBackgroundWorkStatus(config, configDir),

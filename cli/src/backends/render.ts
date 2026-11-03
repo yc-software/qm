@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
+import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigFields, type QmConfig } from "../config.ts";
 import {
   deploymentLayerRequest,
   httpDeploymentLayerTransport,
@@ -64,7 +64,7 @@ import type { Backend } from "./types.ts";
 function layerTransport(originOf: (config: QmConfig) => string): DeploymentLayerTransport {
   return httpDeploymentLayerTransport({
     timeoutMs: 60_000,
-    urlOf: (config) => new URL("/v1/deployment-layer", originOf(config)),
+    baseOf: (config) => new URL(originOf(config)),
   });
 }
 export const renderDeploymentLayerTransport = layerTransport((config) => {
@@ -162,7 +162,7 @@ function workloads(ctx: DeployContext): RenderWorkload[] {
       ...item,
       type,
       plan: item.name === "core" ? render.corePlan : render.servicePlan,
-      ...(item.name === "core" ? { command: "node src/render/start.ts" } : {}),
+      ...(item.name === "core" ? { command: "node src/render/start.ts", preDeploy: "node src/migrate-main.ts" } : {}),
       ...(type === "web_service" ? { health: "/healthz" } : {}),
     });
   }
@@ -457,7 +457,7 @@ async function provision(
   return postgres;
 }
 interface Connections {
-  databaseUrl: string;
+  databaseOwnerUrl: string;
   commit: string;
   storage?: { endpoint: string; secretKey: string };
 }
@@ -510,6 +510,7 @@ function serviceSpec(workload: RenderWorkload, dockerCommand = workload.command 
       plan: workload.plan,
       envSpecificDetails: { dockerCommand, dockerfilePath: workload.dockerfile, dockerContext: "." },
       ...(workload.health ? { healthCheckPath: workload.health } : {}),
+      ...(workload.preDeploy ? { preDeployCommand: workload.preDeploy } : {}),
       ...(!workload.diskSizeGB ? { maxShutdownDelaySeconds: 300 } : {}),
     },
   };
@@ -551,6 +552,7 @@ async function reconcileService(
     service.autoDeploy !== "no" ||
     renderPlanId(details.plan) !== workload.plan ||
     (details.envSpecificDetails.dockerCommand ?? "") !== (workload.command ?? "") ||
+    (details.preDeployCommand ?? "") !== (workload.preDeploy ?? "") ||
     (workload.health !== undefined && details.healthCheckPath !== workload.health) ||
     (!workload.diskSizeGB && details.maxShutdownDelaySeconds !== 300)
   ) {
@@ -696,7 +698,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
         if (!info.internalConnectionString)
           throw new CliError("Render returned no internal Postgres connection string");
         const connections: Connections = {
-          databaseUrl: info.internalConnectionString,
+          databaseOwnerUrl: info.internalConnectionString,
           commit,
         };
         const { services } = bound;
@@ -749,7 +751,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           ),
         };
         const current = readFileSync(ctx.configPath, "utf8");
-        const updated = updateConfigUrls(current, urls);
+        const updated = updateConfigFields(current, urls);
         if (updated !== current) writeFileSync(ctx.configPath, updated);
         Object.assign(ctx.config, urls);
         state.updateInProgress = true;
@@ -972,7 +974,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           if (bound.postgres) await request(`/postgres/${bound.postgres.id}`, "DELETE");
           saveState(ctx, {
             version: 1,
-            orgId: state.orgId,
+            deploymentId: state.deploymentId,
             workspaceId: state.workspaceId,
             region: state.region,
             appPrefix: state.appPrefix,

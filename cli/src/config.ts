@@ -30,9 +30,11 @@ export const FARGATE_MAX_STOP_TIMEOUT_S = 120;
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export const CONTRACT_VERSION = 1 as const;
 
-export const validOrgId = (value: string): boolean =>
+export const validDeploymentId = (value: string): boolean =>
   value.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value);
 
 export type { Target } from "./providers.ts";
@@ -154,7 +156,7 @@ export const isEmailTransport = (value: unknown): value is EmailTransport =>
 
 export interface QmConfig {
   contract: typeof CONTRACT_VERSION;
-  orgId: string;
+  deploymentId: string;
   publicUrl: string;
   apiUrl?: string;
   target: Target;
@@ -173,6 +175,7 @@ export interface QmConfig {
   botName?: string;
   orgName?: string;
   appPrefix?: string;
+  tenant?: string;
   region?: string;
   flyOrg?: string;
   imageFrom?: string;
@@ -217,7 +220,7 @@ export function loadConfigInDir(dir: string, overrides?: { target?: Target }): {
   return loadConfigAt(path, overrides);
 }
 
-export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.orgId;
+export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.deploymentId;
 
 export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT", config.basePort ?? 8080);
 
@@ -232,6 +235,19 @@ export const localSandboxActive = (config: QmConfig): boolean =>
     ? effectiveSandboxBackend(config) === "local"
     : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
 
+const REMOTE_SANDBOX_BACKENDS = new Set(["agent37", "superserve", "e2b"]);
+
+export function sandboxConfigBackend(config: QmConfig): string | undefined {
+  const sb = config.sandbox;
+  if (!sb) return undefined;
+  if (localSandboxActive(config)) return "local";
+  const backend =
+    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
+      ? effectiveSandboxBackend(config)
+      : sb.backend;
+  return backend && REMOTE_SANDBOX_BACKENDS.has(backend) ? backend : undefined;
+}
+
 export function sandboxCoreEnv(
   config: QmConfig,
   lookup?: (name: string) => string | undefined,
@@ -241,18 +257,10 @@ export function sandboxCoreEnv(
   const sb = config.sandbox;
   if (!sb) return { env, missingSecrets };
   if (localSandboxActive(config)) {
-    env.SANDBOX_BACKEND = "local";
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
-  const backend =
-    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
-      ? effectiveSandboxBackend(config)
-      : sb.backend;
-  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
-    env.SANDBOX_BACKEND = backend;
-    return { env, missingSecrets };
-  }
+  if (sandboxConfigBackend(config)) return { env, missingSecrets };
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
   for (const name of sb.secretEnv ?? []) {
     const v = lookup?.(name);
@@ -509,19 +517,9 @@ function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfi
   return { mode: raw.mode, classifier, provider: raw.provider, endpoint: raw.endpoint };
 }
 
-export function readConfigOrgId(path: string): string | undefined {
-  try {
-    const raw = parseConfigJson(readFileSync(path, "utf8"));
-    const orgId = isPlainObject(raw) ? raw.orgId : undefined;
-    return typeof orgId === "string" && validOrgId(orgId) ? orgId : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "contract",
-  "orgId",
+  "deploymentId",
   "publicUrl",
   "apiUrl",
   "target",
@@ -540,6 +538,7 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "botName",
   "orgName",
   "appPrefix",
+  "tenant",
   "region",
   "flyOrg",
   "imageFrom",
@@ -568,9 +567,9 @@ function validate(raw: unknown, path: string): QmConfig {
     throw new CliError(`${path}: "contract" must be ${CONTRACT_VERSION}`);
   }
 
-  const orgId = o["orgId"];
-  if (typeof orgId !== "string" || !validOrgId(orgId)) {
-    throw new CliError(`${path}: "orgId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
+  const deploymentId = o["deploymentId"];
+  if (typeof deploymentId !== "string" || !validDeploymentId(deploymentId)) {
+    throw new CliError(`${path}: "deploymentId" must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
   }
 
   const publicUrl = o["publicUrl"];
@@ -725,7 +724,7 @@ function validate(raw: unknown, path: string): QmConfig {
 
   const out: QmConfig = {
     contract,
-    orgId,
+    deploymentId,
     publicUrl: publicUrl.replace(/\/$/, ""),
     target,
     services,
@@ -773,6 +772,11 @@ function validate(raw: unknown, path: string): QmConfig {
   const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
   if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
+  if (o["tenant"] !== undefined) {
+    if (typeof o["tenant"] !== "string" || !TENANT_ID.test(o["tenant"]))
+      throw new CliError(`${path}: "tenant" must be the deployment's tenant id, a lowercase UUID`);
+    out.tenant = o["tenant"];
+  }
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];
   if (typeof o["imageFrom"] === "string") out.imageFrom = o["imageFrom"];
@@ -788,6 +792,7 @@ function validate(raw: unknown, path: string): QmConfig {
   if (o["render"] !== undefined) out.render = validateRender(o["render"], path);
   if (target === "render" && !out.render) throw new CliError(`${path}: target "render" requires a "render" block`);
   if (target === "aws" && !out.aws) throw new CliError(`${path}: target "aws" requires an "aws" block`);
+  if (out.env.core?.MODEL_PROVIDER?.trim() === "") delete out.env.core.MODEL_PROVIDER;
   validateModelProvider(out, path);
   validatePortalTrust(out, path);
   if (target === "aws") {
@@ -833,8 +838,7 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
 
 function validateModelProvider(config: QmConfig, path: string): void {
   const override = config.env.core?.MODEL_PROVIDER?.trim();
-  if (override === "") delete config.env.core!.MODEL_PROVIDER;
-  if (override !== undefined && override !== "" && !isModelProvider(override)) {
+  if (override && !isModelProvider(override)) {
     throw new CliError(
       `${path}: env.core.MODEL_PROVIDER must be one of ${MODEL_PROVIDERS.join(", ")}, or unset to use "modelProvider"`,
     );
@@ -1572,7 +1576,15 @@ function validateRender(raw: unknown, path: string): RenderConfig {
   };
 }
 
-export function updateConfigUrls(raw: string, updates: { publicUrl: string; apiUrl: string }): string {
+export function deploymentTenantId(config: QmConfig): string {
+  if (!config.tenant)
+    throw new CliError(
+      '"tenant" is not set in the deployment config; run `qm up` or `qm settings push` to create this deployment\'s tenant',
+    );
+  return config.tenant;
+}
+
+export function updateConfigFields(raw: string, updates: Record<string, string>): string {
   const root = objectProps(stripJsonComments(raw), 0);
   const edits: ConfigEdit[] = [];
   for (const [key, value] of Object.entries(updates)) {

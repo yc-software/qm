@@ -22,6 +22,7 @@ export interface RenderService {
     numInstances: number;
     runtime: string;
     healthCheckPath?: string;
+    preDeployCommand?: string;
     maxShutdownDelaySeconds?: number;
     envSpecificDetails: { dockerCommand?: string; dockerfilePath?: string; dockerContext?: string };
     disk?: { id: string; mountPath: string; sizeGB: number };

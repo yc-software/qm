@@ -42,11 +42,13 @@ type Resource = {
   };
 };
 
+const HELM_TENANT = "00000000-0000-4000-8000-0000000000a1";
+
 function render(values: object = {}, explicitImages = true): Resource[] {
   const dir = mkdtempSync(join(tmpdir(), "qm-helm-test-"));
   try {
     const valuesFile = join(dir, "values.json");
-    writeFileSync(valuesFile, JSON.stringify(values));
+    writeFileSync(valuesFile, JSON.stringify({ tenant: HELM_TENANT, ...values }));
     const result = spawnSync(
       helm,
       ["template", "test", chart, ...(explicitImages ? ["--set", "image.tag=fixture"] : []), "-f", valuesFile],
@@ -213,52 +215,119 @@ test("Helm rejects services it does not know", options, () => {
   assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
 });
 
-test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {
-  const auth = { AUTH_ALLOWED_EMAILS: "member@example.com", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" };
-  for (const values of [{ env: auth }, { services: { auth: { env: auth } } }, { secretEnv: auth }]) {
-    const portal = env(render(values));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, auth.AUTH_ALLOWED_EMAIL_DOMAIN);
-  }
-  const secretBacked = render({ secretEnv: auth });
-  assert.ok(!container(secretBacked, "portal").env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
-  const values = { env: { AUTH_ALLOWED_EMAILS: "global@example.com" }, services: { auth: { env: auth } } };
-  assert.equal(env(render(values)).OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
-  const explicit = { OIDC_ALLOWED_EMAILS: "other@example.org", OIDC_ALLOWED_EMAIL_DOMAIN: "example.org" };
-  for (const overrides of [
-    { env: explicit },
-    { secretEnv: explicit },
-    { services: { auth: { env: auth }, portal: { env: explicit } } },
-  ]) {
-    const portal = env(render({ services: { auth: { env: auth } }, ...overrides }));
-    assert.equal(portal.OIDC_ALLOWED_EMAILS, explicit.OIDC_ALLOWED_EMAILS);
-    assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, explicit.OIDC_ALLOWED_EMAIL_DOMAIN);
-  }
-  assert.equal(env(render({ services: { auth: { enabled: false } }, env: auth })).OIDC_ALLOWED_EMAILS, undefined);
+function tenantImport(resources: Resource[]): { tenant: string; env: Record<string, string> } {
+  const secret = resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-tenant-settings");
+  assert.ok(secret?.stringData?.["settings.json"], "missing tenant settings secret");
+  return JSON.parse(secret.stringData["settings.json"]) as { tenant: string; env: Record<string, string> };
+}
+
+const tenantSettings = (resources: Resource[]): Record<string, string> => tenantImport(resources).env;
+
+test("Helm sends the deployment's configured tenant id and refuses a missing or malformed one", options, () => {
+  assert.equal(tenantImport(render()).tenant, HELM_TENANT);
+  for (const tenant of ["", "main", HELM_TENANT.toUpperCase()])
+    assert.throws(() => render({ tenant }), /tenant must be this deployment's tenant id/);
 });
 
-test("Helm does not shadow an external OIDC allowlist with a derived value", options, () => {
-  const envFrom = [{ secretRef: { name: "narrow-oidc-policy" } }];
-  for (const [authKey, oidcKey, broad, narrow] of [
-    ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS", "alice@example.com,bob@example.com", "alice@example.com"],
-    ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN", "example.com", "staff.example.com"],
-  ] as const) {
-    for (const source of [{ env: { [authKey]: broad } }, { services: { auth: { env: { [authKey]: broad } } } }]) {
-      assert.ok(!container(render({ ...source, envFrom }), "portal").env.some((entry) => entry.name === oidcKey));
-      assert.equal(env(render({ ...source, envFrom, secretEnv: { [oidcKey]: narrow } }))[oidcKey], narrow);
-      assert.equal(
-        env(
-          render({
-            ...source,
-            envFrom,
-            services: { auth: { env: { [authKey]: broad } }, portal: { env: { [oidcKey]: narrow } } },
-          }),
-        )[oidcKey],
-        narrow,
-      );
-    }
-    assert.equal(env(render({ envFrom, env: { [authKey]: broad, [oidcKey]: narrow } }))[oidcKey], narrow);
+test("Helm pushes sign-in and admin settings to the deployment's tenant instead of any service env", options, () => {
+  const resources = render({
+    publicUrl: "https://qm.example.com",
+    secretEnv: { AUTH_CLIENT_ID: "qm-portal", AUTH_CLIENT_SECRET: "client-secret" },
+    tenantSettings: { AUTH_ALLOWED_EMAILS: "member@example.com", ADMIN_GRANTS: "member@example.com:org_admin" },
+  });
+  for (const service of ["core", "portal", "web-ui"]) {
+    const names = (container(resources, service).env ?? []).map((entry) => entry.name);
+    assert.ok(!names.some((name) => /^OIDC_|^AUTH_ALLOWED_|^ADMIN_GRANTS$/.test(name)), service);
   }
-  const externalOnly = container(render({ envFrom }), "portal").env;
-  assert.ok(!externalOnly.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
+  const settings = tenantSettings(resources);
+  assert.equal(settings.ADMIN_GRANTS, "member@example.com:org_admin");
+  assert.equal(settings.OIDC_ALLOWED_EMAILS, "member@example.com");
+  assert.equal(settings.OIDC_ISSUER, "https://qm.example.com/idp");
+  assert.equal(settings.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
+  assert.equal(settings.OIDC_CLIENT_ID, "qm-portal");
+  assert.equal(settings.OIDC_CLIENT_SECRET, "client-secret");
+  const explicit = tenantSettings(
+    render({ tenantSettings: { AUTH_ALLOWED_EMAILS: "member@example.com", OIDC_ALLOWED_EMAILS: "other@example.org" } }),
+  );
+  assert.equal(explicit.OIDC_ALLOWED_EMAILS, "other@example.org");
+  const external = tenantSettings(render({ services: { auth: { enabled: false } } }));
+  assert.equal(external.OIDC_ISSUER, undefined);
+  const job = resources.find((r) => r.kind === "Job" && r.metadata.name === "test-qm-tenant-settings");
+  assert.equal(job?.metadata.annotations?.["helm.sh/hook"], "post-install,post-upgrade");
+  const push = job!.spec.template.spec.containers[0]!;
+  assert.equal(push.image, container(resources, "core").image);
+  assert.match(push.env.find((entry) => entry.name === "QM_CORE_URL")!.value, /^http:\/\/test-qm-core\./);
+});
+
+test(
+  "Helm sends model keys, branding and LOOPS_USERS from tenantSettings and refuses them in service env",
+  options,
+  () => {
+    const settings = tenantSettings(
+      render({
+        tenantSettings: { ANTHROPIC_API_KEY: "sk-ant", ORG_BRAND_ORG_NAME: "Acme", LOOPS_USERS: "a@example.com" },
+      }),
+    );
+    assert.equal(settings.ANTHROPIC_API_KEY, "sk-ant");
+    assert.equal(settings.ORG_BRAND_ORG_NAME, "Acme");
+    assert.equal(settings.LOOPS_USERS, "a@example.com");
+    for (const values of [
+      { secretEnv: { ANTHROPIC_API_KEY: "sk-ant" } },
+      { env: { LOOPS_USERS: "a@example.com" } },
+      { services: { "web-ui": { env: { LOOPS_USERS: "a@example.com" } } } },
+      { secretEnv: { SANDBOX_BACKEND: "e2b" } },
+    ])
+      assert.throws(() => render(values), /is a tenant setting; move it to tenantSettings/);
+  },
+);
+
+test("Helm runs the database release in the core pod with core's environment before core starts", options, () => {
+  const resources = render({ services: { core: { persistence: { enabled: true } } } });
+  const pod = deployment(resources, "core").spec.template.spec as unknown as {
+    initContainers?: Array<{
+      name: string;
+      command: string[];
+      env?: unknown;
+      envFrom?: unknown;
+      volumeMounts?: unknown;
+    }>;
+  };
+  const core = container(resources, "core");
+  assert.equal(pod.initContainers?.length, 1);
+  const init = pod.initContainers![0]!;
+  assert.deepEqual(init.command, ["node", "src/migrate-main.ts"]);
+  assert.deepEqual(init.env, core.env);
+  assert.deepEqual(init.envFrom, (core as { envFrom?: unknown }).envFrom);
+  assert.deepEqual(init.volumeMounts, [{ name: "data", mountPath: "/data" }]);
+  for (const service of ["portal", "web-ui"])
+    assert.equal(
+      (deployment(resources, service).spec.template.spec as { initContainers?: unknown }).initContainers,
+      undefined,
+    );
+});
+
+test("Helm gives the database logins to the core pod only", options, () => {
+  const resources = render({
+    secretEnv: { DATABASE_URL: "postgres://acme_app:a@db/qm", DATABASE_OWNER_URL: "postgres://owner:o@db/qm" },
+  });
+  const secret = (name: string) => resources.find((r) => r.kind === "Secret" && r.metadata.name === name)?.stringData;
+  assert.deepEqual(Object.keys(secret("test-qm-database") ?? {}).sort(), ["DATABASE_OWNER_URL", "DATABASE_URL"]);
+  assert.equal(secret("test-qm-env")?.DATABASE_OWNER_URL, undefined);
+  assert.equal(secret("test-qm-env")?.DATABASE_URL, undefined);
+  const refs = (service: string) =>
+    ((container(resources, service) as { envFrom?: { secretRef?: { name: string } }[] }).envFrom ?? []).map(
+      (entry) => entry.secretRef?.name,
+    );
+  assert.ok(refs("core").includes("test-qm-database"));
+  for (const service of ["portal", "web-ui"]) assert.ok(!refs(service).includes("test-qm-database"));
+});
+
+test("Helm refuses tenant settings placed in service env", options, () => {
+  for (const values of [
+    { env: { AUTH_ALLOWED_EMAILS: "member@example.com" } },
+    { secretEnv: { ADMIN_GRANTS: "member@example.com:org_admin" } },
+    { services: { auth: { env: { AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } } },
+    { services: { portal: { env: { OIDC_ALLOWED_EMAILS: "member@example.com" } } } },
+  ])
+    assert.throws(() => render(values), /is a tenant setting; move it to tenantSettings/);
 });

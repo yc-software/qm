@@ -7,7 +7,7 @@ import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts"
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
 const pooling = {
-  ...(direct ? { databaseUrl: direct } : {}),
+  ...(direct ? { databaseUrl: direct, ownerUrl: direct } : {}),
   ...(pooled ? { poolUrl: pooled } : {}),
   ...(process.env.DATABASE_POOL_CA_CERT ? { caCert: process.env.DATABASE_POOL_CA_CERT } : {}),
   queryMax: 4,

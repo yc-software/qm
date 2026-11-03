@@ -26,7 +26,7 @@ export async function runConformance(
   opts: { runtime?: boolean } = {},
 ): Promise<void> {
   const { config, configDir, sandboxDir, target, envFile } = deployment;
-  header(`qm conformance — ${config.orgId}`);
+  header(`qm conformance — ${config.deploymentId}`);
   const checked = runChecks(config, configDir, sandboxDir, { report: false });
   step("config.v1: pass");
   step(`sandbox.descriptors: pass (${checked.layer.tools.length} tools, ${checked.layer.skills.length} skills)`);

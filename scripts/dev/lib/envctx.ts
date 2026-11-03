@@ -20,6 +20,7 @@ const DEV_SECURITY_SECRET_KEYS = [
   "PORTAL_IDENTITY_SECRET",
   "CONNECTOR_SECRET_KEY",
   "PORTAL_SESSION_SECRET",
+  "DEPLOYMENT_CONTROL_SECRET",
 ] as const;
 
 export function completeDevSecuritySecrets(env: Record<string, string>, seed: string): void {
@@ -30,6 +31,11 @@ export function completeDevSecuritySecrets(env: Record<string, string>, seed: st
   if (seen.size !== DEV_SECURITY_SECRET_KEYS.length) {
     throw new Error(`${DEV_SECURITY_SECRET_KEYS.join(", ")} must be distinct`);
   }
+}
+
+export function devTenantId(databaseUrl: string): string {
+  const hex = sha256Hex(`qm-dev\0${databaseUrl}\0tenant`);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 export function repoRoot(cwd = process.cwd()): string {

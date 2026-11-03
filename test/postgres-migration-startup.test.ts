@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
+import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 import pg from "pg";
 import { PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
 import { testBareDatabaseUrl } from "./support/test-database.ts";
@@ -29,7 +30,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
         env: {
           PATH: process.env.PATH,
           NODE_ENV: "test",
-          DATABASE_URL: url,
+          ...databaseLoginEnv(url, new URL(url).pathname.slice(1)),
           SANDBOX_BACKEND: "local",
           ORG_ID: "migration-test",
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
@@ -37,7 +38,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
       });
     const cold = await Promise.all([run(), run()]);
     for (const result of [...cold, await run()]) {
-      assert.match(result.stdout, /\[qm:migrate\] database migrations applied/);
+      assert.match(result.stdout, /\[qm:migrate\] .*; database migrations applied/);
     }
     const applied = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`);
     assert.ok(applied.rowCount! > 10);
@@ -46,7 +47,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
       const failure = error as Error & { code: number; stdout: string; stderr: string };
       assert.equal(failure.code, 1);
       assert.match(failure.stderr, /checksum mismatch/);
-      assert.doesNotMatch(failure.stdout, /\[qm:migrate\] database migrations applied/);
+      assert.doesNotMatch(failure.stdout, /\[qm:migrate\] .*; database migrations applied/);
       return true;
     });
   });

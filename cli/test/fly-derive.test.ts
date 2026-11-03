@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigAt, type QmConfig } from "../src/config.ts";
 import { derivedTomlFor } from "../src/backends/fly.ts";
-import { orgEnv, runnableServices } from "../src/services.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
+import { serviceUrlEnv, runnableServices } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -27,24 +28,23 @@ test("Fly core defaults can sustain the 16-worker baseline", () => {
 
 test("web-ui serves at the root in both shapes — publicUrl IS the web-ui URL (no /web-ui suffix)", () => {
   const url = "https://acme-web-ui.fly.dev";
-  assert.equal(orgEnv("core", "acme", url).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("web-ui", "acme", url).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("core", "acme", `${url}/`).WEB_UI_PUBLIC_URL, url);
-  assert.equal(orgEnv("web-ui", "acme", url).WEB_UI_PUBLIC_URL, url);
+  assert.equal(serviceUrlEnv("core", url).WEB_UI_PUBLIC_URL, url);
+  assert.equal(serviceUrlEnv("web-ui", url).WEB_UI_PUBLIC_URL, url);
+  assert.equal(serviceUrlEnv("core", `${url}/`).WEB_UI_PUBLIC_URL, url);
 });
 
-test("brand env reaches core as ORG_BRAND_* and auth as AUTH_BRAND_NAME, and only when configured", () => {
+test("brand reaches auth as AUTH_BRAND_NAME only when configured and never reaches core env", () => {
   const url = "https://acme-web-ui.fly.dev";
   const brand = { botName: "straylight", orgName: "Acme Corp" };
-  const core = orgEnv("core", "acme", url, brand);
-  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
-  assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
-  assert.equal(orgEnv("auth", "acme", url, brand).AUTH_BRAND_NAME, "straylight");
-  const bare = orgEnv("core", "acme", url);
+  const core = serviceUrlEnv("core", url, brand);
+  assert.equal(core.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(core.ORG_BRAND_ORG_NAME, undefined);
+  assert.equal(serviceUrlEnv("auth", url, brand).AUTH_BRAND_NAME, "straylight");
+  const bare = serviceUrlEnv("core", url);
   assert.equal(bare.ORG_BRAND_SELF_LABEL, undefined);
   assert.equal(bare.ORG_BRAND_ORG_NAME, undefined);
-  assert.equal(orgEnv("auth", "acme", url).AUTH_BRAND_NAME, undefined);
-  assert.equal(orgEnv("web-ui", "acme", url, brand).ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(serviceUrlEnv("auth", url).AUTH_BRAND_NAME, undefined);
+  assert.equal(serviceUrlEnv("web-ui", url, brand).ORG_BRAND_SELF_LABEL, undefined);
 });
 
 const imageFromStack = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "imagefrom-stack.json");
@@ -54,14 +54,14 @@ test("an imageFrom stack reuses the reference images and overrides only its own 
   assert.equal(config.imageFrom, "qm");
   const coreToml = derivedTomlFor(config, "core", repoRoot);
   assert.match(coreToml, /app = "beta-core"/);
-  assert.match(coreToml, /ORG_ID = "beta"/);
+  assert.doesNotMatch(coreToml, /ORG_ID/);
   assert.match(coreToml, /PUBLIC_WEB_URL = "https:\/\/beta-portal\.fly\.dev"/);
   assert.match(coreToml, /STACK_MARKER = "beta-sandboxes"/);
 });
 
 const exampleFlyConfig = (): QmConfig => ({
   contract: 1,
-  orgId: "example",
+  deploymentId: "example",
   publicUrl: "https://example.invalid",
   target: "fly",
   model: "example-model",
@@ -78,12 +78,12 @@ const exampleFlyConfig = (): QmConfig => ({
   imageOverrides: {},
 });
 
-test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
+test("a configured bot identity lands in the derived fly toml for auth and in the tenant settings for core", () => {
   const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
   config.services = ["core", "web-ui", "portal", "auth"];
   const core = derivedTomlFor(config, "core", repoRoot);
-  assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
-  assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
+  assert.doesNotMatch(core, /ORG_BRAND/);
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_ORG_NAME, "Straylight Industries");
   const auth = derivedTomlFor(config, "auth", repoRoot);
   assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
   const webUi = derivedTomlFor(config, "web-ui", repoRoot);
@@ -92,12 +92,12 @@ test("a configured bot identity lands in the derived fly toml for core and auth 
   assert.doesNotMatch(bare, /ORG_BRAND_SELF_LABEL/);
 });
 
-test("a configured bot identity lands in the derived fly toml for core and auth only", () => {
+test("a configured bot identity lands in the derived fly toml for auth and in the tenant settings for core", () => {
   const config = { ...exampleFlyConfig(), botName: "straylight", orgName: "Straylight Industries" };
   config.services = ["core", "web-ui", "portal", "auth"];
   const core = derivedTomlFor(config, "core", repoRoot);
-  assert.match(core, /^\s*ORG_BRAND_SELF_LABEL = "straylight"$/m);
-  assert.match(core, /^\s*ORG_BRAND_ORG_NAME = "Straylight Industries"$/m);
+  assert.doesNotMatch(core, /ORG_BRAND/);
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_ORG_NAME, "Straylight Industries");
   const auth = derivedTomlFor(config, "auth", repoRoot);
   assert.match(auth, /^\s*AUTH_BRAND_NAME = "straylight"$/m);
   const webUi = derivedTomlFor(config, "web-ui", repoRoot);
@@ -114,7 +114,8 @@ test("derived Fly configs contain only the deployment's region, org, sandbox, an
   assert.match(core, /^primary_region = "ord"$/m);
   assert.match(portal, /^primary_region = "ord"$/m);
   assert.match(core, /^\s*FLY_ORG = "example-org"$/m);
-  assert.match(core, /^\s*PI_MODEL = "example-model"$/m);
+  assert.doesNotMatch(core, /PI_MODEL/);
+  assert.equal(tenantSettingsEnv(config, new Map()).PI_MODEL, "example-model");
   assert.match(core, /^\s*QM_DEPLOYMENT_ID = "qm-v2:example-org:example:example-stack"$/m);
   assert.doesNotMatch(core, /PI_DETECT_MODEL/);
   assert.doesNotMatch(portal, /OIDC_ALLOWED_EMAIL_DOMAIN/);

@@ -15,7 +15,7 @@ test("init --org scaffolds config + generated .env + a runnable sandbox/, which 
     const cfgPath = join(dir, CONFIG_FILENAME);
     assert.ok(existsSync(cfgPath), "config written");
     const cfg = loadConfigAt(cfgPath).config;
-    assert.equal(cfg.orgId, "acme");
+    assert.equal(cfg.deploymentId, "acme");
     assert.equal(cfg.target, "docker");
     assert.equal(cfg.sandbox, undefined);
 
@@ -44,7 +44,7 @@ test("init --target fly writes a fly-target config", () => {
     assert.equal(r.code, 0, r.out);
     const cfg = loadConfigAt(join(dir, CONFIG_FILENAME)).config;
     assert.equal(cfg.target, "fly");
-    assert.equal(cfg.orgId, "qm");
+    assert.equal(cfg.deploymentId, "qm");
   } finally {
     rmDir(dir);
   }
@@ -76,7 +76,7 @@ test("init with no --org defaults the org id", () => {
     const r = runCli(["init", dir]);
     assert.equal(r.code, 0, r.out);
     const cfg = loadConfigAt(join(dir, CONFIG_FILENAME)).config;
-    assert.equal(cfg.orgId, "default-org");
+    assert.equal(cfg.deploymentId, "default-org");
   } finally {
     rmDir(dir);
   }
@@ -90,7 +90,7 @@ test("init refuses to clobber an existing deployment", () => {
     assert.equal(again.code, 1);
     assert.match(again.out, /already exists/);
     const cfg = loadConfigAt(join(dir, CONFIG_FILENAME)).config;
-    assert.equal(cfg.orgId, "a");
+    assert.equal(cfg.deploymentId, "a");
   } finally {
     rmDir(dir);
   }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import pg from "pg";
+import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -27,7 +28,7 @@ const migrate = (url: string) =>
     env: {
       PATH: process.env.PATH,
       NODE_ENV: "test",
-      DATABASE_URL: url,
+      ...databaseLoginEnv(url, new URL(url).pathname.slice(1)),
       SANDBOX_BACKEND: "local",
       ORG_ID: "o",
       CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",

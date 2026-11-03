@@ -93,10 +93,10 @@ test("delegated dev resolves org overrides, config, and fallback", (t) => {
     mkdirSync(join(root, "scripts/dev"), { recursive: true });
     writeFileSync(join(root, "scripts/dev/cli.ts"), "console.log(process.env.DEV_INSTANCE_ORG_ID);\n");
   }
-  writeConfig(withConfig, { orgId: "configured", target: "docker" });
+  writeConfig(withConfig, { deploymentId: "configured", target: "docker" });
   writeFileSync(
     join(withInvalidConfig, "qm.config.jsonc"),
-    '{ // deploy config may be broken\n  "orgId": "configured",\n  "target": "k8s"\n}\n',
+    '{ // deploy config may be broken\n  "deploymentId": "configured",\n  "target": "k8s"\n}\n',
   );
 
   assert.equal(runCli(["dev", "status"], { cwd: withConfig, withRepoEnv: false }).stdout.trim(), "configured");

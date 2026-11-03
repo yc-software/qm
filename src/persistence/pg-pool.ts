@@ -14,6 +14,7 @@ export type Rows = Record<string, unknown>[];
 
 interface PgPoolingConfig {
   databaseUrl?: string;
+  ownerUrl?: string;
   poolUrl?: string;
   caCert?: string;
   queryMax?: number;
@@ -24,8 +25,13 @@ let poolingConfig: PgPoolingConfig = {};
 
 export function configurePgPooling(config: PgPoolingConfig): void {
   if (config.poolUrl && !config.databaseUrl) throw new Error("DATABASE_POOL_URL requires DATABASE_URL");
+  if (Boolean(config.ownerUrl) !== Boolean(config.databaseUrl))
+    throw new Error("DATABASE_URL and DATABASE_OWNER_URL must be set together");
   poolingConfig = { ...config };
 }
+
+export const ownerDatabaseUrl = (connectionString: string): string =>
+  connectionString === poolingConfig.databaseUrl ? poolingConfig.ownerUrl! : connectionString;
 
 const migrationQueue = createKeyedQueue();
 const connectionTimeoutMs = 10_000;

@@ -1,4 +1,4 @@
-variable "org_id" { type = string }
+variable "deployment_id" { type = string }
 variable "account_id" { type = string }
 variable "region" { type = string }
 variable "cluster_name" { type = string }

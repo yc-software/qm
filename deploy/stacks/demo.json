@@ -1,6 +1,6 @@
 {
   "contract": 1,
-  "orgId": "demo",
+  "deploymentId": "demo",
   "publicUrl": "https://demo-agent.example.com",
   "target": "fly",
   "appPrefix": "demo-agent",

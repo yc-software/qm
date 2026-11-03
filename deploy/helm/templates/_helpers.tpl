@@ -20,10 +20,23 @@ app.kubernetes.io/name: {{ include "qm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- define "qm.databaseEnvNames" -}}
+{{- list "DATABASE_URL" "DATABASE_OWNER_URL" | toJson -}}
+{{- end -}}
+
 {{- define "qm.hasSecretEnv" -}}
+{{- $database := include "qm.databaseEnvNames" . | fromJsonArray -}}
 {{- $found := "" -}}
 {{- range $k, $v := .Values.secretEnv -}}
-{{- if $v }}{{ $found = "1" }}{{ end -}}
+{{- if and $v (not (has $k $database)) }}{{ $found = "1" }}{{ end -}}
+{{- end -}}
+{{- $found -}}
+{{- end -}}
+
+{{- define "qm.hasDatabaseEnv" -}}
+{{- $found := "" -}}
+{{- range $k := include "qm.databaseEnvNames" . | fromJsonArray -}}
+{{- if index $.Values.secretEnv $k }}{{ $found = "1" }}{{ end -}}
 {{- end -}}
 {{- $found -}}
 {{- end -}}

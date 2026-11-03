@@ -65,7 +65,7 @@ test("a custom sandbox/Dockerfile owns the recipe; --from is then ignored", () =
 test("sandbox build with an empty layer is a clear error", () => {
   const dir = tmp("sb-empty");
   try {
-    writeConfig(dir, { orgId: "acme", target: "docker" });
+    writeConfig(dir, { deploymentId: "acme", target: "docker" });
     const r = runCli(["sandbox", "build", "--dry-run"], { cwd: dir });
     assert.equal(r.code, 1);
     assert.match(r.out, /nothing to build/);
