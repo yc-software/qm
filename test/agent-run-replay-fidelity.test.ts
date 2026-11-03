@@ -12,6 +12,7 @@ import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -541,18 +542,10 @@ async function withPgSession(
     toolOutput: ToolOutputStore;
   }) => Promise<void>,
 ): Promise<void> {
-  const { randomUUID } = await import("node:crypto");
   const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: PG_URL });
-  const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(PG_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  const { seedTestTenants } = await import("./support/tenant-seed.ts");
-  await seedTestTenants(url.toString());
-  const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const store = createPostgresSessionStore(url);
+  const pool = createPgPool(url);
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
@@ -560,10 +553,10 @@ async function withPgSession(
       "personal:tester" as SessionEntry["scopeLabel"],
     );
     const writer = { sessionId: session.id };
-    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
+    await pool.q("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
-        pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
+        pool,
         bytesFor: () => createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
@@ -571,9 +564,7 @@ async function withPgSession(
         forModelContext((await store.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId))),
     });
   } finally {
-    await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
+    await pool.close();
   }
 }
 
