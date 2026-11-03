@@ -129,7 +129,7 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { APP_PAGE_VIEW_MIGRATIONS, createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -321,6 +321,7 @@ import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } f
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
+  INSTANCE_HEARTBEAT_MIGRATIONS,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
@@ -1604,6 +1605,7 @@ export function buildApp(
     processes = createPostgresProcessRegistry(databaseUrl);
   }
 
+  registerPgMigrations(databaseUrl, APP_PAGE_VIEW_MIGRATIONS);
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
@@ -2681,6 +2683,7 @@ export function buildApp(
         active: () => backgroundActive(),
       }
     : undefined;
+  registerPgMigrations(databaseUrl, INSTANCE_HEARTBEAT_MIGRATIONS);
   const instanceRegistry: InstanceRegistry =
     pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {

@@ -17,10 +17,8 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifact_deletions CASCADE");
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+  await p.query("TRUNCATE file_artifacts, file_artifact_deletions");
   await p.end();
 });
 
@@ -218,7 +216,7 @@ test("pg document listing keeps unknown hashes separate and picks deterministic 
     const store = createPostgresFileArtifactStore(URL!, createMemoryDurableByteStore());
     for (const id of ["b", "a", "unknown-1", "unknown-2"]) await store.put(put({ id, path: id, createdAt: 100 }));
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
+    const raw = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     try {
       await raw.query("UPDATE file_artifacts SET sha256 = NULL WHERE id = ANY($1::text[])", [
         ["unknown-1", "unknown-2"],

@@ -19,12 +19,9 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres pa
 test("pg page-view log stores one row per view with clipped request fields", { skip }, () =>
   inTestTenant(async () => {
     const pg = (await import("pg")).default;
-    const admin = new pg.Pool({ connectionString: URL });
+    const admin = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     try {
-      await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE");
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/app-page-views/%'").catch(() => {});
-      await admin.query("CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
-      await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}') ON CONFLICT (id) DO NOTHING`);
+      await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}')`);
       const log = createPostgresAppPageViewLog(URL!);
       await log.record({
         deploymentId: "dep-1",
@@ -76,8 +73,6 @@ test("pg page-view log stores one row per view with clipped request fields", { s
         (err: { code?: string }) => err.code === "23503",
       );
     } finally {
-      await admin.query("DROP TABLE IF EXISTS app_page_views CASCADE").catch(() => {});
-      await admin.query("DELETE FROM deployments WHERE id = 'dep-1'").catch(() => {});
       await admin.end();
     }
   }),
