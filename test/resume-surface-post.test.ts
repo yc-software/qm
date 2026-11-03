@@ -25,6 +25,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -86,41 +87,42 @@ function buildOrchestrator(
   });
 }
 
-test("a resumed turn whose dead attempt already posted does not post its closing text again", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const deliveries = createDeliveryStore();
-  const base = createMockAgent();
-  const agent: Agent = {
-    ...base,
-    runTurn: async (turn) => {
-      await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
-      return { reply: "Done, it printed ok." };
-    },
-  };
-  const threadRef = "ch:C1:100.1";
-  const session = await sessions.getOrCreateByThread(threadRef, "channel", "channel:C1");
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease);
-  for (const [type, payload] of [
-    ["user", { text: "run it and tell me the output", runId: "run-1" }],
-    ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
-    ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
-  ] as const)
-    await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
-  await sessions.releaseLease(lease);
-  const orch = buildOrchestrator(agent, sessions, deliveries);
-  const result = await orch.handleTurn({
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef, channelRef: "C1", audience: [actor] } as Conversation,
-    deliveryTarget: "slack:C1:100.1",
-    origin: { kind: "direct" },
-    text: "run it and tell me the output",
-    surfaceTools: true,
-    addressed: true,
-    attempt: 2,
-    runId: "run-1",
-  } as OrchestratorInput);
-  assert.notEqual(result.status, "error");
-  assert.deepEqual(await deliveries.pending("slack"), []);
-});
+test("a resumed turn whose dead attempt already posted does not post its closing text again", () =>
+  inTestTenant(async () => {
+    const sessions = createPostgresSessionStore(testDatabaseUrl());
+    const deliveries = createDeliveryStore();
+    const base = createMockAgent();
+    const agent: Agent = {
+      ...base,
+      runTurn: async (turn) => {
+        await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
+        return { reply: "Done, it printed ok." };
+      },
+    };
+    const threadRef = "ch:C1:100.1";
+    const session = await sessions.getOrCreateByThread(threadRef, "channel", "channel:C1");
+    const { lease } = await sessions.acquireLease(session.id);
+    assert.ok(lease);
+    for (const [type, payload] of [
+      ["user", { text: "run it and tell me the output", runId: "run-1" }],
+      ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
+      ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
+    ] as const)
+      await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
+    await sessions.releaseLease(lease);
+    const orch = buildOrchestrator(agent, sessions, deliveries);
+    const result = await orch.handleTurn({
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef, channelRef: "C1", audience: [actor] } as Conversation,
+      deliveryTarget: "slack:C1:100.1",
+      origin: { kind: "direct" },
+      text: "run it and tell me the output",
+      surfaceTools: true,
+      addressed: true,
+      attempt: 2,
+      runId: "run-1",
+    } as OrchestratorInput);
+    assert.notEqual(result.status, "error");
+    assert.deepEqual(await deliveries.pending("slack"), []);
+  }));

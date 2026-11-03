@@ -7,7 +7,6 @@ import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-st
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
-import { withoutTenant } from "../src/tenants/context.ts";
 
 test("queued steering transfers files once or leaves the original queue intact", () =>
   inTestTenant(async () => {
@@ -57,7 +56,7 @@ test("queued steering transfers files once or leaves the original queue intact",
       assert.equal((await runs.get(edited.id))?.request.text, "new caption");
       assert.equal((await signals.pending(target.id)).length, 0);
       await runs.withdraw(edited.id);
-      const lease = await withoutTenant(() => runs.claimById(target.id, "test", 10000));
+      const lease = await runs.claimById(target.id, "test", 10000);
       assert.ok(lease?.leaseToken);
       await runs.complete(target.id, lease.leaseToken, { status: "ok", reply: "done" });
       const { run: late } = await runs.enqueue({ sessionId, request: { ...request, attachments } });
