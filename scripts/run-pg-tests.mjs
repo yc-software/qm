@@ -25,6 +25,7 @@ if (positionals.length === 0) throw new Error("Pass the Postgres test files to r
 const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
 
 const baseUrl = process.env.DATABASE_URL;
+const OWNER_DATABASE_HOOK = new URL("../test/support/owner-database.ts", import.meta.url).href;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const children = new Set();
@@ -74,10 +75,14 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
-      detached: true,
-      env: { ...process.env, ...env },
-    });
+    const child = spawn(
+      process.execPath,
+      ["--experimental-test-module-mocks", "--import", OWNER_DATABASE_HOOK, "--test", file],
+      {
+        detached: true,
+        env: { ...process.env, ...env },
+      },
+    );
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
     child.stderr?.on("data", (chunk) => (output += chunk));

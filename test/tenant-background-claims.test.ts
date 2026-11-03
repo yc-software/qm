@@ -166,7 +166,8 @@ test(
           return { status: "silent" as const };
         },
       } as unknown as Orchestrator;
-      const worker = withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+      const sessions = { getByThread: async () => null, fenceTurnLease: async () => undefined };
+      const worker = withTenant(A, () => createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
       withTenant(B, () => worker.start());
       for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
       await worker.stop(1);
