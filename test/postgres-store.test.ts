@@ -32,6 +32,25 @@ const turn = (text: string): OrchestratorInput => ({
   text,
 });
 
+test("sessions inherit the origin of their nearest automated ancestor ", { skip }, async () => {
+  {
+    const store = createPostgresSessionStore(URL!);
+    const run = randomUUID();
+    const scope = scopeId("channel", "C1");
+    const cron = await store.getOrCreateByThread(`agent:main:cron:${run}`, "channel", scope);
+    const child = await store.getOrCreateByThread(`subagent:${run}:1`, "channel", scope);
+    const grandchild = await store.getOrCreateByThread(`subagent:${run}:2`, "channel", scope);
+    const orphan = await store.getOrCreateByThread(`subagent:${run}:3`, "channel", scope);
+    await store.setParentSession(child.id, cron.id);
+    await store.setParentSession(grandchild.id, child.id);
+    await store.setParentSession(orphan.id, `missing-${run}`);
+    const origin = async (id: string) => store.inheritedOrigin((await store.get(id))!);
+    assert.equal(await origin(grandchild.id), "cron");
+    assert.equal(await origin(cron.id), "cron");
+    assert.equal(await origin(orphan.id), "conversation");
+  }
+});
+
 test("pg session row mapping ignores incomplete fork provenance", () => {
   const session = rowToSession({
     id: "fork",
@@ -2966,4 +2985,39 @@ test("pg session pages sort by the person's last message, which appends keep", {
       [grandchild.id, ids[0]],
     ].sort(),
   );
+});
+
+test("pg session pages apply every filter whether or not a scope narrows them", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const me = `filters-${randomUUID()}`;
+  const personal = scopeId("personal", me);
+  const channel = scopeId("channel", `C-${me}`);
+  const chat = async (ref: string, scope: typeof personal, surface: string, title: string) => {
+    const session = await s.getOrCreateByThread(`${ref}:${me}`, "dm", scope, undefined, surface);
+    await s.addParticipant(session.id, me, title);
+    return session.id;
+  };
+  const alpha = await chat("web:a", personal, "web", "Alpha");
+  const beta = await chat("slack:b", channel, "slack", "Beta");
+  const gamma = await chat("web:g", personal, "web", "Gamma");
+  const child = await chat("subagent:c", personal, "web", "Child");
+  await s.setParentSession(child, alpha);
+  await chat("cron:d", personal, "cron", "Nightly");
+  const theirs = await s.getOrCreateByThread(`web:theirs:${me}`, "dm", personal, undefined, "web");
+  await s.addParticipant(theirs.id, `${me}-other`, "Theirs");
+  await s.updateParticipantView(beta, me, { archived: true });
+  await s.updateParticipantView(gamma, me, { pinned: true });
+
+  const ids = async (query: Omit<Parameters<typeof s.listParticipantPage>[1], "limit">) =>
+    (await s.listParticipantPage(me, { limit: 10, ...query })).sessions.map((row) => row.id).sort();
+  assert.deepEqual(await ids({ archived: false, pinned: false }), [alpha]);
+  assert.deepEqual(await ids({ archived: false, pinned: true }), [gamma]);
+  assert.deepEqual(await ids({ archived: true }), [beta]);
+  assert.deepEqual(await ids({ archived: false }), [alpha, gamma].sort());
+  assert.deepEqual(await ids({ archived: false, scopeId: personal }), [alpha, gamma].sort());
+  assert.deepEqual(await ids({ archived: true, scopeId: channel }), [beta]);
+  assert.deepEqual(await ids({ archived: false, scopeId: channel }), []);
+  assert.deepEqual(await ids({ archived: false, sessionIds: [gamma, theirs.id, child] }), [gamma]);
+  assert.deepEqual(await ids({ archived: false, surface: "web", titleQuery: "alp" }), [alpha]);
+  assert.deepEqual(await ids({ archived: false, scopeId: personal, titleQuery: "gam" }), [gamma]);
 });

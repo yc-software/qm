@@ -214,7 +214,7 @@ interface SessionSyscallBinding {
 }
 
 export interface SessionSyscalls {
-  receive?(timeoutMs?: number): Promise<SessionMessage[]>;
+  receive?(timeoutMs?: number, signal?: AbortSignal): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
@@ -587,7 +587,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       return {
-        async receive(timeoutMs = 0) {
+        async receive(timeoutMs = 0, signal) {
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
             binding.request.cancel?.throwIfAborted();
@@ -624,7 +624,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 continue;
               }
             }
-            if (visible.length || Date.now() >= deadline) return visible;
+            if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
           } while (Date.now() <= deadline);
           return [];

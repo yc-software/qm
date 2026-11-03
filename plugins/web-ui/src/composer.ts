@@ -782,26 +782,31 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
+  function sendButton(label: string): TemplateResult {
+    return html`<button
+      class="send-btn"
+      type="submit"
+      aria-label=${label}
+      ${tip(label)}
+      ?disabled=${!composerCanSend()}
+    >
+      ${icon(ArrowUp, 16)}
+    </button>`;
+  }
+
   function sendControls(agent: Agent): TemplateResult {
-    if (!agent.state.isStreaming || ctx.chat.isStopping()) {
-      return html`<button
-        class="send-btn"
-        type="submit"
-        aria-label="Send"
-        ${tip("Send")}
-        ?disabled=${!composerCanSend()}
-      >
-        ${icon(ArrowUp, 16)}
-      </button>`;
-    }
+    if (!agent.state.isStreaming) return sendButton("Send");
+    if (ctx.chat.isStopping())
+      return html`
+        <button class="stop-btn" type="button" aria-label="Stopping…" disabled>${icon(Square, 16)}</button>
+        ${sendButton("Send")}
+      `;
     const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      <button class="send-btn" type="submit" ${tip(label)} aria-label=${label} ?disabled=${!composerCanSend()}>
-        ${icon(ArrowUp, 16)}
-      </button>
+      ${sendButton(label)}
     `;
   }
 

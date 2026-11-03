@@ -57,6 +57,7 @@ export interface ToolContextRef {
   onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  steered?: AbortSignal;
   shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
@@ -76,6 +77,7 @@ export interface ToolContextRef {
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
   approvedToolCalls?: Map<string, string>;
+  stoppedCalls?: Set<string>;
 }
 
 export interface AgentToolsOptions {
@@ -157,7 +159,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { attach, finishSilently, context, runtime } = turnTools(kit);
 
   const tools = [
-    ...(!delegateWork ? [execute] : []),
+    ...(!delegateWork ? [{ ...execute, handlesAbort: true }] : []),
     resourceTool("skills", {
       list: discoverSkills(false),
       search: discoverSkills(true),
@@ -200,10 +202,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(controlTools || surfaceTools ? [guidance] : []),
     ...(surfaceTools ? [surface] : [attach]),
     finishSilently,
-    resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
+    { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
     runtime,
     context,
-    ...clientTools,
+    ...clientTools.map((tool) => ({ ...tool, handlesAbort: true })),
   ];
   const { inline, inlineTools, connectorTools } = mcpTools(kit, new Set(tools.map((t) => t.name)));
   tools.push(...inlineTools, ...connectorTools);
@@ -214,7 +216,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolSpan(withToolApprovalGate(validateSandboxTool(tool, kit), kit), ref),
-      ref,
+      kit,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });
