@@ -26,12 +26,14 @@ function freshApp(overrides: Partial<Config> = {}) {
   return buildApp(config);
 }
 
-async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
+async function waitForOnboardingSkill(built: ReturnType<typeof buildApp>): Promise<void> {
+  const { skills } = built;
+  await built.deploymentLayerReady();
   await settle(async () =>
-    (await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
+    (await skills.listAll()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
   );
   assert.ok(
-    (await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
+    (await skills.listAll()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
     "onboarding skill was not seeded",
   );
 }
@@ -60,8 +62,9 @@ test("setOnboardingStatus replaces the marker fact and round-trips through detec
 });
 
 test("a new personal DM offers onboarding through the skills index", async () => {
-  const { app, skills } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const built = freshApp();
+  const { app } = built;
+  await waitForOnboardingSkill(built);
 
   const sys = await app.turn({
     surface: "test",
@@ -82,8 +85,9 @@ test("the opener defers Slack setup until status can be checked without requirin
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
-  const { app, skills, memory } = freshApp();
-  await waitForOnboardingSkill(skills);
+  const built = freshApp();
+  const { app, memory } = built;
+  await waitForOnboardingSkill(built);
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
     const sys = await app.turn({

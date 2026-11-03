@@ -53,3 +53,13 @@ export function quotedData(value: string): string {
     });
   return ["```untrusted-data", ...lines, "```"].join("\n");
 }
+
+function pgJsonSafe(_key: string, value: unknown): unknown {
+  if (typeof value === "string") return pgTextSafe(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [pgTextSafe(key), item]));
+}
+
+export function pgJsonText(value: unknown): string {
+  return JSON.stringify(value, pgJsonSafe);
+}

@@ -3,7 +3,6 @@ import { DECISION_LEASE_MS } from "./item-ledger.ts";
 import type { Loop } from "./types.ts";
 import type { LoopServiceDeps } from "../api/routes/loops.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
-import { uiStateId } from "../surfaces/ui-state.ts";
 import { renderSourceInboxTask } from "./inbox-loop.ts";
 
 interface Migration {
@@ -18,9 +17,8 @@ async function migrateInboxLocked(
   legacy: Loop,
   defaults: Loop[],
 ): Promise<boolean> {
-  const key = uiStateId(legacy.owner, "inbox-migration");
   const cron = legacy.cronId ? await deps.crons?.get(legacy.cronId) : null;
-  const record = await preferences.putIfAbsent(key, {
+  const record = await preferences.putIfAbsent(legacy.owner, "inbox-migration", {
     value: { phase: "pending", enabled: legacy.state === "enabled" && cron?.enabled === true } satisfies Migration,
     updatedAt: Date.now(),
   });
@@ -84,7 +82,7 @@ async function migrateInboxLocked(
   }
   if (cron) await deps.crons!.update(cron.id, { archived: true, enabled: false });
   await deps.store.setState(legacy.id, "archived");
-  await preferences.put(key, {
+  await preferences.put(legacy.owner, "inbox-migration", {
     value: { ...migration, phase: "complete", sourcePayloadMigrated: true },
     updatedAt: Date.now(),
   });

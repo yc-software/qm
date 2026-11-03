@@ -8,6 +8,7 @@ import { createPostgresMapFactory, type DurableMap } from "../../src/persistence
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
+import { createPostgresProjectStore } from "../../src/projects/project-store.ts";
 import { scopeId } from "../../src/types.ts";
 
 function baseDatabaseUrl(): URL {
@@ -120,4 +121,8 @@ export function testDeployBackings(
     pg: maps.pool,
     ...backings,
   };
+}
+
+export function testProjectStore(opts: Omit<Parameters<typeof createPostgresProjectStore>[1], "advisoryLock"> = {}) {
+  return createPostgresProjectStore(testDatabaseUrl(), { advisoryLock: testAdvisoryLock(), ...opts });
 }

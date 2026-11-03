@@ -5,13 +5,13 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 const U1 = "U1";
@@ -43,7 +43,7 @@ function makeDeps() {
     listByParticipant: async (_p: string) => [],
     participantScopes: async (_p: string) => [],
   };
-  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skills = testSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
   return { files, crons, webhooks, acl, identity, directory, sessions, skills, deploy, deployRows };

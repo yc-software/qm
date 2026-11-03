@@ -471,7 +471,7 @@ test("POST /v1/skills via a capability token authors as the token's own principa
     });
     assert.equal(res.status, 201);
 
-    const all = await srv.skills.list();
+    const all = await srv.skills.listAll();
     const watch = all.find((sk) => sk.manifest.name === "watch-ci");
     assert.ok(watch, "the skill was created");
     assert.equal(
@@ -503,7 +503,7 @@ test("POST /v1/skills via a capability token from a private-channel scope homes 
       body: JSON.stringify({ name: "team-thing", description: "d", body: "# b" }),
     });
     assert.equal(res.status, 201);
-    const all = await srv.skills.list();
+    const all = await srv.skills.listAll();
     const sk = all.find((s) => s.manifest.name === "team-thing");
     assert.ok(sk, "the skill was created");
     assert.equal(sk!.scopeId, scopeId("channel", "C9"), "homed in the channel, not avery's personal scope");
@@ -733,7 +733,7 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
     });
     assert.equal(create.status, 403, "an automated trigger cannot create a shared skill");
     assert.equal(
-      (await srv.skills.list()).find((s) => s.manifest.name === "auto-thing"),
+      (await srv.skills.listAll()).find((s) => s.manifest.name === "auto-thing"),
       undefined,
     );
 
@@ -881,7 +881,7 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
       });
       assert.equal(res.status, 403, `${home}: must refuse inline create into a promotion-gated scope`);
       assert.equal(
-        (await srv.skills.list()).find((s) => s.manifest.name === `wide-${home}`),
+        (await srv.skills.listAll()).find((s) => s.manifest.name === `wide-${home}`),
         undefined,
         `${home}: nothing created`,
       );

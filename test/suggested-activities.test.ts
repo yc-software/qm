@@ -4,13 +4,12 @@ import { createSuggestedActivityService, type SuggestedActivityProfile } from ".
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -33,8 +32,8 @@ function fixture() {
     now: () => time,
     crons,
     deliveries,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    idempotency: createIdempotencyStore(testMap()),
+    identity: testIdentityService(),
+    idempotency: testIdempotencyStore(),
     run: async (request) => {
       calls.push(request);
       const scope = scopeId("personal", request.actor.externalId);

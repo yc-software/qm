@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, jsonbStringify } from "../src/util/text.ts";
+import { headSlice, tailSlice, jsonbStringify, pgJsonText } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -52,4 +52,13 @@ test("jsonbStringify sanitizes keys", () => {
 test("jsonbStringify serializes toJSON values as JSON.stringify does", () => {
   const at = new Date(0);
   assert.equal(jsonbStringify({ at }), JSON.stringify({ at }));
+});
+
+test("pgJsonText strips NULs and lone surrogates from keys and values at every depth and keeps toJSON", () => {
+  const text = pgJsonText({ "a\u0000b": "x\u0000", nested: [{ "\ud800k": "\udfffv" }], when: new Date(0) });
+  assert.deepEqual(JSON.parse(text), {
+    ab: "x",
+    nested: [{ "\ufffdk": "\ufffdv" }],
+    when: "1970-01-01T00:00:00.000Z",
+  });
 });

@@ -1,5 +1,5 @@
 import { skillVisibilityContext } from "./app-skills.ts";
-import { visibleSkillRows } from "../skills/skill-store.ts";
+import { visibleSkillRows, type Skill } from "../skills/skill-store.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { cronVisibility } from "./app-messaging.ts";
@@ -12,6 +12,19 @@ import {
 } from "../search/resource-search.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 import { scopeId } from "../types.ts";
+
+function skillCandidate(skill: Skill): ResourceCandidate {
+  return {
+    id: skill.id,
+    title: skill.manifest.name,
+    description: skill.manifest.description,
+    scopeId: skill.scopeId,
+    ownerScopeId: scopeId("org", ""),
+    createdBy: skill.createdBy,
+    owner: "",
+    status: skill.status,
+  };
+}
 
 export function createResourceSearchMethods(
   deps: AppDeps,
@@ -46,11 +59,14 @@ export function createResourceSearchMethods(
       const limited: string[] = [];
       const search = async (kind: ResourceKind): Promise<ResourceSearchHit[]> => {
         const hits: ResourceSearchHit[] = [];
-        const candidates = await store.search(kind, query, 201);
+        const candidates =
+          kind === "skills"
+            ? (await deps.skills.search(query, 201)).map(skillCandidate)
+            : await store.search(kind, query, 201);
         const rows = candidates.slice(0, 200);
         if (kind === "skills" && rows.length) {
-          const { skills, homes } = await store.skillMetadata([...new Set(rows.map((r) => r.title))]);
-          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
+          const skills = await deps.skills.publishedNamed([...new Set(rows.map((r) => r.title))]);
+          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
         }
         for (let i = 0; i < rows.length; i += 20) {

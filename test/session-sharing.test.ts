@@ -6,12 +6,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createPostgresSessionShareStore, sharedMessages } from "../src/sessions/session-share.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -87,7 +87,7 @@ test("work phases and approval decisions remain outside the shared message snaps
 });
 
 test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
-  const store = testMap<SessionShare>();
+  const store = createPostgresSessionShareStore(testDatabaseUrl());
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
   const countedBytes = {
@@ -97,7 +97,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       return bytes.put(...args);
     },
   };
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = testIdentityService();
   const deliveries = createDeliveryStore();
   const original = [
     ...entries,

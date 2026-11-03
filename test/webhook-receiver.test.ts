@@ -4,10 +4,9 @@ import { createHash, createHmac } from "node:crypto";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -39,7 +38,7 @@ void _deliverStatusIsNot413;
 function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
   const webhooks = tracked(createWebhookStore(testMap(), testMap()));
   const deliveries = tracked(createDeliveryStore());
-  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
+  const identity = tracked(testIdentityService());
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -48,7 +47,7 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
   const receiver = createWebhookReceiver({
     webhooks,
     deliveries,
-    idempotency: tracked(createIdempotencyStore(testMap())),
+    idempotency: tracked(testIdempotencyStore()),
     identity,
     run,
   });

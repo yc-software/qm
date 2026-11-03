@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const PROJECT_GROUP_PREFIX = "web-project-";
 
@@ -17,7 +20,6 @@ interface ProjectSlackChannel {
 
 export interface Project {
   id: string;
-  orgId: string;
   name: string;
   ownerId: string;
   memberIds: string[];
@@ -61,6 +63,23 @@ export interface ProjectStore {
   withVersion<T>(groupRef: string, version: string | undefined, fn: () => Promise<T>): Promise<T | undefined>;
   name(groupRef: string): Promise<string | undefined>;
   withRosterLock<T>(id: string, fn: (project: Project) => Promise<T>): Promise<T | null>;
+  close?(): Promise<void>;
+}
+
+interface ProjectRows {
+  get(id: string): Promise<Project | null>;
+  insert(project: Project): Promise<Project>;
+  save(project: Project): Promise<void>;
+  forMember(principalId: string): Promise<Project[]>;
+  linked(): Promise<Project[]>;
+  close?(): Promise<void>;
+}
+
+interface ProjectStoreOptions {
+  now?: () => number;
+  id?: () => string;
+  isActiveMember?: (principalId: string) => boolean;
+  advisoryLock: AdvisoryLock;
 }
 
 export function projectGroupRef(id: string): string {
@@ -94,28 +113,30 @@ function visible(project: Project): Project {
   };
 }
 
-export function createProjectStore(
-  backing: DurableMap<Project>,
-  opts: {
-    now?: () => number;
-    id?: () => string;
-    isActiveMember?: (principalId: string) => boolean;
-    advisoryLock: AdvisoryLock;
-  },
-): ProjectStore {
+function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectStore {
   const now = opts.now ?? Date.now;
   const nextId = opts.id ?? randomUUID;
   const isActiveMember = opts.isActiveMember ?? (() => true);
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
-  const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> =>
-    queue(id, () => advisoryLock.withLock(`project:${id}`, fn));
+  const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+    const key = `${currentTenant()}:${id}`;
+    return queue(key, () => advisoryLock.withLock(`project:${key}`, fn));
+  };
+
+  async function update(id: string, fn: (project: Project) => Project): Promise<Project | null> {
+    const project = await backing.get(id);
+    if (!project) return null;
+    const next = fn(project);
+    if (next !== project) await backing.save(next);
+    return next;
+  }
 
   async function projectForGroup(groupRef: string): Promise<Project | undefined> {
     const id = projectIdFromGroupRef(groupRef);
     if (!id) return undefined;
     const project = await backing.get(id);
-    return project?.orgId === configOrgId() ? project : undefined;
+    return project ?? undefined;
   }
 
   function effectiveMemberIds(project: Project): string[] {
@@ -133,7 +154,7 @@ export function createProjectStore(
       if (!memberId) return { status: "invalid_member" };
       const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
       let changed = false;
-      const updated = await backing.update(id, (project) => {
+      const updated = await update(id, (project) => {
         const canChangeRoster = add
           ? project.memberIds.some((member) => samePerson(member, actorId))
           : samePerson(project.ownerId, actorId);
@@ -172,14 +193,13 @@ export function createProjectStore(
       const at = now();
       const project: Project = {
         id: nextId(),
-        orgId: configOrgId(),
         name,
         ownerId: input.ownerId,
         memberIds: [input.ownerId],
         createdAt: at,
         updatedAt: at,
       };
-      const stored = await backing.putIfAbsent(project.id, project);
+      const stored = await backing.insert(project);
       if (stored.createdAt !== project.createdAt || stored.ownerId !== project.ownerId)
         throw new Error("project id collision");
       return visible(stored);
@@ -189,16 +209,8 @@ export function createProjectStore(
       return project ? visible(project) : null;
     },
     async listForMember(principalId) {
-      return (await backing.all())
-        .filter(
-          (project) =>
-            project.orgId === configOrgId() &&
-            isActiveMember(project.ownerId) &&
-            isActiveMember(principalId) &&
-            effectiveMemberIds(project).includes(principalId),
-        )
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map(visible);
+      if (!isActiveMember(principalId)) return [];
+      return (await backing.forMember(principalId)).filter((project) => isActiveMember(project.ownerId)).map(visible);
     },
     addMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, true, effect),
     removeMember: (id, ownerId, memberId, effect) => mutate(id, ownerId, memberId, false, effect),
@@ -208,7 +220,7 @@ export function createProjectStore(
         if (!clean) return { status: "invalid_name" };
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
-        const updated = await backing.update(id, (project) => {
+        const updated = await update(id, (project) => {
           if (project.ownerId !== ownerId || !isActiveMember(ownerId)) {
             outcome.status = "forbidden";
             return project;
@@ -229,7 +241,7 @@ export function createProjectStore(
       return withLock(id, async () => {
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
-        const updated = await backing.update(id, (project) => {
+        const updated = await update(id, (project) => {
           const isMember = project.memberIds.some((member) => samePerson(member, actorId));
           if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
             outcome.status = "forbidden";
@@ -268,7 +280,7 @@ export function createProjectStore(
         const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
         let changed = false;
         const next = [...new Set(memberIds)].sort();
-        const updated = await backing.update(id, (project) => {
+        const updated = await update(id, (project) => {
           if (!project.slackChannel || !isActiveMember(project.ownerId)) {
             outcome.status = "forbidden";
             return project;
@@ -295,9 +307,7 @@ export function createProjectStore(
       });
     },
     async listLinked() {
-      return (await backing.all())
-        .filter((project) => project.orgId === configOrgId() && project.slackChannel && isActiveMember(project.ownerId))
-        .map(visible);
+      return (await backing.linked()).filter((project) => isActiveMember(project.ownerId)).map(visible);
     },
     async slackChannel(groupRef) {
       const project = await projectForGroup(groupRef);
@@ -329,7 +339,7 @@ export function createProjectStore(
       if (!id) return undefined;
       return withLock(id, async () => {
         const project = await backing.get(id);
-        if (!project || project.orgId !== configOrgId() || String(project.updatedAt) !== version) return undefined;
+        if (!project || String(project.updatedAt) !== version) return undefined;
         return fn();
       });
     },
@@ -343,5 +353,145 @@ export function createProjectStore(
         return project ? fn(visible(project)) : null;
       });
     },
+    ...(backing.close ? { close: backing.close } : {}),
   };
+}
+
+const SLACK_LINK_COMPLETE = ["channelId", "channelName", "linkedBy", "linkedAt"]
+  .map((field) => `json->'slackChannel'->>'${field}' IS NOT NULL`)
+  .join(" AND ");
+
+const PROJECTS_MIGRATION = typedTableMigration({
+  table: "projects",
+  columns: [
+    "id TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "owner_id TEXT NOT NULL",
+    "member_ids TEXT[] NOT NULL",
+    "channel_member_ids TEXT[]",
+    "slack_channel_id TEXT",
+    "slack_channel_name TEXT",
+    "slack_linked_by TEXT",
+    "slack_linked_at BIGINT",
+    "created_at BIGINT NOT NULL",
+    "updated_at BIGINT NOT NULL",
+  ],
+  constraints: [
+    `CHECK ((slack_channel_id IS NULL) = (slack_channel_name IS NULL)
+       AND (slack_channel_id IS NULL) = (slack_linked_by IS NULL)
+       AND (slack_channel_id IS NULL) = (slack_linked_at IS NULL))`,
+  ],
+  primaryKey: ["id"],
+  backfill: {
+    id: "id",
+    name: "json->>'name'",
+    owner_id: "json->>'ownerId'",
+    member_ids:
+      "CASE WHEN jsonb_typeof(json->'memberIds') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'memberIds')) ELSE ARRAY[json->>'ownerId'] END",
+    channel_member_ids:
+      "CASE WHEN jsonb_typeof(json->'channelMemberIds') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(json->'channelMemberIds')) END",
+    slack_channel_id: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'channelId' END`,
+    slack_channel_name: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'channelName' END`,
+    slack_linked_by: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN json->'slackChannel'->>'linkedBy' END`,
+    slack_linked_at: `CASE WHEN ${SLACK_LINK_COMPLETE} THEN round((json->'slackChannel'->>'linkedAt')::numeric)::bigint END`,
+    created_at: "round(COALESCE(json->>'createdAt', json->>'updatedAt', '0')::numeric)::bigint",
+    updated_at: "round(COALESCE(json->>'updatedAt', json->>'createdAt', '0')::numeric)::bigint",
+  },
+  where: `json->>'name' IS NOT NULL AND json->>'ownerId' IS NOT NULL
+    AND json->>'orgId' = (SELECT json->>'orgId' FROM projects_kv WHERE json->>'orgId' IS NOT NULL
+      GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1)`,
+  indexes: [
+    "CREATE INDEX projects_by_updated ON projects(tenant_id, updated_at DESC)",
+    "CREATE INDEX projects_linked ON projects(tenant_id) WHERE slack_channel_id IS NOT NULL",
+  ],
+});
+
+const PROJECT_COLUMNS = [
+  "id",
+  "name",
+  "owner_id",
+  "member_ids",
+  "channel_member_ids",
+  "slack_channel_id",
+  "slack_channel_name",
+  "slack_linked_by",
+  "slack_linked_at",
+  "created_at",
+  "updated_at",
+];
+
+function projectRow(project: Project): unknown[] {
+  const slack = project.slackChannel;
+  return [
+    pgTextSafe(project.id),
+    pgTextSafe(project.name),
+    pgTextSafe(project.ownerId),
+    project.memberIds.map(pgTextSafe),
+    project.channelMemberIds?.map(pgTextSafe) ?? null,
+    slack ? pgTextSafe(slack.channelId) : null,
+    slack ? pgTextSafe(slack.channelName) : null,
+    slack ? pgTextSafe(slack.linkedBy) : null,
+    slack?.linkedAt ?? null,
+    project.createdAt,
+    project.updatedAt,
+  ];
+}
+
+function projectFromRow(row: Record<string, unknown>): Project {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    ownerId: String(row.owner_id),
+    memberIds: row.member_ids as string[],
+    ...(row.channel_member_ids != null ? { channelMemberIds: row.channel_member_ids as string[] } : {}),
+    ...(row.slack_channel_id != null
+      ? {
+          slackChannel: {
+            channelId: String(row.slack_channel_id),
+            channelName: String(row.slack_channel_name),
+            linkedBy: String(row.slack_linked_by),
+            linkedAt: Number(row.slack_linked_at),
+          },
+        }
+      : {}),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+const MEMBERS = "(member_ids || COALESCE(channel_member_ids, '{}'::text[]))";
+
+export function createPostgresProjectStore(connectionString: string, opts: ProjectStoreOptions): ProjectStore {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, PROJECTS_MIGRATION]);
+  const select = async (where: string, params: unknown[]): Promise<Project[]> =>
+    (
+      await q(`SELECT * FROM projects WHERE tenant_id = ${TENANT} AND ${where} ORDER BY updated_at DESC, id`, params)
+    ).map(projectFromRow);
+  const placeholders = PROJECT_COLUMNS.map((_, i) => `$${i + 1}`).join(", ");
+  return projectStore(
+    {
+      async get(id) {
+        return (await select("id = $1", [id]))[0] ?? null;
+      },
+      async insert(project) {
+        await q(
+          `INSERT INTO projects(${PROJECT_COLUMNS.join(", ")}) VALUES (${placeholders}) ON CONFLICT (tenant_id, id) DO NOTHING`,
+          projectRow(project),
+        );
+        return (await select("id = $1", [project.id]))[0]!;
+      },
+      async save(project) {
+        await q(
+          `UPDATE projects SET ${PROJECT_COLUMNS.slice(1)
+            .map((column, i) => `${column} = $${i + 2}`)
+            .join(", ")} WHERE tenant_id = ${TENANT} AND id = $1`,
+          projectRow(project),
+        );
+      },
+      forMember: (principalId) => select(`${MEMBERS} @> ARRAY[$1::text]`, [principalId]),
+      linked: () => select("slack_channel_id IS NOT NULL", []),
+      close,
+    },
+    opts,
+  );
 }

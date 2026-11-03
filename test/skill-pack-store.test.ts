@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
+import type { NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testSkillPackStore } from "./support/typed-stores.ts";
 
 const base: NewSkillPack = {
   kind: "git",
@@ -17,7 +17,7 @@ const base: NewSkillPack = {
 };
 
 test("create stamps id + createdAt and is retrievable", async () => {
-  const store = createSkillPackStore({ backing: testMap(), now: () => 1000 });
+  const store = testSkillPackStore({ now: () => 1000 });
   const s = await store.create(base);
   assert.ok(s.id);
   assert.equal(s.createdAt, 1000);
@@ -26,7 +26,7 @@ test("create stamps id + createdAt and is retrievable", async () => {
 });
 
 test("update merges fields; recordImport stamps lastImport", async () => {
-  const store = createSkillPackStore({ backing: testMap() });
+  const store = testSkillPackStore();
   const s = await store.create(base);
   const upd = await store.update(s.id, { ref: "deadbeef" });
   assert.equal(upd.ref, "deadbeef");
@@ -41,7 +41,7 @@ test("update merges fields; recordImport stamps lastImport", async () => {
 });
 
 test("update throws on an unknown id; remove deletes", async () => {
-  const store = createSkillPackStore({ backing: testMap() });
+  const store = testSkillPackStore();
   await assert.rejects(() => store.update("nope", { ref: "x" }));
   const s = await store.create(base);
   await store.remove(s.id);

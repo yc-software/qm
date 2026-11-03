@@ -1,10 +1,10 @@
-import type { SkillSummary } from "../skills/skill-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
 import type { ScopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
+type IndexedResourceKind = Exclude<ResourceKind, "skills">;
 export interface ResourceCandidate {
   id: string;
   title: string;
@@ -24,16 +24,10 @@ export interface ResourceSearchHit {
   snippet: string;
 }
 export interface ResourceSearchStore {
-  skillMetadata(names: readonly string[]): Promise<{ skills: SkillSummary[]; homes: ScopeId[] }>;
-  search(kind: ResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
+  search(kind: IndexedResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
 const sources = {
-  skills: {
-    table: "skills",
-    title: "coalesce(json->'manifest'->>'name', '')",
-    description: "coalesce(json->'manifest'->>'description', '')",
-  },
   crons: {
     table: "crons",
     title: "coalesce(json->>'title', '')",
@@ -49,7 +43,7 @@ const sources = {
     title: "coalesce(json->>'action', '')",
     description: "coalesce(json->'verification'->>'scheme', '')",
   },
-} satisfies Record<ResourceKind, { table: string; title: string; description: string }>;
+} satisfies Record<IndexedResourceKind, { table: string; title: string; description: string }>;
 
 export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
   const migrations = Object.entries(sources).map(([kind, source]) => ({
@@ -59,14 +53,11 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
       "SET LOCAL statement_timeout = '15s'",
       `CREATE TABLE IF NOT EXISTS ${source.table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS ${source.table}_resource_search_gin ON ${source.table} USING GIN (to_tsvector('simple', ${source.title} || ' ' || ${source.description}))`,
-      ...(kind === "skills"
-        ? ["CREATE INDEX IF NOT EXISTS skills_resource_name_idx ON skills ((json->'manifest'->>'name'))"]
-        : []),
     ],
   }));
   for (const migration of migrations) pg.registerMigration(migration);
-  const ready = new Map<ResourceKind, Promise<void>>();
-  const ensure = (kind: ResourceKind): Promise<void> => {
+  const ready = new Map<IndexedResourceKind, Promise<void>>();
+  const ensure = (kind: IndexedResourceKind): Promise<void> => {
     let pending = ready.get(kind);
     if (!pending) {
       pending = pg.migrate(migrations[Object.keys(sources).indexOf(kind)]!).catch((error) => {
@@ -78,25 +69,6 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
     return pending;
   };
   return {
-    async skillMetadata(names) {
-      await ensure("skills");
-      const [rows, homes] = await Promise.all([
-        pg.q(
-          "SELECT id, json->>'scopeId' AS scope, json->>'status' AS status, json->'manifest'->>'name' AS name FROM skills WHERE json->'manifest'->>'name' = ANY($1::text[]) ORDER BY id",
-          [[...names]],
-        ),
-        pg.q("SELECT json->>'scopeId' AS scope FROM skills GROUP BY json->>'scopeId' ORDER BY min(id)"),
-      ]);
-      return {
-        skills: rows.map((r) => ({
-          id: String(r.id),
-          scopeId: r.scope as ScopeId,
-          status: r.status as SkillSummary["status"],
-          manifest: { name: String(r.name) },
-        })),
-        homes: homes.map((r) => r.scope as ScopeId),
-      };
-    },
     async search(kind, query, limit) {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];

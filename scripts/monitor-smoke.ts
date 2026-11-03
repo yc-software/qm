@@ -11,8 +11,9 @@ import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createPostgresIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createIdentityService, createPostgresDeactivationStore } from "../src/identity/identity-service.ts";
+import { createPostgresExternalMemberStore } from "../src/identity/external-members.ts";
 import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -106,9 +107,9 @@ const poller = createMonitorPoller({
   processes: registry,
   sandbox: sb,
   deliveries,
-  idempotency: createIdempotencyStore(smokeMap("idempotency")),
-  identity: createIdentityService(smokeMap("deactivated_principals"), {
-    externalMembers: smokeMap("external_members"),
+  idempotency: createPostgresIdempotencyStore(databaseUrl),
+  identity: createIdentityService(createPostgresDeactivationStore(databaseUrl), {
+    externalMembers: createPostgresExternalMemberStore(databaseUrl),
   }),
   run: async (req: TurnRequest): Promise<TurnResult> => {
     wakes.push(req);

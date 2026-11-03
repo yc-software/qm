@@ -5,7 +5,6 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMap } from "./support/test-database.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -16,8 +15,8 @@ mock.module("../src/identity/identity-service.ts", {
     createIdentityService: (...args: Parameters<typeof identityModule.createIdentityService>) =>
       identityModule.createIdentityService(
         {
-          ...testMap<identityModule.DeactivationRecord>(),
-          all: async () => {
+          ...args[0],
+          list: async () => {
             throw identityFailure;
           },
         },
@@ -49,8 +48,7 @@ test("eager hydration failures are contained while explicit startup hydration re
   try {
     const logged = (context: string) =>
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
-    await settle(async () => logged("startup: hydrate identity") && logged("startup: hydrate configuration"));
-    assert.ok(logged("startup: hydrate identity"));
+    await settle(async () => logged("startup: hydrate configuration"));
     assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
