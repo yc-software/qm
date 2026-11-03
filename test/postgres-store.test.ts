@@ -2372,7 +2372,7 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
 });
 
-test("pg search: only the person's own chats are searched, not subagents or automations", { skip }, async () => {
+test("pg search: own chats and side chats only, no subagents or automations", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UOWN");
   const write = async (threadRef: string, text: string, surface?: string): Promise<string> => {
@@ -2388,14 +2388,20 @@ test("pg search: only the person's own chats are searched, not subagents or auto
   const child = await write("own-child", "ownchat harbor from a subagent");
   await s.setParentSession(child, chat);
   await write("own-cron", "ownchat harbor from a cron", "cron");
+  const side = await write("own-side", "ownchat harbor in a side chat");
+  await s.updateForkProvenance(side, {
+    forkedFrom: { sessionId: chat },
+    forkBoundarySeq: 1,
+    sideChat: { entrySeq: 1, quote: "plans", occurrence: 0, expanded: false },
+  });
 
   assert.deepEqual(
-    (await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId),
-    [chat],
+    (await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId).sort(),
+    [chat, side].sort(),
   );
   assert.deepEqual(
-    (await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id),
-    [chat],
+    (await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id).sort(),
+    [chat, side].sort(),
   );
 });
 

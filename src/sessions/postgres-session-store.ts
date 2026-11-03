@@ -171,8 +171,7 @@ const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.creat
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 const OWN_CHAT = (s: string): string =>
-  `${s}.parent_session_id IS NULL AND (${s}.side_chat IS NULL OR ${s}.side_chat->>'expanded' = 'true')
-   AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
+  `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
@@ -290,7 +289,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
   const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
     const params: unknown[] = [principalId];
-    const where: string[] = ["p.principal_id = $1", OWN_CHAT("s"), HAS_CONTENT];
+    const where: string[] = [
+      "p.principal_id = $1",
+      OWN_CHAT("s"),
+      "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
+      HAS_CONTENT,
+    ];
     const param = (value: unknown): string => {
       params.push(value);
       return `$${params.length}`;
