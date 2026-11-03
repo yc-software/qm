@@ -433,7 +433,7 @@ export function surfaceTool(kit: ToolKit) {
             ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
           };
           if (r.image) {
-            const label = `[image ${r.name ?? "file"} (${r.sizeBytes ?? "?"} bytes), shown below]`;
+            const label = `[image ${r.name ?? "file"} (${r.sizeBytes ?? "?"} bytes), shown below; images in tool results aren't kept across restarts, so if it's missing later, call read_file again with the same ref]`;
             return recordExternalResult(
               callId,
               { ...summary, image: true, contentType: r.image.mimeType },
