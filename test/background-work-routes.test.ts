@@ -6,6 +6,7 @@ import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createBackgroundOwnershipStore, createBackgroundOwnershipRows } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -26,7 +27,6 @@ async function fixture(secret: string | undefined = controlSecret) {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
-    requireSignedPortalIdentity: true,
     backgroundOwnership: { store, instanceId: "instance-b", deploymentId: "cohort-b", active: () => active },
     deploymentControlSecret: secret,
   });
@@ -41,7 +41,7 @@ async function fixture(secret: string | undefined = controlSecret) {
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `${method}\n${path}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, canonicalPayload(method, path, raw)),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },

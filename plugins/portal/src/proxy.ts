@@ -1,5 +1,5 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { signedHeaders } from "../../chassis/src/core-client.ts";
+import { signedRequestHeaders, TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
@@ -99,6 +99,7 @@ function relay(
 }
 
 export interface SurfaceTarget {
+  tenant: string;
   upstreamBase: string;
   forwardPath: string;
   search: string;
@@ -122,6 +123,7 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
     const now = t.nowMs ?? Date.now();
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
       {
+        t: t.tenant,
         p: t.principal,
         ...(t.authenticatedPrincipal ? { authenticatedAs: t.authenticatedPrincipal } : {}),
         ...(t.displayName ? { n: t.displayName } : {}),
@@ -177,6 +179,7 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
 export interface DeploymentTarget {
+  tenant: string;
   coreBase: string;
   id: string;
   subPath: string;
@@ -190,11 +193,14 @@ export function proxyToDeployment(req: IncomingMessage, res: ServerResponse, t: 
   const method = req.method ?? "GET";
   const corePath = `/d/${encodeURIComponent(t.id)}${t.subPath}${t.search}`;
   const core = new URL(t.coreBase);
-  const signed = signedHeaders(t.signingSecret, method, corePath, "", t.principal);
+  const signed = signedRequestHeaders(t.signingSecret, method, corePath, t.principal, {
+    "content-type": "application/json",
+    [TENANT_HEADER]: t.tenant,
+  });
   const base: Record<string, string> = { host: core.host, "x-as-principal": t.principal, ...signed };
   if (t.identitySecret)
     base[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-      { p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
+      { t: t.tenant, p: t.principal, exp: Date.now() + IDENTITY_TTL_MS },
       t.identitySecret,
     );
   const headers = safeForwardHeaders(req, base);

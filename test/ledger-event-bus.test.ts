@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
@@ -61,7 +62,7 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
   const dataDir = mkdtempSync(join(tmpdir(), "ap-ledger-sse-"));
   const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
+  const core = createInsecureTestServer(TEST_TENANT, built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {

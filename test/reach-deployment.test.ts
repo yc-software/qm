@@ -19,6 +19,8 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-identity.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -236,7 +238,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(TEST_TENANT, app);
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -283,7 +285,11 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const path = "/v1/deployments?principalId=U2";
-    const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
+    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "U2", exp: Date.now() + 60_000 }, secret);
+    const headers = signedRequestHeaders(secret, "GET", path, "", {
+      ...TENANT_HEADERS,
+      [PORTAL_IDENTITY_HEADER]: identity,
+    });
     const r = await fetch(`${base}${path}`, { headers });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };

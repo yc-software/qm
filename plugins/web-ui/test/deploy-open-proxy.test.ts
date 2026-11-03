@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, get as httpGet, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const PAGE = "<!doctype html><h1>deployed app</h1>";
 let lastCoreRequest: { url: string; principal: string } | null = null;
@@ -48,7 +49,7 @@ test.after(() => {
 
 const IDENTITY = {
   cookie: "webuiuser=alice",
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET),
 };
 
 function rawGet(

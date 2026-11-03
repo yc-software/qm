@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
+import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sign.ts";
 import { bootProblems, readConfig, senderAddress } from "../src/config.ts";
 import { testEnv } from "./helpers.ts";
 
@@ -184,5 +187,82 @@ test("`node src/index.ts` refuses to boot on a placeholder configuration and ser
     assert.match(child.stdout, /200/);
     assert.match(child.stdout, /sign-in broker on/);
     if ("RESEND_API_KEY" in email) assert.match(child.stdout, /email not configured/);
+  }
+});
+
+test("the broker binds each request to the tenant its host names and refuses hosts no tenant serves", async () => {
+  const tenant = "00000000-0000-4000-8000-000000000001";
+  const secret = "a".repeat(48);
+  const seen: { path: string; tenant: unknown; signed: boolean }[] = [];
+  const core = createServer((req, res) => {
+    const url = new URL(req.url!, "http://core");
+    const header = req.headers["x-qm-tenant"] as string | undefined;
+    const expected = signRequest(
+      secret,
+      Number(req.headers["x-timestamp"]),
+      canonicalPayload(req.method!, req.url!, "", header),
+    );
+    seen.push({ path: url.pathname, tenant: header, signed: req.headers["x-signature"] === expected });
+    if (url.pathname === "/v1/tenants/for-host") {
+      const known = url.searchParams.get("host") === "tenant-a.test";
+      res.writeHead(known ? 200 : 404, { "content-type": "application/json" });
+      return void res.end(JSON.stringify(known ? { tenant } : { error: "not_found" }));
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ branding: { selfLabel: "Tenant A" } }));
+  });
+  await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
+  const PORT = "18298";
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", "import('./src/index.ts').then((m) => m.startServer({ host: '127.0.0.1' }))"],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...testEnv({ CORE_SIGNING_SECRET: secret }),
+        CORE_API_URL: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,
+        PORT,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        if (chunk.toString().includes("sign-in broker on")) resolve();
+      });
+      child.once("exit", (code) => reject(new Error(`broker exited ${code}`)));
+    });
+    const get = (host: string, path: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = request({ host: "127.0.0.1", port: PORT, path, headers: { host } }, (res) => {
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+        req.on("error", reject);
+        req.end();
+      });
+    assert.equal((await get("unknown.test", "/healthz")).status, 200);
+    const unknown = await get("unknown.test", "/authorize");
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(JSON.parse(unknown.body), { error: "not_found", message: "no tenant serves this host" });
+    assert.equal(
+      seen.some((call) => call.path !== "/v1/tenants/for-host"),
+      false,
+    );
+    const known = await get("tenant-a.test", "/authorize");
+    assert.ok(known.status >= 200 && known.status < 500, `unexpected ${known.status}`);
+    assert.doesNotMatch(known.body, /no tenant serves this host/);
+    for (let i = 0; i < 50 && !seen.some((call) => call.path === "/v1/surface-config"); i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const branding = seen.find((call) => call.path === "/v1/surface-config");
+    assert.equal(branding?.tenant, tenant);
+    assert.equal(branding?.signed, true);
+    assert.ok(seen.filter((call) => call.path === "/v1/tenants/for-host").every((call) => call.signed));
+  } finally {
+    child.kill();
+    core.close();
   }
 });

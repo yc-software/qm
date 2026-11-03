@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   res.writeHead(200, { "content-type": "application/json", "set-cookie": ["app_pref=ok", "dpl_owner=test"] });
   res.end(
     JSON.stringify({ url: req.url, cookie: req.headers.cookie ?? null, headers: req.headers, method: req.method }),
