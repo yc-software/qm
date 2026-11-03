@@ -12,7 +12,7 @@ import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
