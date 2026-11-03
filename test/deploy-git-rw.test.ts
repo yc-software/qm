@@ -20,7 +20,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testDeploymentRows, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
@@ -47,10 +47,14 @@ const GIT_ENV = {
 };
 
 function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
+  const url = testDatabaseUrl();
   const deployStore = createDeployStore(
-    testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
+    testDeployBackings({
+      deployments: testDeploymentRows(url),
+      git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) },
+    }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl: AclStore = createAclStore(createPostgresGrantStore(url));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -67,12 +71,12 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(url),
+    sessions: createPostgresSessionStore(url),
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe: createPostgresReplayDedupe(url),
     signingSecret: SECRET,
     identity,
     ...urls,

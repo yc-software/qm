@@ -19,7 +19,7 @@ import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-f
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, testDeployBackings, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -28,9 +28,10 @@ const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
 
 function appServingUpstream(upstreamPort: number) {
-  const deployStore = createDeployStore(testDeployBackings());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
+  const acl = createAclStore(createPostgresGrantStore(url));
+  const directory = createPostgresDirectoryStore(url);
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -49,7 +50,7 @@ function appServingUpstream(upstreamPort: number) {
     deploy,
     acl,
     directory,
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(url),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);

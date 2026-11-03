@@ -20,10 +20,11 @@ import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testDeploymentRows, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -150,7 +151,8 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 });
 
 function appServingUpstream(upstreamPort: number) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -160,14 +162,14 @@ function appServingUpstream(upstreamPort: number) {
       destroy: async () => {},
     },
     auditLog,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "subdomain-")),
   });
   const app = createApp({
     deploy,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    acl: createAclStore(createPostgresGrantStore(url)),
+    directory: createPostgresDirectoryStore(url),
+    sessions: createPostgresSessionStore(url),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   return app;
@@ -253,6 +255,53 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
       [["U9", "mysite", "denied", scopeId("personal", "U1")]],
       "one row per person+app+hour, filed under the app's OWNER scope; not_found is never audited",
     );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test("subdomain ingress: a visitor is served under the app's own tenant and its last access is recorded there", async () => {
+  const [ambient, owning] = testTenants();
+  const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
+  upstream.listen(0);
+  const app = appServingUpstream((upstream.address() as AddressInfo).port);
+  const d = await withTenant(owning!, () =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      name: "tenantsite",
+    }),
+  );
+  const server = withTenant(ambient!, () =>
+    createInsecureTestServer(app, {
+      deployAppsDomain: "apps.example.com",
+      deployGateSecret: "gate-secret",
+      auditLog,
+      ...SESSION_DEPS,
+    }),
+  );
+  server.listen(0);
+  const port = (server.address() as AddressInfo).port;
+  const visit = (sub: string) =>
+    withoutTenant(() =>
+      httpGet(port, "/", { Host: "tenantsite.apps.example.com", Cookie: `portal_session=${mintPortalSession(sub)}` }),
+    );
+  try {
+    assert.equal(await withTenant(ambient!, () => app.getDeployment("tenantsite")), null);
+    const before = Date.now();
+    const owner = await visit("U1");
+    assert.equal(owner.status, 200);
+    assert.equal(owner.body, "UPSTREAM OK");
+    const touched = await withTenant(owning!, () => app.getDeployment(d.id));
+    assert.ok((touched?.lastAccessAt ?? 0) >= before, "last access is written to the owning tenant's row");
+    assert.equal((await visit("U9")).status, 403);
+    const missing = await withoutTenant(() =>
+      httpGet(port, "/", { Host: "nope.apps.example.com", Cookie: `portal_session=${mintPortalSession("U1")}` }),
+    );
+    assert.equal(missing.status, 404);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
@@ -374,6 +423,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
+  const replayDedupe = createPostgresReplayDedupe(testDatabaseUrl());
   const app = appServingUpstream(upstreamPort);
   const d = await inTestTenant(() =>
     app.deploy({
@@ -386,7 +436,7 @@ test("subdomain ingress: the gateway vouches for the verified viewer with a per-
   );
   const signingSecret = "s".repeat(64);
   const server = createServer(app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    replayDedupe,
     signingSecret,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",

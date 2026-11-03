@@ -1,3 +1,5 @@
+import { inTenantOf } from "../../tenants/claim.ts";
+import { withoutTenant } from "../../tenants/context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -799,6 +801,18 @@ async function fetchDeploymentResponse(
 }
 
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
+  const tenant = await withoutTenant(() => subdomainTenant(ctx));
+  return inTenantOf(tenant, () => proxyAppRequest(ctx, tenant !== undefined));
+}
+
+async function subdomainTenant({ req, app, deps }: BaseCtx): Promise<string | undefined> {
+  const suffix = `.${(deps.deployAppsDomain ?? "").toLowerCase()}`;
+  const host = (req.headers.host ?? "").split(":")[0]!.toLowerCase();
+  if (!deps.deployAppsDomain || !host.endsWith(suffix)) return undefined;
+  return app.deploymentTenant(host.slice(0, -suffix.length));
+}
+
+async function proxyAppRequest(ctx: BaseCtx, known: boolean): Promise<boolean> {
   const { req, res, app, deps, url, pathname } = ctx;
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
@@ -845,7 +859,9 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     cleanUrlRedirect();
     return true;
   }
-  const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
+  const deployment = known
+    ? await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null))
+    : null;
   const externalAllowed = deployment
     ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
     : false;
@@ -884,6 +900,10 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       res.writeHead(302, { location: signIn, "cache-control": "no-store" });
       res.end();
     }
+    return true;
+  }
+  if (!known) {
+    sendJson(res, 404, { error: "not_found" });
     return true;
   }
   const bareApp = url.searchParams.get("__qm_no_shell") === "1";

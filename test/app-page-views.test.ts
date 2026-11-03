@@ -18,7 +18,7 @@ import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testDeploymentRows, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -52,17 +52,18 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
 }
 
 async function agent(log: AppPageViewLog) {
+  const url = testDatabaseUrl();
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(url));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore: createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) })),
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
@@ -75,8 +76,8 @@ async function agent(log: AppPageViewLog) {
   const app = createApp({
     deploy,
     acl,
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(url),
+    sessions: createPostgresSessionStore(url),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const deployed = await inTestTenant(() =>

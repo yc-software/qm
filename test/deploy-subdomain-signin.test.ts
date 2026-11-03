@@ -117,7 +117,9 @@ function httpGet(
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
   const server = createInsecureTestServer(
-    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
+    { getDeployment: async () => null, deploymentTenant: async () => undefined } as unknown as Parameters<
+      typeof createInsecureTestServer
+    >[0],
     {
       deployAppsDomain: "apps.example.com",
       deployGateSecret: "gate",
